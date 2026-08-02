@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 抽象线条翻开书本：两层对称页缘曲线，白底黑线；几何落在自适应图标 66dp 安全区内 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:strokeColor="#0F0F0F"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:pathData="M30,40 C39,48 47,53 52.5,54.5" />
+    <path
+        android:strokeColor="#0F0F0F"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:pathData="M78,40 C69,48 61,53 55.5,54.5" />
+    <path
+        android:strokeColor="#0F0F0F"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:pathData="M32,55 C40,62 47,66.5 52.5,67.5" />
+    <path
+        android:strokeColor="#0F0F0F"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:pathData="M76,55 C68,62 61,66.5 55.5,67.5" />
+</vector>

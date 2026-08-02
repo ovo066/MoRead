@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- v27+ 才有 windowLightNavigationBar；只在日间基座上追加。 -->
+    <style name="Theme.MoRead" parent="Theme.MoRead.Base">
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+</resources>

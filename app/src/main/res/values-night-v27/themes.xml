@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 夜间 v27+：导航栏图标也要浅色。 -->
+    <style name="Theme.MoRead" parent="Theme.MoRead.Base">
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+</resources>

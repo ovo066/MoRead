@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 与 Theme.kt 的 DarkColors.background 一致，避免启动首帧闪白。 -->
+    <color name="window_background">#FF0E0E0E</color>
+</resources>

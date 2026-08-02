@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 与 Theme.kt 的 LightColors.background / DarkColors.background 保持一致，
+         这样启动首帧的窗口底色和 Compose 接手后的背景不会跳色。 -->
+    <color name="window_background">#FFFAFAFA</color>
+</resources>

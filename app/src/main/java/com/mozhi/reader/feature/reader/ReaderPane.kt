@@ -1,0 +1,822 @@
+package com.mozhi.reader.feature.reader
+
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.graphics.Bitmap
+import android.os.BatteryManager
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.HelpOutline
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.EditNote
+import androidx.compose.material.icons.outlined.Headphones
+import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.Psychology
+import androidx.compose.material.icons.outlined.Translate
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.mozhi.reader.ai.prompt.SelectionAiAction
+import com.mozhi.reader.core.datastore.PageTurnAnimation
+import com.mozhi.reader.core.datastore.ReaderFont
+import com.mozhi.reader.core.datastore.ReaderSettings
+import com.mozhi.reader.feature.reader.engine.ListenHighlightSpan
+import com.mozhi.reader.feature.reader.engine.ReaderAnnotationMark
+import com.mozhi.reader.feature.reader.engine.ReaderContentController
+import com.mozhi.reader.feature.reader.engine.RenderPage
+import com.mozhi.reader.feature.reader.engine.SelectionRect
+import com.mozhi.reader.feature.reader.engine.TextPos
+import com.mozhi.reader.feature.reader.engine.annotationGeometry
+import com.mozhi.reader.feature.reader.engine.dragSelectionHandle
+import com.mozhi.reader.feature.reader.engine.hitTextPos
+import com.mozhi.reader.feature.reader.engine.selectedText
+import com.mozhi.reader.feature.reader.engine.selectionBodyRange
+import com.mozhi.reader.feature.reader.engine.selectionRects
+import com.mozhi.reader.feature.reader.engine.wordSelectionAt
+import com.mozhi.reader.feature.reader.render.PageBitmapRenderer
+import com.mozhi.reader.feature.reader.render.ReaderPageStyle
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+/**
+ * The self-drawn reading surface: renders the three-page window into bitmaps, drives the
+ * Legado-style page-turn state machine over them, and hosts long-press text selection.
+ * Replaces the Readium WebView host.
+ */
+@Composable
+fun ReaderPane(
+    controller: ReaderContentController,
+    settings: ReaderSettings,
+    palette: ReaderPalette,
+    enabled: Boolean,
+    registerContentHook: (((Int) -> Unit)?) -> Unit,
+    onCenterTap: () -> Unit,
+    onBoundary: (PageTurnDirection) -> Unit,
+    onNotice: (String) -> Unit,
+    annotations: List<ReaderAnnotationMark>,
+    listenHighlight: ListenHighlightSpan? = null,
+    onAiAction: (action: SelectionAiAction, selection: String, context: String) -> Unit,
+    onAnnotationAction: (selection: String, range: IntRange) -> Unit,
+    onAnnotationClick: (annotationIds: List<Long>) -> Unit,
+    onTtsAction: (selection: String) -> Unit,
+    onImageAction: (selection: String, context: String, range: IntRange) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
+    val haptics = LocalHapticFeedback.current
+    val clipboard = LocalClipboardManager.current
+    val statusBarPx = WindowInsets.statusBars.getTop(density).toFloat()
+    val navBarPx = WindowInsets.navigationBars.getBottom(density).toFloat()
+
+    var frameTick by remember { mutableIntStateOf(0) }
+    var viewport by remember { mutableStateOf(IntSize.Zero) }
+    val holder = remember(controller) { ReaderPaneHolder(controller) }
+    val selection = remember(controller) {
+        ReaderSelectionController(controller, holder) {
+            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+        }
+    }
+
+    val driver = remember(controller) {
+        PageTurnDriver(
+            scope = scope,
+            callbacks = object : PageTurnDriver.Callbacks {
+                override fun hasPage(direction: PageTurnDirection): Boolean =
+                    if (direction == PageTurnDirection.NEXT) {
+                        controller.hasNextPage()
+                    } else {
+                        controller.hasPrevPage()
+                    }
+
+                override fun fillPage(direction: PageTurnDirection) {
+                    val moved = if (direction == PageTurnDirection.NEXT) {
+                        controller.moveToNextPage()
+                    } else {
+                        controller.moveToPrevPage()
+                    }
+                    // A refused commit (e.g. the window shifted mid-animation) must still leave
+                    // the bitmaps matching the unchanged position instead of a stale frame.
+                    if (!moved) {
+                        holder.refresh(0)
+                        frameTick++
+                    }
+                }
+
+                override fun onBoundaryHit(direction: PageTurnDirection) = onBoundary(direction)
+
+                override fun onTurnCommitted() {
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                }
+
+                override fun onTurnStarted(direction: PageTurnDirection) {
+                    holder.ensureFresh()
+                }
+            }
+        )
+    }
+    driver.mode = when (settings.pageTurnAnimation) {
+        PageTurnAnimation.SIMULATION -> PageTurnDriver.Mode.SIMULATION
+        PageTurnAnimation.COVER, PageTurnAnimation.SLIDE -> PageTurnDriver.Mode.FLAT
+        PageTurnAnimation.NONE -> PageTurnDriver.Mode.INSTANT
+    }
+
+    // Environment: relayout when the typography inputs change; repaint when only colors change.
+    val environment = ReaderEnvironmentKey(
+        fontScale = settings.fontScale,
+        font = settings.font,
+        lineHeight = settings.lineHeight,
+        pageMargin = settings.pageMargin,
+        width = viewport.width,
+        height = viewport.height
+    )
+    remember(environment, palette) {
+        if (viewport.width > 0 && viewport.height > 0) {
+            val style = ReaderPageStyle.resolve(
+                settings = settings,
+                palette = palette,
+                density = density,
+                viewWidth = viewport.width,
+                viewHeight = viewport.height,
+                statusBarPx = statusBarPx,
+                navigationBarPx = navBarPx
+            )
+            driver.cancelActiveTurn()
+            selection.clear()
+            val relayout = holder.applyStyle(style, environment)
+            if (relayout) {
+                controller.updateEnvironment(style.spec, style.measure)
+            } else {
+                holder.refresh(0)
+            }
+            frameTick++
+        }
+        environment
+    }
+
+    LaunchedEffect(annotations) {
+        if (holder.setAnnotations(annotations)) {
+            holder.refresh(0)
+            frameTick++
+        }
+    }
+
+    // 听书当前句变化时重绘页面位图，让底色跟随朗读进度。
+    LaunchedEffect(listenHighlight) {
+        if (holder.setListenHighlight(listenHighlight)) {
+            holder.refresh(0)
+            frameTick++
+        }
+    }
+
+    DisposableEffect(controller) {
+        registerContentHook { relativePosition ->
+            if (relativePosition == 0) selection.clear()
+            holder.refresh(relativePosition)
+            frameTick++
+        }
+        onDispose {
+            registerContentHook(null)
+            driver.cancelActiveTurn()
+            holder.release()
+        }
+    }
+
+    DisposableEffect(context) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(receiverContext: Context?, intent: Intent?) {
+                val changed = when (intent?.action) {
+                    Intent.ACTION_TIME_TICK -> holder.updateTime()
+                    Intent.ACTION_BATTERY_CHANGED -> holder.updateBattery(intent)
+                    else -> false
+                }
+                if (changed) {
+                    holder.refresh(0)
+                    frameTick++
+                }
+            }
+        }
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_TIME_TICK)
+            addAction(Intent.ACTION_BATTERY_CHANGED)
+        }
+        val sticky = context.registerReceiver(receiver, filter)
+        if (sticky != null) holder.updateBattery(sticky)
+        onDispose { context.unregisterReceiver(receiver) }
+    }
+
+    Box(modifier = modifier.fillMaxSize()) {
+        Spacer(
+            modifier = Modifier
+                .fillMaxSize()
+                .onSizeChanged { size ->
+                    if (holder.setViewport(size.width, size.height)) {
+                        driver.setViewport(size.width.toFloat(), size.height.toFloat())
+                        viewport = size
+                    }
+                }
+                .readerPageTouch(
+                    enabled = enabled,
+                    driver = driver,
+                    selection = selection
+                ) { position, fromAbort ->
+                    val annotationIds = holder.annotationIdsAt(position)
+                    if (annotationIds.isNotEmpty()) {
+                        selection.clear()
+                        onAnnotationClick(annotationIds)
+                        return@readerPageTouch
+                    }
+                    val fraction = position.x / holder.viewWidth.coerceAtLeast(1)
+                    when {
+                        fraction < PREV_TAP_ZONE -> driver.turnByTap(PageTurnDirection.PREVIOUS)
+                        fraction > NEXT_TAP_ZONE -> driver.turnByTap(PageTurnDirection.NEXT)
+                        // Legado suppresses only the center action after an aborted settle.
+                        !fromAbort -> onCenterTap()
+                        else -> Unit
+                    }
+                }
+                .drawBehind {
+                    frameTick // draw-phase read: content/style changes invalidate this scope
+                    val canvas = drawContext.canvas.nativeCanvas
+                    val direction = driver.direction
+                    val animation = settings.pageTurnAnimation
+                    val front = holder.bitmapFor(direction, front = true)
+                    val under = holder.bitmapFor(direction, front = false)
+                    if (
+                        driver.isRunning &&
+                        direction != null &&
+                        animation != PageTurnAnimation.NONE &&
+                        front != null &&
+                        under != null
+                    ) {
+                        holder.compositor.draw(
+                            canvas = canvas,
+                            animation = animation,
+                            direction = direction,
+                            front = front,
+                            under = under,
+                            touchX = driver.touchX,
+                            touchY = driver.touchY,
+                            startX = driver.startX,
+                            cornerAtTop = driver.cornerAtTop,
+                            width = size.width,
+                            height = size.height,
+                            backgroundColor = holder.backgroundColor,
+                            darkTheme = palette.isDark
+                        )
+                    } else {
+                        holder.curBitmap?.takeUnless(Bitmap::isRecycled)?.let {
+                            canvas.drawBitmap(it, 0f, 0f, null)
+                        } ?: canvas.drawColor(holder.backgroundColor)
+                        selection.drawHighlight(this, palette)
+                    }
+                }
+        )
+
+        selection.active?.takeIf { !it.dragging }?.let { active ->
+            SelectionToolbar(
+                palette = palette,
+                topPx = selection.toolbarTop(active, density),
+                onAi = { action ->
+                    val text = selection.selectedText()
+                    val range = selection.bodyRange()
+                    if (text.isNotBlank() && range != null) {
+                        onAiAction(action, text, controller.contextAround(range))
+                    }
+                    selection.clear()
+                },
+                onAnnotation = {
+                    val text = selection.selectedText()
+                    val range = selection.bodyRange()
+                    if (text.isNotBlank() && range != null) onAnnotationAction(text, range)
+                    selection.clear()
+                },
+                onTts = {
+                    selection.selectedText().takeIf(String::isNotBlank)?.let(onTtsAction)
+                    selection.clear()
+                },
+                onImage = {
+                    val text = selection.selectedText()
+                    val range = selection.bodyRange()
+                    if (text.isNotBlank() && range != null) {
+                        onImageAction(text, controller.contextAround(range), range)
+                    }
+                    selection.clear()
+                },
+                onCopy = {
+                    val text = selection.selectedText()
+                    if (text.isNotEmpty()) {
+                        clipboard.setText(AnnotatedString(text))
+                        onNotice("已复制 ${text.length} 字")
+                    }
+                    selection.clear()
+                },
+                onDismiss = { selection.clear() }
+            )
+        }
+    }
+}
+
+@Composable
+private fun BoxScope.SelectionToolbar(
+    palette: ReaderPalette,
+    topPx: Int,
+    onAi: (SelectionAiAction) -> Unit,
+    onAnnotation: () -> Unit,
+    onTts: () -> Unit,
+    onImage: () -> Unit,
+    onCopy: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .align(Alignment.TopCenter)
+            .fillMaxWidth(0.96f)
+            .offset { IntOffset(0, topPx) },
+        shape = RoundedCornerShape(17.dp),
+        color = palette.glassStrong,
+        contentColor = palette.onBackground,
+        border = BorderStroke(1.dp, palette.glassBorder),
+        shadowElevation = 8.dp
+    ) {
+        Row(
+            modifier = Modifier
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 4.dp, vertical = 5.dp)
+        ) {
+            SelectionAiAction.entries.forEach { action ->
+                SelectionToolItem(
+                    icon = action.toolbarIcon(),
+                    label = action.label,
+                    iconTint = palette.accent,
+                    palette = palette
+                ) { onAi(action) }
+            }
+            SelectionToolItem(Icons.Outlined.EditNote, "批注", palette.accent, palette, onAnnotation)
+            SelectionToolItem(Icons.Outlined.Headphones, "朗读", palette.accent, palette, onTts)
+            SelectionToolItem(Icons.Outlined.Image, "生图", palette.accent, palette, onImage)
+            SelectionToolItem(Icons.Outlined.ContentCopy, "复制", palette.onBackground, palette, onCopy)
+            SelectionToolItem(Icons.Outlined.Close, "取消", palette.muted, palette, onDismiss)
+        }
+    }
+}
+
+/** 图标在上、小字在下的选区操作项，替代早期的纯文字按钮。 */
+@Composable
+private fun SelectionToolItem(
+    icon: ImageVector,
+    label: String,
+    iconTint: Color,
+    palette: ReaderPalette,
+    onClick: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 11.dp, vertical = 7.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = iconTint,
+            modifier = Modifier.size(20.dp)
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            fontSize = 10.sp,
+            color = palette.muted
+        )
+    }
+}
+
+private fun SelectionAiAction.toolbarIcon(): ImageVector = when (this) {
+    SelectionAiAction.TRANSLATE -> Icons.Outlined.Translate
+    SelectionAiAction.ANALYZE -> Icons.Outlined.Psychology
+    SelectionAiAction.ASK -> Icons.AutoMirrored.Outlined.HelpOutline
+}
+
+private data class ReaderEnvironmentKey(
+    val fontScale: Float,
+    val font: ReaderFont,
+    val lineHeight: Float,
+    val pageMargin: Float,
+    val width: Int,
+    val height: Int
+)
+
+/**
+ * Long-press selection over the current page, Legado's `ContentTextView` selection reduced to the
+ * single-page case: the long press seeds a word, dragging extends either side of it.
+ */
+private class ReaderSelectionController(
+    private val controller: ReaderContentController,
+    private val holder: ReaderPaneHolder,
+    private val onSelectionStarted: () -> Unit
+) : SelectionGestureHooks {
+
+    data class ActiveSelection(
+        val page: com.mozhi.reader.feature.reader.engine.TextPage,
+        val anchorStart: TextPos,
+        val anchorEnd: TextPos,
+        val start: TextPos,
+        val end: TextPos,
+        val rects: List<SelectionRect>,
+        val dragging: Boolean
+    )
+
+    private enum class Handle { START, END }
+
+    var active by mutableStateOf<ActiveSelection?>(null)
+        private set
+
+    /** Non-null while a handle drag owns the gesture; long-press drags keep the anchor model. */
+    private var draggedHandle: Handle? = null
+
+    override val isActive: Boolean get() = active != null
+
+    override fun begin(position: Offset): Boolean {
+        val laid = controller.curPage() as? RenderPage.Laid ?: return false
+        val page = laid.page
+        val local = holder.toContentLocal(position) ?: return false
+        val hit = page.hitTextPos(local.x, local.y, exact = true) ?: return false
+        val (start, end) = page.wordSelectionAt(hit)
+        draggedHandle = null
+        active = ActiveSelection(
+            page = page,
+            anchorStart = start,
+            anchorEnd = end,
+            start = start,
+            end = end,
+            rects = page.selectionRects(start, end),
+            dragging = true
+        )
+        onSelectionStarted()
+        return true
+    }
+
+    override fun grabHandle(position: Offset, radiusPx: Float): Boolean {
+        val current = active ?: return false
+        val origin = holder.contentOrigin() ?: return false
+        val first = current.rects.firstOrNull() ?: return false
+        val last = current.rects.last()
+        val startCenter = Offset(origin.x + first.left, origin.y + first.bottom)
+        val endCenter = Offset(origin.x + last.right, origin.y + last.bottom)
+        val startDistance = (position - startCenter).getDistance()
+        val endDistance = (position - endCenter).getDistance()
+        draggedHandle = when {
+            startDistance > radiusPx && endDistance > radiusPx -> return false
+            startDistance <= endDistance -> Handle.START
+            else -> Handle.END
+        }
+        active = current.copy(dragging = true)
+        return true
+    }
+
+    override fun drag(position: Offset) {
+        val current = active ?: return
+        val local = holder.toContentLocal(position) ?: return
+        val hit = current.page.hitTextPos(local.x, local.y, exact = false) ?: return
+        val handle = draggedHandle
+        val (start, end) = if (handle != null) {
+            val dragged = dragSelectionHandle(
+                start = current.start,
+                end = current.end,
+                hit = hit,
+                draggingStart = handle == Handle.START
+            )
+            draggedHandle = if (dragged.draggingStart) Handle.START else Handle.END
+            dragged.start to dragged.end
+        } else {
+            when {
+                hit < current.anchorStart -> hit to current.anchorEnd
+                hit > current.anchorEnd -> current.anchorStart to hit
+                else -> current.anchorStart to current.anchorEnd
+            }
+        }
+        if (start == current.start && end == current.end) return
+        active = current.copy(
+            start = start,
+            end = end,
+            rects = current.page.selectionRects(start, end)
+        )
+    }
+
+    override fun end() {
+        draggedHandle = null
+        active = active?.copy(dragging = false)
+    }
+
+    override fun clear() {
+        draggedHandle = null
+        active = null
+    }
+
+    fun selectedText(): String {
+        val current = active ?: return ""
+        return current.page.selectedText(current.start, current.end)
+    }
+
+    /** Body offsets of the current selection, for context assembly. */
+    fun bodyRange(): IntRange? {
+        val current = active ?: return null
+        return current.page.selectionBodyRange(current.start, current.end)
+    }
+
+    fun drawHighlight(drawScope: DrawScope, palette: ReaderPalette) {
+        val current = active ?: return
+        val origin = holder.contentOrigin() ?: return
+        // The veil sits on top of the glyphs; on dark paper a light accent at 30% washes the
+        // text out, so the overlay thins while the handles keep full accent strength.
+        val color = palette.accent.copy(alpha = if (palette.isDark) 0.18f else 0.30f)
+        for (rect in current.rects) {
+            drawScope.drawRect(
+                color = color,
+                topLeft = Offset(origin.x + rect.left, origin.y + rect.top),
+                size = Size(rect.right - rect.left, rect.bottom - rect.top)
+            )
+        }
+        val first = current.rects.firstOrNull() ?: return
+        val last = current.rects.last()
+        drawHandle(
+            drawScope = drawScope,
+            palette = palette,
+            x = origin.x + first.left,
+            top = origin.y + first.top,
+            bottom = origin.y + first.bottom
+        )
+        drawHandle(
+            drawScope = drawScope,
+            palette = palette,
+            x = origin.x + last.right,
+            top = origin.y + last.top,
+            bottom = origin.y + last.bottom
+        )
+    }
+
+    /** Platform-style grab handle: a cursor bar over the line plus a ball hanging below it. */
+    private fun drawHandle(
+        drawScope: DrawScope,
+        palette: ReaderPalette,
+        x: Float,
+        top: Float,
+        bottom: Float
+    ) = with(drawScope) {
+        val barWidth = 2.dp.toPx()
+        val radius = 6.dp.toPx()
+        drawRect(
+            color = palette.accent,
+            topLeft = Offset(x - barWidth / 2f, top),
+            size = Size(barWidth, bottom - top)
+        )
+        drawCircle(
+            color = palette.accent,
+            radius = radius,
+            center = Offset(x, bottom + radius * 0.8f)
+        )
+    }
+
+    /** Toolbar y in view px: above the selection, or below it when too close to the top. */
+    fun toolbarTop(current: ActiveSelection, density: Density): Int {
+        val origin = holder.contentOrigin() ?: return 0
+        val gap = with(density) { 12.dp.toPx() }
+        val barHeight = with(density) { 48.dp.toPx() }
+        val first = current.rects.firstOrNull() ?: return 0
+        val above = origin.y + first.top - gap - barHeight
+        if (above > origin.y * 0.4f) return above.toInt()
+        val last = current.rects.last()
+        return (origin.y + last.bottom + gap).toInt()
+    }
+}
+
+/** Owns the page bitmaps and the render pipeline; all mutation happens on the main thread. */
+private class ReaderPaneHolder(private val controller: ReaderContentController) {
+    var viewWidth = 0
+        private set
+    var viewHeight = 0
+        private set
+    var backgroundColor: Int = android.graphics.Color.WHITE
+        private set
+
+    val compositor = PageTurnCompositor()
+
+    private var style: ReaderPageStyle? = null
+    private var renderer: PageBitmapRenderer? = null
+    private var appliedEnvironment: ReaderEnvironmentKey? = null
+    private var timeText: String = timeFormat.format(Date())
+    private var batteryPercent: Int = 100
+    private var annotations: List<ReaderAnnotationMark> = emptyList()
+    private var listenHighlight: ListenHighlightSpan? = null
+    private var dirty = true
+
+    var curBitmap: Bitmap? = null
+        private set
+    private var nextBitmap: Bitmap? = null
+    private var prevBitmap: Bitmap? = null
+
+    fun setViewport(width: Int, height: Int): Boolean {
+        if (width == viewWidth && height == viewHeight) return false
+        viewWidth = width
+        viewHeight = height
+        return true
+    }
+
+    /** Returns true when the typography environment changed and a relayout is required. */
+    fun applyStyle(style: ReaderPageStyle, environment: ReaderEnvironmentKey): Boolean {
+        val relayout = appliedEnvironment != environment
+        appliedEnvironment = environment
+        this.style = style
+        backgroundColor = style.backgroundColor
+        renderer?.release()
+        renderer = PageBitmapRenderer(style)
+        dirty = true
+        return relayout
+    }
+
+    fun setAnnotations(value: List<ReaderAnnotationMark>): Boolean {
+        if (annotations == value) return false
+        annotations = value
+        dirty = true
+        return true
+    }
+
+    fun setListenHighlight(value: ListenHighlightSpan?): Boolean {
+        if (listenHighlight == value) return false
+        listenHighlight = value
+        dirty = true
+        return true
+    }
+
+    /** Top-left of the typeset content area in view coordinates, or null before the first style. */
+    fun contentOrigin(): Offset? = style?.let { Offset(it.paddingHorizontal, it.headerHeight) }
+
+    fun annotationIdsAt(position: Offset): List<Long> {
+        val currentStyle = style ?: return emptyList()
+        val page = controller.curPage() as? RenderPage.Laid ?: return emptyList()
+        val local = toContentLocal(position) ?: return emptyList()
+        // 与 PageBitmapRenderer.drawBody 的 marker 参数保持一致，否则点击热区和画出的圆点对不上
+        val markerRadius = (currentStyle.tipSizePx * 0.72f).coerceAtLeast(8f)
+        val geometry = page.page.annotationGeometry(
+            annotations.filter { it.chapterIndex == page.chapterIndex },
+            markerRadius = markerRadius,
+            markerGap = markerRadius * 0.35f,
+            maxRight = currentStyle.contentWidth + currentStyle.paddingHorizontal * 0.9f
+        )
+        val hitRadius = (currentStyle.tipSizePx * 1.35f).coerceAtLeast(18f)
+        return geometry.markers.firstOrNull { marker ->
+            val dx = local.x - marker.centerX
+            val dy = local.y - marker.centerY
+            dx * dx + dy * dy <= hitRadius * hitRadius
+        }?.annotationIds.orEmpty()
+    }
+
+    fun toContentLocal(position: Offset): Offset? {
+        val origin = contentOrigin() ?: return null
+        return Offset(position.x - origin.x, position.y - origin.y)
+    }
+
+    fun bitmapFor(direction: PageTurnDirection?, front: Boolean): Bitmap? = when (direction) {
+        PageTurnDirection.NEXT -> if (front) curBitmap else nextBitmap
+        PageTurnDirection.PREVIOUS -> if (front) prevBitmap else curBitmap
+        null -> curBitmap
+    }?.takeUnless(Bitmap::isRecycled)
+
+    fun ensureFresh() {
+        if (dirty) refresh(0)
+    }
+
+    fun refresh(relativePosition: Int) {
+        val renderer = renderer ?: return
+        when (relativePosition) {
+            -1 -> prevBitmap = renderPage(renderer, prevBitmap, RelativePage.PREV)
+            1 -> nextBitmap = renderPage(renderer, nextBitmap, RelativePage.NEXT)
+            else -> {
+                curBitmap = renderPage(renderer, curBitmap, RelativePage.CUR)
+                nextBitmap = renderPage(renderer, nextBitmap, RelativePage.NEXT)
+                prevBitmap = renderPage(renderer, prevBitmap, RelativePage.PREV)
+            }
+        }
+        dirty = false
+    }
+
+    private enum class RelativePage { PREV, CUR, NEXT }
+
+    private fun renderPage(
+        renderer: PageBitmapRenderer,
+        into: Bitmap?,
+        which: RelativePage
+    ): Bitmap {
+        val page = when (which) {
+            RelativePage.PREV -> controller.prevPage()
+            RelativePage.CUR -> controller.curPage()
+            RelativePage.NEXT -> controller.nextPage()
+        }
+        val progress = when (page) {
+            is RenderPage.Laid -> controller.progressAt(page.chapterIndex, page.page.chapterPosition)
+            else -> controller.bookProgress()
+        }
+        return renderer.render(
+            page = page,
+            into = into,
+            bookProgress = progress,
+            timeText = timeText,
+            batteryPercent = batteryPercent,
+            annotations = annotations.filter { it.chapterIndex == page.chapterIndex },
+            listenHighlight = listenHighlight?.takeIf { it.chapterIndex == page.chapterIndex }
+        )
+    }
+
+    fun updateTime(): Boolean {
+        val next = timeFormat.format(Date())
+        if (next == timeText) return false
+        timeText = next
+        return true
+    }
+
+    fun updateBattery(intent: Intent): Boolean {
+        val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+        val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+        if (level < 0 || scale <= 0) return false
+        val next = (level * 100) / scale
+        if (next == batteryPercent) return false
+        batteryPercent = next
+        return true
+    }
+
+    fun release() {
+        renderer?.release()
+        renderer = null
+        curBitmap?.recycle()
+        nextBitmap?.recycle()
+        prevBitmap?.recycle()
+        curBitmap = null
+        nextBitmap = null
+        prevBitmap = null
+    }
+
+    private companion object {
+        val timeFormat = SimpleDateFormat("HH:mm", Locale.ROOT)
+    }
+}
+
+private const val PREV_TAP_ZONE = 0.28f
+private const val NEXT_TAP_ZONE = 0.72f

@@ -1,0 +1,115 @@
+{
+  "_note1": "KEEP THIS FILE! Check it into a version control system (VCS) like git.",
+  "_note2": "ObjectBox manages crucial IDs for your object model. See docs for details.",
+  "_note3": "If you have VCS merge conflicts, you must resolve them according to ObjectBox docs.",
+  "entities": [
+    {
+      "id": "1:7099831677170735472",
+      "lastPropertyId": "6:5685756075687868289",
+      "name": "BookChunk",
+      "properties": [
+        {
+          "id": "1:5098410638880310890",
+          "name": "id",
+          "type": 6,
+          "flags": 1
+        },
+        {
+          "id": "2:6820025376792000427",
+          "name": "bookId",
+          "type": 6
+        },
+        {
+          "id": "3:8260452550499359418",
+          "name": "chapterIndex",
+          "type": 5
+        },
+        {
+          "id": "4:5870464362219702166",
+          "name": "chunkIndex",
+          "type": 5
+        },
+        {
+          "id": "5:3968609330445415312",
+          "name": "text",
+          "type": 9
+        },
+        {
+          "id": "6:5685756075687868289",
+          "name": "embedding",
+          "indexId": "1:3033982387288121715",
+          "type": 28,
+          "flags": 8
+        }
+      ],
+      "relations": []
+    },
+    {
+      "id": "2:6440457849962055940",
+      "lastPropertyId": "9:7519625019676345909",
+      "name": "MemoryEntry",
+      "properties": [
+        {
+          "id": "1:4124266861181239520",
+          "name": "id",
+          "type": 6,
+          "flags": 1
+        },
+        {
+          "id": "2:3369213926608409735",
+          "name": "personaId",
+          "type": 6
+        },
+        {
+          "id": "3:9143104951599022035",
+          "name": "bookId",
+          "type": 6
+        },
+        {
+          "id": "4:8813446042092923945",
+          "name": "summary",
+          "type": 9
+        },
+        {
+          "id": "5:2924820089196760531",
+          "name": "sourceType",
+          "type": 9
+        },
+        {
+          "id": "6:679982778164402338",
+          "name": "createdAt",
+          "type": 6
+        },
+        {
+          "id": "7:6271074032942571024",
+          "name": "embedding",
+          "indexId": "2:5281254523515256999",
+          "type": 28,
+          "flags": 8
+        },
+        {
+          "id": "8:6735757795730531570",
+          "name": "conversationId",
+          "type": 6
+        },
+        {
+          "id": "9:7519625019676345909",
+          "name": "sourceMessageId",
+          "type": 6
+        }
+      ],
+      "relations": []
+    }
+  ],
+  "lastEntityId": "2:6440457849962055940",
+  "lastIndexId": "2:5281254523515256999",
+  "lastRelationId": "0:0",
+  "lastSequenceId": "0:0",
+  "modelVersion": 5,
+  "modelVersionParserMinimum": 5,
+  "retiredEntityUids": [],
+  "retiredIndexUids": [],
+  "retiredPropertyUids": [],
+  "retiredRelationUids": [],
+  "version": 1
+}

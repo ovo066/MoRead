@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      日间基座。夜间取值由 values-night/themes.xml 覆盖同名 Base —— 平台没有公开的
+      Theme.DeviceDefault.DayNight.NoActionBar，所以用资源限定符切换，而不是 DayNight 父主题。
+
+      原先整个主题钉死在 Light：夜间启动会闪白屏，且 windowLightStatusBar 一直是 true，
+      深色底上配深色状态栏图标等于看不见。
+    -->
+    <style name="Theme.MoRead.Base" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowBackground">@color/window_background</item>
+    </style>
+
+    <style name="Theme.MoRead" parent="Theme.MoRead.Base" />
+</resources>

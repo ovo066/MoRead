@@ -93,6 +93,7 @@ fun SettingsScreen(
     onOpenProvider: (Long) -> Unit,
     onOpenTtsSettings: () -> Unit = {},
     onOpenImageGenSettings: () -> Unit = {},
+    onOpenApiLog: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -157,6 +158,12 @@ fun SettingsScreen(
                     onChange = viewModel::setSuggestionReplies
                 )
             }
+            item {
+                AiAnnotationVisibilityCard(
+                    enabled = state.showAiAnnotations,
+                    onChange = viewModel::setShowAiAnnotations
+                )
+            }
 
             item { SectionLabel(title = "语音与生图") }
             item {
@@ -185,6 +192,11 @@ fun SettingsScreen(
                     onShelfLayoutChange = viewModel::setShelfLayout,
                     onClearCoverCache = viewModel::clearCoverCache
                 )
+            }
+
+            item { SectionLabel(title = "诊断") }
+            item {
+                ApiLogEntryCard(onClick = onOpenApiLog)
             }
 
             item { SectionLabel(title = "关于") }
@@ -919,6 +931,31 @@ private fun SuggestionReplyCard(enabled: Boolean, onChange: (Boolean) -> Unit) {
     }
 }
 
+/** 显示 AI 批注开关：关掉后阅读页不再渲染角色划线与「评」标记，详情页仍可回顾。 */
+@Composable
+private fun AiAnnotationVisibilityCard(enabled: Boolean, onChange: (Boolean) -> Unit) {
+    FrostedSurface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        shadowElevation = 4.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("显示 AI 批注", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    "关闭后阅读页只显示你自己的划线，角色批注仍可在书籍详情回顾",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(checked = enabled, onCheckedChange = onChange)
+        }
+    }
+}
+
 /** 「语音朗读」入口卡：引擎切换与音色参数在独立二级页配置。 */
 @Composable
 private fun TtsEntryCard(onClick: () -> Unit) {
@@ -984,6 +1021,36 @@ private fun ImageGenEntryCard(onClick: () -> Unit) {
     }
 }
 
+
+/** 「API 调用日志」入口卡：开关与记录列表在独立二级页。 */
+@Composable
+private fun ApiLogEntryCard(onClick: () -> Unit) {
+    FrostedSurface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(20.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("API 调用日志", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    "记录 AI 请求的地址、状态与耗时，排查连接问题；默认关闭，日志仅存本机",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Icon(
+                Icons.Outlined.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
 
 private fun ModelRole.label(): String = when (this) {
     ModelRole.CHAT -> "主对话"

@@ -26,9 +26,9 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.HelpOutline
+import androidx.compose.material.icons.outlined.BorderColor
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
-import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material.icons.outlined.Headphones
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Psychology
@@ -111,7 +111,7 @@ fun ReaderPane(
     annotations: List<ReaderAnnotationMark>,
     listenHighlight: ListenHighlightSpan? = null,
     onAiAction: (action: SelectionAiAction, selection: String, context: String) -> Unit,
-    onAnnotationAction: (selection: String, range: IntRange) -> Unit,
+    onAnnotationAction: (selection: String, range: IntRange, anchorTopPx: Int) -> Unit,
     onAnnotationClick: (annotationIds: List<Long>) -> Unit,
     onTtsAction: (selection: String) -> Unit,
     onImageAction: (selection: String, context: String, range: IntRange) -> Unit,
@@ -330,9 +330,10 @@ fun ReaderPane(
         )
 
         selection.active?.takeIf { !it.dragging }?.let { active ->
+            val toolbarTopPx = selection.toolbarTop(active, density)
             SelectionToolbar(
                 palette = palette,
-                topPx = selection.toolbarTop(active, density),
+                topPx = toolbarTopPx,
                 onAi = { action ->
                     val text = selection.selectedText()
                     val range = selection.bodyRange()
@@ -344,7 +345,9 @@ fun ReaderPane(
                 onAnnotation = {
                     val text = selection.selectedText()
                     val range = selection.bodyRange()
-                    if (text.isNotBlank() && range != null) onAnnotationAction(text, range)
+                    if (text.isNotBlank() && range != null) {
+                        onAnnotationAction(text, range, toolbarTopPx)
+                    }
                     selection.clear()
                 },
                 onTts = {
@@ -374,7 +377,7 @@ fun ReaderPane(
 }
 
 @Composable
-private fun BoxScope.SelectionToolbar(
+internal fun BoxScope.SelectionToolbar(
     palette: ReaderPalette,
     topPx: Int,
     onAi: (SelectionAiAction) -> Unit,
@@ -408,7 +411,7 @@ private fun BoxScope.SelectionToolbar(
                     palette = palette
                 ) { onAi(action) }
             }
-            SelectionToolItem(Icons.Outlined.EditNote, "批注", palette.accent, palette, onAnnotation)
+            SelectionToolItem(Icons.Outlined.BorderColor, "划线", palette.accent, palette, onAnnotation)
             SelectionToolItem(Icons.Outlined.Headphones, "朗读", palette.accent, palette, onTts)
             SelectionToolItem(Icons.Outlined.Image, "生图", palette.accent, palette, onImage)
             SelectionToolItem(Icons.Outlined.ContentCopy, "复制", palette.onBackground, palette, onCopy)
@@ -454,6 +457,10 @@ private fun SelectionAiAction.toolbarIcon(): ImageVector = when (this) {
     SelectionAiAction.ANALYZE -> Icons.Outlined.Psychology
     SelectionAiAction.ASK -> Icons.AutoMirrored.Outlined.HelpOutline
 }
+
+/** 点击分区：左右侧翻页/滚屏、中央呼出章节 chrome；翻页面与滚动面共用。 */
+internal const val PREV_TAP_ZONE = 0.28f
+internal const val NEXT_TAP_ZONE = 0.72f
 
 private data class ReaderEnvironmentKey(
     val fontScale: Float,
@@ -718,15 +725,22 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
         val geometry = page.page.annotationGeometry(
             annotations.filter { it.chapterIndex == page.chapterIndex },
             markerRadius = markerRadius,
-            markerGap = markerRadius * 0.35f,
+            markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.ANNOTATION_MARKER_GAP_RATIO,
             maxRight = currentStyle.contentWidth + currentStyle.paddingHorizontal * 0.9f
         )
         val hitRadius = (currentStyle.tipSizePx * 1.35f).coerceAtLeast(18f)
-        return geometry.markers.firstOrNull { marker ->
+        geometry.markers.firstOrNull { marker ->
             val dx = local.x - marker.centerX
             val dy = local.y - marker.centerY
             dx * dx + dy * dy <= hitRadius * hitRadius
-        }?.annotationIds.orEmpty()
+        }?.let { return it.annotationIds }
+        // 纯高亮没有「评」圆点，划线区域本身也可点开讨论串
+        return geometry.highlights
+            .filter { rect ->
+                local.x in rect.left..rect.right && local.y in rect.top..rect.bottom
+            }
+            .map { it.annotationId }
+            .distinct()
     }
 
     fun toContentLocal(position: Offset): Offset? {
@@ -817,6 +831,3 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
         val timeFormat = SimpleDateFormat("HH:mm", Locale.ROOT)
     }
 }
-
-private const val PREV_TAP_ZONE = 0.28f
-private const val NEXT_TAP_ZONE = 0.72f

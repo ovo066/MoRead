@@ -390,4 +390,73 @@ object DatabaseMigrations {
             db.execSQL("ALTER TABLE `messages` ADD COLUMN `attachmentsJson` TEXT")
         }
     }
+
+    /**
+     * 伴读体验二期（M2.5）v15 一次到位：批注划线样式列、段评讨论串回复表，
+     * 以及批次三的创作两表（表先行，UI 后置，省一轮迁移）。
+     */
+    val Migration14To15 = object : Migration(14, 15) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "ALTER TABLE `annotations` ADD COLUMN `style` TEXT NOT NULL DEFAULT 'HIGHLIGHT'"
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `annotation_replies` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `annotationId` INTEGER NOT NULL,
+                    `personaId` INTEGER,
+                    `replyToId` INTEGER,
+                    `contentMarkdown` TEXT NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    FOREIGN KEY(`annotationId`) REFERENCES `annotations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_annotation_replies_annotationId` " +
+                    "ON `annotation_replies` (`annotationId`)"
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `ai_creations` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `bookId` INTEGER NOT NULL,
+                    `type` TEXT NOT NULL,
+                    `chapterIndex` INTEGER NOT NULL,
+                    `startCharOffset` INTEGER NOT NULL,
+                    `endCharOffset` INTEGER NOT NULL,
+                    `directive` TEXT NOT NULL,
+                    `activeVersionId` INTEGER,
+                    `personaId` INTEGER,
+                    `createdAt` INTEGER NOT NULL,
+                    FOREIGN KEY(`bookId`) REFERENCES `books`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_ai_creations_bookId_chapterIndex` " +
+                    "ON `ai_creations` (`bookId`, `chapterIndex`)"
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `ai_creation_versions` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `creationId` INTEGER NOT NULL,
+                    `ord` INTEGER NOT NULL,
+                    `directive` TEXT NOT NULL,
+                    `content` TEXT NOT NULL,
+                    `status` TEXT NOT NULL,
+                    `modelName` TEXT NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    FOREIGN KEY(`creationId`) REFERENCES `ai_creations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_ai_creation_versions_creationId` " +
+                    "ON `ai_creation_versions` (`creationId`)"
+            )
+        }
+    }
 }

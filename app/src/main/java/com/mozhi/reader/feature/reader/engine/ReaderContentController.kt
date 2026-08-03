@@ -411,6 +411,64 @@ class ReaderContentController(
         )
     }
 
+    // ---- 滚动模式（PageMode.SCROLL）----
+
+    val chapterCount: Int get() = chapters.size
+
+    /** 滑窗内已排版的章：-1/0/+1 相对当前章，滚动条带按此拼接。 */
+    fun laidChapter(relative: Int): TextChapter? = when (relative) {
+        -1 -> prevChapter
+        0 -> curChapter
+        1 -> nextChapter
+        else -> null
+    }
+
+    /**
+     * 滚动模式的位置推进：只更新偏移并平移滑窗，不做页语义，也不回调 onContentChanged ——
+     * 滚动面自己持帧，回调只会造成多余重绘。跨到相邻章时窗口跟着滑（预排下一邻章），
+     * 更远的跳转整窗重开。
+     */
+    fun scrollTo(chapter: Int, offset: Int) {
+        if (chapters.isEmpty()) return
+        val target = chapter.coerceIn(0, chapters.size - 1)
+        val clamped = offset.coerceAtLeast(0)
+        when (target) {
+            chapterIndex -> {
+                if (charOffset == clamped) return
+                charOffset = clamped
+                rederivePageIndex()
+                publishPosition()
+            }
+            chapterIndex + 1 -> {
+                chapterIndex = target
+                charOffset = clamped
+                prevSlot = curSlot
+                curSlot = nextSlot
+                nextSlot = null
+                rederivePageIndex()
+                if (curSlot == null) ensureLoaded(chapterIndex)
+                ensureLoaded(chapterIndex + 1)
+                publishPosition()
+            }
+            chapterIndex - 1 -> {
+                chapterIndex = target
+                charOffset = clamped
+                nextSlot = curSlot
+                curSlot = prevSlot
+                prevSlot = null
+                rederivePageIndex()
+                if (curSlot == null) ensureLoaded(chapterIndex)
+                ensureLoaded(chapterIndex - 1)
+                publishPosition()
+            }
+            else -> {
+                chapterIndex = target
+                charOffset = clamped
+                rebindWindow()
+            }
+        }
+    }
+
     /**
      * A body slice around the given range of the current chapter, for AI context assembly.
      * Cuts at the nearest paragraph break within reach so the slice starts and ends cleanly.

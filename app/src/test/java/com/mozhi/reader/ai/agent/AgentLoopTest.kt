@@ -297,4 +297,64 @@ class AgentLoopTest {
             .map { it.id }
         assertEquals(toolIds.toSet(), callIds.toSet())
     }
+
+    // ---- runDetached：段评讨论串等轻量场景的不落库循环 ----
+
+    @Test
+    fun `detached run streams text and writes nothing to the dao`() = runTest {
+        val dao = FakeChatDao(emptyList())
+        val history = listOf(
+            ChatMessage(ChatRole.SYSTEM, "讨论区规则"),
+            ChatMessage(ChatRole.USER, "你怎么看这段")
+        )
+        val events = loop(dao).runDetachedWith(history, emptyList(), maxRounds = 3) {
+            AgentLoop.Streamer { _, _ -> flowOf(ChatDelta.Text("我认"), ChatDelta.Text("为很妙")) }
+        }.toList()
+
+        assertEquals(listOf<AgentEvent>(AgentEvent.Text("我认"), AgentEvent.Text("为很妙")), events)
+        assertTrue("讨论内容绝不落聊天消息表", dao.messages.isEmpty())
+    }
+
+    @Test
+    fun `detached run executes tools and feeds results to the next round`() = runTest {
+        val dao = FakeChatDao(emptyList())
+        val tool = EchoTool("第 2 章的雪是白色的")
+        var round = 0
+        val events = loop(dao).runDetachedWith(
+            listOf(ChatMessage(ChatRole.USER, "前文的雪什么颜色")),
+            listOf(tool),
+            maxRounds = 3
+        ) {
+            AgentLoop.Streamer { messages, _ ->
+                round++
+                if (round == 1) {
+                    flowOf(ChatDelta.ToolCalls(listOf(ToolCall("call_1", "echo_tool", "{}"))))
+                } else {
+                    assertEquals(ChatRole.TOOL, messages.last().role)
+                    flowOf(ChatDelta.Text("是白色的"))
+                }
+            }
+        }.toList()
+
+        assertEquals(1, tool.invocations)
+        assertTrue(events.any { it is AgentEvent.ToolRun })
+        assertTrue(events.any { it is AgentEvent.ToolFinished && it.succeeded })
+        assertEquals("是白色的", events.filterIsInstance<AgentEvent.Text>().joinToString("") { it.text })
+        assertTrue(dao.messages.isEmpty())
+    }
+
+    @Test
+    fun `detached run requires a user message`() = runTest {
+        val dao = FakeChatDao(emptyList())
+        val result = runCatching {
+            loop(dao).runDetachedWith(
+                listOf(ChatMessage(ChatRole.SYSTEM, "只有系统")),
+                emptyList(),
+                maxRounds = 3
+            ) {
+                AgentLoop.Streamer { _, _ -> flowOf(ChatDelta.Text("不该到这")) }
+            }.toList()
+        }
+        assertTrue(result.exceptionOrNull() is AiClientException.Empty)
+    }
 }

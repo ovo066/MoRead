@@ -564,6 +564,74 @@ class MigrationTest {
         }
     }
 
+    /** v15：批注补样式列（旧行回填 HIGHLIGHT），并建讨论串回复表与创作两表（级联删除生效）。 */
+    @Test
+    fun migrate14To15AddsAnnotationStyleAndCompanionPhase2Tables() {
+        helper.createDatabase(DB_NAME, 14).use { db ->
+            db.execSQL(
+                """
+                INSERT INTO books (
+                    id, title, author, coverPath, epubPath, sourceType, importedAt,
+                    totalChapters, lastReadLocator, lastReadChapterIndex, lastReadCharOffset,
+                    lastReadAt, textVersion, tags, metadataEdited
+                ) VALUES (1, '测试书', '', NULL, '/book.epub', 'EPUB', 1,
+                          3, NULL, 1, 20, 2, 1, '', 0)
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                INSERT INTO annotations (
+                    id, bookId, personaId, chapterIndex, startCharOffset, endCharOffset,
+                    selectedText, note, colorTag, createdAt
+                ) VALUES (1, 1, NULL, 0, 5, 12, '一段旧划线', '旧想法', '', 1)
+                """.trimIndent()
+            )
+        }
+
+        val db = helper.runMigrationsAndValidate(
+            DB_NAME,
+            15,
+            true,
+            DatabaseMigrations.Migration14To15
+        )
+        db.query("SELECT style FROM annotations WHERE id = 1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("HIGHLIGHT", cursor.getString(0))
+        }
+        db.execSQL(
+            """
+            INSERT INTO annotation_replies (annotationId, personaId, replyToId, contentMarkdown, createdAt)
+            VALUES (1, NULL, NULL, '用户的讨论回复', 2)
+            """.trimIndent()
+        )
+        db.execSQL(
+            """
+            INSERT INTO ai_creations (
+                id, bookId, type, chapterIndex, startCharOffset, endCharOffset,
+                directive, activeVersionId, personaId, createdAt
+            ) VALUES (1, 1, 'CONTINUE', 1, 20, 20, '往温柔的方向写', NULL, NULL, 3)
+            """.trimIndent()
+        )
+        db.execSQL(
+            """
+            INSERT INTO ai_creation_versions (creationId, ord, directive, content, status, modelName, createdAt)
+            VALUES (1, 1, '往温柔的方向写', '（生成中）', 'STREAMING', 'test-model', 3)
+            """.trimIndent()
+        )
+        // 外键级联：删除批注应带走回复，删除创作应带走版本
+        db.execSQL("PRAGMA foreign_keys = ON")
+        db.execSQL("DELETE FROM annotations WHERE id = 1")
+        db.query("SELECT COUNT(*) FROM annotation_replies").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(0, cursor.getInt(0))
+        }
+        db.execSQL("DELETE FROM ai_creations WHERE id = 1")
+        db.query("SELECT COUNT(*) FROM ai_creation_versions").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(0, cursor.getInt(0))
+        }
+    }
+
     private companion object {
         const val DB_NAME = "migration-test.db"
     }

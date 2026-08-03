@@ -87,8 +87,10 @@ class ReaderSettingsRepository @Inject constructor(
             theme = preferences[Keys.Theme]
                 ?.let { runCatching { ReaderTheme.valueOf(it) }.getOrNull() }
                 ?: ReaderTheme.SYSTEM,
-            // 滚动模式按 DECISIONS 暂时移除：存量 SCROLL 一律回落到分页。
-            pageMode = PageMode.PAGINATED,
+            // 2026-08-03 滚动模式回归：以章节为单位的连续滚动（上下滑动翻页）。
+            pageMode = preferences[Keys.PageMode]
+                ?.let { runCatching { PageMode.valueOf(it) }.getOrNull() }
+                ?: PageMode.PAGINATED,
             pageTurnAnimation = preferences[Keys.PageTurnAnimation]
                 ?.let { runCatching { PageTurnAnimation.valueOf(it) }.getOrNull() }
                 ?: PageTurnAnimation.SIMULATION,
@@ -219,6 +221,29 @@ class ReaderSettingsRepository @Inject constructor(
         dataStore.edit { it[Keys.SuggestionReplies] = value }
     }
 
+    /** 显示 AI 批注：关闭后角色划线与「评」标记不再渲染，书籍详情仍可回顾。默认开。 */
+    val showAiAnnotations: Flow<Boolean> =
+        dataStore.data.map { it[Keys.ShowAiAnnotations] ?: true }
+
+    suspend fun setShowAiAnnotations(value: Boolean) {
+        dataStore.edit { it[Keys.ShowAiAnnotations] = value }
+    }
+
+    /** 即划即改：记住上次划线样式（AnnotationStyle wire 值），一击直接复用。 */
+    val lastAnnotationStyle: Flow<String> =
+        dataStore.data.map { it[Keys.LastAnnotationStyle] ?: "HIGHLIGHT" }
+
+    /** 上次划线颜色（AnnotationColors 色名）。 */
+    val lastAnnotationColor: Flow<String> =
+        dataStore.data.map { it[Keys.LastAnnotationColor] ?: "amber" }
+
+    suspend fun setLastAnnotationInk(style: String, colorTag: String) {
+        dataStore.edit {
+            it[Keys.LastAnnotationStyle] = style
+            it[Keys.LastAnnotationColor] = colorTag
+        }
+    }
+
     private object Keys {
         val FontScale = floatPreferencesKey("reader_font_scale")
         val Font = stringPreferencesKey("reader_font")
@@ -234,6 +259,9 @@ class ReaderSettingsRepository @Inject constructor(
         val AccentCustomArgb = intPreferencesKey("accent_custom_argb")
         val ActivePersonaId = longPreferencesKey("active_persona_id")
         val SuggestionReplies = booleanPreferencesKey("companion_suggestion_replies")
+        val ShowAiAnnotations = booleanPreferencesKey("companion_show_ai_annotations")
+        val LastAnnotationStyle = stringPreferencesKey("reader_annotation_last_style")
+        val LastAnnotationColor = stringPreferencesKey("reader_annotation_last_color")
         val CustomThemes = stringPreferencesKey("reader_custom_themes")
         val ActiveCustomThemeId = longPreferencesKey("reader_active_custom_theme_id")
     }

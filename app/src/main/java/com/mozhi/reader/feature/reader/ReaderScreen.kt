@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -69,7 +70,9 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import coil3.compose.AsyncImage
 import com.mozhi.reader.R
 import com.mozhi.reader.ui.components.blockSheetDrag
+import com.mozhi.reader.core.database.entity.AnnotationColors
 import com.mozhi.reader.core.database.entity.AnnotationEntity
+import com.mozhi.reader.core.database.entity.AnnotationStyle
 import com.mozhi.reader.core.database.entity.BookmarkEntity
 import com.mozhi.reader.core.database.entity.ChapterEntity
 import com.mozhi.reader.core.datastore.ReaderFont
@@ -78,10 +81,10 @@ import com.mozhi.reader.core.datastore.ReaderTheme
 import com.mozhi.reader.feature.reader.engine.ReaderAnnotationMark
 import kotlinx.coroutines.launch
 
-private data class AnnotationDraft(
-    val chapterIndex: Int,
-    val selectedText: String,
-    val range: IntRange
+/** 即划即改浮条：刚落的划线 id + 浮条位置（沿用选区工具栏的锚点位）。 */
+private data class AnnotationInkFloater(
+    val annotationId: Long,
+    val topPx: Int
 )
 
 private data class AnnotationThreadKey(
@@ -117,7 +120,7 @@ fun ReaderScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     var activeSheet by remember { mutableStateOf<ReaderSheet?>(null) }
     var aiRequest by remember { mutableStateOf<ReaderAiRequest?>(null) }
-    var annotationDraft by remember { mutableStateOf<AnnotationDraft?>(null) }
+    var inkFloater by remember { mutableStateOf<AnnotationInkFloater?>(null) }
     var annotationThread by remember { mutableStateOf<AnnotationThreadKey?>(null) }
     var ttsDraft by remember { mutableStateOf<String?>(null) }
     var chromeVisible by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(true) }
@@ -132,13 +135,15 @@ fun ReaderScreen(
     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
     val palette = readerPalette(state.settings, systemDark)
     val listeningThisBook = listenState?.bookId == bookId
+    // 滚动模式：听书「按页跳」与「翻页回写朗读位置」都不适用，跟读交给滚动面自己做。
+    val scrollMode = state.settings.pageMode == com.mozhi.reader.core.datastore.PageMode.SCROLL
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { }
 
     // 听书自动翻页：朗读句越过当前页边界时，直接跳到句首所在页（无翻页动画）。
-    LaunchedEffect(listeningThisBook) {
-        if (!listeningThisBook) return@LaunchedEffect
+    LaunchedEffect(listeningThisBook, scrollMode) {
+        if (!listeningThisBook || scrollMode) return@LaunchedEffect
         listenViewModel.state.collect { listen ->
             if (listen == null || listen.bookId != bookId) return@collect
             if (listen.isPlaying &&
@@ -150,8 +155,8 @@ fun ReaderScreen(
     }
     // 听书时手动翻页/跳章：把朗读位置同步到新页首（Legado 语义）。
     // 自动翻页落点恰是当前句起点，会命中 withinSentence 而不回环触发 seek。
-    LaunchedEffect(listeningThisBook) {
-        if (!listeningThisBook) return@LaunchedEffect
+    LaunchedEffect(listeningThisBook, scrollMode) {
+        if (!listeningThisBook || scrollMode) return@LaunchedEffect
         snapshotFlow { state.currentChapterIndex to state.currentCharOffset }
             .collect { (chapterIndex, charOffset) ->
                 val listen = listenViewModel.state.value ?: return@collect
@@ -168,14 +173,27 @@ fun ReaderScreen(
         .orEmpty()
     val contextQuote = chapterTitle.ifBlank { state.book?.title.orEmpty() }
     val readerReady = !state.isLoading && state.errorMessage == null
-    val annotationMarks = remember(state.annotations) {
-        state.annotations.map { annotation ->
+    // AI 批注开关只影响阅读页渲染；关闭时角色划线与标记不再出现（详情页仍可回顾）
+    val visibleAnnotations = remember(state.annotations, state.showAiAnnotations) {
+        if (state.showAiAnnotations) {
+            state.annotations
+        } else {
+            state.annotations.filter { it.personaId == null }
+        }
+    }
+    val annotationMarks = remember(visibleAnnotations, state.repliedAnnotationIds) {
+        visibleAnnotations.map { annotation ->
             ReaderAnnotationMark(
                 id = annotation.id,
                 chapterIndex = annotation.chapterIndex,
                 startCharOffset = annotation.startCharOffset,
                 endCharOffset = annotation.endCharOffset,
-                hasComment = annotation.note.isNotBlank()
+                hasComment = annotation.note.isNotBlank() ||
+                    annotation.id in state.repliedAnnotationIds,
+                style = annotation.style,
+                colorTag = annotation.colorTag.ifBlank {
+                    annotation.personaId?.let(AnnotationColors::forPersona).orEmpty()
+                }
             )
         }
     }
@@ -188,6 +206,9 @@ fun ReaderScreen(
     }.orEmpty()
 
     LaunchedEffect(bookId) { companionViewModel.bind(bookId) }
+
+    // 翻页/跳章即收起样式浮条
+    LaunchedEffect(state.currentChapterIndex, state.pageIndex) { inkFloater = null }
 
     LaunchedEffect(viewModel) {
         viewModel.events.collect { event ->
@@ -274,42 +295,42 @@ fun ReaderScreen(
                 onBack = onBack,
                 modifier = Modifier.align(Alignment.Center)
             )
-            else -> ReaderPane(
-                controller = viewModel.contentController,
-                settings = state.settings,
-                palette = palette,
-                enabled = activeSheet == null && !detailsVisible && aiRequest == null &&
-                    annotationDraft == null && annotationThread == null && ttsDraft == null,
-                registerContentHook = viewModel::setContentHook,
-                onNotice = { message ->
-                    coroutineScope.launch { snackbarHostState.showSnackbar(message) }
-                },
-                annotations = annotationMarks,
-                listenHighlight = listenState?.takeIf { it.bookId == bookId }?.let { listen ->
+            else -> {
+                val paneEnabled = activeSheet == null && !detailsVisible && aiRequest == null &&
+                    inkFloater == null && annotationThread == null && ttsDraft == null
+                val paneListenHighlight = listenState?.takeIf { it.bookId == bookId }?.let { listen ->
                     com.mozhi.reader.feature.reader.engine.ListenHighlightSpan(
                         chapterIndex = listen.chapterIndex,
                         startCharOffset = listen.sentenceStart,
                         endCharOffset = listen.sentenceEnd
                     )
-                },
-                onAiAction = { action, selectionText, contextText ->
-                    aiRequest = ReaderAiRequest(
-                        action = action,
-                        selection = selectionText,
-                        context = contextText,
-                        bookId = bookId,
-                        bookTitle = state.book?.title.orEmpty(),
-                        chapterTitle = chapterTitle
-                    )
-                },
-                onAnnotationAction = { selectedText, range ->
-                    annotationDraft = AnnotationDraft(
-                        chapterIndex = state.currentChapterIndex,
-                        selectedText = selectedText,
-                        range = range
-                    )
-                },
-                onAnnotationClick = { ids ->
+                }
+                val paneNotice: (String) -> Unit = { message ->
+                    coroutineScope.launch { snackbarHostState.showSnackbar(message) }
+                }
+                val paneAiAction: (com.mozhi.reader.ai.prompt.SelectionAiAction, String, String) -> Unit =
+                    { action, selectionText, contextText ->
+                        aiRequest = ReaderAiRequest(
+                            action = action,
+                            selection = selectionText,
+                            context = contextText,
+                            bookId = bookId,
+                            bookTitle = state.book?.title.orEmpty(),
+                            chapterTitle = chapterTitle
+                        )
+                    }
+                val paneAnnotationAction: (String, IntRange, Int) -> Unit =
+                    { selectedText, range, anchorTopPx ->
+                        // 即划即改：一击先落上次样式的划线，浮条随后浮出供实时微调
+                        val chapterIndex = state.currentChapterIndex
+                        coroutineScope.launch {
+                            val id = viewModel.quickAnnotate(chapterIndex, selectedText, range)
+                            if (id != null) {
+                                inkFloater = AnnotationInkFloater(annotationId = id, topPx = anchorTopPx)
+                            }
+                        }
+                    }
+                val paneAnnotationClick: (List<Long>) -> Unit = { ids ->
                     state.annotations.firstOrNull { it.id in ids }?.let { annotation ->
                         annotationThread = AnnotationThreadKey(
                             annotation.chapterIndex,
@@ -317,23 +338,61 @@ fun ReaderScreen(
                             annotation.endCharOffset
                         )
                     }
-                },
-                onTtsAction = { selection -> ttsDraft = selection },
-                onImageAction = { selectionText, contextText, range ->
-                    selectionMediaViewModel.generateImage(
-                        bookId = bookId,
-                        bookTitle = state.book?.title.orEmpty(),
-                        chapterTitle = chapterTitle,
-                        chapterIndex = state.currentChapterIndex,
-                        charOffset = range.first,
-                        selection = selectionText,
-                        contextText = contextText
+                }
+                val paneTtsAction: (String) -> Unit = { selection -> ttsDraft = selection }
+                val paneImageAction: (String, String, IntRange) -> Unit =
+                    { selectionText, contextText, range ->
+                        selectionMediaViewModel.generateImage(
+                            bookId = bookId,
+                            bookTitle = state.book?.title.orEmpty(),
+                            chapterTitle = chapterTitle,
+                            chapterIndex = state.currentChapterIndex,
+                            charOffset = range.first,
+                            selection = selectionText,
+                            contextText = contextText
+                        )
+                    }
+                if (scrollMode) {
+                    ReaderScrollPane(
+                        controller = viewModel.contentController,
+                        settings = state.settings,
+                        palette = palette,
+                        enabled = paneEnabled,
+                        registerContentHook = viewModel::setContentHook,
+                        onCenterTap = { chromeVisible = !chromeVisible },
+                        onBoundary = viewModel::onBoundaryHit,
+                        onNotice = paneNotice,
+                        annotations = annotationMarks,
+                        listenHighlight = paneListenHighlight,
+                        listenPlaying = listenState?.takeIf { it.bookId == bookId }?.isPlaying == true,
+                        onAiAction = paneAiAction,
+                        onAnnotationAction = paneAnnotationAction,
+                        onAnnotationClick = paneAnnotationClick,
+                        onTtsAction = paneTtsAction,
+                        onImageAction = paneImageAction,
+                        modifier = Modifier.fillMaxSize()
                     )
-                },
-                onCenterTap = { chromeVisible = !chromeVisible },
-                onBoundary = viewModel::onBoundaryHit,
-                modifier = Modifier.fillMaxSize()
-            )
+                } else {
+                    ReaderPane(
+                        controller = viewModel.contentController,
+                        settings = state.settings,
+                        palette = palette,
+                        enabled = paneEnabled,
+                        registerContentHook = viewModel::setContentHook,
+                        onNotice = paneNotice,
+                        annotations = annotationMarks,
+                        listenHighlight = paneListenHighlight,
+                        onAiAction = paneAiAction,
+                        onAnnotationAction = paneAnnotationAction,
+                        onAnnotationClick = paneAnnotationClick,
+                        onTtsAction = paneTtsAction,
+                        onImageAction = paneImageAction,
+                        onCenterTap = { chromeVisible = !chromeVisible },
+                        onBoundary = viewModel::onBoundaryHit,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
         }
 
         if (!detailsVisible) {
@@ -464,6 +523,40 @@ fun ReaderScreen(
             }
         }
 
+        // 即划即改浮条：点浮条外任意处收起；翻页/跳章由 LaunchedEffect 收起
+        inkFloater?.let { floater ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                        indication = null
+                    ) { inkFloater = null }
+            )
+            val floaterAnnotation = state.annotations.firstOrNull { it.id == floater.annotationId }
+            if (floaterAnnotation != null) {
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .offset { androidx.compose.ui.unit.IntOffset(0, floater.topPx) },
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(17.dp),
+                    color = palette.glassStrong,
+                    contentColor = palette.onBackground,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, palette.glassBorder),
+                    shadowElevation = 8.dp
+                ) {
+                    AnnotationStylePanel(
+                        selectedStyle = AnnotationStyle.fromWire(floaterAnnotation.style),
+                        selectedColor = AnnotationColors.normalize(floaterAnnotation.colorTag),
+                        palette = palette,
+                        onChange = { style, color ->
+                            viewModel.updateAnnotationStyle(floater.annotationId, style, color)
+                        }
+                    )
+                }
+            }
+        }
+
         SnackbarHost(
             hostState = snackbarHostState,
             modifier = Modifier
@@ -524,6 +617,7 @@ fun ReaderScreen(
                 onSaveCustomTheme = viewModel::saveCustomTheme,
                 onDeleteCustomTheme = viewModel::deleteCustomTheme,
                 onAnimationChange = viewModel::setPageTurnAnimation,
+                onPageModeChange = viewModel::setPageMode,
                 onKeepScreenOnChange = viewModel::setKeepScreenOn
             )
         }
@@ -576,38 +670,39 @@ fun ReaderScreen(
         )
     }
 
-    annotationDraft?.let { draft ->
-        AnnotationEditorDialog(
-            selectedText = draft.selectedText,
-            onDismiss = { annotationDraft = null },
-            onSave = { comment ->
-                viewModel.addAnnotation(
-                    chapterIndex = draft.chapterIndex,
-                    selectedText = draft.selectedText,
-                    range = draft.range,
-                    comment = comment
-                )
-                annotationDraft = null
-            }
-        )
-    }
-
     if (annotationThread != null) {
+        val discussionViewModel: AnnotationDiscussionViewModel = hiltViewModel()
+        val discussionState by discussionViewModel.uiState.collectAsStateWithLifecycle()
+        val threadIds = threadAnnotations.map { it.id }
+        LaunchedEffect(threadIds) { discussionViewModel.open(threadIds) }
         ModalBottomSheet(
-            onDismissRequest = { annotationThread = null },
+            onDismissRequest = {
+                annotationThread = null
+                discussionViewModel.close()
+            },
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
             containerColor = palette.glassStrong,
-            contentColor = palette.onBackground
+            contentColor = palette.onBackground,
+            scrimColor = palette.scrim
         ) {
-            AnnotationThreadSheet(
+            AnnotationDiscussionSheet(
                 annotations = threadAnnotations,
+                replies = discussionState.replies,
+                streaming = discussionState.streaming,
+                error = discussionState.error,
                 personas = companionState.personas,
                 palette = palette,
-                onReply = { comment ->
-                    threadAnnotations.firstOrNull()?.let { viewModel.replyToAnnotation(it, comment) }
+                onSend = { target, text, respondPersonaId ->
+                    discussionViewModel.sendUserReply(bookId, target, text, respondPersonaId)
                 },
-                onDelete = viewModel::deleteAnnotation,
-                onDismiss = { annotationThread = null }
+                onUpdateStyle = viewModel::updateAnnotationStyle,
+                onDeleteAnnotation = viewModel::deleteAnnotation,
+                onDeleteReply = discussionViewModel::deleteReply,
+                onCancelStreaming = discussionViewModel::cancelStreaming,
+                onDismiss = {
+                    annotationThread = null
+                    discussionViewModel.close()
+                }
             )
         }
     }
@@ -672,156 +767,6 @@ fun ReaderScreen(
                     coroutineScope.launch { snackbarHostState.showSnackbar("已复制回答") }
                 }
             )
-        }
-    }
-}
-
-@Composable
-private fun AnnotationEditorDialog(
-    selectedText: String,
-    onDismiss: () -> Unit,
-    onSave: (String) -> Unit
-) {
-    var comment by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("添加段落批注") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
-                ) {
-                    Text(
-                        "“${selectedText.take(300)}${if (selectedText.length > 300) "…" else ""}”",
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(10.dp)
-                    )
-                }
-                OutlinedTextField(
-                    value = comment,
-                    onValueChange = { comment = it },
-                    label = { Text("你的批注") },
-                    minLines = 3,
-                    maxLines = 8,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Text(
-                    "保存后正文旁会出现“评”标记，点击即可打开该段评论区。",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { onSave(comment.trim()) }, enabled = comment.isNotBlank()) {
-                Text("保存")
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
-    )
-}
-
-@Composable
-private fun AnnotationThreadSheet(
-    annotations: List<AnnotationEntity>,
-    personas: List<com.mozhi.reader.core.database.entity.PersonaEntity>,
-    palette: ReaderPalette,
-    onReply: (String) -> Unit,
-    onDelete: (Long) -> Unit,
-    onDismiss: () -> Unit
-) {
-    var reply by remember { mutableStateOf("") }
-    val quote = annotations.firstOrNull()?.selectedText.orEmpty()
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 18.dp, vertical = 8.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("段落评论区", style = MaterialTheme.typography.titleLarge)
-                Text(
-                    "${annotations.size} 条批注",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = palette.muted
-                )
-            }
-            TextButton(onClick = onDismiss) { Text("完成") }
-        }
-        if (quote.isNotBlank()) {
-            Surface(
-                color = palette.accentContainer.copy(alpha = 0.45f),
-                shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
-                modifier = Modifier.padding(vertical = 8.dp)
-            ) {
-                Text(
-                    "“${quote.take(500)}${if (quote.length > 500) "…" else ""}”",
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(12.dp)
-                )
-            }
-        }
-        val threadListState = androidx.compose.foundation.lazy.rememberLazyListState()
-        LazyColumn(
-            state = threadListState,
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 420.dp)
-                .blockSheetDrag(threadListState),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            if (annotations.isEmpty()) {
-                item { Text("这段批注已删除。", color = palette.muted, modifier = Modifier.padding(12.dp)) }
-            }
-            items(annotations, key = AnnotationEntity::id) { annotation ->
-                val author = annotation.personaId?.let { id ->
-                    personas.firstOrNull { it.id == id }?.name ?: "已删除角色"
-                } ?: "我的批注"
-                Surface(
-                    color = palette.glass,
-                    shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, palette.glassBorder)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
-                        verticalAlignment = Alignment.Top
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(author, style = MaterialTheme.typography.labelMedium, color = palette.accent)
-                            Text(
-                                annotation.note.ifBlank { "仅标记了这段原文" },
-                                style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.padding(top = 4.dp)
-                            )
-                        }
-                        IconButton(onClick = { onDelete(annotation.id) }) {
-                            Icon(Icons.Outlined.Delete, contentDescription = "删除这条批注", tint = palette.muted)
-                        }
-                    }
-                }
-            }
-        }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 10.dp, bottom = 18.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            OutlinedTextField(
-                value = reply,
-                onValueChange = { reply = it },
-                placeholder = { Text("参与这段讨论…") },
-                maxLines = 4,
-                modifier = Modifier.weight(1f)
-            )
-            TextButton(
-                onClick = {
-                    onReply(reply.trim())
-                    reply = ""
-                },
-                enabled = reply.isNotBlank() && annotations.isNotEmpty()
-            ) { Text("发表") }
         }
     }
 }

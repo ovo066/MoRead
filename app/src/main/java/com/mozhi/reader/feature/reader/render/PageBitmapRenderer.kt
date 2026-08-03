@@ -43,10 +43,8 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         textAlign = Paint.Align.CENTER
     }
     private val imagePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-    private val annotationHighlightPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = pageStyle.accentColor
-        alpha = if (pageStyle.isDark) 42 else 55
-    }
+    /** (style|colorTag) → Paint；样式实例随 pageStyle 重建，缓存不会跨主题存活。 */
+    private val annotationInkPaints = HashMap<String, Paint>()
     private val listenHighlightPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = pageStyle.accentColor
         alpha = if (pageStyle.isDark) 30 else 38
@@ -118,10 +116,7 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
     ): Bitmap {
         val bitmap = obtainBitmap(into)
         val canvas = Canvas(bitmap)
-        canvas.drawColor(pageStyle.backgroundColor)
-        grainPaint?.let {
-            canvas.drawRect(0f, 0f, bitmap.width.toFloat(), bitmap.height.toFloat(), it)
-        }
+        drawBackdrop(canvas, bitmap.width.toFloat(), bitmap.height.toFloat())
         drawHeader(canvas, page)
         when (page) {
             is RenderPage.Laid -> drawBody(canvas, page, annotations, listenHighlight)
@@ -131,7 +126,13 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         return bitmap
     }
 
-    private fun drawHeader(canvas: Canvas, page: RenderPage) {
+    /** 纸面底色 + 纸纹；滚动模式在实时画布上也走这一笔。 */
+    internal fun drawBackdrop(canvas: Canvas, width: Float, height: Float) {
+        canvas.drawColor(pageStyle.backgroundColor)
+        grainPaint?.let { canvas.drawRect(0f, 0f, width, height, it) }
+    }
+
+    internal fun drawHeader(canvas: Canvas, page: RenderPage) {
         val title = page.chapterTitle.ifBlank { return }
         val maxWidth = pageStyle.contentWidth
         val text = ellipsize(title, tipPaint, maxWidth)
@@ -147,6 +148,23 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
     ) {
         canvas.save()
         canvas.translate(pageStyle.paddingHorizontal, pageStyle.headerHeight)
+        drawContent(canvas, page, annotations, listenHighlight)
+        canvas.restore()
+    }
+
+    /**
+     * 内容层（听书底色 → 批注墨迹 → 正文 → 「评」标记），坐标为内容局部系，画布由调用方
+     * 平移定位；翻页位图与滚动条带共用这一份代码。[clipTop]/[clipBottom] 是页内可见窗，
+     * 滚动模式用它跳过视口外的行，避免逐帧画整页。
+     */
+    internal fun drawContent(
+        canvas: Canvas,
+        page: RenderPage.Laid,
+        annotations: List<ReaderAnnotationMark>,
+        listenHighlight: ListenHighlightSpan?,
+        clipTop: Float = Float.NEGATIVE_INFINITY,
+        clipBottom: Float = Float.POSITIVE_INFINITY
+    ) {
         val markerRadius = (pageStyle.tipSizePx * 0.72f).coerceAtLeast(8f)
         // 听书当前句底色画在批注高亮之下，两者重叠时批注色仍占主导。
         if (listenHighlight != null && listenHighlight.chapterIndex == page.chapterIndex) {
@@ -161,10 +179,11 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
                     )
                 ),
                 markerRadius = markerRadius,
-                markerGap = markerRadius * 0.35f,
+                markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.ANNOTATION_MARKER_GAP_RATIO,
                 maxRight = pageStyle.contentWidth + pageStyle.paddingHorizontal * 0.9f
             )
             listenGeometry.highlights.forEach { rect ->
+                if (rect.bottom < clipTop || rect.top > clipBottom) return@forEach
                 canvas.drawRoundRect(
                     RectF(rect.left, rect.top, rect.right, rect.bottom),
                     ANNOTATION_HIGHLIGHT_RADIUS,
@@ -176,22 +195,22 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         val geometry = page.page.annotationGeometry(
             annotations = annotations,
             markerRadius = markerRadius,
-            markerGap = markerRadius * 0.35f,
+            markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.ANNOTATION_MARKER_GAP_RATIO,
             maxRight = pageStyle.contentWidth + pageStyle.paddingHorizontal * 0.9f
         )
+        val markById = annotations.associateBy(ReaderAnnotationMark::id)
+        // 荧光垫在正文之下；直线/波浪画在字形基线下沿，也一并先画（都在文字层之下不糊字形）
         geometry.highlights.forEach { rect ->
-            canvas.drawRoundRect(
-                RectF(rect.left, rect.top, rect.right, rect.bottom),
-                ANNOTATION_HIGHLIGHT_RADIUS,
-                ANNOTATION_HIGHLIGHT_RADIUS,
-                annotationHighlightPaint
-            )
+            if (rect.bottom < clipTop || rect.top > clipBottom) return@forEach
+            val mark = markById[rect.annotationId]
+            drawAnnotationInk(canvas, rect, mark)
         }
         val contentPaint = pageStyle.measure.contentPaint
         val titlePaint = pageStyle.measure.titlePaint
         contentPaint.color = pageStyle.textColor
         titlePaint.color = pageStyle.textColor
         for (line in page.page.lines) {
+            if (line.lineBottom < clipTop || line.lineTop > clipBottom) continue
             val inlineImage = line.inlineImage
             if (inlineImage != null) {
                 drawInlineImage(
@@ -213,6 +232,9 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
             }
         }
         geometry.markers.forEach { marker ->
+            if (marker.centerY + markerRadius < clipTop || marker.centerY - markerRadius > clipBottom) {
+                return@forEach
+            }
             canvas.drawCircle(marker.centerX, marker.centerY, markerRadius, annotationMarkerPaint)
             val label = if (marker.annotationIds.size > 1) marker.annotationIds.size.toString() else "评"
             canvas.drawText(
@@ -222,8 +244,76 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
                 annotationMarkerTextPaint
             )
         }
-        canvas.restore()
     }
+
+    /** 按批注样式分笔画：荧光=填充矩形，直线=底沿实线，波浪=底沿正弦 Path。 */
+    private fun drawAnnotationInk(
+        canvas: Canvas,
+        rect: com.mozhi.reader.feature.reader.engine.AnnotationHighlightRect,
+        mark: ReaderAnnotationMark?
+    ) {
+        val style = mark?.style?.uppercase() ?: "HIGHLIGHT"
+        val colorTag = mark?.colorTag.orEmpty()
+        val stroke = (pageStyle.contentSizePx * 0.055f).coerceAtLeast(2.5f)
+        when (style) {
+            "UNDERLINE" -> {
+                val paint = inkPaint("UNDERLINE", colorTag) {
+                    color = AnnotationInk.lineColor(colorTag, pageStyle.isDark, pageStyle.accentColor)
+                    strokeWidth = stroke
+                    strokeCap = Paint.Cap.ROUND
+                }
+                val y = rect.bottom - stroke * 0.75f
+                canvas.drawLine(rect.left + 1f, y, rect.right - 1f, y, paint)
+            }
+            "WAVY" -> {
+                val paint = inkPaint("WAVY", colorTag) {
+                    color = AnnotationInk.lineColor(colorTag, pageStyle.isDark, pageStyle.accentColor)
+                    this.style = Paint.Style.STROKE
+                    strokeWidth = stroke * 0.9f
+                    strokeCap = Paint.Cap.ROUND
+                }
+                val amplitude = stroke * 1.1f
+                val period = (pageStyle.contentSizePx * 0.42f).coerceAtLeast(8f)
+                val baseY = rect.bottom - amplitude - stroke * 0.35f
+                val width = rect.right - rect.left - 2f
+                val segments = AnnotationInk.wavySegments(width, period)
+                if (segments > 0) {
+                    val path = Path()
+                    val step = width / segments
+                    path.moveTo(rect.left + 1f, baseY)
+                    var up = true
+                    var x = rect.left + 1f
+                    repeat(segments) {
+                        val controlY = if (up) baseY - amplitude else baseY + amplitude
+                        path.quadTo(x + step / 2f, controlY, x + step, baseY)
+                        x += step
+                        up = !up
+                    }
+                    canvas.drawPath(path, paint)
+                }
+            }
+            else -> {
+                val paint = inkPaint("HIGHLIGHT", colorTag) {
+                    color = AnnotationInk.highlightFillColor(
+                        colorTag,
+                        pageStyle.isDark,
+                        pageStyle.accentColor
+                    )
+                }
+                canvas.drawRoundRect(
+                    RectF(rect.left, rect.top, rect.right, rect.bottom),
+                    ANNOTATION_HIGHLIGHT_RADIUS,
+                    ANNOTATION_HIGHLIGHT_RADIUS,
+                    paint
+                )
+            }
+        }
+    }
+
+    private inline fun inkPaint(style: String, colorTag: String, configure: Paint.() -> Unit): Paint =
+        annotationInkPaints.getOrPut("$style|$colorTag") {
+            Paint(Paint.ANTI_ALIAS_FLAG).apply(configure)
+        }
 
     private fun drawInlineImage(
         canvas: Canvas,
@@ -300,7 +390,24 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         canvas.drawText(page.message, centerX, centerY + pageStyle.lineStep * 0.5f, placeholderPaint)
     }
 
-    private fun drawFooter(
+    /** 滚动模式的未排版邻章占位块：在条带上画一屏高的「章名 + 加载中」。 */
+    internal fun drawScrollPlaceholder(
+        canvas: Canvas,
+        title: String,
+        message: String,
+        top: Float,
+        height: Float
+    ) {
+        val centerX = pageStyle.viewWidth / 2f
+        val centerY = top + height / 2f
+        if (title.isNotBlank()) {
+            val titleText = ellipsize(title, placeholderPaint, pageStyle.contentWidth)
+            canvas.drawText(titleText, centerX, centerY - pageStyle.lineStep, placeholderPaint)
+        }
+        canvas.drawText(message, centerX, centerY + pageStyle.lineStep * 0.5f, placeholderPaint)
+    }
+
+    internal fun drawFooter(
         canvas: Canvas,
         page: RenderPage,
         bookProgress: Float,

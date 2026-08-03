@@ -5,6 +5,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -44,6 +45,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.InputChip
@@ -433,15 +435,54 @@ fun BookDetailScreen(
             ) {
                 Text("段落批注与评论", style = MaterialTheme.typography.titleLarge)
                 Text(
-                    "阅读正文时点击段落旁的“评”标记可参与评论。",
+                    "阅读正文时点击划线或“评”标记可参与讨论。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
+                    modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
                 )
-                val threads = remember(state.annotations) {
-                    state.annotations.groupBy {
-                        Triple(it.chapterIndex, it.startCharOffset, it.endCharOffset)
-                    }.values.sortedByDescending { group -> group.maxOf(AnnotationEntity::createdAt) }
+                // 作者筛选：全部 / 我的 / 各角色（学习向用户复习时常只看自己的划线）
+                var authorFilter by remember { mutableStateOf<Long?>(FILTER_ALL) }
+                val annotationAuthors = remember(state.annotations) {
+                    state.annotations.mapNotNull(AnnotationEntity::personaId).distinct()
+                }
+                androidx.compose.foundation.layout.Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(androidx.compose.foundation.rememberScrollState())
+                        .padding(bottom = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    FilterChip(
+                        selected = authorFilter == FILTER_ALL,
+                        onClick = { authorFilter = FILTER_ALL },
+                        label = { Text("全部") }
+                    )
+                    FilterChip(
+                        selected = authorFilter == null,
+                        onClick = { authorFilter = null },
+                        label = { Text("我的") }
+                    )
+                    annotationAuthors.forEach { personaId ->
+                        FilterChip(
+                            selected = authorFilter == personaId,
+                            onClick = { authorFilter = personaId },
+                            label = {
+                                Text(
+                                    state.personaNames[personaId] ?: "已删除角色",
+                                    maxLines = 1
+                                )
+                            }
+                        )
+                    }
+                }
+                val threads = remember(state.annotations, authorFilter) {
+                    state.annotations
+                        .filter { annotation ->
+                            authorFilter == FILTER_ALL || annotation.personaId == authorFilter
+                        }
+                        .groupBy {
+                            Triple(it.chapterIndex, it.startCharOffset, it.endCharOffset)
+                        }.values.sortedByDescending { group -> group.maxOf(AnnotationEntity::createdAt) }
                 }
                 if (threads.isEmpty()) {
                     Text("还没有批注。阅读时长按原文即可添加，伴读 Agent 也能调用 add_annotation。")
@@ -457,6 +498,7 @@ fun BookDetailScreen(
                         items(threads, key = { group -> group.first().id }) { comments ->
                             AnnotationReviewCard(
                                 comments = comments,
+                                personaNames = state.personaNames,
                                 onDelete = viewModel::deleteAnnotation
                             )
                         }
@@ -651,9 +693,13 @@ private fun NoteEditorDialog(
     )
 }
 
+/** 批注作者筛选的「全部」哨兵值（null 已被「我的」占用）。 */
+private const val FILTER_ALL = -1L
+
 @Composable
 private fun AnnotationReviewCard(
     comments: List<AnnotationEntity>,
+    personaNames: Map<Long, String>,
     onDelete: (Long) -> Unit
 ) {
     val first = comments.first()
@@ -675,7 +721,9 @@ private fun AnnotationReviewCard(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            if (annotation.personaId == null) "我的批注" else "角色批注",
+                            annotation.personaId?.let { id ->
+                                personaNames[id] ?: "已删除角色"
+                            } ?: "我的批注",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary
                         )

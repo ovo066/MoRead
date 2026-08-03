@@ -123,10 +123,135 @@ data class AnnotationEntity(
     val endCharOffset: Int,
     /** 选中原文快照，定位失效时仍可展示。 */
     val selectedText: String,
-    /** 批注想法，可为空串（纯高亮）。 */
+    /** 批注想法，可为空串（纯高亮）；作为讨论串的楼主层展示。 */
     val note: String = "",
-    /** 高亮色名，空串用默认色；用户与各 AI 角色的底色区分由 personaId 决定。 */
+    /** 划线色名（见 [AnnotationColors]），空串用默认强调色。 */
     val colorTag: String = "",
+    /** 划线样式（见 [AnnotationStyle]），存 wire 值。 */
+    @ColumnInfo(defaultValue = "'HIGHLIGHT'")
+    val style: String = AnnotationStyle.HIGHLIGHT.wire,
+    val createdAt: Long
+)
+
+/**
+ * 批注样式。语义约定（写进 add_annotation 工具描述，让 AI 批注自带信息层次）：
+ * 荧光 = 金句/精彩段落，波浪 = 伏笔/暗线，直线 = 知识点/典故。
+ */
+enum class AnnotationStyle(val wire: String) {
+    HIGHLIGHT("HIGHLIGHT"),
+    UNDERLINE("UNDERLINE"),
+    WAVY("WAVY");
+
+    companion object {
+        /** 未知/历史值一律回落荧光，坏数据不炸渲染。 */
+        fun fromWire(value: String?): AnnotationStyle =
+            entries.firstOrNull { it.wire.equals(value, ignoreCase = true) } ?: HIGHLIGHT
+    }
+}
+
+/** 划线色名（四预设 + "#RRGGBB" 自定义）；ARGB 由渲染层派生，这里只管稳定的标签值。 */
+object AnnotationColors {
+    const val AMBER = "amber"
+    const val BAMBOO = "bamboo"
+    const val INDIGO = "indigo"
+    const val ROSE = "rose"
+    val ALL = listOf(AMBER, BAMBOO, INDIGO, ROSE)
+
+    /** 预设名或合法十六进制原样保留（统一成 "#RRGGBB" 大写）；其余回落琥珀。 */
+    fun normalize(tag: String?): String {
+        val trimmed = tag?.trim().orEmpty()
+        ALL.firstOrNull { it.equals(trimmed, ignoreCase = true) }?.let { return it }
+        val hex = trimmed.removePrefix("#")
+        if (hex.length == 6 && hex.all(::isHexDigit)) return "#" + hex.uppercase()
+        return AMBER
+    }
+
+    /** 角色批注不占用户色板：按 personaId 稳定散列，同角色永远同色。 */
+    fun forPersona(personaId: Long): String = ALL[(personaId % ALL.size).toInt().coerceAtLeast(0)]
+
+    private fun isHexDigit(c: Char): Boolean = c.isDigit() || c.lowercaseChar() in 'a'..'f'
+}
+
+/** 段评讨论串的回复层；楼主层是 [AnnotationEntity.note] 本身。 */
+@Entity(
+    tableName = "annotation_replies",
+    foreignKeys = [
+        ForeignKey(
+            entity = AnnotationEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["annotationId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index("annotationId")]
+)
+data class AnnotationReplyEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val annotationId: Long,
+    /** null = 用户；无 FK，角色删除后发言留存。 */
+    val personaId: Long? = null,
+    /** 可选：针对楼内某条回复；null = 直接回复楼主层。 */
+    val replyToId: Long? = null,
+    val contentMarkdown: String,
+    val createdAt: Long
+)
+
+/**
+ * AI 创作（续写/改写）。内容永不写入正文——正文只在锚点行末画一枚创作星标，
+ * 点开卡片弹层查看（伴读二期批次三接 UI，本表随 v15 先行建好）。
+ */
+@Entity(
+    tableName = "ai_creations",
+    foreignKeys = [
+        ForeignKey(
+            entity = BookEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["bookId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index(value = ["bookId", "chapterIndex"])]
+)
+data class AiCreationEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val bookId: Long,
+    /** CONTINUE（续写，点锚 start == end）| REWRITE（改写，范围锚）。 */
+    val type: String,
+    val chapterIndex: Int,
+    val startCharOffset: Int,
+    val endCharOffset: Int,
+    /** 最近一次生效的用户方向指令。 */
+    val directive: String = "",
+    /** 当前展示版本；null = 最新版本。 */
+    val activeVersionId: Long? = null,
+    /** v1 恒 null（执笔模式不带人设）；无 FK。 */
+    val personaId: Long? = null,
+    val createdAt: Long
+)
+
+/** 创作的一个版本；「换个方向再写」新增版本，「继续写」在版本内追加。 */
+@Entity(
+    tableName = "ai_creation_versions",
+    foreignKeys = [
+        ForeignKey(
+            entity = AiCreationEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["creationId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index("creationId")]
+)
+data class AiCreationVersionEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val creationId: Long,
+    val ord: Int,
+    /** 本版本对应的方向指令快照。 */
+    val directive: String = "",
+    val content: String = "",
+    /** STREAMING | DONE | ERROR；进程被杀留下的 STREAMING 视为截断的 DONE。 */
+    val status: String,
+    val modelName: String = "",
     val createdAt: Long
 )
 

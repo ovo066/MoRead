@@ -41,6 +41,7 @@ data class SettingsUiState(
     val appearance: AppearanceSettings = AppearanceSettings(),
     val shelfLayout: ShelfLayout = ShelfLayout.GRID,
     val suggestionRepliesEnabled: Boolean = true,
+    val showAiAnnotations: Boolean = true,
     val isWorking: Boolean = false,
     /** 封面缓存占用字节数；null = 还没统计。 */
     val coverCacheBytes: Long? = null,
@@ -67,13 +68,15 @@ class SettingsViewModel @Inject constructor(
 
     private data class AppPrefs(
         val shelfLayout: ShelfLayout,
-        val suggestionRepliesEnabled: Boolean
+        val suggestionRepliesEnabled: Boolean,
+        val showAiAnnotations: Boolean
     )
 
     private val appPrefs = combine(
         readerSettingsRepository.settings.map { it.shelfLayout },
-        readerSettingsRepository.suggestionRepliesEnabled
-    ) { layout, suggestions -> AppPrefs(layout, suggestions) }
+        readerSettingsRepository.suggestionRepliesEnabled,
+        readerSettingsRepository.showAiAnnotations
+    ) { layout, suggestions, aiAnnotations -> AppPrefs(layout, suggestions, aiAnnotations) }
 
     private data class AiConfig(
         val providers: List<AiProviderEntity>,
@@ -106,6 +109,7 @@ class SettingsViewModel @Inject constructor(
             appearance = appearance,
             shelfLayout = prefs.shelfLayout,
             suggestionRepliesEnabled = prefs.suggestionRepliesEnabled,
+            showAiAnnotations = prefs.showAiAnnotations,
             isWorking = isWorking,
             coverCacheBytes = usage?.coverBytes,
             bookStorageBytes = usage?.bookBytes
@@ -157,6 +161,10 @@ class SettingsViewModel @Inject constructor(
 
     fun setSuggestionReplies(enabled: Boolean) {
         viewModelScope.launch { readerSettingsRepository.setSuggestionRepliesEnabled(enabled) }
+    }
+
+    fun setShowAiAnnotations(enabled: Boolean) {
+        viewModelScope.launch { readerSettingsRepository.setShowAiAnnotations(enabled) }
     }
 
     fun refreshStorageUsage() {

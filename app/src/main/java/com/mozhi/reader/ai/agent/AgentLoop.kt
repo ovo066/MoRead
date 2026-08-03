@@ -81,6 +81,90 @@ class AgentLoop @Inject constructor(
         fun stream(messages: List<ChatMessage>, tools: List<ToolSpec>): Flow<ChatDelta>
     }
 
+    /**
+     * 段评讨论串等轻量场景的独立循环：历史由调用方内存组装，任何消息都不落
+     * conversations/messages（讨论内容有自己的 annotation_replies 归宿，也不该
+     * 污染统计口径与记忆固化）。工具执行与事件流和 [run] 同构。
+     */
+    fun runDetached(
+        history: List<ChatMessage>,
+        tools: List<AgentTool>,
+        maxRounds: Int = DETACHED_MAX_ROUNDS
+    ): Flow<AgentEvent> = runDetachedWith(history, tools, maxRounds) {
+        val resolved = clientFactory.get().forRole(ModelRole.CHAT)
+        Streamer { messages, specs ->
+            resolved.client.chatStream(messages, specs, resolved.options)
+        }
+    }
+
+    internal fun runDetachedWith(
+        history: List<ChatMessage>,
+        tools: List<AgentTool>,
+        maxRounds: Int,
+        resolve: suspend () -> Streamer
+    ): Flow<AgentEvent> = flow {
+        if (history.none { it.role == ChatRole.USER }) throw AiClientException.Empty()
+        val working = history.toMutableList()
+        val streamer = resolve()
+        val specs = tools.map { it.spec }
+        val byName = tools.associateBy { it.spec.name }
+        var producedText = false
+
+        repeat(maxRounds.coerceAtLeast(1)) { round ->
+            val text = StringBuilder()
+            var requested: List<ToolCall> = emptyList()
+            streamer.stream(working, specs).collect { delta ->
+                when (delta) {
+                    is ChatDelta.Text -> {
+                        text.append(delta.text)
+                        emit(AgentEvent.Text(delta.text))
+                    }
+                    is ChatDelta.ToolCalls -> requested = delta.calls
+                }
+            }
+
+            if (requested.isEmpty()) {
+                if (text.isBlank() && !producedText) throw AiClientException.Empty()
+                return@flow
+            }
+
+            if (text.isNotBlank()) producedText = true
+            working.add(ChatMessage(ChatRole.ASSISTANT, text.toString(), toolCalls = requested))
+            for (call in requested) {
+                val tool = byName[call.name]
+                val displayName = tool?.displayName ?: "调用 ${call.name}"
+                emit(AgentEvent.ToolRun(call.id, call.name, displayName))
+                val result = if (tool == null) {
+                    "未知工具：${call.name}"
+                } else {
+                    try {
+                        tool.execute(call.argumentsObject())
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Throwable) {
+                        "工具执行失败：${error.message ?: "未知错误"}"
+                    }
+                }
+                val succeeded = result.isToolSuccess()
+                emit(
+                    AgentEvent.ToolFinished(
+                        callId = call.id,
+                        toolName = call.name,
+                        displayName = displayName,
+                        succeeded = succeeded,
+                        detail = if (succeeded) "已完成" else result.take(MAX_TOOL_STATUS_CHARS)
+                    )
+                )
+                working.add(ChatMessage(ChatRole.TOOL, result, toolCallId = call.id))
+            }
+
+            if (round == maxRounds - 1 && !producedText) {
+                val notice = "（已达到工具调用上限，回复基于目前掌握的信息）"
+                emit(AgentEvent.Text(notice))
+            }
+        }
+    }
+
     internal fun runWith(
         conversationId: Long,
         tools: List<AgentTool>,
@@ -273,6 +357,7 @@ class AgentLoop @Inject constructor(
 
     private companion object {
         const val MAX_ROUNDS = 8
+        const val DETACHED_MAX_ROUNDS = 3
         const val WINDOW_MESSAGES = 20
         const val MAX_TOOL_STATUS_CHARS = 120
     }

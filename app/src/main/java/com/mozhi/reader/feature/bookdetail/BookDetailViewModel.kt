@@ -25,6 +25,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -37,6 +38,8 @@ data class BookDetailUiState(
     val notes: List<NoteEntity> = emptyList(),
     val annotations: List<AnnotationEntity> = emptyList(),
     val illustrations: List<IllustrationEntity> = emptyList(),
+    /** personaId → 角色名，批注列表按作者筛选/署名用。 */
+    val personaNames: Map<Long, String> = emptyMap(),
     val totalDurationMs: Long = 0,
     val readingDays: Int = 0,
     val streakDays: Int = 0,
@@ -60,7 +63,8 @@ class BookDetailViewModel @Inject constructor(
     private val annotationRepository: AnnotationRepository,
     private val illustrationRepository: IllustrationRepository,
     private val coverStore: BookCoverStore,
-    private val noteExporter: NoteExporter
+    private val noteExporter: NoteExporter,
+    personaDao: com.mozhi.reader.core.database.dao.PersonaDao
 ) : ViewModel() {
     private val bookId: Long = when (val value: Any? = savedStateHandle["bookId"]) {
         is Long -> value
@@ -79,7 +83,8 @@ class BookDetailViewModel @Inject constructor(
         val bookmarks: List<BookmarkEntity>,
         val notes: List<NoteEntity>,
         val annotations: List<AnnotationEntity>,
-        val illustrations: List<IllustrationEntity>
+        val illustrations: List<IllustrationEntity>,
+        val personaNames: Map<Long, String>
     )
 
     private val libraryContent = combine(
@@ -94,14 +99,18 @@ class BookDetailViewModel @Inject constructor(
         illustrationRepository.observeForBook(bookId)
     ) { notes, annotations, illustrations -> Triple(notes, annotations, illustrations) }
 
-    private val content = combine(libraryContent, readingAssets) { library, assets ->
+    private val personaNames = personaDao.observePersonas()
+        .map { personas -> personas.associate { it.id to it.name } }
+
+    private val content = combine(libraryContent, readingAssets, personaNames) { library, assets, names ->
         BookContent(
             book = library.first,
             chapters = library.second,
             bookmarks = library.third,
             notes = assets.first,
             annotations = assets.second,
-            illustrations = assets.third
+            illustrations = assets.third,
+            personaNames = names
         )
     }
 
@@ -123,6 +132,7 @@ class BookDetailViewModel @Inject constructor(
             notes = content.notes,
             annotations = content.annotations,
             illustrations = content.illustrations,
+            personaNames = content.personaNames,
             totalDurationMs = days.sumOf(ReadingDailyEntity::durationMs),
             readingDays = days.count { it.durationMs > 0 },
             streakDays = days.streakDays(),

@@ -49,6 +49,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.mozhi.reader.core.datastore.CustomReaderTheme
+import com.mozhi.reader.core.datastore.PageMode
 import com.mozhi.reader.core.datastore.PageTurnAnimation
 import com.mozhi.reader.core.datastore.ReaderFont
 import com.mozhi.reader.core.datastore.ReaderSettings
@@ -76,6 +77,7 @@ fun ReaderTypographySheet(
     onSaveCustomTheme: (CustomReaderTheme) -> Unit,
     onDeleteCustomTheme: (Long) -> Unit,
     onAnimationChange: (PageTurnAnimation) -> Unit,
+    onPageModeChange: (PageMode) -> Unit,
     onKeepScreenOnChange: (Boolean) -> Unit
 ) {
     var editorDraft by remember { mutableStateOf<CustomReaderTheme?>(null) }
@@ -191,14 +193,25 @@ fun ReaderTypographySheet(
         }
 
         SheetRow(label = "翻页", palette = palette) {
+            val paginated = settings.pageMode == PageMode.PAGINATED
             PageTurnAnimation.entries.forEach { animation ->
                 SegChip(
                     text = animation.shortLabel(),
-                    selected = settings.pageTurnAnimation == animation,
+                    selected = paginated && settings.pageTurnAnimation == animation,
                     palette = palette,
                     modifier = Modifier.weight(1f)
-                ) { onAnimationChange(animation) }
+                ) {
+                    onPageModeChange(PageMode.PAGINATED)
+                    onAnimationChange(animation)
+                }
             }
+            // 上下滑动 = 以章节为单位的连续滚动模式，与四种翻页动画互斥。
+            SegChip(
+                text = "上下",
+                selected = settings.pageMode == PageMode.SCROLL,
+                palette = palette,
+                modifier = Modifier.weight(1f)
+            ) { onPageModeChange(PageMode.SCROLL) }
         }
 
         Row(

@@ -3,7 +3,9 @@ package com.mozhi.reader.feature.reader
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.mozhi.reader.core.database.entity.AnnotationColors
 import com.mozhi.reader.core.database.entity.AnnotationEntity
+import com.mozhi.reader.core.database.entity.AnnotationStyle
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.BookmarkEntity
 import com.mozhi.reader.core.database.entity.ChapterEntity
@@ -38,6 +40,12 @@ data class ReaderUiState(
     val chapters: List<ChapterEntity> = emptyList(),
     val bookmarks: List<BookmarkEntity> = emptyList(),
     val annotations: List<AnnotationEntity> = emptyList(),
+    /** 有讨论回复的批注 id：纯高亮有讨论时也要出「评」标记。 */
+    val repliedAnnotationIds: Set<Long> = emptySet(),
+    val showAiAnnotations: Boolean = true,
+    /** 即划即改：上次使用的划线样式与颜色。 */
+    val lastAnnotationStyle: AnnotationStyle = AnnotationStyle.HIGHLIGHT,
+    val lastAnnotationColor: String = AnnotationColors.AMBER,
     val settings: ReaderSettings = ReaderSettings(),
     val currentChapterIndex: Int = 0,
     val currentCharOffset: Int = 0,
@@ -115,6 +123,26 @@ class ReaderViewModel @Inject constructor(
         viewModelScope.launch {
             annotationRepository.observeForBook(bookId).collect { annotations ->
                 mutableState.update { it.copy(annotations = annotations) }
+            }
+        }
+        viewModelScope.launch {
+            annotationRepository.observeRepliedAnnotationIds(bookId).collect { ids ->
+                mutableState.update { it.copy(repliedAnnotationIds = ids.toSet()) }
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.showAiAnnotations.collect { enabled ->
+                mutableState.update { it.copy(showAiAnnotations = enabled) }
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.lastAnnotationStyle.collect { style ->
+                mutableState.update { it.copy(lastAnnotationStyle = AnnotationStyle.fromWire(style)) }
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.lastAnnotationColor.collect { color ->
+                mutableState.update { it.copy(lastAnnotationColor = AnnotationColors.normalize(color)) }
             }
         }
         viewModelScope.launch {
@@ -366,40 +394,42 @@ class ReaderViewModel @Inject constructor(
         viewModelScope.launch { libraryRepository.deleteBookmark(bookmarkId) }
     }
 
-    fun addAnnotation(
+    /**
+     * 即划即改第一步：一击落一条纯高亮（上次样式+颜色），返回 id 供浮条实时改写。
+     * 想法内容走讨论串弹层补写，这里不再弹输入框。
+     */
+    suspend fun quickAnnotate(
         chapterIndex: Int,
         selectedText: String,
-        range: IntRange,
-        comment: String
-    ) {
-        if (range.isEmpty() || selectedText.isBlank() || comment.isBlank()) return
+        range: IntRange
+    ): Long? {
+        if (range.isEmpty() || selectedText.isBlank()) return null
+        val state = mutableState.value
+        return annotationRepository.add(
+            bookId = bookId,
+            personaId = null,
+            chapterIndex = chapterIndex,
+            startCharOffset = range.first,
+            endCharOffset = range.last + 1,
+            selectedText = selectedText,
+            note = "",
+            colorTag = state.lastAnnotationColor,
+            style = state.lastAnnotationStyle
+        )
+    }
+
+    /** 浮条/讨论串里改样式；同时记为下次一击的默认。 */
+    fun updateAnnotationStyle(annotationId: Long, style: AnnotationStyle, colorTag: String) {
         viewModelScope.launch {
-            annotationRepository.add(
-                bookId = bookId,
-                personaId = null,
-                chapterIndex = chapterIndex,
-                startCharOffset = range.first,
-                endCharOffset = range.last + 1,
-                selectedText = selectedText,
-                note = comment.trim()
-            )
-            eventChannel.send(ReaderEvent.ShowMessage("批注已加入段落评论区"))
+            annotationRepository.updateStyle(annotationId, style, colorTag)
+            settingsRepository.setLastAnnotationInk(style.wire, AnnotationColors.normalize(colorTag))
         }
     }
 
-    fun replyToAnnotation(annotation: AnnotationEntity, comment: String) {
-        if (comment.isBlank()) return
-        viewModelScope.launch {
-            annotationRepository.add(
-                bookId = annotation.bookId,
-                personaId = null,
-                chapterIndex = annotation.chapterIndex,
-                startCharOffset = annotation.startCharOffset,
-                endCharOffset = annotation.endCharOffset,
-                selectedText = annotation.selectedText,
-                note = comment.trim()
-            )
-        }
+    /** 给纯高亮补写想法（讨论串楼主层）。 */
+    fun updateAnnotationNote(annotationId: Long, note: String) {
+        if (note.isBlank()) return
+        viewModelScope.launch { annotationRepository.updateNote(annotationId, note.trim()) }
     }
 
     fun deleteAnnotation(annotationId: Long) {
@@ -442,6 +472,10 @@ class ReaderViewModel @Inject constructor(
 
     fun setPageTurnAnimation(value: PageTurnAnimation) {
         viewModelScope.launch { settingsRepository.setPageTurnAnimation(value) }
+    }
+
+    fun setPageMode(value: com.mozhi.reader.core.datastore.PageMode) {
+        viewModelScope.launch { settingsRepository.setPageMode(value) }
     }
 
     fun setKeepScreenOn(value: Boolean) {

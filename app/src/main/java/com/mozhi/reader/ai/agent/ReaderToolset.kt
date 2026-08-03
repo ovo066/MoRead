@@ -5,6 +5,8 @@ import com.mozhi.reader.ai.client.ToolSpec
 import com.mozhi.reader.ai.embedding.BookEmbeddingScheduler
 import com.mozhi.reader.ai.media.AgentMediaResult
 import com.mozhi.reader.ai.media.AiMediaGenerationService
+import com.mozhi.reader.core.database.entity.AnnotationColors
+import com.mozhi.reader.core.database.entity.AnnotationStyle
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.ModelRole
 import com.mozhi.reader.core.library.AnnotationRepository
@@ -333,7 +335,8 @@ private class AddAnnotationTool(
 
     override val spec: ToolSpec = ToolSpec(
         name = "add_annotation",
-        description = "对用户已读原文添加一条可在正文段落评论区看到的角色批注。quote 必须逐字复制自 read_book_section/search_book 的结果；用户未要求或没有值得补充的观点时不要擅自调用。",
+        description = "对用户已读原文添加一条可在正文段落讨论区看到的角色批注（划线样式承载语义，帮读者一眼识别批注类型）。" +
+            "quote 必须逐字复制自 read_book_section/search_book 的结果；用户未要求或没有值得补充的观点时不要擅自调用。",
         parameters = buildJsonObject {
             put("type", "object")
             putJsonObject("properties") {
@@ -343,7 +346,20 @@ private class AddAnnotationTool(
                 }
                 putJsonObject("comment") {
                     put("type", "string")
-                    put("description", "显示在该段评论区的批注内容")
+                    put("description", "显示在该段讨论区的批注内容")
+                }
+                putJsonObject("style") {
+                    put("type", "string")
+                    put("enum", kotlinx.serialization.json.buildJsonArray {
+                        add(JsonPrimitive("highlight"))
+                        add(JsonPrimitive("underline"))
+                        add(JsonPrimitive("wavy"))
+                    })
+                    put(
+                        "description",
+                        "划线样式，按内容语义选择：highlight 荧光=金句/精彩段落；" +
+                            "wavy 波浪=伏笔/暗线/前后呼应；underline 直线=知识点/典故/术语。默认 highlight"
+                    )
                 }
                 putJsonObject("chapter_number") {
                     put("type", "integer")
@@ -363,6 +379,7 @@ private class AddAnnotationTool(
         if (quote.isEmpty()) return "缺少原文 quote"
         if (comment.isEmpty()) return "缺少批注 comment"
         if (quote.length > MAX_ANNOTATION_QUOTE_CHARS) return "quote 过长，请选择 2000 字以内的连续原文"
+        val style = AnnotationStyle.fromWire(arguments["style"]?.jsonPrimitive?.contentOrNull)
         val book = libraryRepository.getBook(bookId) ?: return "未找到当前书籍"
         val chapterNumber = arguments["chapter_number"]?.jsonPrimitive?.intOrNull
         if (chapterNumber != null && chapterNumber !in 1..book.lastReadChapterIndex + 1) {
@@ -399,9 +416,13 @@ private class AddAnnotationTool(
             startCharOffset = match.startCharOffset,
             endCharOffset = match.endCharOffset,
             selectedText = quote,
-            note = comment.take(MAX_ANNOTATION_COMMENT_CHARS)
+            note = comment.take(MAX_ANNOTATION_COMMENT_CHARS),
+            // 角色颜色不占用户色板：按 personaId 稳定散列，同角色永远同色
+            colorTag = AnnotationColors.forPersona(personaId),
+            style = style
         )
-        return "已在第 ${match.chapterIndex + 1} 章添加段落批注（编号 $id），读者点击正文旁的批注符号即可在评论区看到。"
+        return "已在第 ${match.chapterIndex + 1} 章添加段落批注（编号 $id，样式 ${style.wire.lowercase()}），" +
+            "读者点击正文旁的批注标记即可在讨论区看到。"
     }
 
     private companion object {

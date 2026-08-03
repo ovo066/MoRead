@@ -1,12 +1,19 @@
 package com.mozhi.reader.feature.reader.engine
 
+/** 「评」marker 与末字符右边界的间距系数（× markerRadius）；渲染与点击热区必须共用。0.35 会压到句号。 */
+const val ANNOTATION_MARKER_GAP_RATIO = 0.72f
+
 /** Render-layer copy of a Room annotation, kept free of database dependencies for geometry tests. */
 data class ReaderAnnotationMark(
     val id: Long,
     val chapterIndex: Int,
     val startCharOffset: Int,
     val endCharOffset: Int,
-    val hasComment: Boolean
+    val hasComment: Boolean,
+    /** AnnotationStyle wire 值；渲染层按它分笔画（荧光/直线/波浪）。 */
+    val style: String = "HIGHLIGHT",
+    /** AnnotationColors 色名；空串用阅读页强调色。 */
+    val colorTag: String = ""
 )
 
 /** 听书当前句（章内 UTF-16 区间）；render 层据此画一条跟随朗读进度的柔和底色。 */

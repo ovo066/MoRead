@@ -36,7 +36,7 @@ sealed interface ModelCatalogResult {
 }
 
 /**
- * 拉取模型目录。普通 Provider 只访问其方言标准目录并默认归为对话模型；OpenRouter
+ * 拉取模型目录。普通 Provider 也读取标准目录返回的输出模态，并用模型名兜底识别生图模型；OpenRouter
  * 内置适配额外聚合 `/models?output_modalities=all`、`/embeddings/models` 与
  * `/images/models`，按返回模态自动标注 CHAT / EMBEDDING / TTS / IMAGE。
  */
@@ -149,7 +149,7 @@ class ModelCatalogFetcher @Inject constructor(
                 forcedType = AiModelType.CHAT,
                 anthropicAuth = true
             )
-            else -> CatalogRequest("$base/models", AiModelType.CHAT)
+            else -> CatalogRequest("$base/models", forcedType = null)
         }
         val result = fetchOpenAiCatalog(provider, apiKey, spec)
         return catalogResult(result.models.orEmpty(), result.httpCode)
@@ -177,7 +177,14 @@ class ModelCatalogFetcher @Inject constructor(
                 models = entries.mapNotNull { entry ->
                     entry.id.takeIf(String::isNotBlank)?.let { id ->
                         val type = spec.forcedType ?: entry.inferredType()
-                        CatalogModel(id, type, endpointFor(type))
+                        val endpoint = if (
+                            provider.adapter == AiProviderAdapter.OPENROUTER && type == AiModelType.IMAGE
+                        ) {
+                            "/images"
+                        } else {
+                            endpointFor(type)
+                        }
+                        CatalogModel(id, type, endpoint)
                     }
                 }
             )
@@ -198,6 +205,7 @@ class ModelCatalogFetcher @Inject constructor(
         return when {
             "speech" in outputs -> AiModelType.TTS
             "image" in outputs -> AiModelType.IMAGE
+            modelNameLooksLikeImage(id) -> AiModelType.IMAGE
             else -> AiModelType.CHAT
         }
     }
@@ -206,7 +214,7 @@ class ModelCatalogFetcher @Inject constructor(
         AiModelType.CHAT -> ""
         AiModelType.EMBEDDING -> "/embeddings"
         AiModelType.TTS -> "/audio/speech"
-        AiModelType.IMAGE -> "/images"
+        AiModelType.IMAGE -> "/images/generations"
     }
 
     private fun catalogResult(
@@ -234,4 +242,17 @@ class ModelCatalogFetcher @Inject constructor(
         val models: List<CatalogModel>? = null,
         val httpCode: Int? = null
     )
+
+    private fun modelNameLooksLikeImage(name: String): Boolean {
+        val normalized = name.lowercase()
+        return IMAGE_MODEL_MARKERS.any { marker -> marker in normalized }
+    }
+
+    private companion object {
+        val IMAGE_MODEL_MARKERS = listOf(
+            "gpt-image", "dall-e", "dalle", "flux", "stable-diffusion", "sdxl",
+            "imagen", "recraft", "seedream", "kolors", "ideogram",
+            "playground-v", "hidream", "qwen-image", "wan-image"
+        )
+    }
 }

@@ -53,6 +53,8 @@ data class ImageApiSettings(
     val model: String = "",
     /** 形如 1024x1024；NovelAI 可任意填，请求侧会对齐 64 的倍数。 */
     val size: String = "",
+    /** 仅 NovelAI 使用；会作为固定 Danbooru tags 前缀拼到每次动态提示词前。 */
+    val positivePrompt: String = "",
     /** 仅 NovelAI 使用；空串走内置默认负面词。 */
     val negativePrompt: String = "",
     /** 仅 NovelAI：采样器，空串走默认。 */
@@ -83,6 +85,7 @@ class ImageApiSettingsStore @Inject constructor(
             prefs[KEY_BASE_URL] = next.baseUrl
             prefs[KEY_MODEL] = next.model
             prefs[KEY_SIZE] = next.size
+            prefs[KEY_POSITIVE] = next.positivePrompt
             prefs[KEY_NEGATIVE] = next.negativePrompt
             prefs[KEY_SAMPLER] = next.sampler
             prefs[KEY_STEPS] = next.steps
@@ -97,6 +100,7 @@ class ImageApiSettingsStore @Inject constructor(
         baseUrl = prefs[KEY_BASE_URL].orEmpty(),
         model = prefs[KEY_MODEL].orEmpty(),
         size = prefs[KEY_SIZE].orEmpty(),
+        positivePrompt = prefs[KEY_POSITIVE].orEmpty(),
         negativePrompt = prefs[KEY_NEGATIVE].orEmpty(),
         sampler = prefs[KEY_SAMPLER].orEmpty(),
         steps = prefs[KEY_STEPS] ?: 28,
@@ -111,6 +115,7 @@ class ImageApiSettingsStore @Inject constructor(
         private val KEY_BASE_URL = stringPreferencesKey("image_api_base_url")
         private val KEY_MODEL = stringPreferencesKey("image_api_model")
         private val KEY_SIZE = stringPreferencesKey("image_api_size")
+        private val KEY_POSITIVE = stringPreferencesKey("image_api_positive")
         private val KEY_NEGATIVE = stringPreferencesKey("image_api_negative")
         private val KEY_SAMPLER = stringPreferencesKey("image_api_sampler")
         private val KEY_STEPS = intPreferencesKey("image_api_steps")

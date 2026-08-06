@@ -6,6 +6,7 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
+import android.graphics.Rect
 import android.graphics.Typeface
 import android.util.LruCache
 import android.text.TextPaint
@@ -43,6 +44,10 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         textAlign = Paint.Align.CENTER
     }
     private val imagePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private val backgroundImagePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+        alpha = (pageStyle.backgroundImageOpacity.coerceIn(0.05f, 1f) * 255).toInt()
+    }
+    private val syntaxPaints = HashMap<String, TextPaint>()
     /** (style|colorTag) → Paint；样式实例随 pageStyle 重建，缓存不会跨主题存活。 */
     private val annotationInkPaints = HashMap<String, Paint>()
     private val listenHighlightPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -129,6 +134,23 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
     /** 纸面底色 + 纸纹；滚动模式在实时画布上也走这一笔。 */
     internal fun drawBackdrop(canvas: Canvas, width: Float, height: Float) {
         canvas.drawColor(pageStyle.backgroundColor)
+        pageStyle.backgroundImagePath?.let { path ->
+            loadImage(path, width.toInt(), height.toInt())?.let { bitmap ->
+                val targetAspect = width / height.coerceAtLeast(1f)
+                val bitmapAspect = bitmap.width.toFloat() / bitmap.height.coerceAtLeast(1)
+                val source = if (bitmapAspect > targetAspect) {
+                    val cropWidth = (bitmap.height * targetAspect).toInt().coerceAtLeast(1)
+                    val left = ((bitmap.width - cropWidth) / 2).coerceAtLeast(0)
+                    Rect(left, 0, (left + cropWidth).coerceAtMost(bitmap.width), bitmap.height)
+                } else {
+                    val cropHeight = (bitmap.width / targetAspect.coerceAtLeast(0.01f)).toInt()
+                        .coerceAtLeast(1)
+                    val top = ((bitmap.height - cropHeight) / 2).coerceAtLeast(0)
+                    Rect(0, top, bitmap.width, (top + cropHeight).coerceAtMost(bitmap.height))
+                }
+                canvas.drawBitmap(bitmap, source, RectF(0f, 0f, width, height), backgroundImagePaint)
+            }
+        }
         grainPaint?.let { canvas.drawRect(0f, 0f, width, height, it) }
     }
 
@@ -228,7 +250,17 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
             }
             val paint = if (line.isTitle) titlePaint else contentPaint
             for (column in line.columns) {
-                canvas.drawText(column.charData, column.start, line.lineBase, paint)
+                val resolvedPaint = if (column.syntaxColorArgb != null || column.syntaxUnderline) {
+                    syntaxPaint(
+                        base = paint,
+                        color = column.syntaxColorArgb ?: pageStyle.textColor,
+                        underline = column.syntaxUnderline,
+                        title = line.isTitle
+                    )
+                } else {
+                    paint
+                }
+                canvas.drawText(column.charData, column.start, line.lineBase, resolvedPaint)
             }
         }
         geometry.markers.forEach { marker ->
@@ -314,6 +346,16 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         annotationInkPaints.getOrPut("$style|$colorTag") {
             Paint(Paint.ANTI_ALIAS_FLAG).apply(configure)
         }
+
+    private fun syntaxPaint(base: TextPaint, color: Int, underline: Boolean, title: Boolean): TextPaint {
+        val key = "$title|$color|$underline"
+        return syntaxPaints.getOrPut(key) {
+            TextPaint(base).apply {
+                this.color = color
+                isUnderlineText = underline
+            }
+        }
+    }
 
     private fun drawInlineImage(
         canvas: Canvas,

@@ -140,6 +140,12 @@ fun ReaderScreen(
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { }
+    val backgroundImageLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri -> uri?.let(viewModel::importBackgroundImage) }
+    val customFontLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri -> uri?.let(viewModel::importCustomFont) }
 
     // 听书自动翻页：朗读句越过当前页边界时，直接跳到句首所在页（无翻页动画）。
     LaunchedEffect(listeningThisBook, scrollMode) {
@@ -610,12 +616,24 @@ fun ReaderScreen(
                 palette = palette,
                 onFontScaleChange = viewModel::setFontScale,
                 onFontChange = viewModel::setFont,
+                onImportFont = {
+                    customFontLauncher.launch(
+                        arrayOf("font/ttf", "font/otf", "application/x-font-ttf", "application/octet-stream")
+                    )
+                },
+                onClearFont = viewModel::clearCustomFont,
                 onLineHeightChange = viewModel::setLineHeight,
                 onPageMarginChange = viewModel::setPageMargin,
                 onThemeChange = viewModel::setTheme,
                 onCustomThemeSelect = viewModel::selectCustomTheme,
                 onSaveCustomTheme = viewModel::saveCustomTheme,
                 onDeleteCustomTheme = viewModel::deleteCustomTheme,
+                onImportBackground = { backgroundImageLauncher.launch(arrayOf("image/*")) },
+                onClearBackground = viewModel::clearBackgroundImage,
+                onBackgroundOpacityChange = viewModel::setBackgroundImageOpacity,
+                onSyntaxHighlightEnabledChange = viewModel::setSyntaxHighlightEnabled,
+                onSaveSyntaxRule = viewModel::saveSyntaxHighlightRule,
+                onDeleteSyntaxRule = viewModel::deleteSyntaxHighlightRule,
                 onAnimationChange = viewModel::setPageTurnAnimation,
                 onPageModeChange = viewModel::setPageMode,
                 onKeepScreenOnChange = viewModel::setKeepScreenOn

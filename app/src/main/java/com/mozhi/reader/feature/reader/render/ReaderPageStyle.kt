@@ -1,10 +1,12 @@
 package com.mozhi.reader.feature.reader.render
 
 import android.graphics.Typeface
+import java.io.File
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.Density
 import com.mozhi.reader.core.datastore.ReaderFont
 import com.mozhi.reader.core.datastore.ReaderSettings
+import com.mozhi.reader.core.datastore.ReaderSyntaxRule
 import com.mozhi.reader.feature.reader.ReaderPalette
 import com.mozhi.reader.feature.reader.engine.AndroidTextMeasure
 import com.mozhi.reader.feature.reader.engine.TypesetSpec
@@ -31,7 +33,10 @@ class ReaderPageStyle(
     val isDark: Boolean,
     /** Subtle paper grain, only for the 纸张 theme per the approved visual proposal. */
     val grain: Boolean,
-    val typeface: Typeface
+    val typeface: Typeface,
+    val backgroundImagePath: String?,
+    val backgroundImageOpacity: Float,
+    val syntaxHighlightRules: List<ReaderSyntaxRule>
 ) {
     val contentWidth: Float = (viewWidth - paddingHorizontal * 2).coerceAtLeast(1f)
     val contentHeight: Float = (viewHeight - headerHeight - footerHeight).coerceAtLeast(1f)
@@ -43,7 +48,8 @@ class ReaderPageStyle(
         titleLineStep = titleSizePx * TITLE_LINE_HEIGHT,
         paragraphSpacing = contentSizePx * PARAGRAPH_SPACING_EM,
         titleTopSpacing = lineStep * TITLE_TOP_LINES,
-        titleBottomSpacing = lineStep * TITLE_BOTTOM_LINES
+        titleBottomSpacing = lineStep * TITLE_BOTTOM_LINES,
+        syntaxHighlightRules = syntaxHighlightRules
     )
 
     val measure: AndroidTextMeasure = AndroidTextMeasure(
@@ -82,6 +88,9 @@ class ReaderPageStyle(
             val horizontal = with(density) {
                 (MARGIN_BASE_DP + MARGIN_RANGE_DP * settings.pageMargin).dp.toPx()
             }
+            val syntaxRules = settings.syntaxHighlightRules.takeIf {
+                settings.syntaxHighlightEnabled
+            }.orEmpty()
             return ReaderPageStyle(
                 viewWidth = viewWidth,
                 viewHeight = viewHeight,
@@ -100,15 +109,25 @@ class ReaderPageStyle(
                 // 纸纹只属于内置「纸张」主题；自定义配色下不叠加。
                 grain = settings.activeCustomThemeId == null &&
                     settings.theme == com.mozhi.reader.core.datastore.ReaderTheme.PAPER,
-                typeface = settings.font.toTypeface()
+                typeface = settings.resolveTypeface(),
+                backgroundImagePath = settings.backgroundImagePath,
+                backgroundImageOpacity = settings.backgroundImageOpacity,
+                syntaxHighlightRules = syntaxRules
             )
         }
 
-        private fun ReaderFont.toTypeface(): Typeface = when (this) {
-            ReaderFont.SYSTEM -> Typeface.DEFAULT
-            ReaderFont.SERIF -> Typeface.SERIF
-            ReaderFont.SANS_SERIF -> Typeface.SANS_SERIF
-            ReaderFont.MONOSPACE -> Typeface.MONOSPACE
+        private fun ReaderSettings.resolveTypeface(): Typeface {
+            if (font == ReaderFont.CUSTOM) {
+                customFontPath?.let { path ->
+                    runCatching { Typeface.createFromFile(File(path)) }.getOrNull()?.let { return it }
+                }
+            }
+            return when (font) {
+                ReaderFont.SYSTEM, ReaderFont.CUSTOM -> Typeface.DEFAULT
+                ReaderFont.SERIF -> Typeface.SERIF
+                ReaderFont.SANS_SERIF -> Typeface.SANS_SERIF
+                ReaderFont.MONOSPACE -> Typeface.MONOSPACE
+            }
         }
     }
 }

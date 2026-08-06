@@ -4,11 +4,7 @@ import android.media.MediaPlayer
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mozhi.reader.ai.client.AiClientException
-import com.mozhi.reader.ai.client.AiClientFactory
-import com.mozhi.reader.ai.client.ChatMessage
 import com.mozhi.reader.ai.media.AiMediaGenerationService
-import com.mozhi.reader.ai.client.ChatRole
-import com.mozhi.reader.core.database.entity.ModelRole
 import com.mozhi.reader.core.speech.SystemTtsSpeaker
 import com.mozhi.reader.core.speech.TtsEngineMode
 import com.mozhi.reader.core.speech.TtsSettingsStore
@@ -38,7 +34,6 @@ sealed interface SelectionMediaEvent {
 /** 选区 TTS 与生图：TTS 按「语音朗读」设置路由到系统引擎或云端模型，生图走分配的模型。 */
 @HiltViewModel
 class ReaderSelectionMediaViewModel @Inject constructor(
-    private val clientFactory: AiClientFactory,
     private val mediaService: AiMediaGenerationService,
     private val ttsSettingsStore: TtsSettingsStore,
     private val systemTtsSpeaker: SystemTtsSpeaker,
@@ -182,40 +177,20 @@ class ReaderSelectionMediaViewModel @Inject constructor(
                     append("画面内容：").append(selected)
                     if (nearby.isNotBlank()) append("。附近语境：").append(nearby)
                 }
-                val prompt = try {
-                    val chat = clientFactory.forRole(ModelRole.CHAT)
-                    chat.client.chat(
-                        messages = listOf(
-                            ChatMessage(
-                                ChatRole.SYSTEM,
-                                "你是小说插画提示词编辑。只输出一段可直接交给生图模型的中文画面描述；" +
-                                    "忠实于给定选段，写清人物、环境、构图、光线与氛围；" +
-                                    "不得添加选段之后的剧情，不要解释，不要 Markdown，不要文字水印。"
-                            ),
-                            ChatMessage(ChatRole.USER, fallbackPrompt)
-                        ),
-                        options = chat.options.copy(reasoning = null)
-                    ).trim().ifBlank { fallbackPrompt }
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (_: Throwable) {
-                    // 生图是独立能力：未分配 CHAT 时仍直接把安全的本地提示交给 IMAGE 模型。
-                    fallbackPrompt
-                }
                 mutableState.value = mutableState.value.copy(status = "正在生成插图…")
                 val illustration = mediaService.generateIllustration(
                     bookId = bookId,
                     chapterIndex = chapterIndex,
                     charOffset = charOffset,
                     sourceText = selected,
-                    prompt = prompt,
+                    prompt = fallbackPrompt,
                     personaId = null
                 )
                 mutableState.value = mutableState.value.copy(
                     status = null,
                     isWorking = false,
                     imagePath = illustration.imagePath,
-                    imagePrompt = prompt
+                    imagePrompt = illustration.prompt
                 )
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error

@@ -44,6 +44,27 @@ class NovelAiImageClientTest {
     }
 
     @Test
+    fun customPositiveTagsArePrependedToDynamicTags() {
+        val client = NovelAiImageClient(
+            baseUrl = "https://image.novelai.net",
+            apiKey = "k",
+            model = "nai-diffusion-4-5-full",
+            defaultSize = "832x1216",
+            positivePrompt = "masterpiece, best quality,",
+            negativePrompt = "",
+            httpClient = OkHttpClient()
+        )
+
+        val payload = client.buildPayload("1girl, reading", "832x1216")
+
+        assertEquals("masterpiece, best quality, 1girl, reading", payload.string("input"))
+        assertEquals(
+            payload.string("input"),
+            payload.obj("parameters").obj("v4_prompt").obj("caption").string("base_caption")
+        )
+    }
+
+    @Test
     fun v3ModelUsesFlatNegativePromptOnly() {
         val client = client(model = "nai-diffusion-3", negative = "低质量")
         val parameters = client.buildPayload("湖畔", "1216x832").obj("parameters")

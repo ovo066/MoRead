@@ -235,6 +235,16 @@ fun ImageGenSettingsScreen(
                 }
 
                 if (settings.provider == ImageApiProvider.NOVELAI) {
+                    OutlinedTextField(
+                        value = settings.positivePrompt,
+                        onValueChange = viewModel::setPositivePrompt,
+                        label = { Text("固定正面提示词（可选）") },
+                        supportingText = {
+                            Text("使用英文 Danbooru tags，自动加在 LLM 生成的动态 tags 前面")
+                        },
+                        minLines = 2,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                     var samplerMenuExpanded by remember { mutableStateOf(false) }
                     ExposedDropdownMenuBox(
                         expanded = samplerMenuExpanded,
@@ -294,7 +304,7 @@ fun ImageGenSettingsScreen(
                         value = settings.negativePrompt,
                         onValueChange = viewModel::setNegativePrompt,
                         label = { Text("负面提示词（可选）") },
-                        supportingText = { Text("留空使用内置默认负面词") },
+                        supportingText = { Text("使用英文 Danbooru tags；留空使用内置默认负面词") },
                         minLines = 2,
                         modifier = Modifier.fillMaxWidth()
                     )

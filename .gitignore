@@ -3,6 +3,7 @@ reference/
 .tools/
 .isolated-build/
 .gradle/
+.kotlin/
 local.properties
 *.iml
 .idea/

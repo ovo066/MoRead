@@ -1,5 +1,7 @@
 package com.mozhi.reader.feature.reader.engine
 
+import com.mozhi.reader.core.datastore.ReaderSyntaxHighlighter
+import com.mozhi.reader.core.datastore.ReaderSyntaxRule
 import kotlin.math.max
 import kotlin.math.min
 
@@ -15,6 +17,7 @@ data class TypesetSpec(
     val paragraphSpacing: Float,
     val titleTopSpacing: Float,
     val titleBottomSpacing: Float,
+    val syntaxHighlightRules: List<ReaderSyntaxRule> = emptyList(),
     val indentCharCount: Int = 2,
     val bottomAlign: Boolean = true
 )
@@ -46,6 +49,7 @@ class ChapterTypesetter(
         inlineImages: List<InlineImageSource> = emptyList()
     ): TextChapter {
         val state = LayoutState()
+        val syntax = SyntaxStyleMap(body, spec.syntaxHighlightRules)
         val imagesByOffset = inlineImages.associateBy(InlineImageSource::charOffset)
         val trimmedTitle = title.trim()
         var cursor = 0
@@ -61,14 +65,14 @@ class ChapterTypesetter(
                 firstParagraph = false
                 state.addSpacing(spec.titleTopSpacing, atPageTop = true)
                 if (trimmedTitle.isNotEmpty() && paragraph.trim() == trimmedTitle) {
-                    layoutParagraph(state, paragraph, cursor, isTitle = true, synthetic = false)
+                    layoutParagraph(state, paragraph, cursor, isTitle = true, synthetic = false, syntax = syntax)
                     state.addSpacing(spec.titleBottomSpacing)
                     cursor = end + 1
                     if (isLastParagraph) break
                     continue
                 }
                 if (trimmedTitle.isNotEmpty()) {
-                    layoutParagraph(state, trimmedTitle, cursor, isTitle = true, synthetic = true)
+                    layoutParagraph(state, trimmedTitle, cursor, isTitle = true, synthetic = true, syntax = syntax)
                     state.addSpacing(spec.titleBottomSpacing)
                 }
             }
@@ -79,7 +83,7 @@ class ChapterTypesetter(
             if (inlineImage != null) {
                 layoutInlineImage(state, inlineImage, cursor, paragraph.length)
             } else if (paragraph.isNotEmpty()) {
-                layoutParagraph(state, paragraph, cursor, isTitle = false, synthetic = false)
+                layoutParagraph(state, paragraph, cursor, isTitle = false, synthetic = false, syntax = syntax)
             } else {
                 // A blank source line keeps a full line of height, like Legado laying out "" —
                 // TXT scene separators must stay visibly wider than an ordinary paragraph gap.
@@ -169,7 +173,8 @@ class ChapterTypesetter(
         text: String,
         bodyOffset: Int,
         isTitle: Boolean,
-        synthetic: Boolean
+        synthetic: Boolean,
+        syntax: SyntaxStyleMap
     ) {
         val metrics = if (isTitle) titleMetrics else contentMetrics
         val lineStep = if (isTitle) spec.titleLineStep else spec.contentLineStep
@@ -197,7 +202,14 @@ class ChapterTypesetter(
             val startX = if (lineIndex == 0) indent else 0f
             val isLastLine = lineIndex == lineStarts.lastIndex
             val justify = !isTitle && !isLastLine
-            val columns = placeClusters(clusters, clusterWidths, startX, justify)
+            val columns = placeClusters(
+                clusters = clusters,
+                widths = clusterWidths,
+                startX = startX,
+                justify = justify,
+                absoluteOffset = if (synthetic) -1 else bodyOffset + lineStart,
+                syntax = syntax
+            )
 
             val lineTop = state.durY
             val lineBottom = lineTop + metrics.textHeight
@@ -229,7 +241,9 @@ class ChapterTypesetter(
         clusters: List<String>,
         widths: List<Float>,
         startX: Float,
-        justify: Boolean
+        justify: Boolean,
+        absoluteOffset: Int,
+        syntax: SyntaxStyleMap
     ): Pair<List<TextColumn>, Float> {
         val desired = widths.sum()
         val residual = spec.visibleWidth - startX - desired
@@ -246,6 +260,7 @@ class ChapterTypesetter(
 
         val columns = ArrayList<TextColumn>(clusters.size)
         var x = startX
+        var textOffset = absoluteOffset
         for (index in clusters.indices) {
             var width = widths[index]
             if (spaceExtra > 0f && clusters[index] == " " && index != clusters.lastIndex) {
@@ -254,8 +269,18 @@ class ChapterTypesetter(
             if (gapExtra > 0f && index != clusters.lastIndex) {
                 width += gapExtra
             }
-            columns.add(TextColumn(start = x, end = x + widths[index], charData = clusters[index]))
+            val style = syntax.at(textOffset)
+            columns.add(
+                TextColumn(
+                    start = x,
+                    end = x + widths[index],
+                    charData = clusters[index],
+                    syntaxColorArgb = style?.first,
+                    syntaxUnderline = style?.second ?: false
+                )
+            )
             x += width
+            if (textOffset >= 0) textOffset += clusters[index].length
         }
 
         // Compression fallback for lines that still overrun the right margin.
@@ -266,7 +291,13 @@ class ChapterTypesetter(
                 val shift = perGap * index
                 if (shift > 0f) {
                     val column = columns[index]
-                    columns[index] = TextColumn(column.start - shift, column.end - shift, column.charData)
+                    columns[index] = TextColumn(
+                        column.start - shift,
+                        column.end - shift,
+                        column.charData,
+                        column.syntaxColorArgb,
+                        column.syntaxUnderline
+                    )
                 }
             }
         }
@@ -347,5 +378,24 @@ class ChapterTypesetter(
         const val MAX_IMAGE_ASPECT = 5f
         /** A line whose residual exceeds this fraction is a stub (e.g. forced break) — leave it ragged. */
         const val MAX_JUSTIFY_FRACTION = 0.35f
+    }
+
+    private class SyntaxStyleMap(text: String, rules: List<ReaderSyntaxRule>) {
+        private val colors = IntArray(text.length)
+        private val styled = BooleanArray(text.length)
+        private val underlines = BooleanArray(text.length)
+
+        init {
+            ReaderSyntaxHighlighter.spans(text, rules).forEach { span ->
+                for (index in span.start until span.endExclusive.coerceAtMost(text.length)) {
+                    colors[index] = span.colorArgb
+                    styled[index] = true
+                    underlines[index] = span.underline
+                }
+            }
+        }
+
+        fun at(index: Int): Pair<Int, Boolean>? =
+            if (index in styled.indices && styled[index]) colors[index] to underlines[index] else null
     }
 }

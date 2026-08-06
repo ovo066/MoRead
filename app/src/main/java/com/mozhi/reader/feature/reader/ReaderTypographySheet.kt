@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
@@ -34,6 +35,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.UploadFile
+import androidx.compose.material.icons.outlined.Wallpaper
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -44,6 +48,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -53,6 +58,7 @@ import com.mozhi.reader.core.datastore.PageMode
 import com.mozhi.reader.core.datastore.PageTurnAnimation
 import com.mozhi.reader.core.datastore.ReaderFont
 import com.mozhi.reader.core.datastore.ReaderSettings
+import com.mozhi.reader.core.datastore.ReaderSyntaxRule
 import com.mozhi.reader.core.datastore.ReaderTheme
 import com.mozhi.reader.feature.reader.render.ReaderPageStyle
 import com.mozhi.reader.ui.theme.onAccent
@@ -70,21 +76,32 @@ fun ReaderTypographySheet(
     palette: ReaderPalette,
     onFontScaleChange: (Float) -> Unit,
     onFontChange: (ReaderFont) -> Unit,
+    onImportFont: () -> Unit,
+    onClearFont: () -> Unit,
     onLineHeightChange: (Float) -> Unit,
     onPageMarginChange: (Float) -> Unit,
     onThemeChange: (ReaderTheme) -> Unit,
     onCustomThemeSelect: (Long) -> Unit,
     onSaveCustomTheme: (CustomReaderTheme) -> Unit,
     onDeleteCustomTheme: (Long) -> Unit,
+    onImportBackground: () -> Unit,
+    onClearBackground: () -> Unit,
+    onBackgroundOpacityChange: (Float) -> Unit,
+    onSyntaxHighlightEnabledChange: (Boolean) -> Unit,
+    onSaveSyntaxRule: (ReaderSyntaxRule) -> Unit,
+    onDeleteSyntaxRule: (Long) -> Unit,
     onAnimationChange: (PageTurnAnimation) -> Unit,
     onPageModeChange: (PageMode) -> Unit,
     onKeepScreenOnChange: (Boolean) -> Unit
 ) {
     var editorDraft by remember { mutableStateOf<CustomReaderTheme?>(null) }
+    var syntaxDraft by remember { mutableStateOf<ReaderSyntaxRule?>(null) }
+    var advancedExpanded by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 18.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
@@ -144,13 +161,38 @@ fun ReaderTypographySheet(
         }
 
         SheetRow(label = "字体", palette = palette) {
-            ReaderFont.entries.forEach { font ->
+            ReaderFont.entries.filter { it != ReaderFont.CUSTOM || settings.customFontPath != null }
+                .forEach { font ->
                 SegChip(
                     text = font.shortLabel(),
                     selected = settings.font == font,
                     palette = palette,
                     modifier = Modifier.weight(1f)
                 ) { onFontChange(font) }
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Surface(
+                onClick = onImportFont,
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(11.dp),
+                color = Color.Transparent,
+                border = BorderStroke(1.dp, palette.glassBorder)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Outlined.UploadFile, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Text("导入 TTF/OTF", style = MaterialTheme.typography.labelMedium)
+                }
+            }
+            if (settings.customFontPath != null) {
+                TextButton(onClick = onClearFont) { Text("移除字体") }
             }
         }
 
@@ -189,6 +231,47 @@ fun ReaderTypographySheet(
                         accentArgb = palette.accent.toArgb()
                     )
                 }
+            }
+        }
+
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Outlined.Wallpaper,
+                    contentDescription = null,
+                    tint = palette.muted,
+                    modifier = Modifier.size(18.dp)
+                )
+                Column(modifier = Modifier.weight(1f).padding(start = 8.dp)) {
+                    Text("自定义背景", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        if (settings.backgroundImagePath == null) "使用主题底色" else "背景图片已启用",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = palette.muted
+                    )
+                }
+                TextButton(onClick = onImportBackground) {
+                    Text(if (settings.backgroundImagePath == null) "导入" else "更换")
+                }
+                if (settings.backgroundImagePath != null) {
+                    TextButton(onClick = onClearBackground) { Text("移除") }
+                }
+            }
+            if (settings.backgroundImagePath != null) {
+                Text(
+                    "背景强度 ${(settings.backgroundImageOpacity * 100).roundToInt()}%",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.muted
+                )
+                Slider(
+                    value = settings.backgroundImageOpacity,
+                    onValueChange = onBackgroundOpacityChange,
+                    valueRange = 0.05f..1f,
+                    colors = SliderDefaults.colors(
+                        thumbColor = palette.accent,
+                        activeTrackColor = palette.accent
+                    )
+                )
             }
         }
 
@@ -234,6 +317,46 @@ fun ReaderTypographySheet(
                 )
             )
         }
+
+        Surface(
+            onClick = { advancedExpanded = !advancedExpanded },
+            color = Color.Transparent,
+            shape = RoundedCornerShape(14.dp),
+            border = BorderStroke(1.dp, palette.glassBorder),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 11.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("高级选项", style = MaterialTheme.typography.bodyMedium)
+                    Text("成对符号内容高亮", style = MaterialTheme.typography.labelSmall, color = palette.muted)
+                }
+                Icon(
+                    Icons.Outlined.ExpandMore,
+                    contentDescription = null,
+                    modifier = Modifier.graphicsLayer { rotationZ = if (advancedExpanded) 180f else 0f }
+                )
+            }
+        }
+        if (advancedExpanded) {
+            SyntaxHighlightEditor(
+                settings = settings,
+                palette = palette,
+                onEnabledChange = onSyntaxHighlightEnabledChange,
+                onEdit = { syntaxDraft = it },
+                onAdd = {
+                    syntaxDraft = ReaderSyntaxRule(
+                        id = 0L,
+                        name = "自定义规则",
+                        startDelimiter = "",
+                        endDelimiter = "",
+                        colorArgb = palette.accent.toArgb()
+                    )
+                }
+            )
+        }
     }
 
     editorDraft?.let { draft ->
@@ -253,6 +376,176 @@ fun ReaderTypographySheet(
                 null
             }
         )
+    }
+    syntaxDraft?.let { draft ->
+        SyntaxRuleEditorDialog(
+            initial = draft,
+            onDismiss = { syntaxDraft = null },
+            onSave = {
+                onSaveSyntaxRule(it)
+                syntaxDraft = null
+            },
+            onDelete = if (draft.id != 0L) {
+                {
+                    onDeleteSyntaxRule(draft.id)
+                    syntaxDraft = null
+                }
+            } else null
+        )
+    }
+}
+
+@Composable
+private fun SyntaxHighlightEditor(
+    settings: ReaderSettings,
+    palette: ReaderPalette,
+    onEnabledChange: (Boolean) -> Unit,
+    onEdit: (ReaderSyntaxRule) -> Unit,
+    onAdd: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("语法高亮", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "匹配引号、书名号等成对符号，并美化其中内容",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.muted
+                )
+            }
+            Switch(
+                checked = settings.syntaxHighlightEnabled,
+                onCheckedChange = onEnabledChange,
+                colors = SwitchDefaults.colors(checkedTrackColor = palette.accent)
+            )
+        }
+        settings.syntaxHighlightRules.forEach { rule ->
+            Surface(
+                onClick = { onEdit(rule) },
+                color = palette.glass.copy(alpha = 0.55f),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(14.dp)
+                            .background(Color(rule.colorArgb), CircleShape)
+                    )
+                    Column(modifier = Modifier.weight(1f).padding(start = 9.dp)) {
+                        Text(rule.name, style = MaterialTheme.typography.labelLarge)
+                        Text(
+                            "${rule.startDelimiter} 内容 ${rule.endDelimiter}" +
+                                if (rule.underline) " · 下划线" else "",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = palette.muted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Text(if (rule.enabled) "启用" else "停用", style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
+        TextButton(onClick = onAdd, modifier = Modifier.align(Alignment.End)) {
+            Icon(Icons.Outlined.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+            Text("添加规则")
+        }
+    }
+}
+
+@Composable
+private fun SyntaxRuleEditorDialog(
+    initial: ReaderSyntaxRule,
+    onDismiss: () -> Unit,
+    onSave: (ReaderSyntaxRule) -> Unit,
+    onDelete: (() -> Unit)?
+) {
+    var name by remember { mutableStateOf(initial.name) }
+    var start by remember { mutableStateOf(initial.startDelimiter) }
+    var end by remember { mutableStateOf(initial.endDelimiter) }
+    var color by remember { mutableStateOf(Color(initial.colorArgb)) }
+    var includeDelimiters by remember { mutableStateOf(initial.includeDelimiters) }
+    var underline by remember { mutableStateOf(initial.underline) }
+    var enabled by remember { mutableStateOf(initial.enabled) }
+    val valid = start.isNotEmpty() && end.isNotEmpty()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (initial.id == 0L) "添加高亮规则" else "编辑高亮规则") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it.take(20) },
+                    label = { Text("规则名称") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = start,
+                        onValueChange = { start = it.take(8) },
+                        label = { Text("开始符号") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = end,
+                        onValueChange = { end = it.take(8) },
+                        label = { Text("结束符号") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                Text("文字颜色", style = MaterialTheme.typography.labelMedium)
+                EditorChannelSlider("红", color.red) { color = color.copy(red = it) }
+                EditorChannelSlider("绿", color.green) { color = color.copy(green = it) }
+                EditorChannelSlider("蓝", color.blue) { color = color.copy(blue = it) }
+                SyntaxRuleSwitch("符号本身也着色", includeDelimiters) { includeDelimiters = it }
+                SyntaxRuleSwitch("添加下划线", underline) { underline = it }
+                SyntaxRuleSwitch("启用这条规则", enabled) { enabled = it }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = valid,
+                onClick = {
+                    onSave(
+                        initial.copy(
+                            name = name.trim().ifBlank { "高亮规则" },
+                            startDelimiter = start,
+                            endDelimiter = end,
+                            colorArgb = color.toArgb(),
+                            includeDelimiters = includeDelimiters,
+                            underline = underline,
+                            enabled = enabled
+                        )
+                    )
+                }
+            ) { Text("保存") }
+        },
+        dismissButton = {
+            Row {
+                onDelete?.let { delete ->
+                    TextButton(onClick = delete) {
+                        Text("删除", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+                TextButton(onClick = onDismiss) { Text("取消") }
+            }
+        }
+    )
+}
+
+@Composable
+private fun SyntaxRuleSwitch(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 
@@ -388,6 +681,7 @@ private fun ReaderFont.shortLabel(): String = when (this) {
     ReaderFont.SERIF -> "宋体"
     ReaderFont.SANS_SERIF -> "黑体"
     ReaderFont.MONOSPACE -> "等宽"
+    ReaderFont.CUSTOM -> "自定义"
 }
 
 private fun PageTurnAnimation.shortLabel(): String = when (this) {

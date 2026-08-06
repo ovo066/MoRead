@@ -181,12 +181,20 @@ fun ReaderPane(
     val environment = ReaderEnvironmentKey(
         fontScale = settings.fontScale,
         font = settings.font,
+        customFontPath = settings.customFontPath,
         lineHeight = settings.lineHeight,
         pageMargin = settings.pageMargin,
+        syntaxHighlightEnabled = settings.syntaxHighlightEnabled,
+        syntaxRulesHash = settings.syntaxHighlightRules.hashCode(),
         width = viewport.width,
         height = viewport.height
     )
-    remember(environment, palette) {
+    remember(
+        environment,
+        palette,
+        settings.backgroundImagePath,
+        settings.backgroundImageOpacity
+    ) {
         if (viewport.width > 0 && viewport.height > 0) {
             val style = ReaderPageStyle.resolve(
                 settings = settings,
@@ -465,8 +473,11 @@ internal const val NEXT_TAP_ZONE = 0.72f
 private data class ReaderEnvironmentKey(
     val fontScale: Float,
     val font: ReaderFont,
+    val customFontPath: String?,
     val lineHeight: Float,
     val pageMargin: Float,
+    val syntaxHighlightEnabled: Boolean,
+    val syntaxRulesHash: Int,
     val width: Int,
     val height: Int
 )

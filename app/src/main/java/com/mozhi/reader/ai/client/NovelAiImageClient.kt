@@ -22,6 +22,7 @@ class NovelAiImageClient(
     private val apiKey: String,
     private val model: String,
     private val defaultSize: String,
+    private val positivePrompt: String = "",
     private val negativePrompt: String,
     private val sampler: String = "",
     private val steps: Int = 28,
@@ -81,6 +82,7 @@ class NovelAiImageClient(
     /** 拆出来便于单测校验请求体结构。 */
     internal fun buildPayload(prompt: String, size: String): JsonObject {
         val (width, height) = parseSize(size)
+        val effectivePrompt = mergePositivePrompt(positivePrompt, prompt)
         val negative = negativePrompt.trim().ifBlank { DEFAULT_NEGATIVE_PROMPT }
         val isV4 = model.startsWith("nai-diffusion-4")
         val parameters = linkedMapOf<String, JsonElement>(
@@ -100,7 +102,7 @@ class NovelAiImageClient(
                 mapOf(
                     "caption" to JsonObject(
                         mapOf(
-                            "base_caption" to JsonPrimitive(prompt),
+                            "base_caption" to JsonPrimitive(effectivePrompt),
                             "char_captions" to JsonArray(emptyList())
                         )
                     ),
@@ -121,7 +123,7 @@ class NovelAiImageClient(
         }
         return JsonObject(
             mapOf(
-                "input" to JsonPrimitive(prompt),
+                "input" to JsonPrimitive(effectivePrompt),
                 "model" to JsonPrimitive(model),
                 "action" to JsonPrimitive("generate"),
                 "parameters" to JsonObject(parameters)
@@ -145,6 +147,12 @@ class NovelAiImageClient(
         const val DEFAULT_NEGATIVE_PROMPT =
             "lowres, jpeg artifacts, worst quality, bad quality, watermark, blurry, very displeasing"
         private const val MAX_ARCHIVE_BYTES = 30 * 1024 * 1024
+
+        internal fun mergePositivePrompt(fixed: String, dynamic: String): String =
+            listOf(fixed, dynamic)
+                .map { it.trim().trim(',') }
+                .filter(String::isNotBlank)
+                .joinToString(", ")
     }
 }
 

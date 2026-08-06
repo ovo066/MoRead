@@ -462,7 +462,7 @@ private class GenerateImageTool(
 
     override val spec: ToolSpec = ToolSpec(
         name = "generate_image",
-        description = "调用用户分配的生图模型生成小说插图，并永久保存到本书插图廊。提示词只能依据用户已读内容；适合用户明确要求画面、插图或角色形象时调用。",
+        description = "调用用户分配的生图模型生成小说插图，并永久保存到本书插图廊。提示词只能依据用户已读内容；系统会按当前后端自动改写提示词，NovelAI 使用 Danbooru tags。适合用户明确要求画面、插图或角色形象时调用。",
         parameters = buildJsonObject {
             put("type", "object")
             putJsonObject("properties") {

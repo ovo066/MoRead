@@ -143,6 +143,7 @@ class AiClientFactory @Inject constructor(
                         apiKey = apiKey,
                         model = config.model,
                         defaultSize = config.effectiveSize,
+                        positivePrompt = config.positivePrompt,
                         negativePrompt = config.negativePrompt,
                         sampler = config.sampler,
                         steps = config.steps,

@@ -73,6 +73,7 @@ class ImageGenSettingsViewModel @Inject constructor(
     fun setBaseUrl(value: String) = update { it.copy(baseUrl = value.trim()) }
     fun setModel(value: String) = update { it.copy(model = value.trim()) }
     fun setSize(value: String) = update { it.copy(size = value.trim()) }
+    fun setPositivePrompt(value: String) = update { it.copy(positivePrompt = value) }
     fun setNegativePrompt(value: String) = update { it.copy(negativePrompt = value) }
     fun setSampler(value: String) = update { it.copy(sampler = value.trim()) }
     fun setSteps(value: Int) = update { it.copy(steps = value.coerceIn(1, 50)) }
@@ -100,7 +101,13 @@ class ImageGenSettingsViewModel @Inject constructor(
             message.value = null
             try {
                 val resolved = clientFactory.imageGeneration()
-                val generated = resolved.client.generateImages(TEST_PROMPT).first()
+                val current = uiState.value.settings
+                val prompt = if (current.configured && current.provider == ImageApiProvider.NOVELAI) {
+                    TEST_NOVELAI_PROMPT
+                } else {
+                    TEST_PROMPT
+                }
+                val generated = resolved.client.generateImages(prompt).first()
                 val bytes = resolved.client.materializeImage(generated)
                 val path = withContext(Dispatchers.IO) {
                     val directory = File(context.cacheDir, "image-api-test").apply { mkdirs() }
@@ -131,5 +138,7 @@ class ImageGenSettingsViewModel @Inject constructor(
 
     private companion object {
         const val TEST_PROMPT = "安静的书斋一角，暖色台灯下摊开的线装书，水墨插画风格，无文字"
+        const val TEST_NOVELAI_PROMPT =
+            "masterpiece, best quality, absurdres, 1girl, reading, book, indoors, study, warm_lighting, detailed_background"
     }
 }

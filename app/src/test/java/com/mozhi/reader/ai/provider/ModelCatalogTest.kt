@@ -56,7 +56,7 @@ class ModelCatalogTest {
     }
 
     @Test
-    fun genericOpenAiUsesOnlyStandardCatalogAndLeavesTypeManual() = runBlocking {
+    fun genericOpenAiUsesStandardCatalogAndInfersImageCapability() = runBlocking {
         val paths = mutableListOf<String>()
         val client = fakeClient { path ->
             paths += path
@@ -69,8 +69,23 @@ class ModelCatalogTest {
         ) as ModelCatalogResult.Success
 
         assertEquals(listOf("/api/v1/models"), paths)
-        assertEquals(AiModelType.CHAT, result.models.single().type)
-        assertEquals("", result.models.single().endpointPath)
+        assertEquals(AiModelType.IMAGE, result.models.single().type)
+        assertEquals("/images/generations", result.models.single().endpointPath)
+    }
+
+    @Test
+    fun genericCatalogRecognizesImageModelNameWithoutArchitecture() = runBlocking {
+        val client = fakeClient {
+            """{"data":[{"id":"gpt-image-1"},{"id":"ordinary-chat"}]}"""
+        }
+
+        val result = ModelCatalogFetcher(client).fetch(
+            provider(adapter = AiProviderAdapter.CUSTOM),
+            "secret"
+        ) as ModelCatalogResult.Success
+
+        assertEquals(AiModelType.IMAGE, result.models.single { it.modelName == "gpt-image-1" }.type)
+        assertEquals(AiModelType.CHAT, result.models.single { it.modelName == "ordinary-chat" }.type)
     }
 
     private fun provider(adapter: AiProviderAdapter) = AiProviderEntity(

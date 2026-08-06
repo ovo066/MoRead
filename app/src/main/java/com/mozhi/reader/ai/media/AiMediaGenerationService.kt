@@ -45,6 +45,7 @@ data class CachedSpeech(val path: String, val mediaType: String?, val cacheHit: 
 class AiMediaGenerationService @Inject constructor(
     @ApplicationContext private val context: Context,
     private val clientFactory: AiClientFactory,
+    private val imagePromptComposer: ImagePromptComposer,
     private val illustrations: IllustrationRepository
 ) {
     private val speechMutex = Mutex()
@@ -59,8 +60,9 @@ class AiMediaGenerationService @Inject constructor(
     ): IllustrationEntity {
         val cleanPrompt = prompt.trim().take(MAX_PROMPT_CHARS)
         require(cleanPrompt.isNotEmpty()) { "生图提示词不能为空" }
+        val generatedPrompt = imagePromptComposer.compose(cleanPrompt).take(MAX_PROMPT_CHARS)
         val resolved = clientFactory.imageGeneration()
-        val generated = resolved.client.generateImages(prompt = cleanPrompt).first()
+        val generated = resolved.client.generateImages(prompt = generatedPrompt).first()
         val bytes = resolved.client.materializeImage(generated)
         require(bytes.size <= MAX_MEDIA_BYTES) { "生成图片超过 30 MB，已取消保存" }
         return withContext(Dispatchers.IO) {
@@ -79,7 +81,7 @@ class AiMediaGenerationService @Inject constructor(
                         chapterIndex = chapterIndex,
                         charOffset = charOffset,
                         sourceText = sourceText.trim().take(MAX_SOURCE_CHARS),
-                        prompt = cleanPrompt,
+                        prompt = generatedPrompt,
                         imagePath = output.absolutePath,
                         mediaType = generated.mediaType,
                         pixelWidth = bounds.outWidth.coerceAtLeast(0),

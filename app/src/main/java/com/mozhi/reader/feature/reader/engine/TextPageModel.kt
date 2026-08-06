@@ -13,7 +13,9 @@ package com.mozhi.reader.feature.reader.engine
 class TextColumn(
     val start: Float,
     val end: Float,
-    val charData: String
+    val charData: String,
+    val syntaxColorArgb: Int? = null,
+    val syntaxUnderline: Boolean = false
 )
 
 /** Chapter-level source metadata loaded from the EPUB media sidecar. */

@@ -44,7 +44,8 @@ enum class ReaderFont {
     SYSTEM,
     SERIF,
     SANS_SERIF,
-    MONOSPACE
+    MONOSPACE,
+    CUSTOM
 }
 
 enum class ShelfLayout {
@@ -55,6 +56,8 @@ enum class ShelfLayout {
 data class ReaderSettings(
     val fontScale: Float = 1f,
     val font: ReaderFont = ReaderFont.SYSTEM,
+    /** 已导入到应用私有目录的 TTF/OTF 文件。 */
+    val customFontPath: String? = null,
     val lineHeight: Float = 1.55f,
     val pageMargin: Float = 1f,
     val theme: ReaderTheme = ReaderTheme.SYSTEM,
@@ -62,6 +65,12 @@ data class ReaderSettings(
     val pageTurnAnimation: PageTurnAnimation = PageTurnAnimation.SIMULATION,
     val shelfLayout: ShelfLayout = ShelfLayout.GRID,
     val keepScreenOn: Boolean = false,
+    /** 已导入到应用私有目录的阅读背景图片。 */
+    val backgroundImagePath: String? = null,
+    /** 背景图片在主题底色之上的不透明度。 */
+    val backgroundImageOpacity: Float = 0.28f,
+    val syntaxHighlightEnabled: Boolean = false,
+    val syntaxHighlightRules: List<ReaderSyntaxRule> = ReaderSyntaxHighlighter.DEFAULT_RULES,
     /** 用户保存的自定义主题预设。 */
     val customThemes: List<CustomReaderTheme> = emptyList(),
     /** 非空表示自定义主题生效，覆盖 [theme]；选内置主题时清空。 */
@@ -82,6 +91,7 @@ class ReaderSettingsRepository @Inject constructor(
             font = preferences[Keys.Font]
                 ?.let { runCatching { ReaderFont.valueOf(it) }.getOrNull() }
                 ?: ReaderFont.SYSTEM,
+            customFontPath = preferences[Keys.CustomFontPath]?.takeIf(String::isNotBlank),
             lineHeight = preferences[Keys.LineHeight] ?: 1.55f,
             pageMargin = preferences[Keys.PageMargin] ?: 1f,
             theme = preferences[Keys.Theme]
@@ -98,6 +108,11 @@ class ReaderSettingsRepository @Inject constructor(
                 ?.let { runCatching { ShelfLayout.valueOf(it) }.getOrNull() }
                 ?: ShelfLayout.GRID,
             keepScreenOn = preferences[Keys.KeepScreenOn] ?: false,
+            backgroundImagePath = preferences[Keys.BackgroundImagePath]?.takeIf(String::isNotBlank),
+            backgroundImageOpacity = (preferences[Keys.BackgroundImageOpacity] ?: 0.28f)
+                .coerceIn(0.05f, 1f),
+            syntaxHighlightEnabled = preferences[Keys.SyntaxHighlightEnabled] ?: false,
+            syntaxHighlightRules = ReaderSyntaxRuleCodec.decode(preferences[Keys.SyntaxHighlightRules]),
             customThemes = CustomReaderThemeCodec.decode(preferences[Keys.CustomThemes]),
             activeCustomThemeId = preferences[Keys.ActiveCustomThemeId]
         )
@@ -138,6 +153,18 @@ class ReaderSettingsRepository @Inject constructor(
 
     suspend fun setFont(value: ReaderFont) {
         dataStore.edit { it[Keys.Font] = value.name }
+    }
+
+    suspend fun setCustomFontPath(path: String?) {
+        dataStore.edit {
+            if (path.isNullOrBlank()) {
+                it.remove(Keys.CustomFontPath)
+                if (it[Keys.Font] == ReaderFont.CUSTOM.name) it[Keys.Font] = ReaderFont.SYSTEM.name
+            } else {
+                it[Keys.CustomFontPath] = path
+                it[Keys.Font] = ReaderFont.CUSTOM.name
+            }
+        }
     }
 
     suspend fun setLineHeight(value: Float) {
@@ -200,6 +227,39 @@ class ReaderSettingsRepository @Inject constructor(
         dataStore.edit { it[Keys.KeepScreenOn] = value }
     }
 
+    suspend fun setBackgroundImagePath(path: String?) {
+        dataStore.edit {
+            if (path.isNullOrBlank()) it.remove(Keys.BackgroundImagePath)
+            else it[Keys.BackgroundImagePath] = path
+        }
+    }
+
+    suspend fun setBackgroundImageOpacity(value: Float) {
+        dataStore.edit { it[Keys.BackgroundImageOpacity] = value.coerceIn(0.05f, 1f) }
+    }
+
+    suspend fun setSyntaxHighlightEnabled(value: Boolean) {
+        dataStore.edit { it[Keys.SyntaxHighlightEnabled] = value }
+    }
+
+    suspend fun saveSyntaxHighlightRule(rule: ReaderSyntaxRule) {
+        dataStore.edit { preferences ->
+            val existing = ReaderSyntaxRuleCodec.decode(preferences[Keys.SyntaxHighlightRules])
+            val id = rule.id.takeIf { it != 0L } ?: ((existing.maxOfOrNull { it.id } ?: 0L) + 1)
+            preferences[Keys.SyntaxHighlightRules] = ReaderSyntaxRuleCodec.encode(
+                existing.filterNot { it.id == id } + rule.copy(id = id)
+            )
+        }
+    }
+
+    suspend fun deleteSyntaxHighlightRule(id: Long) {
+        dataStore.edit { preferences ->
+            val remaining = ReaderSyntaxRuleCodec.decode(preferences[Keys.SyntaxHighlightRules])
+                .filterNot { it.id == id }
+            preferences[Keys.SyntaxHighlightRules] = ReaderSyntaxRuleCodec.encode(remaining)
+        }
+    }
+
     /** 当前伴读角色（personas.id）；null = 未选择，界面按第一个角色处理。 */
     val activePersonaId: Flow<Long?> = dataStore.data.map { it[Keys.ActivePersonaId] }
 
@@ -247,6 +307,7 @@ class ReaderSettingsRepository @Inject constructor(
     private object Keys {
         val FontScale = floatPreferencesKey("reader_font_scale")
         val Font = stringPreferencesKey("reader_font")
+        val CustomFontPath = stringPreferencesKey("reader_custom_font_path")
         val LineHeight = floatPreferencesKey("reader_line_height")
         val PageMargin = floatPreferencesKey("reader_page_margin")
         val Theme = stringPreferencesKey("reader_theme")
@@ -254,6 +315,10 @@ class ReaderSettingsRepository @Inject constructor(
         val PageTurnAnimation = stringPreferencesKey("reader_page_turn_animation")
         val ShelfLayout = stringPreferencesKey("shelf_layout")
         val KeepScreenOn = booleanPreferencesKey("keep_screen_on")
+        val BackgroundImagePath = stringPreferencesKey("reader_background_image_path")
+        val BackgroundImageOpacity = floatPreferencesKey("reader_background_image_opacity")
+        val SyntaxHighlightEnabled = booleanPreferencesKey("reader_syntax_highlight_enabled")
+        val SyntaxHighlightRules = stringPreferencesKey("reader_syntax_highlight_rules")
         val ThemeMode = stringPreferencesKey("app_theme_mode")
         val AccentPreset = stringPreferencesKey("accent_preset")
         val AccentCustomArgb = intPreferencesKey("accent_custom_argb")

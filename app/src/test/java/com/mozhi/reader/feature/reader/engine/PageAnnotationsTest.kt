@@ -83,6 +83,31 @@ class PageAnnotationsTest {
         assertEquals(44f - 8f, geometry.markers.single().centerX)
     }
 
+    @Test
+    fun illustrationMarkerUsesSelectionEndAndGroupsSameLine() {
+        val page = TextPage(
+            index = 0,
+            lines = listOf(line("天地玄黄", chapterPosition = 0, top = 0f)),
+            chapterPosition = 0,
+            charLength = 4,
+            height = 30f
+        )
+
+        val markers = page.illustrationMarkers(
+            illustrations = listOf(
+                ReaderIllustrationMark(8, 0, 0, 2),
+                ReaderIllustrationMark(9, 0, 1, 2)
+            ),
+            markerRadius = 8f,
+            markerGap = 4f,
+            maxRight = 200f
+        )
+
+        assertEquals(1, markers.size)
+        assertEquals(listOf(8L, 9L), markers.single().illustrationIds)
+        assertEquals(20f + 4f + 8f, markers.single().centerX)
+    }
+
     private fun line(text: String, chapterPosition: Int, top: Float): TextLine {
         val columns = text.mapIndexed { index, char ->
             TextColumn(index * 10f, (index + 1) * 10f, char.toString())

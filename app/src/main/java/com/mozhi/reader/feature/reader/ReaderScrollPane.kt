@@ -53,6 +53,7 @@ import com.mozhi.reader.core.datastore.ReaderSettings
 import com.mozhi.reader.feature.reader.engine.ChapterStrip
 import com.mozhi.reader.feature.reader.engine.ListenHighlightSpan
 import com.mozhi.reader.feature.reader.engine.ReaderAnnotationMark
+import com.mozhi.reader.feature.reader.engine.ReaderIllustrationMark
 import com.mozhi.reader.feature.reader.engine.ReaderContentController
 import com.mozhi.reader.feature.reader.engine.RenderPage
 import com.mozhi.reader.feature.reader.engine.SelectionRect
@@ -61,6 +62,7 @@ import com.mozhi.reader.feature.reader.engine.TextPos
 import com.mozhi.reader.feature.reader.engine.annotationGeometry
 import com.mozhi.reader.feature.reader.engine.dragSelectionHandle
 import com.mozhi.reader.feature.reader.engine.hitTextPos
+import com.mozhi.reader.feature.reader.engine.illustrationMarkers
 import com.mozhi.reader.feature.reader.engine.selectedText
 import com.mozhi.reader.feature.reader.engine.selectionBodyRange
 import com.mozhi.reader.feature.reader.engine.selectionRects
@@ -94,11 +96,13 @@ fun ReaderScrollPane(
     onBoundary: (PageTurnDirection) -> Unit,
     onNotice: (String) -> Unit,
     annotations: List<ReaderAnnotationMark>,
+    illustrations: List<ReaderIllustrationMark> = emptyList(),
     listenHighlight: ListenHighlightSpan? = null,
     listenPlaying: Boolean = false,
     onAiAction: (action: SelectionAiAction, selection: String, context: String) -> Unit,
     onAnnotationAction: (selection: String, range: IntRange, anchorTopPx: Int) -> Unit,
     onAnnotationClick: (annotationIds: List<Long>) -> Unit,
+    onIllustrationClick: (illustrationIds: List<Long>) -> Unit = {},
     onTtsAction: (selection: String) -> Unit,
     onImageAction: (selection: String, context: String, range: IntRange) -> Unit,
     modifier: Modifier = Modifier
@@ -215,6 +219,10 @@ fun ReaderScrollPane(
     LaunchedEffect(annotations) {
         holder.annotations = annotations
         invalidate()
+    }
+    LaunchedEffect(illustrations) {
+        holder.illustrations = illustrations
+        frameTick++
     }
     LaunchedEffect(listenHighlight) {
         holder.listenHighlight = listenHighlight
@@ -358,6 +366,12 @@ fun ReaderScrollPane(
                         holder.dragging = false
                         if (hadSelection || longPressFired) return@awaitEachGesture
                         // 纯点击：先批注热区，再左右滚屏分区，最后中央呼出 chrome。
+                        val illustrationIds = holder.illustrationIdsAt(upPosition)
+                        if (illustrationIds.isNotEmpty()) {
+                            selection.clear()
+                            onIllustrationClick(illustrationIds)
+                            return@awaitEachGesture
+                        }
                         val annotationIds = holder.annotationIdsAt(upPosition)
                         if (annotationIds.isNotEmpty()) {
                             selection.clear()
@@ -476,6 +490,7 @@ private class ScrollPaneHolder(private val controller: ReaderContentController) 
     private var batteryPercent: Int = 100
 
     var annotations: List<ReaderAnnotationMark> = emptyList()
+    var illustrations: List<ReaderIllustrationMark> = emptyList()
     var listenHighlight: ListenHighlightSpan? = null
 
     /** 内容带顶边在当前章条带里的 Y；draw phase 逐帧读。 */
@@ -734,6 +749,24 @@ private class ScrollPaneHolder(private val controller: ReaderContentController) 
             .distinct()
     }
 
+    fun illustrationIdsAt(position: Offset): List<Long> {
+        val currentStyle = style ?: return emptyList()
+        val hit = resolve(position) ?: return emptyList()
+        val markerRadius = (currentStyle.tipSizePx * 0.72f).coerceAtLeast(8f)
+        val markers = hit.page.illustrationMarkers(
+            illustrations.filter { it.chapterIndex == hit.chapterIndex },
+            markerRadius,
+            markerRadius * com.mozhi.reader.feature.reader.engine.ANNOTATION_MARKER_GAP_RATIO,
+            currentStyle.contentWidth + currentStyle.paddingHorizontal * 0.9f
+        )
+        val hitRadius = (currentStyle.tipSizePx * 1.35f).coerceAtLeast(18f)
+        return markers.firstOrNull { marker ->
+            val dx = hit.local.x - marker.centerX
+            val dy = hit.local.y - marker.centerY
+            dx * dx + dy * dy <= hitRadius * hitRadius
+        }?.illustrationIds.orEmpty()
+    }
+
     // ---- 绘制 ----
 
     fun drawFrame(canvas: android.graphics.Canvas, width: Float, height: Float) {
@@ -761,6 +794,7 @@ private class ScrollPaneHolder(private val controller: ReaderContentController) 
             }
             val chapter = strip.chapter
             val chapterAnnotations = annotations.filter { it.chapterIndex == chapter.chapterIndex }
+            val chapterIllustrations = illustrations.filter { it.chapterIndex == chapter.chapterIndex }
             val highlight = listenHighlight?.takeIf { it.chapterIndex == chapter.chapterIndex }
             for (pageIndex in chapter.pages.indices) {
                 val pageTop = blockTop + strip.pageTops[pageIndex]
@@ -783,6 +817,7 @@ private class ScrollPaneHolder(private val controller: ReaderContentController) 
                         page = page
                     ),
                     annotations = chapterAnnotations,
+                    illustrations = chapterIllustrations,
                     listenHighlight = highlight,
                     clipTop = contentTop - pageTop,
                     clipBottom = contentBottom - pageTop

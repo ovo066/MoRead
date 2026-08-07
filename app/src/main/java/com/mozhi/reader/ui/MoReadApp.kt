@@ -48,7 +48,10 @@ import com.mozhi.reader.feature.importer.ImportPreviewScreen
 import com.mozhi.reader.feature.reader.CompanionChatScreen
 import com.mozhi.reader.feature.reader.ReaderScreen
 import com.mozhi.reader.feature.settings.ApiLogScreen
+import com.mozhi.reader.feature.settings.AppUpdatePrompt
 import com.mozhi.reader.feature.settings.ImageGenSettingsScreen
+import com.mozhi.reader.feature.settings.GlobalPresetSettingsScreen
+import com.mozhi.reader.feature.settings.BackupSettingsScreen
 import com.mozhi.reader.feature.settings.ProviderDetailScreen
 import com.mozhi.reader.feature.settings.SettingsScreen
 import com.mozhi.reader.feature.settings.TtsSettingsScreen
@@ -157,6 +160,8 @@ fun MoReadApp(
                         },
                         onOpenTtsSettings = { navController.navigate("tts-settings") },
                         onOpenImageGenSettings = { navController.navigate("image-gen-settings") },
+                        onOpenGlobalPresets = { navController.navigate("global-presets") },
+                        onOpenBackup = { navController.navigate("backup-settings") },
                         onOpenApiLog = { navController.navigate("api-log") }
                     )
                 }
@@ -165,6 +170,12 @@ fun MoReadApp(
                 }
                 composable("image-gen-settings") {
                     ImageGenSettingsScreen(onBack = navController::popBackStack)
+                }
+                composable("global-presets") {
+                    GlobalPresetSettingsScreen(onBack = navController::popBackStack)
+                }
+                composable("backup-settings") {
+                    BackupSettingsScreen(onBack = navController::popBackStack)
                 }
                 composable("api-log") {
                     ApiLogScreen(onBack = navController::popBackStack)
@@ -230,6 +241,7 @@ fun MoReadApp(
                     }
                 )
             }
+            AppUpdatePrompt()
         }
     }
 }

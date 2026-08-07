@@ -13,6 +13,7 @@ import com.mozhi.reader.core.database.entity.AnnotationStyle
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.BookmarkEntity
 import com.mozhi.reader.core.database.entity.ChapterEntity
+import com.mozhi.reader.core.database.entity.IllustrationEntity
 import com.mozhi.reader.core.database.entity.ReadingDailyEntity
 import com.mozhi.reader.core.datastore.PageTurnAnimation
 import com.mozhi.reader.core.datastore.ReaderFont
@@ -22,6 +23,7 @@ import com.mozhi.reader.core.datastore.ReaderTheme
 import com.mozhi.reader.core.library.AnnotationRepository
 import com.mozhi.reader.core.library.BookMediaStore
 import com.mozhi.reader.core.library.LibraryRepository
+import com.mozhi.reader.core.library.IllustrationRepository
 import com.mozhi.reader.feature.reader.engine.ChapterMeta
 import com.mozhi.reader.feature.reader.engine.InlineImageSource
 import com.mozhi.reader.feature.reader.engine.ReaderContentController
@@ -48,6 +50,7 @@ data class ReaderUiState(
     val chapters: List<ChapterEntity> = emptyList(),
     val bookmarks: List<BookmarkEntity> = emptyList(),
     val annotations: List<AnnotationEntity> = emptyList(),
+    val illustrations: List<IllustrationEntity> = emptyList(),
     /** 有讨论回复的批注 id：纯高亮有讨论时也要出「评」标记。 */
     val repliedAnnotationIds: Set<Long> = emptySet(),
     val showAiAnnotations: Boolean = true,
@@ -99,6 +102,7 @@ class ReaderViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val libraryRepository: LibraryRepository,
     private val annotationRepository: AnnotationRepository,
+    private val illustrationRepository: IllustrationRepository,
     private val mediaStore: BookMediaStore,
     private val settingsRepository: ReaderSettingsRepository
 ) : ViewModel(), ReaderContentController.Listener {
@@ -137,6 +141,11 @@ class ReaderViewModel @Inject constructor(
         viewModelScope.launch {
             annotationRepository.observeForBook(bookId).collect { annotations ->
                 mutableState.update { it.copy(annotations = annotations) }
+            }
+        }
+        viewModelScope.launch {
+            illustrationRepository.observeForBook(bookId).collect { illustrations ->
+                mutableState.update { it.copy(illustrations = illustrations) }
             }
         }
         viewModelScope.launch {

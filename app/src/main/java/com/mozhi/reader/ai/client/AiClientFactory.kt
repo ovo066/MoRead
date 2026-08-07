@@ -10,6 +10,7 @@ import com.mozhi.reader.core.database.entity.AiModelEntity
 import com.mozhi.reader.core.database.entity.AiModelType
 import com.mozhi.reader.core.database.entity.AiProviderAdapter
 import com.mozhi.reader.core.database.entity.ModelRole
+import com.mozhi.reader.core.datastore.GlobalPromptPresetStore
 import com.mozhi.reader.core.media.ImageApiProvider
 import com.mozhi.reader.core.media.ImageApiSettingsStore
 import com.mozhi.reader.core.security.ApiKeyStore
@@ -45,12 +46,18 @@ class AiClientFactory @Inject constructor(
     private val ttsSettingsStore: TtsSettingsStore,
     private val imageApiSettingsStore: ImageApiSettingsStore,
     private val apiKeyStore: ApiKeyStore,
-    private val httpClient: OkHttpClient
+    private val httpClient: OkHttpClient,
+    private val globalPromptPresetStore: GlobalPromptPresetStore
 ) {
     /** Resolves the model assigned to [role] or throws a guided [AiClientException]. */
     suspend fun forRole(role: ModelRole): ResolvedChatClient {
         val (provider, model) = resolve(role)
-        return forModel(provider, model)
+        val resolved = forModel(provider, model)
+        if (role != ModelRole.CHAT) return resolved
+        val presets = globalPromptPresetStore.current().filter { it.enabled }
+        return if (presets.isEmpty()) resolved else resolved.copy(
+            client = GlobalPresetChatApiClient(resolved.client, presets)
+        )
     }
 
     fun forModel(provider: AiProviderEntity, model: AiModelEntity): ResolvedChatClient {

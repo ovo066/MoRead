@@ -26,6 +26,8 @@ import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Colorize
+import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material.icons.outlined.CloudSync
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -93,6 +95,8 @@ fun SettingsScreen(
     onOpenProvider: (Long) -> Unit,
     onOpenTtsSettings: () -> Unit = {},
     onOpenImageGenSettings: () -> Unit = {},
+    onOpenGlobalPresets: () -> Unit = {},
+    onOpenBackup: () -> Unit = {},
     onOpenApiLog: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
@@ -164,6 +168,7 @@ fun SettingsScreen(
                     onChange = viewModel::setShowAiAnnotations
                 )
             }
+            item { GlobalPresetEntryCard(onClick = onOpenGlobalPresets) }
 
             item { SectionLabel(title = "语音与生图") }
             item {
@@ -194,12 +199,16 @@ fun SettingsScreen(
                 )
             }
 
+            item { SectionLabel(title = "数据") }
+            item { BackupEntryCard(onClick = onOpenBackup) }
+
             item { SectionLabel(title = "诊断") }
             item {
                 ApiLogEntryCard(onClick = onOpenApiLog)
             }
 
             item { SectionLabel(title = "关于") }
+            item { AppUpdateCard() }
             item { AboutCard() }
         }
 
@@ -1046,6 +1055,76 @@ private fun ApiLogEntryCard(onClick: () -> Unit) {
             Icon(
                 Icons.Outlined.ChevronRight,
                 contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+/** 全局提示词预设二级页入口。 */
+@Composable
+private fun GlobalPresetEntryCard(onClick: () -> Unit) {
+    FrostedSurface(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        shape = RoundedCornerShape(20.dp),
+        shadowElevation = 4.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Outlined.Tune,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(22.dp)
+            )
+            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                Text("全局预设", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "自定义提示词与注入位置",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Icon(
+                Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                contentDescription = "打开",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+/** 本地与 WebDAV 数据备份入口。 */
+@Composable
+private fun BackupEntryCard(onClick: () -> Unit) {
+    FrostedSurface(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        shape = RoundedCornerShape(20.dp),
+        shadowElevation = 4.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Outlined.CloudSync,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(22.dp)
+            )
+            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                Text("数据备份", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "本地导入导出、WebDAV 与每日自动备份",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Icon(
+                Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                contentDescription = "打开",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }

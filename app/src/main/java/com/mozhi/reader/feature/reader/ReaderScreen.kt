@@ -79,6 +79,7 @@ import com.mozhi.reader.core.datastore.ReaderFont
 import com.mozhi.reader.core.datastore.ReaderSettings
 import com.mozhi.reader.core.datastore.ReaderTheme
 import com.mozhi.reader.feature.reader.engine.ReaderAnnotationMark
+import com.mozhi.reader.feature.reader.engine.ReaderIllustrationMark
 import kotlinx.coroutines.launch
 
 /** 即划即改浮条：刚落的划线 id + 浮条位置（沿用选区工具栏的锚点位）。 */
@@ -200,6 +201,18 @@ fun ReaderScreen(
                 colorTag = annotation.colorTag.ifBlank {
                     annotation.personaId?.let(AnnotationColors::forPersona).orEmpty()
                 }
+            )
+        }
+    }
+    val illustrationMarks = remember(state.illustrations) {
+        state.illustrations.mapNotNull { illustration ->
+            val chapter = illustration.chapterIndex ?: return@mapNotNull null
+            val start = illustration.charOffset ?: return@mapNotNull null
+            ReaderIllustrationMark(
+                id = illustration.id,
+                chapterIndex = chapter,
+                startCharOffset = start,
+                endCharOffset = start + illustration.sourceText.length.coerceAtLeast(1)
             )
         }
     }
@@ -345,6 +358,14 @@ fun ReaderScreen(
                         )
                     }
                 }
+                val paneIllustrationClick: (List<Long>) -> Unit = { ids ->
+                    state.illustrations.firstOrNull { it.id in ids }?.let { illustration ->
+                        selectionMediaViewModel.showSavedImage(
+                            illustration.imagePath,
+                            illustration.prompt
+                        )
+                    }
+                }
                 val paneTtsAction: (String) -> Unit = { selection -> ttsDraft = selection }
                 val paneImageAction: (String, String, IntRange) -> Unit =
                     { selectionText, contextText, range ->
@@ -369,11 +390,13 @@ fun ReaderScreen(
                         onBoundary = viewModel::onBoundaryHit,
                         onNotice = paneNotice,
                         annotations = annotationMarks,
+                        illustrations = illustrationMarks,
                         listenHighlight = paneListenHighlight,
                         listenPlaying = listenState?.takeIf { it.bookId == bookId }?.isPlaying == true,
                         onAiAction = paneAiAction,
                         onAnnotationAction = paneAnnotationAction,
                         onAnnotationClick = paneAnnotationClick,
+                        onIllustrationClick = paneIllustrationClick,
                         onTtsAction = paneTtsAction,
                         onImageAction = paneImageAction,
                         modifier = Modifier.fillMaxSize()
@@ -387,10 +410,12 @@ fun ReaderScreen(
                         registerContentHook = viewModel::setContentHook,
                         onNotice = paneNotice,
                         annotations = annotationMarks,
+                        illustrations = illustrationMarks,
                         listenHighlight = paneListenHighlight,
                         onAiAction = paneAiAction,
                         onAnnotationAction = paneAnnotationAction,
                         onAnnotationClick = paneAnnotationClick,
+                        onIllustrationClick = paneIllustrationClick,
                         onTtsAction = paneTtsAction,
                         onImageAction = paneImageAction,
                         onCenterTap = { chromeVisible = !chromeVisible },

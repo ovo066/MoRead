@@ -15,6 +15,8 @@ import androidx.core.content.IntentCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
+import com.mozhi.reader.core.backup.BackupSettingsStore
+import com.mozhi.reader.core.backup.WebDavBackupScheduler
 import com.mozhi.reader.ui.MoReadApp
 import com.mozhi.reader.ui.theme.AppearanceSettings
 import com.mozhi.reader.ui.theme.MoReadTheme
@@ -23,11 +25,15 @@ import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     @Inject
     lateinit var settingsRepository: ReaderSettingsRepository
+
+    @Inject
+    lateinit var backupSettingsStore: BackupSettingsStore
 
     private val incomingBookUri = MutableStateFlow<Uri?>(null)
 
@@ -58,6 +64,12 @@ class MainActivity : ComponentActivity() {
             started = SharingStarted.Eagerly,
             initialValue = AppearanceSettings()
         )
+        lifecycleScope.launch {
+            WebDavBackupScheduler.update(
+                this@MainActivity,
+                backupSettingsStore.current().autoBackup
+            )
+        }
         setContent {
             val current by appearance.collectAsStateWithLifecycle()
             val incoming by incomingBookUri.collectAsStateWithLifecycle()

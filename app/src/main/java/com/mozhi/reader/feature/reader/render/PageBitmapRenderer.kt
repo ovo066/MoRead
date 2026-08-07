@@ -12,8 +12,10 @@ import android.util.LruCache
 import android.text.TextPaint
 import com.mozhi.reader.feature.reader.engine.ListenHighlightSpan
 import com.mozhi.reader.feature.reader.engine.ReaderAnnotationMark
+import com.mozhi.reader.feature.reader.engine.ReaderIllustrationMark
 import com.mozhi.reader.feature.reader.engine.RenderPage
 import com.mozhi.reader.feature.reader.engine.annotationGeometry
+import com.mozhi.reader.feature.reader.engine.illustrationMarkers
 import java.util.Locale
 
 /**
@@ -62,6 +64,16 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         color = pageStyle.backgroundColor
         textAlign = Paint.Align.CENTER
         typeface = Typeface.DEFAULT_BOLD
+    }
+    private val illustrationMarkerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = pageStyle.accentColor
+    }
+    private val illustrationGlyphPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = pageStyle.backgroundColor
+        style = Paint.Style.STROKE
+        strokeWidth = (pageStyle.tipSizePx * 0.1f).coerceAtLeast(1.4f)
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
     }
     private val imageFramePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = pageStyle.mutedColor
@@ -117,6 +129,7 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         timeText: String,
         batteryPercent: Int,
         annotations: List<ReaderAnnotationMark> = emptyList(),
+        illustrations: List<ReaderIllustrationMark> = emptyList(),
         listenHighlight: ListenHighlightSpan? = null
     ): Bitmap {
         val bitmap = obtainBitmap(into)
@@ -124,7 +137,7 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         drawBackdrop(canvas, bitmap.width.toFloat(), bitmap.height.toFloat())
         drawHeader(canvas, page)
         when (page) {
-            is RenderPage.Laid -> drawBody(canvas, page, annotations, listenHighlight)
+            is RenderPage.Laid -> drawBody(canvas, page, annotations, illustrations, listenHighlight)
             is RenderPage.Placeholder -> drawPlaceholder(canvas, page)
         }
         drawFooter(canvas, page, bookProgress, timeText, batteryPercent)
@@ -166,11 +179,12 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         canvas: Canvas,
         page: RenderPage.Laid,
         annotations: List<ReaderAnnotationMark>,
+        illustrations: List<ReaderIllustrationMark>,
         listenHighlight: ListenHighlightSpan?
     ) {
         canvas.save()
         canvas.translate(pageStyle.paddingHorizontal, pageStyle.headerHeight)
-        drawContent(canvas, page, annotations, listenHighlight)
+        drawContent(canvas, page, annotations, illustrations, listenHighlight)
         canvas.restore()
     }
 
@@ -183,7 +197,8 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         canvas: Canvas,
         page: RenderPage.Laid,
         annotations: List<ReaderAnnotationMark>,
-        listenHighlight: ListenHighlightSpan?,
+        illustrations: List<ReaderIllustrationMark> = emptyList(),
+        listenHighlight: ListenHighlightSpan? = null,
         clipTop: Float = Float.NEGATIVE_INFINITY,
         clipBottom: Float = Float.POSITIVE_INFINITY
     ) {
@@ -276,6 +291,39 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
                 annotationMarkerTextPaint
             )
         }
+        page.page.illustrationMarkers(
+            illustrations = illustrations,
+            markerRadius = markerRadius,
+            markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.ANNOTATION_MARKER_GAP_RATIO,
+            maxRight = pageStyle.contentWidth + pageStyle.paddingHorizontal * 0.9f
+        ).forEach { marker ->
+            if (marker.centerY + markerRadius < clipTop || marker.centerY - markerRadius > clipBottom) {
+                return@forEach
+            }
+            drawIllustrationMarker(canvas, marker.centerX, marker.centerY, markerRadius)
+        }
+    }
+
+    /** 小图片符号：圆角相框 + 山景与太阳，保持位图渲染器不依赖 Compose 图标。 */
+    private fun drawIllustrationMarker(canvas: Canvas, centerX: Float, centerY: Float, radius: Float) {
+        val rect = RectF(centerX - radius, centerY - radius, centerX + radius, centerY + radius)
+        canvas.drawRoundRect(rect, radius * 0.38f, radius * 0.38f, illustrationMarkerPaint)
+        val inset = radius * 0.42f
+        val frame = RectF(rect.left + inset, rect.top + inset, rect.right - inset, rect.bottom - inset)
+        canvas.drawRoundRect(frame, radius * 0.12f, radius * 0.12f, illustrationGlyphPaint)
+        val mountain = Path().apply {
+            moveTo(frame.left + radius * 0.12f, frame.bottom - radius * 0.12f)
+            lineTo(frame.centerX() - radius * 0.08f, frame.centerY())
+            lineTo(frame.centerX() + radius * 0.12f, frame.bottom - radius * 0.22f)
+            lineTo(frame.right - radius * 0.08f, frame.bottom - radius * 0.08f)
+        }
+        canvas.drawPath(mountain, illustrationGlyphPaint)
+        canvas.drawCircle(
+            frame.right - radius * 0.28f,
+            frame.top + radius * 0.28f,
+            radius * 0.09f,
+            illustrationGlyphPaint
+        )
     }
 
     /** 按批注样式分笔画：荧光=填充矩形，直线=底沿实线，波浪=底沿正弦 Path。 */

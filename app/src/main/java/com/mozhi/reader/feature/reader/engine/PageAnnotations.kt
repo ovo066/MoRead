@@ -16,6 +16,14 @@ data class ReaderAnnotationMark(
     val colorTag: String = ""
 )
 
+/** Render-layer copy of a generated illustration anchor. */
+data class ReaderIllustrationMark(
+    val id: Long,
+    val chapterIndex: Int,
+    val startCharOffset: Int,
+    val endCharOffset: Int
+)
+
 /** 听书当前句（章内 UTF-16 区间）；render 层据此画一条跟随朗读进度的柔和底色。 */
 data class ListenHighlightSpan(
     val chapterIndex: Int,
@@ -33,6 +41,12 @@ data class AnnotationHighlightRect(
 
 data class AnnotationMarker(
     val annotationIds: List<Long>,
+    val centerX: Float,
+    val centerY: Float
+)
+
+data class IllustrationMarker(
+    val illustrationIds: List<Long>,
     val centerX: Float,
     val centerY: Float
 )
@@ -96,6 +110,45 @@ fun TextPage.annotationGeometry(
         AnnotationMarker(ids.distinct(), centerX, (line.lineTop + line.lineBottom) / 2f)
     }
     return PageAnnotationGeometry(highlights, markers)
+}
+
+/**
+ * 选段插图的图片标记与批注「评」使用同一种末字符锚定语义。同行多张图合并成一个
+ * 可点击标记，避免小图标互相覆盖。
+ */
+fun TextPage.illustrationMarkers(
+    illustrations: List<ReaderIllustrationMark>,
+    markerRadius: Float,
+    markerGap: Float,
+    maxRight: Float
+): List<IllustrationMarker> {
+    if (illustrations.isEmpty()) return emptyList()
+    val idsByLine = linkedMapOf<Int, MutableList<Long>>()
+    val endXByLine = mutableMapOf<Int, Float>()
+    illustrations.forEach { illustration ->
+        val start = illustration.startCharOffset.coerceAtLeast(0)
+        val end = illustration.endCharOffset.coerceAtLeast(start + 1)
+        val lineIndex = lines.indexOfFirst { line ->
+            if (line.charLength <= 0 || line.columns.isEmpty()) return@indexOfFirst false
+            val lineStart = line.chapterPosition
+            val lineEnd = lineStart + line.charLength
+            end > lineStart && end <= lineEnd
+        }
+        if (lineIndex < 0) return@forEach
+        val line = lines[lineIndex]
+        val right = line.xBoundaryAt(end, endBoundary = true)
+        idsByLine.getOrPut(lineIndex) { mutableListOf() }.add(illustration.id)
+        endXByLine[lineIndex] = maxOf(endXByLine[lineIndex] ?: 0f, right)
+    }
+    return idsByLine.mapNotNull { (lineIndex, ids) ->
+        val line = lines.getOrNull(lineIndex) ?: return@mapNotNull null
+        val endX = endXByLine[lineIndex] ?: line.columns.last().end
+        IllustrationMarker(
+            illustrationIds = ids.distinct(),
+            centerX = (endX + markerGap + markerRadius).coerceAtMost(maxRight - markerRadius),
+            centerY = (line.lineTop + line.lineBottom) / 2f
+        )
+    }
 }
 
 private fun TextLine.xBoundaryAt(offset: Int, endBoundary: Boolean): Float {

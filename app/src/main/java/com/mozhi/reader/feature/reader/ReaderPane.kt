@@ -76,6 +76,7 @@ import com.mozhi.reader.core.datastore.ReaderFont
 import com.mozhi.reader.core.datastore.ReaderSettings
 import com.mozhi.reader.feature.reader.engine.ListenHighlightSpan
 import com.mozhi.reader.feature.reader.engine.ReaderAnnotationMark
+import com.mozhi.reader.feature.reader.engine.ReaderIllustrationMark
 import com.mozhi.reader.feature.reader.engine.ReaderContentController
 import com.mozhi.reader.feature.reader.engine.RenderPage
 import com.mozhi.reader.feature.reader.engine.SelectionRect
@@ -83,6 +84,7 @@ import com.mozhi.reader.feature.reader.engine.TextPos
 import com.mozhi.reader.feature.reader.engine.annotationGeometry
 import com.mozhi.reader.feature.reader.engine.dragSelectionHandle
 import com.mozhi.reader.feature.reader.engine.hitTextPos
+import com.mozhi.reader.feature.reader.engine.illustrationMarkers
 import com.mozhi.reader.feature.reader.engine.selectedText
 import com.mozhi.reader.feature.reader.engine.selectionBodyRange
 import com.mozhi.reader.feature.reader.engine.selectionRects
@@ -109,10 +111,12 @@ fun ReaderPane(
     onBoundary: (PageTurnDirection) -> Unit,
     onNotice: (String) -> Unit,
     annotations: List<ReaderAnnotationMark>,
+    illustrations: List<ReaderIllustrationMark> = emptyList(),
     listenHighlight: ListenHighlightSpan? = null,
     onAiAction: (action: SelectionAiAction, selection: String, context: String) -> Unit,
     onAnnotationAction: (selection: String, range: IntRange, anchorTopPx: Int) -> Unit,
     onAnnotationClick: (annotationIds: List<Long>) -> Unit,
+    onIllustrationClick: (illustrationIds: List<Long>) -> Unit = {},
     onTtsAction: (selection: String) -> Unit,
     onImageAction: (selection: String, context: String, range: IntRange) -> Unit,
     modifier: Modifier = Modifier
@@ -224,6 +228,12 @@ fun ReaderPane(
             frameTick++
         }
     }
+    LaunchedEffect(illustrations) {
+        if (holder.setIllustrations(illustrations)) {
+            holder.refresh(0)
+            frameTick++
+        }
+    }
 
     // 听书当前句变化时重绘页面位图，让底色跟随朗读进度。
     LaunchedEffect(listenHighlight) {
@@ -284,6 +294,12 @@ fun ReaderPane(
                     driver = driver,
                     selection = selection
                 ) { position, fromAbort ->
+                    val illustrationIds = holder.illustrationIdsAt(position)
+                    if (illustrationIds.isNotEmpty()) {
+                        selection.clear()
+                        onIllustrationClick(illustrationIds)
+                        return@readerPageTouch
+                    }
                     val annotationIds = holder.annotationIdsAt(position)
                     if (annotationIds.isNotEmpty()) {
                         selection.clear()
@@ -683,6 +699,7 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
     private var timeText: String = timeFormat.format(Date())
     private var batteryPercent: Int = 100
     private var annotations: List<ReaderAnnotationMark> = emptyList()
+    private var illustrations: List<ReaderIllustrationMark> = emptyList()
     private var listenHighlight: ListenHighlightSpan? = null
     private var dirty = true
 
@@ -713,6 +730,13 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
     fun setAnnotations(value: List<ReaderAnnotationMark>): Boolean {
         if (annotations == value) return false
         annotations = value
+        dirty = true
+        return true
+    }
+
+    fun setIllustrations(value: List<ReaderIllustrationMark>): Boolean {
+        if (illustrations == value) return false
+        illustrations = value
         dirty = true
         return true
     }
@@ -752,6 +776,25 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
             }
             .map { it.annotationId }
             .distinct()
+    }
+
+    fun illustrationIdsAt(position: Offset): List<Long> {
+        val currentStyle = style ?: return emptyList()
+        val page = controller.curPage() as? RenderPage.Laid ?: return emptyList()
+        val local = toContentLocal(position) ?: return emptyList()
+        val markerRadius = (currentStyle.tipSizePx * 0.72f).coerceAtLeast(8f)
+        val markers = page.page.illustrationMarkers(
+            illustrations.filter { it.chapterIndex == page.chapterIndex },
+            markerRadius,
+            markerRadius * com.mozhi.reader.feature.reader.engine.ANNOTATION_MARKER_GAP_RATIO,
+            currentStyle.contentWidth + currentStyle.paddingHorizontal * 0.9f
+        )
+        val hitRadius = (currentStyle.tipSizePx * 1.35f).coerceAtLeast(18f)
+        return markers.firstOrNull { marker ->
+            val dx = local.x - marker.centerX
+            val dy = local.y - marker.centerY
+            dx * dx + dy * dy <= hitRadius * hitRadius
+        }?.illustrationIds.orEmpty()
     }
 
     fun toContentLocal(position: Offset): Offset? {
@@ -806,6 +849,7 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
             timeText = timeText,
             batteryPercent = batteryPercent,
             annotations = annotations.filter { it.chapterIndex == page.chapterIndex },
+            illustrations = illustrations.filter { it.chapterIndex == page.chapterIndex },
             listenHighlight = listenHighlight?.takeIf { it.chapterIndex == page.chapterIndex }
         )
     }

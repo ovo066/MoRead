@@ -5,6 +5,7 @@ import com.mozhi.reader.core.database.entity.PersonaExampleDialog
 import com.mozhi.reader.core.database.entity.PersonaLoreEntry
 import com.mozhi.reader.core.database.entity.encodeExampleDialogs
 import com.mozhi.reader.core.database.entity.encodeWorldBook
+import com.mozhi.reader.core.datastore.UserMask
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -87,6 +88,26 @@ class CompanionContextBuilderTest {
     }
 
     @Test
+    fun userMaskDescribesUserWithoutReplacingAssistantPersona() {
+        val prompt = CompanionContextBuilder.assemble(
+            persona = persona(isRoleplay = true),
+            userMask = UserMask(
+                id = 2,
+                name = "陆教授",
+                description = "研究城市史，希望被称为教授。"
+            ),
+            progress = progress,
+            scene = null,
+            memories = emptyList()
+        )
+
+        assertTrue(prompt.contains("你是「阿翎」"))
+        assertTrue(prompt.contains("【用户面具】"))
+        assertTrue(prompt.contains("用户以「陆教授」的身份参与"))
+        assertTrue(prompt.contains("不是你的角色设定"))
+    }
+
+    @Test
     fun toolGuidanceOnlyMentionsRegisteredTools() {
         val withSearch = CompanionContextBuilder.assemble(
             persona = null,
@@ -105,6 +126,34 @@ class CompanionContextBuilderTest {
             memories = emptyList()
         )
         assertFalse(without.contains("【工具使用】"))
+    }
+
+    @Test
+    fun webSearchGuidancePreservesSpoilerBoundary() {
+        val prompt = CompanionContextBuilder.assemble(
+            persona = null,
+            progress = progress,
+            scene = null,
+            memories = emptyList(),
+            toolNames = setOf("web_search")
+        )
+
+        assertTrue(prompt.contains("来源链接"))
+        assertTrue(prompt.contains("严禁借联网搜索绕过防剧透范围"))
+    }
+
+    @Test
+    fun webScrapeGuidanceUsesFullPageOnlyWhenNeeded() {
+        val prompt = CompanionContextBuilder.assemble(
+            persona = null,
+            progress = progress,
+            scene = null,
+            memories = emptyList(),
+            toolNames = setOf("web_search", "web_scrape")
+        )
+
+        assertTrue(prompt.contains("web_scrape"))
+        assertTrue(prompt.contains("搜索摘要不足"))
     }
 
     @Test

@@ -49,7 +49,7 @@ class BookshelfViewModel @Inject constructor(
     // 阅读进度更新时做两次相同的全表查询，固定开销与界面数据量无关。
     private val books = libraryRepository.observeBooks().shareIn(
         scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5_000),
+        started = SharingStarted.Lazily,
         replay = 1
     )
 
@@ -81,7 +81,7 @@ class BookshelfViewModel @Inject constructor(
         )
     }.stateIn(
         scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5_000),
+        started = SharingStarted.Lazily,
         initialValue = BookshelfUiState()
     )
 

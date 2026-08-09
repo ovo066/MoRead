@@ -184,6 +184,37 @@ class AgentLoopTest {
     }
 
     @Test
+    fun `tool preface commits before tool activity and next round starts separately`() = runTest {
+        val dao = FakeChatDao(seed(ChatRole.USER to "搜搜今天新闻"))
+        val tool = EchoTool("搜索结果")
+        var round = 0
+
+        val events = loop(dao).runWith(1, listOf(tool)) {
+            AgentLoop.Streamer { _, _ ->
+                round++
+                if (round == 1) {
+                    flowOf(
+                        ChatDelta.Text("我来查一下。"),
+                        ChatDelta.ToolCalls(listOf(ToolCall("call_1", "echo_tool", "{}")))
+                    )
+                } else {
+                    flowOf(ChatDelta.Text("今天的新闻如下。"))
+                }
+            }
+        }.toList()
+
+        assertEquals(AgentEvent.Text("我来查一下。"), events[0])
+        assertTrue(events[1] is AgentEvent.RoundCommitted)
+        assertTrue(events[2] is AgentEvent.ToolRun)
+        assertTrue(events[3] is AgentEvent.ToolFinished)
+        assertEquals(AgentEvent.Text("今天的新闻如下。"), events[4])
+        assertEquals(
+            listOf("我来查一下。", "今天的新闻如下。"),
+            dao.messages.filter { it.role == "assistant" }.map { it.content }
+        )
+    }
+
+    @Test
     fun `unknown tool returns an error result instead of crashing`() = runTest {
         val dao = FakeChatDao(seed(ChatRole.USER to "hi"))
         var round = 0

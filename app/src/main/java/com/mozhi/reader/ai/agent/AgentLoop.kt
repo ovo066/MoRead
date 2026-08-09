@@ -29,6 +29,12 @@ sealed interface AgentEvent {
     /** Incremental assistant text of the current round. */
     data class Text(val text: String) : AgentEvent
 
+    /**
+     * 当前工具轮次的文字已持久化；UI 应在此刻将实时气泡交接给消息列表。
+     * 显式轮次边界避免同一段文字同时以「已落库 + 流式」渲染两次。
+     */
+    data class RoundCommitted(val message: MessageEntity) : AgentEvent
+
     /** 工具开始执行；[callId] 让界面能把开始/完成更新到同一条时间线。 */
     data class ToolRun(
         val callId: String,
@@ -219,7 +225,10 @@ class AgentLoop @Inject constructor(
             }
 
             if (text.isNotBlank()) producedText = true
-            persistAssistant(conversationId, text.toString(), requested)
+            val committedMessage = persistAssistant(conversationId, text.toString(), requested)
+            if (committedMessage != null) {
+                emit(AgentEvent.RoundCommitted(committedMessage))
+            }
             history.add(ChatMessage(ChatRole.ASSISTANT, text.toString(), toolCalls = requested))
 
             for (call in requested) {
@@ -279,20 +288,20 @@ class AgentLoop @Inject constructor(
         conversationId: Long,
         content: String,
         toolCalls: List<ToolCall>
-    ) {
-        if (content.isBlank() && toolCalls.isEmpty()) return
+    ): MessageEntity? {
+        if (content.isBlank() && toolCalls.isEmpty()) return null
         val now = System.currentTimeMillis()
-        chatDao.insertMessage(
-            MessageEntity(
-                conversationId = conversationId,
-                role = ChatRole.ASSISTANT.wire,
-                content = content,
-                toolCallsJson = toolCalls.takeIf { it.isNotEmpty() }
-                    ?.let { AiJson.encodeToString(ListSerializer(ToolCall.serializer()), it) },
-                createdAt = now
-            )
+        val message = MessageEntity(
+            conversationId = conversationId,
+            role = ChatRole.ASSISTANT.wire,
+            content = content,
+            toolCallsJson = toolCalls.takeIf { it.isNotEmpty() }
+                ?.let { AiJson.encodeToString(ListSerializer(ToolCall.serializer()), it) },
+            createdAt = now
         )
+        val messageId = chatDao.insertMessage(message)
         chatDao.touchConversation(conversationId, now)
+        return message.copy(id = messageId)
     }
 
     /**

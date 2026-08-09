@@ -12,6 +12,8 @@ import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.mapLatest
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -32,17 +34,35 @@ class CompanionViewModel @Inject constructor(
     private val vectorStore: dagger.Lazy<BoxStore>
 ) : ViewModel() {
 
-    val uiState = combine(
-        personaRepository.observePersonas(),
-        settingsRepository.activePersonaId
-    ) { personas, storedActiveId ->
-        val counts = withContext(Dispatchers.IO) {
-            personas.associate { persona ->
+    private val personas = personaRepository.observePersonas().shareIn(
+        scope = viewModelScope,
+        started = SharingStarted.Lazily,
+        replay = 1
+    )
+
+    /**
+     * ObjectBox 首次打开可能需要初始化映射。计数保持在 IO 线程并单独产出，
+     * 不再阻塞 personas 的首次 UI 状态：角色卡先显示，记忆数稍后补上。
+     */
+    private val memoryCounts = personas.mapLatest { list ->
+        withContext(Dispatchers.IO) {
+            list.associate { persona ->
                 persona.id to runCatching {
                     VectorQueries.countMemories(vectorStore.get(), persona.id)
                 }.getOrDefault(0L)
             }
         }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.Lazily,
+        initialValue = emptyMap()
+    )
+
+    val uiState = combine(
+        personas,
+        settingsRepository.activePersonaId,
+        memoryCounts
+    ) { personas, storedActiveId, counts ->
         CompanionUiState(
             personas = personas,
             activePersonaId = storedActiveId.takeIf { id -> personas.any { it.id == id } }
@@ -52,7 +72,7 @@ class CompanionViewModel @Inject constructor(
         )
     }.stateIn(
         scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5_000),
+        started = SharingStarted.Lazily,
         initialValue = CompanionUiState()
     )
 

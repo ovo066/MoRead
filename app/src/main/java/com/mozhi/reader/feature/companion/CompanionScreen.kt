@@ -25,6 +25,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -106,6 +107,7 @@ private fun PersonaCard(
     onClick: () -> Unit,
     onEdit: () -> Unit
 ) {
+    val worldBookCount = remember(persona.worldBookJson) { persona.worldBook().size }
     FrostedSurface(
         modifier = Modifier
             .fillMaxWidth()
@@ -187,7 +189,7 @@ private fun PersonaCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 MetricPill(if (persona.isRoleplay) "扮演型" else "工具型")
-                MetricPill("世界书 ${persona.worldBook().size} 条")
+                MetricPill("世界书 $worldBookCount 条")
                 MetricPill("记忆 $memoryCount 段")
             }
         }

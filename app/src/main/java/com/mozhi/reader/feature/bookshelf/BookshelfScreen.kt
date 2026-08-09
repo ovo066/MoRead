@@ -481,9 +481,11 @@ private fun ReadingNowCard(
     recentChapterTitle: String,
     onOpenBook: (Long) -> Unit
 ) {
-    val recentBook = books
-        .filter { it.lastReadAt > 0L }
-        .maxByOrNull(BookEntity::lastReadAt)
+    val recentBook = remember(books) {
+        books.asSequence()
+            .filter { it.lastReadAt > 0L }
+            .maxByOrNull(BookEntity::lastReadAt)
+    }
     val seal = sealColor()
     val darkTheme = isDarkTheme()
     val accent = accentColor()

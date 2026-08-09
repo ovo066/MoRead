@@ -27,6 +27,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -41,7 +42,6 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -75,6 +75,7 @@ import com.mozhi.reader.core.database.entity.AnnotationStyle
 import com.mozhi.reader.core.database.entity.PersonaEntity
 import com.mozhi.reader.feature.reader.render.AnnotationInk
 import com.mozhi.reader.ui.components.PersonaAvatarImage
+import com.mozhi.reader.ui.components.NoteStyleColorPalette
 import com.mozhi.reader.ui.components.blockSheetDrag
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -174,49 +175,30 @@ internal fun AnnotationStylePanel(
     }
 }
 
-/** RGB 三滑条取色（与外观自定义强调色同款交互）；确认回调 "#RRGGBB"。 */
+/** 与外观、排版页共用笔记软件式色板；确认回调 "#RRGGBB"。 */
 @Composable
 private fun InkColorPickerDialog(
     initial: Color,
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit
 ) {
-    var red by remember { mutableStateOf(initial.red) }
-    var green by remember { mutableStateOf(initial.green) }
-    var blue by remember { mutableStateOf(initial.blue) }
-    val preview = Color(red, green, blue)
-    val hex = "#%02X%02X%02X".format(
-        (red * 255).toInt().coerceIn(0, 255),
-        (green * 255).toInt().coerceIn(0, 255),
-        (blue * 255).toInt().coerceIn(0, 255)
-    )
+    var preview by remember { mutableStateOf(initial) }
+    val hex = String.format(Locale.ROOT, "#%06X", preview.toArgb() and 0x00FFFFFF)
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("自定义划线颜色") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 52.dp)
-                        .background(preview, RoundedCornerShape(14.dp))
-                        .border(
-                            1.dp,
-                            MaterialTheme.colorScheme.outlineVariant,
-                            RoundedCornerShape(14.dp)
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = hex,
-                        style = MaterialTheme.typography.labelLarge,
-                        color = if ((red + green + blue) / 3f > 0.6f) Color.Black else Color.White
-                    )
-                }
-                InkChannelSlider("红", red) { red = it }
-                InkChannelSlider("绿", green) { green = it }
-                InkChannelSlider("蓝", blue) { blue = it }
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 520.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                NoteStyleColorPalette(
+                    color = preview,
+                    onColorChange = { preview = it }
+                )
                 Text(
                     "荧光会自动降透明度垫在文字下方，直线与波浪使用原色。",
                     style = MaterialTheme.typography.bodySmall,
@@ -231,27 +213,6 @@ private fun InkColorPickerDialog(
             TextButton(onClick = onDismiss) { Text("取消") }
         }
     )
-}
-
-@Composable
-private fun InkChannelSlider(label: String, value: Float, onValueChange: (Float) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            modifier = Modifier.widthIn(min = 20.dp)
-        )
-        Slider(
-            value = value,
-            onValueChange = onValueChange,
-            modifier = Modifier.weight(1f)
-        )
-        Text(
-            text = "${(value * 255).toInt()}",
-            style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.widthIn(min = 28.dp)
-        )
-    }
 }
 
 /** 单个样式示例：以「文字」实绘该样式，选中态加边框。 */
@@ -346,7 +307,7 @@ private fun ParticipantAvatar(
     size: androidx.compose.ui.unit.Dp
 ) {
     val persona = personaId?.let { id -> personas.firstOrNull { it.id == id } }
-    if (personaId == null || persona == null && personaId != null && personaId < 0) {
+    if (personaId == null || (persona == null && personaId < 0)) {
         Box(
             modifier = Modifier
                 .size(size)
@@ -409,8 +370,9 @@ internal fun AnnotationDiscussionSheet(
     val listState = rememberLazyListState()
     val timeFormat = remember { SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()) }
 
-    // 新回复/流式增长时跟到底部（弹层场景内容短，不需要聊天页的手势状态机）
-    LaunchedEffect(replies.size, streaming?.text?.length) {
+    // 新回复落地或 AI 开始应答时跟到底部；流式正文逐 token 长高不再拽视口，
+    // 回复在视口下方生长，生成期间可自由上滑回看。
+    LaunchedEffect(replies.size, streaming != null) {
         val total = listState.layoutInfo.totalItemsCount
         if (total > 0) listState.scrollToItem(total - 1)
     }
@@ -868,7 +830,7 @@ private fun StreamingReplyRow(
                 )
             }
             if (streaming.text.isNotBlank()) {
-                AiRichText(
+                StreamingAiRichText(
                     content = streaming.text,
                     palette = palette,
                     modifier = Modifier.padding(top = 2.dp)

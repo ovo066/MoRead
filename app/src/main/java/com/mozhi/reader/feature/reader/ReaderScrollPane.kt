@@ -34,6 +34,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -117,6 +118,7 @@ fun ReaderScrollPane(
     val flingDecay = rememberSplineBasedDecay<Float>()
 
     var frameTick by remember { mutableIntStateOf(0) }
+    var backgroundTick by remember { mutableIntStateOf(0) }
     var viewport by remember { mutableStateOf(IntSize.Zero) }
     val holder = remember(controller) { ScrollPaneHolder(controller) }
     val selection = remember(controller) {
@@ -212,6 +214,7 @@ fun ReaderScrollPane(
                 controller.updateEnvironment(style.spec, style.measure)
             }
             invalidate()
+            backgroundTick++
         }
         environment
     }
@@ -274,6 +277,20 @@ fun ReaderScrollPane(
     }
 
     Box(modifier = modifier.fillMaxSize()) {
+        // 背景独立成静态兄弟层；anchorY 的逐帧变化只会让下面的透明内容层失效。
+        Spacer(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer { }
+                .drawBehind {
+                    backgroundTick
+                    holder.drawBackground(
+                        drawContext.canvas.nativeCanvas,
+                        size.width,
+                        size.height
+                    )
+                }
+        )
         Spacer(
             modifier = Modifier
                 .fillMaxSize()
@@ -523,6 +540,11 @@ private class ScrollPaneHolder(private val controller: ReaderContentController) 
         renderer = PageBitmapRenderer(style)
         strips.clear()
         return relayout
+    }
+
+    fun drawBackground(canvas: android.graphics.Canvas, width: Float, height: Float) {
+        renderer?.drawBackdrop(canvas, width, height)
+            ?: canvas.drawColor(android.graphics.Color.TRANSPARENT)
     }
 
     fun interruptScroll() {
@@ -776,7 +798,6 @@ private class ScrollPaneHolder(private val controller: ReaderContentController) 
             canvas.drawColor(android.graphics.Color.TRANSPARENT)
             return
         }
-        renderer.drawBackdrop(canvas, width, height)
         canvas.save()
         canvas.clipRect(0f, contentTop, width, contentBottom)
         for (block in visibleBlocks()) {

@@ -5,6 +5,8 @@ import com.mozhi.reader.core.database.entity.ModelRole
 import com.mozhi.reader.core.database.entity.PersonaEntity
 import com.mozhi.reader.core.database.entity.exampleDialogs
 import com.mozhi.reader.core.database.entity.worldBook
+import com.mozhi.reader.core.datastore.UserMask
+import com.mozhi.reader.core.datastore.UserMaskStore
 import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.vector.Embeddings
 import com.mozhi.reader.core.vector.VectorQueries
@@ -34,7 +36,8 @@ data class BookProgress(
 class CompanionContextBuilder @Inject constructor(
     private val libraryRepository: LibraryRepository,
     private val clientFactory: dagger.Lazy<AiClientFactory>,
-    private val vectorStore: dagger.Lazy<BoxStore>
+    private val vectorStore: dagger.Lazy<BoxStore>,
+    private val userMaskStore: UserMaskStore
 ) {
     /**
      * @param scene 调用方备好的场景原文（选段及其邻域，或章节开头），可空
@@ -66,8 +69,10 @@ class CompanionContextBuilder @Inject constructor(
         } else {
             emptyList()
         }
+        val userMask = userMaskStore.activeMask()
         return assemble(
             persona = persona,
+            userMask = userMask,
             progress = progress,
             scene = scene,
             memories = memories,
@@ -101,6 +106,7 @@ class CompanionContextBuilder @Inject constructor(
         /** 纯组装，便于单测。[loreTrigger] 是关键词触发条目的命中材料。 */
         fun assemble(
             persona: PersonaEntity?,
+            userMask: UserMask? = null,
             progress: BookProgress?,
             scene: String?,
             memories: List<String>,
@@ -110,6 +116,7 @@ class CompanionContextBuilder @Inject constructor(
         ): String {
             val fixedBlocks = listOfNotNull(
                 personaBlock(persona, loreTrigger),
+                userMaskBlock(userMask),
                 progressBlock(progress),
                 spoilerBlock(progress),
                 toolsBlock(toolNames)
@@ -186,6 +193,19 @@ class CompanionContextBuilder @Inject constructor(
             }
         }
 
+        private fun userMaskBlock(mask: UserMask?): String? = mask?.let {
+            buildString {
+                append("【用户面具】本次对话中，用户以「")
+                    .append(it.name)
+                    .append("」的身份参与。")
+                if (it.description.isNotBlank()) {
+                    append("\n用户人设：").append(it.description)
+                }
+                append("\n这是用户的身份设定，不是你的角色设定；称呼、理解和回应用户时应尊重它，")
+                append("但不要替用户擅自决定言行，也不要主动复述这段系统说明。")
+            }
+        }
+
         private fun progressBlock(progress: BookProgress?): String? = progress?.let {
             buildString {
                 append("用户正在阅读《").append(it.title).append("》")
@@ -219,6 +239,12 @@ class CompanionContextBuilder @Inject constructor(
                 }
                 if ("get_reading_progress" in toolNames) {
                     add("回答与进度相关的问题前，用 get_reading_progress 确认最新进度。")
+                }
+                if ("web_search" in toolNames) {
+                    add("遇到书外知识、近期事实或用户明确要求联网时，用 web_search 搜索并在回答中附上来源链接；本书剧情仍只用书内工具，严禁借联网搜索绕过防剧透范围。")
+                }
+                if ("web_scrape" in toolNames) {
+                    add("当搜索摘要不足或用户给出了具体网址时，用 web_scrape 抓取正文后再回答；不要无必要地抓取每条搜索结果。")
                 }
                 if ("add_annotation" in toolNames) {
                     add("用户要求对原文段落作批注时，先读取原文，再把逐字 quote 和评论交给 add_annotation；批注会显示在正文旁的段落评论区。")

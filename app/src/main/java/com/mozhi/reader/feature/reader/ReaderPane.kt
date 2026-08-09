@@ -56,6 +56,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -130,6 +131,7 @@ fun ReaderPane(
     val navBarPx = WindowInsets.navigationBars.getBottom(density).toFloat()
 
     var frameTick by remember { mutableIntStateOf(0) }
+    var backgroundTick by remember { mutableIntStateOf(0) }
     var viewport by remember { mutableStateOf(IntSize.Zero) }
     val holder = remember(controller) { ReaderPaneHolder(controller) }
     val selection = remember(controller) {
@@ -150,6 +152,7 @@ fun ReaderPane(
                     }
 
                 override fun fillPage(direction: PageTurnDirection) {
+                    holder.prepareTurn(direction)
                     val moved = if (direction == PageTurnDirection.NEXT) {
                         controller.moveToNextPage()
                     } else {
@@ -158,6 +161,7 @@ fun ReaderPane(
                     // A refused commit (e.g. the window shifted mid-animation) must still leave
                     // the bitmaps matching the unchanged position instead of a stale frame.
                     if (!moved) {
+                        holder.cancelPreparedTurn()
                         holder.refresh(0)
                         frameTick++
                     }
@@ -211,15 +215,33 @@ fun ReaderPane(
             )
             driver.cancelActiveTurn()
             selection.clear()
-            val relayout = holder.applyStyle(style, environment)
+            val relayout = holder.applyStyle(
+                style = style,
+                environment = environment,
+                includeBackgroundInPages = settings.pageTurnAnimation.usesEmbeddedPageBackground()
+            )
             if (relayout) {
                 controller.updateEnvironment(style.spec, style.measure)
             } else {
                 holder.refresh(0)
             }
             frameTick++
+            backgroundTick++
         }
         environment
+    }
+
+    // 动画模式切换只改变页面快照是否嵌背景，不重建/重解码 BackgroundProvider。
+    LaunchedEffect(settings.pageTurnAnimation) {
+        driver.cancelActiveTurn()
+        selection.clear()
+        if (holder.setIncludeBackgroundInPages(
+                settings.pageTurnAnimation.usesEmbeddedPageBackground()
+            )
+        ) {
+            holder.refresh(0)
+            frameTick++
+        }
     }
 
     LaunchedEffect(annotations) {
@@ -280,6 +302,20 @@ fun ReaderPane(
     }
 
     Box(modifier = modifier.fillMaxSize()) {
+        // 静态背景是独立兄弟层；翻页/滚动帧只让内容层失效，不再重录背景绘制。
+        Spacer(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer { }
+                .drawBehind {
+                    backgroundTick
+                    holder.drawBackground(
+                        drawContext.canvas.nativeCanvas,
+                        size.width,
+                        size.height
+                    )
+                }
+        )
         Spacer(
             modifier = Modifier
                 .fillMaxSize()
@@ -347,7 +383,7 @@ fun ReaderPane(
                     } else {
                         holder.curBitmap?.takeUnless(Bitmap::isRecycled)?.let {
                             canvas.drawBitmap(it, 0f, 0f, null)
-                        } ?: canvas.drawColor(holder.backgroundColor)
+                        }
                         selection.drawHighlight(this, palette)
                     }
                 }
@@ -695,6 +731,7 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
 
     private var style: ReaderPageStyle? = null
     private var renderer: PageBitmapRenderer? = null
+    private var includeBackgroundInPages = true
     private var appliedEnvironment: ReaderEnvironmentKey? = null
     private var timeText: String = timeFormat.format(Date())
     private var batteryPercent: Int = 100
@@ -702,6 +739,7 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
     private var illustrations: List<ReaderIllustrationMark> = emptyList()
     private var listenHighlight: ListenHighlightSpan? = null
     private var dirty = true
+    private var preparedTurn: PageTurnDirection? = null
 
     var curBitmap: Bitmap? = null
         private set
@@ -716,15 +754,31 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
     }
 
     /** Returns true when the typography environment changed and a relayout is required. */
-    fun applyStyle(style: ReaderPageStyle, environment: ReaderEnvironmentKey): Boolean {
+    fun applyStyle(
+        style: ReaderPageStyle,
+        environment: ReaderEnvironmentKey,
+        includeBackgroundInPages: Boolean
+    ): Boolean {
         val relayout = appliedEnvironment != environment
         appliedEnvironment = environment
         this.style = style
+        this.includeBackgroundInPages = includeBackgroundInPages
         backgroundColor = style.backgroundColor
         renderer?.release()
         renderer = PageBitmapRenderer(style)
         dirty = true
         return relayout
+    }
+
+    fun drawBackground(canvas: android.graphics.Canvas, width: Float, height: Float) {
+        renderer?.drawBackdrop(canvas, width, height) ?: canvas.drawColor(backgroundColor)
+    }
+
+    fun setIncludeBackgroundInPages(value: Boolean): Boolean {
+        if (includeBackgroundInPages == value) return false
+        includeBackgroundInPages = value
+        dirty = true
+        return true
     }
 
     fun setAnnotations(value: List<ReaderAnnotationMark>): Boolean {
@@ -812,8 +866,23 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
         if (dirty) refresh(0)
     }
 
+    fun prepareTurn(direction: PageTurnDirection) {
+        preparedTurn = direction
+    }
+
+    fun cancelPreparedTurn() {
+        preparedTurn = null
+    }
+
     fun refresh(relativePosition: Int) {
         val renderer = renderer ?: return
+        val turn = preparedTurn
+        if (relativePosition == 0 && turn != null) {
+            preparedTurn = null
+            rotateAndRenderNeighbor(renderer, turn)
+            dirty = false
+            return
+        }
         when (relativePosition) {
             -1 -> prevBitmap = renderPage(renderer, prevBitmap, RelativePage.PREV)
             1 -> nextBitmap = renderPage(renderer, nextBitmap, RelativePage.NEXT)
@@ -824,6 +893,24 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
             }
         }
         dirty = false
+    }
+
+    private fun rotateAndRenderNeighbor(
+        renderer: PageBitmapRenderer,
+        direction: PageTurnDirection
+    ) {
+        val rotated = rotatePageWindow(prevBitmap, curBitmap, nextBitmap, direction)
+        prevBitmap = rotated.previous
+        curBitmap = rotated.current
+        nextBitmap = rotated.next
+        when (direction) {
+            PageTurnDirection.NEXT -> {
+                nextBitmap = renderPage(renderer, rotated.reusable, RelativePage.NEXT)
+            }
+            PageTurnDirection.PREVIOUS -> {
+                prevBitmap = renderPage(renderer, rotated.reusable, RelativePage.PREV)
+            }
+        }
     }
 
     private enum class RelativePage { PREV, CUR, NEXT }
@@ -850,7 +937,8 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
             batteryPercent = batteryPercent,
             annotations = annotations.filter { it.chapterIndex == page.chapterIndex },
             illustrations = illustrations.filter { it.chapterIndex == page.chapterIndex },
-            listenHighlight = listenHighlight?.takeIf { it.chapterIndex == page.chapterIndex }
+            listenHighlight = listenHighlight?.takeIf { it.chapterIndex == page.chapterIndex },
+            includeBackground = includeBackgroundInPages
         )
     }
 

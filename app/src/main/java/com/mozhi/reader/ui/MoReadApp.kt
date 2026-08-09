@@ -1,9 +1,20 @@
 package com.mozhi.reader.ui
 
 import android.net.Uri
+import androidx.compose.animation.AnimatedContentScope
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -36,6 +47,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.navigation.NavBackStackEntry
+import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -55,12 +68,59 @@ import com.mozhi.reader.feature.settings.BackupSettingsScreen
 import com.mozhi.reader.feature.settings.ProviderDetailScreen
 import com.mozhi.reader.feature.settings.SettingsScreen
 import com.mozhi.reader.feature.settings.TtsSettingsScreen
+import com.mozhi.reader.feature.settings.UserMaskSettingsScreen
+import com.mozhi.reader.feature.settings.WebSearchSettingsScreen
 import com.mozhi.reader.feature.stats.StatsScreen
 import com.mozhi.reader.ui.components.MoReadBackdrop
 import com.mozhi.reader.ui.theme.MoReadTokens
 import com.mozhi.reader.ui.theme.isDarkTheme
 import com.mozhi.reader.ui.theme.navSelectedColor
 import com.mozhi.reader.ui.theme.onNavSelectedColor
+
+/**
+ * 页面转场（Material 3 motion）：
+ * - 根页互切用 fade-through——旧页 90ms 快出、新页再 210ms 淡入，两页几乎不
+ *   叠帧绘制。Navigation 默认的 700ms 双页叠加淡入淡出既拖沓又让重列表掉帧。
+ * - 二级页推入用 shared-axis X：入场从右侧 1/4 滑入，底页微退场；返回镜像。
+ */
+private const val ROOT_FADE_OUT_MS = 90
+private const val ROOT_FADE_IN_MS = 210
+private const val PUSH_MS = 280
+
+private fun rootEnter(): EnterTransition =
+    fadeIn(tween(ROOT_FADE_IN_MS, delayMillis = ROOT_FADE_OUT_MS, easing = LinearOutSlowInEasing)) +
+        scaleIn(
+            initialScale = 0.92f,
+            animationSpec = tween(ROOT_FADE_IN_MS, delayMillis = ROOT_FADE_OUT_MS, easing = LinearOutSlowInEasing)
+        )
+
+private fun rootExit(): ExitTransition =
+    fadeOut(tween(ROOT_FADE_OUT_MS, easing = FastOutLinearInEasing))
+
+/** 二级页统一注册入口：带 shared-axis X 转场的 composable。 */
+private fun NavGraphBuilder.pushComposable(
+    route: String,
+    content: @Composable AnimatedContentScope.(NavBackStackEntry) -> Unit
+) = composable(
+    route = route,
+    enterTransition = {
+        slideInHorizontally(tween(PUSH_MS, easing = FastOutSlowInEasing)) { it / 4 } +
+            fadeIn(tween(PUSH_MS, easing = LinearOutSlowInEasing))
+    },
+    exitTransition = {
+        slideOutHorizontally(tween(PUSH_MS, easing = FastOutSlowInEasing)) { -it / 8 } +
+            fadeOut(tween(160, easing = FastOutLinearInEasing))
+    },
+    popEnterTransition = {
+        slideInHorizontally(tween(PUSH_MS, easing = FastOutSlowInEasing)) { -it / 8 } +
+            fadeIn(tween(PUSH_MS, easing = LinearOutSlowInEasing))
+    },
+    popExitTransition = {
+        slideOutHorizontally(tween(PUSH_MS, easing = FastOutSlowInEasing)) { it / 4 } +
+            fadeOut(tween(160, easing = FastOutLinearInEasing))
+    },
+    content = content
+)
 
 private enum class RootDestination(
     val route: String,
@@ -126,7 +186,11 @@ fun MoReadApp(
                 NavHost(
                     navController = navController,
                     startDestination = RootDestination.Bookshelf.route,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize(),
+                    enterTransition = { rootEnter() },
+                    exitTransition = { rootExit() },
+                    popEnterTransition = { rootEnter() },
+                    popExitTransition = { rootExit() }
                 ) {
                 composable(RootDestination.Bookshelf.route) {
                     BookshelfScreen(
@@ -158,39 +222,47 @@ fun MoReadApp(
                         onOpenProvider = { providerId ->
                             navController.navigate("provider/$providerId")
                         },
+                        onOpenWebSearch = { navController.navigate("web-search-settings") },
                         onOpenTtsSettings = { navController.navigate("tts-settings") },
                         onOpenImageGenSettings = { navController.navigate("image-gen-settings") },
                         onOpenGlobalPresets = { navController.navigate("global-presets") },
+                        onOpenUserMasks = { navController.navigate("user-masks") },
                         onOpenBackup = { navController.navigate("backup-settings") },
                         onOpenApiLog = { navController.navigate("api-log") }
                     )
                 }
-                composable("tts-settings") {
+                pushComposable("tts-settings") {
                     TtsSettingsScreen(onBack = navController::popBackStack)
                 }
-                composable("image-gen-settings") {
+                pushComposable("web-search-settings") {
+                    WebSearchSettingsScreen(onBack = navController::popBackStack)
+                }
+                pushComposable("image-gen-settings") {
                     ImageGenSettingsScreen(onBack = navController::popBackStack)
                 }
-                composable("global-presets") {
+                pushComposable("global-presets") {
                     GlobalPresetSettingsScreen(onBack = navController::popBackStack)
                 }
-                composable("backup-settings") {
+                pushComposable("user-masks") {
+                    UserMaskSettingsScreen(onBack = navController::popBackStack)
+                }
+                pushComposable("backup-settings") {
                     BackupSettingsScreen(onBack = navController::popBackStack)
                 }
-                composable("api-log") {
+                pushComposable("api-log") {
                     ApiLogScreen(onBack = navController::popBackStack)
                 }
-                composable("book/{bookId}") { entry ->
+                pushComposable("book/{bookId}") { entry ->
                     BookDetailScreen(
                         bookId = entry.arguments?.getString("bookId")?.toLongOrNull()
-                            ?: return@composable,
+                            ?: return@pushComposable,
                         onBack = navController::popBackStack,
                         onContinueReading = { bookId ->
                             navController.navigate("reader/$bookId")
                         }
                     )
                 }
-                composable("import/{sessionId}") {
+                pushComposable("import/{sessionId}") {
                     ImportPreviewScreen(
                         onBack = navController::popBackStack,
                         onImported = { bookId ->
@@ -200,27 +272,27 @@ fun MoReadApp(
                         }
                     )
                 }
-                composable("reader/{bookId}") { entry ->
+                pushComposable("reader/{bookId}") { entry ->
                     ReaderScreen(
                         bookId = entry.arguments?.getString("bookId")?.toLongOrNull()
-                            ?: return@composable,
+                            ?: return@pushComposable,
                         onBack = navController::popBackStack,
                         onOpenCompanionChat = { bookId ->
                             navController.navigate("companion-chat/$bookId")
                         }
                     )
                 }
-                composable("companion-chat/{bookId}") { entry ->
+                pushComposable("companion-chat/{bookId}") { entry ->
                     CompanionChatScreen(
                         bookId = entry.arguments?.getString("bookId")?.toLongOrNull()
-                            ?: return@composable,
+                            ?: return@pushComposable,
                         onBack = navController::popBackStack
                     )
                 }
-                composable("persona/{personaId}") {
+                pushComposable("persona/{personaId}") {
                     PersonaEditorScreen(onBack = navController::popBackStack)
                 }
-                composable("provider/{providerId}") {
+                pushComposable("provider/{providerId}") {
                     ProviderDetailScreen(onBack = navController::popBackStack)
                 }
                 }

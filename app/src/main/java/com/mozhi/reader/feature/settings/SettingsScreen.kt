@@ -1,6 +1,5 @@
 package com.mozhi.reader.feature.settings
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -14,18 +13,21 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Colorize
+import androidx.compose.material.icons.outlined.PersonOutline
+import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.CloudSync
 import androidx.compose.material3.AlertDialog
@@ -38,7 +40,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -54,12 +55,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.PathEffect
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -77,6 +75,7 @@ import com.mozhi.reader.core.database.entity.ModelRole
 import com.mozhi.reader.core.datastore.ShelfLayout
 import com.mozhi.reader.ui.components.DashedAddRow
 import com.mozhi.reader.ui.components.FrostedSurface
+import com.mozhi.reader.ui.components.NoteStyleColorPalette
 import com.mozhi.reader.ui.components.SectionLabel
 import com.mozhi.reader.ui.theme.AccentPreset
 import com.mozhi.reader.ui.theme.AppearanceSettings
@@ -93,15 +92,18 @@ import java.util.Locale
 fun SettingsScreen(
     contentPadding: PaddingValues,
     onOpenProvider: (Long) -> Unit,
+    onOpenWebSearch: () -> Unit = {},
     onOpenTtsSettings: () -> Unit = {},
     onOpenImageGenSettings: () -> Unit = {},
     onOpenGlobalPresets: () -> Unit = {},
+    onOpenUserMasks: () -> Unit = {},
     onOpenBackup: () -> Unit = {},
     onOpenApiLog: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    val modelsByProvider = remember(state.models) { state.models.groupBy(AiModelEntity::providerId) }
 
     LaunchedEffect(viewModel) {
         viewModel.events.collect { event ->
@@ -129,7 +131,7 @@ fun SettingsScreen(
             items(state.providers, key = AiProviderEntity::id) { provider ->
                 ProviderRow(
                     provider = provider,
-                    models = state.models.filter { it.providerId == provider.id },
+                    models = modelsByProvider[provider.id].orEmpty(),
                     onClick = { onOpenProvider(provider.id) }
                 )
             }
@@ -139,6 +141,7 @@ fun SettingsScreen(
                     onClick = { onOpenProvider(0) }
                 )
             }
+            item { WebSearchEntryCard(onClick = onOpenWebSearch) }
 
             item { SectionLabel(title = "模型分配") }
             item {
@@ -169,6 +172,7 @@ fun SettingsScreen(
                 )
             }
             item { GlobalPresetEntryCard(onClick = onOpenGlobalPresets) }
+            item { UserMaskEntryCard(onClick = onOpenUserMasks) }
 
             item { SectionLabel(title = "语音与生图") }
             item {
@@ -575,12 +579,12 @@ private fun AppearanceCard(
                         onClick = { onAccentChange(preset) }
                     )
                 }
-                CustomAccentSwatch(
-                    color = appearance.customAccentArgb?.let { Color(it) },
-                    selected = appearance.customAccentArgb != null,
-                    onClick = { showColorPicker = true }
-                )
             }
+            CustomAccentRow(
+                color = appearance.customAccentArgb?.let { Color(it) } ?: accentColor(),
+                selected = appearance.customAccentArgb != null,
+                onClick = { showColorPicker = true }
+            )
         }
     }
 
@@ -630,92 +634,90 @@ private fun AccentSwatch(
     }
 }
 
-/** 自定义取色入口：未选时是虚线描边的调色盘图标，选中后显示所选颜色。 */
+/** 显式入口：预设色之外，告诉用户这里可以连续取任意颜色。 */
 @Composable
-private fun CustomAccentSwatch(color: Color?, selected: Boolean, onClick: () -> Unit) {
-    val outline = MaterialTheme.colorScheme.outline
-    Box(
+private fun CustomAccentRow(color: Color, selected: Boolean, onClick: () -> Unit) {
+    Surface(
         modifier = Modifier
-            .size(36.dp)
+            .fillMaxWidth()
             .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
+        shape = RoundedCornerShape(16.dp),
+        color = if (selected) {
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.58f)
+        },
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+        )
     ) {
-        if (color != null) {
+        Row(
+            modifier = Modifier.padding(horizontal = 13.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Box(
                 modifier = Modifier
                     .size(36.dp)
                     .background(color, CircleShape)
-                    .border(
-                        width = if (selected) 2.dp else 1.dp,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        shape = CircleShape
-                    )
-            )
-        } else {
-            Canvas(Modifier.size(36.dp)) {
-                drawCircle(
-                    color = outline.copy(alpha = 0.6f),
-                    radius = size.minDimension / 2 - 1.dp.toPx(),
-                    style = Stroke(
-                        width = 1.5.dp.toPx(),
-                        pathEffect = PathEffect.dashPathEffect(
-                            floatArrayOf(5.dp.toPx(), 4.dp.toPx())
-                        )
-                    )
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Colorize,
+                    contentDescription = null,
+                    tint = color.onAccent(),
+                    modifier = Modifier.size(17.dp)
                 )
             }
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 11.dp)
+            ) {
+                Text("自定义颜色", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    if (selected) {
+                        String.format(Locale.ROOT, "#%06X · 已启用", color.toArgb() and 0x00FFFFFF)
+                    } else {
+                        "打开连续调色盘，可拖动选择任意颜色"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Icon(
+                Icons.Outlined.ChevronRight,
+                contentDescription = "打开自定义调色盘",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
-        Icon(
-            imageVector = Icons.Outlined.Colorize,
-            contentDescription = "自定义强调色",
-            tint = if (color != null) {
-                color.onAccent()
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            },
-            modifier = Modifier.size(17.dp)
-        )
     }
 }
 
-/** RGB 三滑条取色。比色轮好实现，也足够精确，且键盘/无障碍友好。 */
+/** 与批注、排版页共用连续 HSV 取色器。 */
 @Composable
 private fun AccentColorPickerDialog(
     initial: Color,
     onDismiss: () -> Unit,
     onConfirm: (Int) -> Unit
 ) {
-    var red by remember { mutableStateOf(initial.red) }
-    var green by remember { mutableStateOf(initial.green) }
-    var blue by remember { mutableStateOf(initial.blue) }
-    val preview = Color(red, green, blue)
+    var preview by remember { mutableStateOf(initial) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("自定义强调色") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 56.dp)
-                        .background(preview, RoundedCornerShape(16.dp))
-                        .border(
-                            1.dp,
-                            MaterialTheme.colorScheme.outlineVariant,
-                            RoundedCornerShape(16.dp)
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = preview.toHex(),
-                        style = MaterialTheme.typography.labelLarge,
-                        color = preview.onAccent()
-                    )
-                }
-                ChannelSlider("红", red) { red = it }
-                ChannelSlider("绿", green) { green = it }
-                ChannelSlider("蓝", blue) { blue = it }
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 520.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                NoteStyleColorPalette(
+                    color = preview,
+                    onColorChange = { preview = it }
+                )
                 Text(
                     "过暗或过亮的颜色会被自动调整，以保证在当前底色上可读。",
                     style = MaterialTheme.typography.bodySmall,
@@ -730,29 +732,6 @@ private fun AccentColorPickerDialog(
             TextButton(onClick = onDismiss) { Text("取消") }
         }
     )
-}
-
-@Composable
-private fun ChannelSlider(label: String, value: Float, onValueChange: (Float) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            modifier = Modifier.width(20.dp)
-        )
-        Slider(
-            value = value,
-            onValueChange = onValueChange,
-            modifier = Modifier.weight(1f)
-        )
-        Text(
-            text = "${(value * 255).toInt()}",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.widthIn(min = 30.dp),
-            textAlign = TextAlign.End
-        )
-    }
 }
 
 /** 应用卡：书架布局 + 存储占用与封面缓存清理。 */
@@ -900,14 +879,6 @@ private fun AboutCard() {
         }
     }
 }
-
-private fun Color.toHex(): String = String.format(
-    Locale.ROOT,
-    "#%02X%02X%02X",
-    (red * 255).toInt(),
-    (green * 255).toInt(),
-    (blue * 255).toInt()
-)
 
 private fun ThemeMode.label(): String = when (this) {
     ThemeMode.SYSTEM -> "跟随系统"
@@ -1083,6 +1054,76 @@ private fun GlobalPresetEntryCard(onClick: () -> Unit) {
                 Text("全局预设", style = MaterialTheme.typography.titleSmall)
                 Text(
                     "自定义提示词与注入位置",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Icon(
+                Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                contentDescription = "打开",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+/** 用户侧人设（SillyTavern user persona）二级页入口。 */
+@Composable
+private fun UserMaskEntryCard(onClick: () -> Unit) {
+    FrostedSurface(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        shape = RoundedCornerShape(20.dp),
+        shadowElevation = 4.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Outlined.PersonOutline,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(22.dp)
+            )
+            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                Text("用户面具", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "创建、选择或关闭对话中的用户人设",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Icon(
+                Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                contentDescription = "打开",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+/** Agent 网络搜索配置二级页入口。 */
+@Composable
+private fun WebSearchEntryCard(onClick: () -> Unit) {
+    FrostedSurface(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        shape = RoundedCornerShape(20.dp),
+        shadowElevation = 4.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Outlined.Language,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(22.dp)
+            )
+            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                Text("网络搜索", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "Firecrawl、Exa、Tavily 与兼容接口",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

@@ -3,10 +3,10 @@ package com.mozhi.reader.feature.reader.render
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
-import android.graphics.Rect
 import android.graphics.Typeface
 import android.util.LruCache
 import android.text.TextPaint
@@ -19,10 +19,10 @@ import com.mozhi.reader.feature.reader.engine.illustrationMarkers
 import java.util.Locale
 
 /**
- * Renders one [RenderPage] into a bitmap: background, header (chapter title), the laid-out body,
- * and the footer (page number, whole-book progress, time, battery). The whole page lives in one
- * bitmap so every page-turn delegate can composite real pages, which is what Legado gets from
- * screenshotting its `PageView`s.
+ * Renders one [RenderPage] into a bitmap: header (chapter title), the laid-out body, and the footer
+ * (page number, whole-book progress, time, battery). Flat/no-animation modes use transparent page
+ * bitmaps over a static background layer; simulation embeds the shared background to form a full
+ * page snapshot for curl compositing.
  */
 class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
 
@@ -46,9 +46,7 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         textAlign = Paint.Align.CENTER
     }
     private val imagePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-    private val backgroundImagePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
-        alpha = (pageStyle.backgroundImageOpacity.coerceIn(0.05f, 1f) * 255).toInt()
-    }
+    private val backgroundProvider = ReaderBackgroundProvider(pageStyle)
     private val syntaxPaints = HashMap<String, TextPaint>()
     /** (style|colorTag) → Paint；样式实例随 pageStyle 重建，缓存不会跨主题存活。 */
     private val annotationInkPaints = HashMap<String, Paint>()
@@ -88,30 +86,6 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         }
     }
 
-    /** Tiled speckle shader for the paper theme; opacity stays under the proposal's 5% cap. */
-    private val grainPaint: Paint? = if (pageStyle.grain) {
-        val tile = Bitmap.createBitmap(GRAIN_TILE, GRAIN_TILE, Bitmap.Config.ARGB_8888)
-        val tileCanvas = Canvas(tile)
-        val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = pageStyle.textColor and 0x00FFFFFF or (0x0D shl 24)
-        }
-        val random = java.util.Random(GRAIN_SEED)
-        repeat(GRAIN_DOTS) {
-            val x = random.nextFloat() * GRAIN_TILE
-            val y = random.nextFloat() * GRAIN_TILE
-            tileCanvas.drawCircle(x, y, 0.6f + random.nextFloat() * 0.7f, dotPaint)
-        }
-        Paint().apply {
-            shader = android.graphics.BitmapShader(
-                tile,
-                android.graphics.Shader.TileMode.REPEAT,
-                android.graphics.Shader.TileMode.REPEAT
-            )
-        }
-    } else {
-        null
-    }
-
     fun obtainBitmap(recycled: Bitmap?): Bitmap {
         val existing = recycled
             ?.takeIf { !it.isRecycled && it.width == pageStyle.viewWidth && it.height == pageStyle.viewHeight }
@@ -130,11 +104,16 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         batteryPercent: Int,
         annotations: List<ReaderAnnotationMark> = emptyList(),
         illustrations: List<ReaderIllustrationMark> = emptyList(),
-        listenHighlight: ListenHighlightSpan? = null
+        listenHighlight: ListenHighlightSpan? = null,
+        includeBackground: Boolean = true
     ): Bitmap {
         val bitmap = obtainBitmap(into)
         val canvas = Canvas(bitmap)
-        drawBackdrop(canvas, bitmap.width.toFloat(), bitmap.height.toFloat())
+        if (includeBackground) {
+            drawBackdrop(canvas, bitmap.width.toFloat(), bitmap.height.toFloat())
+        } else {
+            bitmap.eraseColor(Color.TRANSPARENT)
+        }
         drawHeader(canvas, page)
         when (page) {
             is RenderPage.Laid -> drawBody(canvas, page, annotations, illustrations, listenHighlight)
@@ -146,25 +125,7 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
 
     /** 纸面底色 + 纸纹；滚动模式在实时画布上也走这一笔。 */
     internal fun drawBackdrop(canvas: Canvas, width: Float, height: Float) {
-        canvas.drawColor(pageStyle.backgroundColor)
-        pageStyle.backgroundImagePath?.let { path ->
-            loadImage(path, width.toInt(), height.toInt())?.let { bitmap ->
-                val targetAspect = width / height.coerceAtLeast(1f)
-                val bitmapAspect = bitmap.width.toFloat() / bitmap.height.coerceAtLeast(1)
-                val source = if (bitmapAspect > targetAspect) {
-                    val cropWidth = (bitmap.height * targetAspect).toInt().coerceAtLeast(1)
-                    val left = ((bitmap.width - cropWidth) / 2).coerceAtLeast(0)
-                    Rect(left, 0, (left + cropWidth).coerceAtMost(bitmap.width), bitmap.height)
-                } else {
-                    val cropHeight = (bitmap.width / targetAspect.coerceAtLeast(0.01f)).toInt()
-                        .coerceAtLeast(1)
-                    val top = ((bitmap.height - cropHeight) / 2).coerceAtLeast(0)
-                    Rect(0, top, bitmap.width, (top + cropHeight).coerceAtMost(bitmap.height))
-                }
-                canvas.drawBitmap(bitmap, source, RectF(0f, 0f, width, height), backgroundImagePaint)
-            }
-        }
-        grainPaint?.let { canvas.drawRect(0f, 0f, width, height, it) }
+        backgroundProvider.draw(canvas, width, height)
     }
 
     internal fun drawHeader(canvas: Canvas, page: RenderPage) {
@@ -439,6 +400,13 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
 
     private fun loadImage(path: String, targetWidth: Int, targetHeight: Int): Bitmap? {
         imageCache.get(path)?.takeIf { !it.isRecycled }?.let { return it }
+        val bitmap = decodeImage(path, targetWidth, targetHeight) ?: return null
+        imageCache.put(path, bitmap)
+        return bitmap
+    }
+
+    /** 普通正文插图按目标尺寸采样，缓存由 renderer 生命周期托管。 */
+    private fun decodeImage(path: String, targetWidth: Int, targetHeight: Int): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         val readBounds = runCatching {
             BitmapFactory.decodeFile(path, bounds)
@@ -462,12 +430,12 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
                 }
             )
         }.getOrNull() ?: return null
-        imageCache.put(path, bitmap)
         return bitmap
     }
 
     fun release() {
         imageCache.evictAll()
+        backgroundProvider.release()
     }
 
     private fun drawPlaceholder(canvas: Canvas, page: RenderPage.Placeholder) {
@@ -548,9 +516,6 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
     }
 
     private companion object {
-        const val GRAIN_TILE = 128
-        const val GRAIN_DOTS = 220
-        const val GRAIN_SEED = 42L
         const val IMAGE_CACHE_KB = 32 * 1024
         const val IMAGE_CORNER_RADIUS = 12f
         const val ANNOTATION_HIGHLIGHT_RADIUS = 4f

@@ -9,6 +9,7 @@ import com.mozhi.reader.ai.chat.AiChatRepository
 import com.mozhi.reader.ai.client.AiClientException
 import com.mozhi.reader.ai.prompt.SelectionAiAction
 import com.mozhi.reader.ai.prompt.SelectionPrompts
+import com.mozhi.reader.ai.search.WebSearchSettingsStore
 import com.mozhi.reader.core.database.entity.MessageEntity
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -44,7 +45,8 @@ data class ReaderAiUiState(
 class ReaderAiViewModel @Inject constructor(
     private val chatRepository: AiChatRepository,
     private val agentLoop: AgentLoop,
-    private val readerToolset: ReaderToolset
+    private val readerToolset: ReaderToolset,
+    private val webSearchSettingsStore: WebSearchSettingsStore
 ) : ViewModel() {
 
     private val mutableState = MutableStateFlow(ReaderAiUiState())
@@ -53,6 +55,9 @@ class ReaderAiViewModel @Inject constructor(
     private var startedRequest: ReaderAiRequest? = null
     private var streamJob: Job? = null
     private var messagesJob: Job? = null
+
+    /** 流式正文真源；UI 快照按 [STREAM_UI_TICK_MS] 节拍发布，避免逐 token 重组。 */
+    private val streamBuffer = StringBuilder()
 
     /** Idempotent per request instance; a new selection action starts a fresh conversation. */
     fun start(request: ReaderAiRequest) {
@@ -110,12 +115,13 @@ class ReaderAiViewModel @Inject constructor(
 
     /** Cancels the stream and keeps whatever arrived as a persisted partial reply. */
     fun stop() {
-        val partial = mutableState.value.streamingText
+        val partial = streamBuffer.toString()
         val conversationId = mutableState.value.conversationId
         streamJob?.cancel()
         streamJob = null
+        streamBuffer.setLength(0)
         mutableState.value = mutableState.value.copy(isStreaming = false, streamingText = null)
-        if (!partial.isNullOrBlank() && conversationId != null) {
+        if (partial.isNotBlank() && conversationId != null) {
             viewModelScope.launch { chatRepository.appendAssistantMessage(conversationId, partial) }
         }
     }
@@ -133,6 +139,7 @@ class ReaderAiViewModel @Inject constructor(
         streamJob = null
         messagesJob = null
         startedRequest = null
+        streamBuffer.setLength(0)
         mutableState.value = ReaderAiUiState()
     }
 
@@ -162,14 +169,42 @@ class ReaderAiViewModel @Inject constructor(
                 executionSteps = emptyList(),
                 error = null
             )
+            streamBuffer.setLength(0)
+            val ticker = launchStreamingTicker(::publishStreamingSnapshot)
             try {
-                val tools = bookId?.let { readerToolset.forBook(it) }.orEmpty()
+                val tools = bookId?.let { id ->
+                    val enabledTools = buildSet {
+                        add("get_reading_progress")
+                        add("search_book")
+                        add("read_book_section")
+                        if (webSearchSettingsStore.current().enabled) {
+                            add("web_search")
+                            add("web_scrape")
+                        }
+                    }
+                    readerToolset.forBook(id, enabledTools = enabledTools)
+                }.orEmpty()
                 agentLoop.run(conversationId, tools).collect { event ->
                     when (event) {
-                        is AgentEvent.Text -> mutableState.value = mutableState.value.copy(
-                            streamingText = (mutableState.value.streamingText ?: "") + event.text,
-                            toolStatus = null
-                        )
+                        is AgentEvent.Text -> {
+                            streamBuffer.append(event.text)
+                            if (mutableState.value.toolStatus != null) {
+                                mutableState.value = mutableState.value.copy(toolStatus = null)
+                            }
+                        }
+                        is AgentEvent.RoundCommitted -> {
+                            streamBuffer.setLength(0)
+                            val messages = mutableState.value.messages
+                            val committed = event.message.takeIf { it.content.isNotBlank() }
+                            mutableState.value = mutableState.value.copy(
+                                messages = if (committed == null || messages.any { it.id == committed.id }) {
+                                    messages
+                                } else {
+                                    messages + committed
+                                },
+                                streamingText = ""
+                            )
+                        }
                         is AgentEvent.ToolRun -> mutableState.value = mutableState.value.copy(
                             toolStatus = "正在${event.displayName}…",
                             executionSteps = mutableState.value.executionSteps
@@ -200,6 +235,7 @@ class ReaderAiViewModel @Inject constructor(
                     }
                 }
                 // The full reply is persisted by the loop; the live buffer hands over to it.
+                streamBuffer.setLength(0)
                 mutableState.value = mutableState.value.copy(
                     isStreaming = false,
                     streamingText = null,
@@ -207,12 +243,26 @@ class ReaderAiViewModel @Inject constructor(
                 )
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
+                // 已到达的残段完整亮出来，和错误行一起停留在面板里等重试。
                 mutableState.value = mutableState.value.copy(
                     isStreaming = false,
                     toolStatus = null,
+                    streamingText = streamBuffer.toString().takeIf(String::isNotBlank),
                     error = error.userMessage()
                 )
+            } finally {
+                ticker.cancel()
             }
+        }
+    }
+
+    /** 节拍器回调：缓冲区快照发布给 UI，仅流式进行且内容变化时触发重组。 */
+    private fun publishStreamingSnapshot() {
+        val current = mutableState.value
+        if (!current.isStreaming) return
+        val text = streamBuffer.toString()
+        if (current.streamingText != text) {
+            mutableState.value = current.copy(streamingText = text)
         }
     }
 

@@ -84,6 +84,7 @@ class AnnotationDiscussionService @Inject constructor(
                         text.append(event.text)
                         emit(Event.Text(event.text))
                     }
+                    is AgentEvent.RoundCommitted -> Unit
                     is AgentEvent.ToolRun -> emit(Event.ToolActivity(event.displayName))
                     is AgentEvent.ToolFinished -> Unit
                 }

@@ -61,6 +61,7 @@ import com.mozhi.reader.core.datastore.ReaderSettings
 import com.mozhi.reader.core.datastore.ReaderSyntaxRule
 import com.mozhi.reader.core.datastore.ReaderTheme
 import com.mozhi.reader.feature.reader.render.ReaderPageStyle
+import com.mozhi.reader.ui.components.NoteStyleColorPalette
 import com.mozhi.reader.ui.theme.onAccent
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -477,7 +478,12 @@ private fun SyntaxRuleEditorDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (initial.id == 0L) "添加高亮规则" else "编辑高亮规则") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 520.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(9.dp)
+            ) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it.take(20) },
@@ -502,9 +508,10 @@ private fun SyntaxRuleEditorDialog(
                     )
                 }
                 Text("文字颜色", style = MaterialTheme.typography.labelMedium)
-                EditorChannelSlider("红", color.red) { color = color.copy(red = it) }
-                EditorChannelSlider("绿", color.green) { color = color.copy(green = it) }
-                EditorChannelSlider("蓝", color.blue) { color = color.copy(blue = it) }
+                NoteStyleColorPalette(
+                    color = color,
+                    onColorChange = { color = it }
+                )
                 SyntaxRuleSwitch("符号本身也着色", includeDelimiters) { includeDelimiters = it }
                 SyntaxRuleSwitch("添加下划线", underline) { underline = it }
                 SyntaxRuleSwitch("启用这条规则", enabled) { enabled = it }
@@ -765,7 +772,7 @@ private enum class ThemeColorTarget(val label: String) {
     ACCENT("强调")
 }
 
-/** 三色编辑器：实时预览 + 目标切换 + RGB 滑条；保存即应用。 */
+/** 三色编辑器：实时预览 + 目标切换 + 笔记软件式直观色板；保存即应用。 */
 @Composable
 private fun CustomThemeEditorDialog(
     initial: CustomReaderTheme,
@@ -794,7 +801,12 @@ private fun CustomThemeEditorDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (initial.id == 0L) "新建阅读主题" else "编辑阅读主题") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 520.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it.take(12) },
@@ -854,9 +866,10 @@ private fun CustomThemeEditorDialog(
                         )
                     }
                 }
-                EditorChannelSlider("红", current.red) { update(current.copy(red = it)) }
-                EditorChannelSlider("绿", current.green) { update(current.copy(green = it)) }
-                EditorChannelSlider("蓝", current.blue) { update(current.copy(blue = it)) }
+                NoteStyleColorPalette(
+                    color = current,
+                    onColorChange = ::update
+                )
             }
         },
         confirmButton = {
@@ -885,27 +898,4 @@ private fun CustomThemeEditorDialog(
             }
         }
     )
-}
-
-@Composable
-private fun EditorChannelSlider(label: String, value: Float, onValueChange: (Float) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            modifier = Modifier.width(20.dp)
-        )
-        Slider(
-            value = value,
-            onValueChange = onValueChange,
-            modifier = Modifier.weight(1f)
-        )
-        Text(
-            text = "${(value * 255).roundToInt()}",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.End,
-            modifier = Modifier.width(30.dp)
-        )
-    }
 }

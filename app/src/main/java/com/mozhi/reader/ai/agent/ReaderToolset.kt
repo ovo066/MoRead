@@ -5,6 +5,7 @@ import com.mozhi.reader.ai.client.ToolSpec
 import com.mozhi.reader.ai.embedding.BookEmbeddingScheduler
 import com.mozhi.reader.ai.media.AgentMediaResult
 import com.mozhi.reader.ai.media.AiMediaGenerationService
+import com.mozhi.reader.ai.search.WebSearchService
 import com.mozhi.reader.core.database.entity.AnnotationColors
 import com.mozhi.reader.core.database.entity.AnnotationStyle
 import com.mozhi.reader.core.database.entity.BookEntity
@@ -45,7 +46,8 @@ class ReaderToolset @Inject constructor(
     private val mediaService: AiMediaGenerationService,
     private val clientFactory: dagger.Lazy<AiClientFactory>,
     private val vectorStore: dagger.Lazy<BoxStore>,
-    private val embeddingScheduler: BookEmbeddingScheduler
+    private val embeddingScheduler: BookEmbeddingScheduler,
+    private val webSearchService: WebSearchService
 ) {
     fun forBook(
         bookId: Long,
@@ -92,6 +94,8 @@ class ReaderToolset @Inject constructor(
                 )
             )
             add(ReadBookSectionTool(libraryRepository, bookId))
+            add(WebSearchTool(webSearchService))
+            add(WebScrapeTool(webSearchService))
             if (personaId != null) {
                 add(
                     RecallMemoryTool(
@@ -149,6 +153,93 @@ class ReaderToolset @Inject constructor(
                     (tool.spec.name == "save_plot_summary" && "write_note" in allowed)
             }
         } ?: tools
+    }
+}
+
+private class WebScrapeTool(
+    private val service: WebSearchService
+) : AgentTool {
+    override val displayName: String = "抓取网页正文"
+
+    override val spec: ToolSpec = ToolSpec(
+        name = "web_scrape",
+        description = "抓取一个已知网址的网页正文。当搜索结果摘要不足以回答，或用户直接给出网址时使用；不要用它绕过书籍防剧透范围。",
+        parameters = buildJsonObject {
+            put("type", "object")
+            putJsonObject("properties") {
+                putJsonObject("url") {
+                    put("type", "string")
+                    put("description", "要抓取的完整 http/https 网址")
+                }
+            }
+            putJsonArray("required") { add(JsonPrimitive("url")) }
+        }
+    )
+
+    override suspend fun execute(arguments: JsonObject): String {
+        val url = arguments["url"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+        if (url.isEmpty()) return "缺少网址 url"
+        val result = try {
+            service.scrape(url)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            return error.message ?: "网页抓取失败"
+        }
+        return buildString {
+            append("网页正文（回答时请标明来源链接）：\n")
+            append("标题：").append(result.title).append('\n')
+            append("来源：").append(result.url).append("\n\n")
+            append(result.content)
+        }
+    }
+}
+
+private class WebSearchTool(
+    private val service: WebSearchService
+) : AgentTool {
+    override val displayName: String = "搜索互联网"
+
+    override val spec: ToolSpec = ToolSpec(
+        name = "web_search",
+        description = "搜索互联网以获取书外知识、近期事实和可引用来源。不要用它查询尚未阅读的书中后续剧情；需要核对本书已读内容时应使用 search_book。",
+        parameters = buildJsonObject {
+            put("type", "object")
+            putJsonObject("properties") {
+                putJsonObject("query") {
+                    put("type", "string")
+                    put("description", "简洁、独立且适合搜索引擎的查询词")
+                }
+                putJsonObject("limit") {
+                    put("type", "integer")
+                    put("description", "返回结果数量，1-8，默认 5")
+                }
+            }
+            putJsonArray("required") { add(JsonPrimitive("query")) }
+        }
+    )
+
+    override suspend fun execute(arguments: JsonObject): String {
+        val query = arguments["query"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+        if (query.isEmpty()) return "缺少搜索词 query"
+        val limit = (arguments["limit"]?.jsonPrimitive?.intOrNull ?: 5).coerceIn(1, 8)
+        val results = try {
+            service.search(query, limit)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            return error.message ?: "网络搜索失败"
+        }
+        if (results.isEmpty()) return "没有找到与「$query」相关的网页结果。"
+        return buildString {
+            append("互联网搜索结果（回答时请标明来源链接）：\n")
+            results.forEachIndexed { index, result ->
+                append("\n[").append(index + 1).append("] ").append(result.title)
+                append("\n").append(result.url)
+                if (result.snippet.isNotBlank()) append("\n").append(result.snippet)
+                append('\n')
+            }
+        }
     }
 }
 

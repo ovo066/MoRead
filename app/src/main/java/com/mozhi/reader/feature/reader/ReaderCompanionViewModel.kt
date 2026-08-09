@@ -14,11 +14,13 @@ import com.mozhi.reader.ai.embedding.BookEmbeddingProgress
 import com.mozhi.reader.ai.embedding.EmbeddingProgressTracker
 import com.mozhi.reader.ai.persona.PersonaRepository
 import com.mozhi.reader.ai.prompt.CompanionContextBuilder
+import com.mozhi.reader.ai.search.WebSearchSettingsStore
 import com.mozhi.reader.core.database.entity.ConversationEntity
 import com.mozhi.reader.core.database.entity.MessageEntity
 import com.mozhi.reader.core.database.entity.PersonaEntity
 import com.mozhi.reader.core.database.entity.enabledTools
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
+import com.mozhi.reader.core.datastore.UserMaskStore
 import com.mozhi.reader.core.library.AttachmentStore
 import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.library.MessageAttachment
@@ -96,7 +98,9 @@ class ReaderCompanionViewModel @Inject constructor(
     private val embeddingProgressTracker: EmbeddingProgressTracker,
     private val attachmentStore: AttachmentStore,
     private val libraryRepository: LibraryRepository,
-    private val suggestionService: ReplySuggestionService
+    private val suggestionService: ReplySuggestionService,
+    private val webSearchSettingsStore: WebSearchSettingsStore,
+    private val userMaskStore: UserMaskStore
 ) : ViewModel() {
 
     private val bookId = MutableStateFlow<Long?>(null)
@@ -105,6 +109,14 @@ class ReaderCompanionViewModel @Inject constructor(
     private var messagesJob: Job? = null
     private var conversationsJob: Job? = null
     private var suggestionJob: Job? = null
+    /** 现有记忆表尚无 maskId；面具回合先不固化，避免把扮演经历污染为用户真实偏好。 */
+    private var latestTurnWasMasked: Boolean = false
+
+    /**
+     * 流式正文的真源。SSE 增量只追加到这里（主线程独占），UI 快照由节拍器按
+     * [STREAM_UI_TICK_MS] 发布到 session，避免逐 token 重组整页与 O(n²) 拼串。
+     */
+    private val streamBuffer = StringBuilder()
 
     private data class SessionState(
         val conversationId: Long? = null,
@@ -394,16 +406,20 @@ class ReaderCompanionViewModel @Inject constructor(
 
     /** Cancels the stream and keeps whatever arrived as a persisted partial reply. */
     fun stop() {
-        val current = session.value
+        val partial = streamBuffer.toString()
+        val conversationId = session.value.conversationId
         streamJob?.cancel()
         streamJob = null
-        session.value = current.copy(isStreaming = false, streamingText = null, toolStatus = null)
-        val partial = current.streamingText
-        val conversationId = current.conversationId
-        if (!partial.isNullOrBlank() && conversationId != null) {
+        streamBuffer.setLength(0)
+        session.value = session.value.copy(
+            isStreaming = false,
+            streamingText = null,
+            toolStatus = null
+        )
+        if (partial.isNotBlank() && conversationId != null) {
             viewModelScope.launch {
                 chatRepository.appendAssistantMessage(conversationId, partial)
-                memoryScheduler.afterTurn(conversationId)
+                consolidateMemoryIfUnmasked(conversationId)
             }
         }
     }
@@ -469,6 +485,7 @@ class ReaderCompanionViewModel @Inject constructor(
     private fun activateConversation(conversationId: Long) {
         streamJob?.cancel()
         suggestionJob?.cancel()
+        streamBuffer.setLength(0)
         session.value = session.value.copy(
             conversationId = conversationId,
             messages = emptyList(),
@@ -523,12 +540,20 @@ class ReaderCompanionViewModel @Inject constructor(
                 suggestions = emptyList(),
                 error = null
             )
+            streamBuffer.setLength(0)
+            val ticker = launchStreamingTicker(::publishStreamingSnapshot)
             try {
+                latestTurnWasMasked = userMaskStore.activeMask() != null
+                val globallyEnabledTools = if (webSearchSettingsStore.current().enabled) {
+                    setOf("web_search", "web_scrape")
+                } else {
+                    emptySet()
+                }
                 val tools = readerToolset.forBook(
                     bookId = book,
                     personaId = persona.id,
                     conversationId = conversationId,
-                    enabledTools = persona.enabledTools().toSet() + requiredTools
+                    enabledTools = persona.enabledTools().toSet() + requiredTools + globallyEnabledTools
                 )
                 val systemPrompt = contextBuilder.build(
                     persona = persona,
@@ -539,10 +564,25 @@ class ReaderCompanionViewModel @Inject constructor(
                 )
                 agentLoop.run(conversationId, tools, systemPrompt).collect { event ->
                     when (event) {
-                        is AgentEvent.Text -> session.value = session.value.copy(
-                            streamingText = (session.value.streamingText ?: "") + event.text,
-                            toolStatus = null
-                        )
+                        is AgentEvent.Text -> {
+                            streamBuffer.append(event.text)
+                            // 正文一到就撤下工具状态行；文本快照本身交给节拍器。
+                            if (session.value.toolStatus != null) {
+                                session.value = session.value.copy(toolStatus = null)
+                            }
+                        }
+                        is AgentEvent.RoundCommitted -> {
+                            streamBuffer.setLength(0)
+                            val messages = session.value.messages
+                            session.value = session.value.copy(
+                                messages = if (messages.any { it.id == event.message.id }) {
+                                    messages
+                                } else {
+                                    messages + event.message
+                                },
+                                streamingText = ""
+                            )
+                        }
                         is AgentEvent.ToolRun -> session.value = session.value.copy(
                             toolStatus = "正在${event.displayName}…",
                             executionSteps = session.value.executionSteps
@@ -578,7 +618,8 @@ class ReaderCompanionViewModel @Inject constructor(
                 ) {
                     throw IllegalStateException("模型没有调用保存工具，剧情梗概尚未入库；可重试或换用支持工具调用的模型")
                 }
-                memoryScheduler.afterTurn(conversationId)
+                consolidateMemoryIfUnmasked(conversationId)
+                streamBuffer.setLength(0)
                 session.value = session.value.copy(
                     isStreaming = false,
                     streamingText = null,
@@ -587,17 +628,37 @@ class ReaderCompanionViewModel @Inject constructor(
                 refreshSuggestions(persona, conversationId)
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
+                // 已到达的残段完整亮出来，和错误行一起停留在气泡里等重试。
                 session.value = session.value.copy(
                     isStreaming = false,
                     toolStatus = null,
+                    streamingText = streamBuffer.toString().takeIf(String::isNotBlank),
                     error = error.userMessage()
                 )
+            } finally {
+                ticker.cancel()
             }
         }
     }
 
+    /** 节拍器回调：把缓冲区快照发布给 UI，仅在流式进行且内容变化时触发重组。 */
+    private fun publishStreamingSnapshot() {
+        val current = session.value
+        if (!current.isStreaming) return
+        val text = streamBuffer.toString()
+        if (current.streamingText != text) {
+            session.value = current.copy(streamingText = text)
+        }
+    }
+
+    private fun consolidateMemoryIfUnmasked(conversationId: Long) {
+        if (!latestTurnWasMasked) memoryScheduler.afterTurn(conversationId)
+    }
+
     override fun onCleared() {
-        session.value.conversationId?.let(memoryScheduler::onConversationClosed)
+        if (!latestTurnWasMasked) {
+            session.value.conversationId?.let(memoryScheduler::onConversationClosed)
+        }
         streamJob?.cancel()
         messagesJob?.cancel()
         conversationsJob?.cancel()

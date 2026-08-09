@@ -13,8 +13,14 @@ import com.mozhi.reader.ui.theme.AppearanceSettings
 import com.mozhi.reader.ui.theme.ThemeMode
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 
 enum class ReaderTheme {
     SYSTEM,
@@ -117,6 +123,18 @@ class ReaderSettingsRepository @Inject constructor(
             activeCustomThemeId = preferences[Keys.ActiveCustomThemeId]
         )
     }
+
+    /**
+     * 进程级热缓存：阅读页首帧要同步拿到真实纸色与排版，冷读 DataStore 会先用
+     * 默认值画一帧再跳变（进场转场中途背景变色）。Eagerly 随单例构造预热；
+     * 进程冷启动瞬间取到默认值属可接受回落。需要「等到真实值」的写路径仍用
+     * [settings].first()。
+     */
+    val cachedSettings: StateFlow<ReaderSettings> = settings.stateIn(
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+        started = SharingStarted.Eagerly,
+        initialValue = ReaderSettings()
+    )
 
     /** 外观偏好独立成流：MainActivity 只关心这三项，不必因字号变化重组整棵树。 */
     val appearance: Flow<AppearanceSettings> = dataStore.data.map { preferences ->

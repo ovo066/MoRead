@@ -52,4 +52,44 @@ class AiRichTextNormalizerTest {
         assertTrue(output.contains("| --- | --- |"))
         assertTrue(output.contains("| 甲 | 登场 |"))
     }
+
+    @Test
+    fun `流式分块 - 按空行切段`() {
+        val blocks = AiRichTextNormalizer.splitStreamingBlocks("第一段。\n\n第二段。\n\n第三段还没写完")
+        assertEquals(listOf("第一段。", "第二段。", "第三段还没写完"), blocks)
+    }
+
+    @Test
+    fun `流式分块 - 多个空行等价于一个分隔`() {
+        val blocks = AiRichTextNormalizer.splitStreamingBlocks("甲\n\n\n\n乙")
+        assertEquals(listOf("甲", "乙"), blocks)
+    }
+
+    @Test
+    fun `流式分块 - 代码围栏内的空行不切`() {
+        val source = "看这段代码：\n\n```kotlin\nval a = 1\n\nval b = 2\n```\n\n结束。"
+        val blocks = AiRichTextNormalizer.splitStreamingBlocks(source)
+        assertEquals(3, blocks.size)
+        assertEquals("```kotlin\nval a = 1\n\nval b = 2\n```", blocks[1])
+    }
+
+    @Test
+    fun `流式分块 - 未闭合围栏把余下内容留成一块`() {
+        val source = "开头\n\n```\n流式中\n\n还在围栏里"
+        val blocks = AiRichTextNormalizer.splitStreamingBlocks(source)
+        assertEquals(2, blocks.size)
+        assertEquals("```\n流式中\n\n还在围栏里", blocks[1])
+    }
+
+    @Test
+    fun `流式分块 - 单段与空串原样返回`() {
+        assertEquals(listOf("只有一段"), AiRichTextNormalizer.splitStreamingBlocks("只有一段"))
+        assertEquals(listOf(""), AiRichTextNormalizer.splitStreamingBlocks(""))
+    }
+
+    @Test
+    fun `流式分块 - 紧凑列表保持一块`() {
+        val blocks = AiRichTextNormalizer.splitStreamingBlocks("- 一\n- 二\n- 三")
+        assertEquals(listOf("- 一\n- 二\n- 三"), blocks)
+    }
 }

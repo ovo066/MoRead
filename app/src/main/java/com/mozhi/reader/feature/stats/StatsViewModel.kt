@@ -54,7 +54,7 @@ class StatsViewModel @Inject constructor(
         buildState(days, books, aiChats, notes + annotations)
     }.stateIn(
         scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5_000),
+        started = SharingStarted.Lazily,
         initialValue = StatsUiState()
     )
 

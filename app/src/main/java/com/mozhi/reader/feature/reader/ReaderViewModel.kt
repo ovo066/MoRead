@@ -113,7 +113,10 @@ class ReaderViewModel @Inject constructor(
         else -> null
     } ?: error("缺少 bookId")
 
-    private val mutableState = MutableStateFlow(ReaderUiState())
+    // 首帧就用热缓存里的真实设置：默认值画一帧再换纸色，进场会可见地跳一下。
+    private val mutableState = MutableStateFlow(
+        ReaderUiState(settings = settingsRepository.cachedSettings.value)
+    )
     val uiState = mutableState.asStateFlow()
     private val eventChannel = Channel<ReaderEvent>(Channel.BUFFERED)
     val events = eventChannel.receiveAsFlow()

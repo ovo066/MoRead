@@ -22,6 +22,7 @@ import java.util.Locale
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
@@ -116,12 +117,16 @@ class SettingsViewModel @Inject constructor(
         )
     }.stateIn(
         scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5_000),
+        started = SharingStarted.Lazily,
         initialValue = SettingsUiState()
     )
 
     init {
-        refreshStorageUsage()
+        viewModelScope.launch {
+            // 先把设置页首帧交给 UI；目录统计不是首屏必需信息，稍后后台补齐。
+            delay(STORAGE_SCAN_DEFER_MS)
+            storage.value = scanStorageUsage()
+        }
     }
 
     fun assignModel(role: ModelRole, modelId: Long?) {
@@ -169,16 +174,18 @@ class SettingsViewModel @Inject constructor(
 
     fun refreshStorageUsage() {
         viewModelScope.launch {
-            storage.value = withContext(Dispatchers.IO) {
-                StorageUsage(
-                    coverBytes = coversDirectory().directorySize(),
-                    bookBytes = File(context.filesDir, "books").directorySize() +
-                        File(context.filesDir, "book-text").directorySize() +
-                        File(context.filesDir, "book-media").directorySize() +
-                        File(context.filesDir, "illustrations").directorySize()
-                )
-            }
+            storage.value = scanStorageUsage()
         }
+    }
+
+    private suspend fun scanStorageUsage(): StorageUsage = withContext(Dispatchers.IO) {
+        StorageUsage(
+            coverBytes = coversDirectory().directorySize(),
+            bookBytes = File(context.filesDir, "books").directorySize() +
+                File(context.filesDir, "book-text").directorySize() +
+                File(context.filesDir, "book-media").directorySize() +
+                File(context.filesDir, "illustrations").directorySize()
+        )
     }
 
     /**
@@ -217,6 +224,7 @@ class SettingsViewModel @Inject constructor(
     private companion object {
         /** 与 ImportCoordinator 里的 marker 同名，清理后补齐任务才会重跑。 */
         const val COVER_BACKFILL_MARKER = ".epub-cover-backfill-v1"
+        const val STORAGE_SCAN_DEFER_MS = 400L
     }
 }
 

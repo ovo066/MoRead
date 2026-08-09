@@ -43,6 +43,9 @@ class AnnotationDiscussionViewModel @Inject constructor(
     private var repliesJob: Job? = null
     private var respondJob: Job? = null
 
+    /** 流式正文真源；UI 快照按 [STREAM_UI_TICK_MS] 节拍发布，避免逐 token 重组。 */
+    private val streamBuffer = StringBuilder()
+
     /** 弹层打开时绑定该讨论串（同锚点的全部批注 id）。 */
     fun open(annotationIds: List<Long>) {
         repliesJob?.cancel()
@@ -93,28 +96,41 @@ class AnnotationDiscussionViewModel @Inject constructor(
             mutableState.update {
                 it.copy(streaming = DiscussionStreaming(personaId), error = null)
             }
-            discussionService.respond(bookId, annotationId, personaId).collect { event ->
-                when (event) {
-                    is AnnotationDiscussionService.Event.Text -> mutableState.update { state ->
-                        val current = state.streaming ?: return@update state
-                        state.copy(
-                            streaming = current.copy(
-                                text = current.text + event.delta,
-                                toolLabel = null
-                            )
-                        )
-                    }
-                    is AnnotationDiscussionService.Event.ToolActivity -> mutableState.update { state ->
-                        val current = state.streaming ?: return@update state
-                        state.copy(streaming = current.copy(toolLabel = event.label))
-                    }
-                    is AnnotationDiscussionService.Event.Done -> mutableState.update {
-                        it.copy(streaming = null)
-                    }
-                    is AnnotationDiscussionService.Event.Failed -> mutableState.update {
-                        it.copy(streaming = null, error = event.message)
+            streamBuffer.setLength(0)
+            val ticker = launchStreamingTicker {
+                val state = mutableState.value
+                val current = state.streaming ?: return@launchStreamingTicker
+                val text = streamBuffer.toString()
+                if (current.text != text) {
+                    mutableState.value = state.copy(streaming = current.copy(text = text))
+                }
+            }
+            try {
+                discussionService.respond(bookId, annotationId, personaId).collect { event ->
+                    when (event) {
+                        is AnnotationDiscussionService.Event.Text -> {
+                            streamBuffer.append(event.delta)
+                            if (mutableState.value.streaming?.toolLabel != null) {
+                                mutableState.update { state ->
+                                    val current = state.streaming ?: return@update state
+                                    state.copy(streaming = current.copy(toolLabel = null))
+                                }
+                            }
+                        }
+                        is AnnotationDiscussionService.Event.ToolActivity -> mutableState.update { state ->
+                            val current = state.streaming ?: return@update state
+                            state.copy(streaming = current.copy(toolLabel = event.label))
+                        }
+                        is AnnotationDiscussionService.Event.Done -> mutableState.update {
+                            it.copy(streaming = null)
+                        }
+                        is AnnotationDiscussionService.Event.Failed -> mutableState.update {
+                            it.copy(streaming = null, error = event.message)
+                        }
                     }
                 }
+            } finally {
+                ticker.cancel()
             }
         }
     }
@@ -122,6 +138,7 @@ class AnnotationDiscussionViewModel @Inject constructor(
     /** 停止生成：丢弃半截回复（半条讨论没有保存价值）。 */
     fun cancelStreaming() {
         respondJob?.cancel()
+        streamBuffer.setLength(0)
         mutableState.update { it.copy(streaming = null) }
     }
 

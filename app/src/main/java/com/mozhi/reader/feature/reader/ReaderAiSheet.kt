@@ -58,12 +58,14 @@ fun ReaderAiSheet(
     val listState = rememberLazyListState()
     var input by remember { mutableStateOf("") }
 
-    // Follow the stream: keep the newest content visible while tokens arrive.
+    // 只在结构变化（消息条数、流式开始/结束、工具阶段）时定位到最新；
+    // 流式正文逐 token 长高不再触发滚动——回答在视口下方生长，用户随时可以
+    // 上滑回看而不会被拽回底部。
     LaunchedEffect(
         state.messages.size,
-        state.streamingText?.length,
+        state.streamingText != null,
         state.toolStatus,
-        state.executionSteps
+        state.executionSteps.size
     ) {
         val itemCount = state.messages.size + (if (state.streamingText != null) 1 else 0) + 1
         if (itemCount > 0) listState.scrollToItem(itemCount - 1)
@@ -246,10 +248,11 @@ private fun AssistantBubble(
             .clickable(enabled = onCopy != null) { onCopy?.invoke() }
             .padding(horizontal = 12.dp, vertical = 10.dp)
     ) {
-        AiRichText(
-            content = if (streaming) "$text▍" else text,
-            palette = palette
-        )
+        if (streaming) {
+            StreamingAiRichText(content = "$text▍", palette = palette)
+        } else {
+            AiRichText(content = text, palette = palette)
+        }
         if (!streaming && onCopy != null) {
             Text(
                 text = "点按复制",

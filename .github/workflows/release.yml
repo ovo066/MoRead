@@ -16,12 +16,6 @@ jobs:
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    env:
-      MOREAD_RELEASE_STORE_FILE: ${{ github.workspace }}/.ci-release.jks
-      MOREAD_RELEASE_STORE_PASSWORD: ${{ secrets.MOREAD_RELEASE_STORE_PASSWORD }}
-      MOREAD_RELEASE_KEY_ALIAS: ${{ secrets.MOREAD_RELEASE_KEY_ALIAS }}
-      MOREAD_RELEASE_KEY_PASSWORD: ${{ secrets.MOREAD_RELEASE_KEY_PASSWORD }}
-      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -32,13 +26,20 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Restore release keystore
         shell: bash
-        run: printf '%s' '${{ secrets.MOREAD_RELEASE_KEYSTORE_BASE64 }}' | base64 --decode > "$MOREAD_RELEASE_STORE_FILE"
+        env:
+          KEYSTORE_BASE64: ${{ secrets.MOREAD_RELEASE_KEYSTORE_BASE64 }}
+        run: printf '%s' "$KEYSTORE_BASE64" | base64 --decode > .ci-release.jks
       - name: Verify tag matches app version
         shell: bash
         run: |
           VERSION_NAME=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -1)
           test "$VERSION_NAME" = "${GITHUB_REF_NAME#v}"
       - name: Test and build signed release
+        env:
+          MOREAD_RELEASE_STORE_FILE: .ci-release.jks
+          MOREAD_RELEASE_STORE_PASSWORD: ${{ secrets.MOREAD_RELEASE_STORE_PASSWORD }}
+          MOREAD_RELEASE_KEY_ALIAS: ${{ secrets.MOREAD_RELEASE_KEY_ALIAS }}
+          MOREAD_RELEASE_KEY_PASSWORD: ${{ secrets.MOREAD_RELEASE_KEY_PASSWORD }}
         run: ./gradlew :app:testDebugUnitTest :app:assembleRelease --console=plain
       - name: Verify signature and prepare artifact
         shell: bash
@@ -50,4 +51,6 @@ jobs:
           cp app/build/outputs/apk/release/app-release.apk "dist/mozhi-${VERSION_NAME}-vc${VERSION_CODE}.apk"
       - name: Publish GitHub Latest release
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" dist/*.apk --verify-tag --generate-notes --latest --title "墨知 ${GITHUB_REF_NAME#v}"

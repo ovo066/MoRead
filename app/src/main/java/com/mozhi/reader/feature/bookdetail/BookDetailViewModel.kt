@@ -11,8 +11,10 @@ import com.mozhi.reader.core.database.entity.ChapterEntity
 import com.mozhi.reader.core.database.entity.IllustrationEntity
 import com.mozhi.reader.core.database.entity.NoteEntity
 import com.mozhi.reader.core.database.entity.ReadingDailyEntity
+import com.mozhi.reader.core.datastore.ReaderImageAsset
+import com.mozhi.reader.core.datastore.ReaderImageImporter
+import com.mozhi.reader.core.datastore.ReaderSettingsRepository
 import com.mozhi.reader.core.library.AnnotationRepository
-import com.mozhi.reader.core.library.BookCoverStore
 import com.mozhi.reader.core.library.IllustrationRepository
 import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.library.NoteExporter
@@ -29,7 +31,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 data class BookDetailUiState(
     val book: BookEntity? = null,
@@ -44,6 +45,7 @@ data class BookDetailUiState(
     val readingDays: Int = 0,
     val streakDays: Int = 0,
     val durationsByEpochDay: Map<Long, Long> = emptyMap(),
+    val imageLibrary: List<ReaderImageAsset> = emptyList(),
     val isLoading: Boolean = true,
     val isWorking: Boolean = false
 )
@@ -62,7 +64,8 @@ class BookDetailViewModel @Inject constructor(
     private val noteRepository: NoteRepository,
     private val annotationRepository: AnnotationRepository,
     private val illustrationRepository: IllustrationRepository,
-    private val coverStore: BookCoverStore,
+    private val settingsRepository: ReaderSettingsRepository,
+    private val imageImporter: ReaderImageImporter,
     private val noteExporter: NoteExporter,
     personaDao: com.mozhi.reader.core.database.dao.PersonaDao
 ) : ViewModel() {
@@ -123,8 +126,9 @@ class BookDetailViewModel @Inject constructor(
     val uiState = combine(
         content,
         libraryRepository.observeReadingDays(bookId),
-        working
-    ) { content, days, isWorking ->
+        working,
+        settingsRepository.settings
+    ) { content, days, isWorking, settings ->
         BookDetailUiState(
             book = content.book,
             chapters = content.chapters,
@@ -139,6 +143,7 @@ class BookDetailViewModel @Inject constructor(
             durationsByEpochDay = days
                 .groupBy(ReadingDailyEntity::epochDay)
                 .mapValues { (_, list) -> list.sumOf(ReadingDailyEntity::durationMs) },
+            imageLibrary = settings.imageLibrary,
             isLoading = false,
             isWorking = isWorking
         )
@@ -255,22 +260,29 @@ class BookDetailViewModel @Inject constructor(
         }
     }
 
-    /**
-     * 用户从相册选的图先压缩落盘再入库。写新文件成功后才改数据库，
-     * 中途失败时旧封面仍然有效。
-     */
+    /** 从系统选择器导入的新图同时进入图片库，之后可被其他书籍与背景复用。 */
     fun replaceCover(source: Uri) {
         viewModelScope.launch {
             working.value = true
-            val saved = withContext(Dispatchers.IO) {
-                runCatching { coverStore.save(bookId, source) }.getOrNull()
-            }
+            val saved = runCatching { imageImporter.importImage(source) }.getOrNull()
             working.value = false
             if (saved == null) {
                 eventChannel.send(BookDetailEvent.ShowMessage("无法读取所选图片"))
                 return@launch
             }
-            libraryRepository.replaceBookCover(bookId, saved.absolutePath)
+            libraryRepository.replaceBookCover(bookId, saved.filePath)
+            eventChannel.send(BookDetailEvent.ShowMessage("已加入图片库并设为封面"))
+        }
+    }
+
+    fun selectCover(imageId: String) {
+        viewModelScope.launch {
+            val image = uiState.value.imageLibrary.firstOrNull { it.id == imageId }
+            if (image == null) {
+                eventChannel.send(BookDetailEvent.ShowMessage("图片不存在或已删除"))
+                return@launch
+            }
+            libraryRepository.replaceBookCover(bookId, image.filePath)
             eventChannel.send(BookDetailEvent.ShowMessage("封面已更新"))
         }
     }

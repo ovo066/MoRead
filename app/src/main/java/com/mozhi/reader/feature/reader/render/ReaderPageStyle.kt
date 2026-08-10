@@ -1,6 +1,7 @@
 package com.mozhi.reader.feature.reader.render
 
 import android.graphics.Typeface
+import android.os.Build
 import java.io.File
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.Density
@@ -34,9 +35,17 @@ class ReaderPageStyle(
     /** Subtle paper grain, only for the 纸张 theme per the approved visual proposal. */
     val grain: Boolean,
     val typeface: Typeface,
+    val customFontPath: String?,
+    val customFontPaths: Map<String, String>,
+    val showHeader: Boolean,
+    val showFooter: Boolean,
     val backgroundImagePath: String?,
     val backgroundImageOpacity: Float,
-    val syntaxHighlightRules: List<ReaderSyntaxRule>
+    val syntaxHighlightRules: List<ReaderSyntaxRule>,
+    val paragraphSpacingEm: Float,
+    val firstLineIndentEm: Float,
+    val textJustification: Boolean,
+    val letterSpacingEm: Float
 ) {
     val contentWidth: Float = (viewWidth - paddingHorizontal * 2).coerceAtLeast(1f)
     val contentHeight: Float = (viewHeight - headerHeight - footerHeight).coerceAtLeast(1f)
@@ -46,16 +55,19 @@ class ReaderPageStyle(
         visibleHeight = contentHeight,
         contentLineStep = lineStep,
         titleLineStep = titleSizePx * TITLE_LINE_HEIGHT,
-        paragraphSpacing = contentSizePx * PARAGRAPH_SPACING_EM,
+        paragraphSpacing = contentSizePx * paragraphSpacingEm,
         titleTopSpacing = lineStep * TITLE_TOP_LINES,
         titleBottomSpacing = lineStep * TITLE_BOTTOM_LINES,
-        syntaxHighlightRules = syntaxHighlightRules
+        syntaxHighlightRules = syntaxHighlightRules,
+        indentCharCount = firstLineIndentEm,
+        justifyContent = textJustification
     )
 
     val measure: AndroidTextMeasure = AndroidTextMeasure(
         contentSizePx = contentSizePx,
         titleSizePx = titleSizePx,
-        typeface = typeface
+        typeface = typeface,
+        letterSpacingEm = letterSpacingEm
     )
 
     companion object {
@@ -91,14 +103,23 @@ class ReaderPageStyle(
             val syntaxRules = settings.syntaxHighlightRules.takeIf {
                 settings.syntaxHighlightEnabled
             }.orEmpty()
+            val baseTypeface = settings.resolveTypeface()
             return ReaderPageStyle(
                 viewWidth = viewWidth,
                 viewHeight = viewHeight,
                 paddingHorizontal = horizontal,
-                headerHeight = statusBarPx + headerPadding + tipSize * 1.6f,
-                footerHeight = navigationBarPx.coerceAtLeast(footerPadding) + tipSize * 1.9f,
+                headerHeight = if (settings.showHeader) {
+                    statusBarPx + headerPadding + tipSize * 1.6f
+                } else {
+                    statusBarPx + headerPadding * 0.4f
+                },
+                footerHeight = if (settings.showFooter) {
+                    navigationBarPx.coerceAtLeast(footerPadding) + tipSize * 1.9f
+                } else {
+                    navigationBarPx + footerPadding * 0.35f
+                },
                 contentSizePx = contentSize,
-                titleSizePx = contentSize * TITLE_SCALE,
+                titleSizePx = contentSize * settings.titleScale,
                 tipSizePx = tipSize,
                 lineStep = contentSize * settings.lineHeight,
                 backgroundColor = palette.background.toArgb(),
@@ -109,10 +130,18 @@ class ReaderPageStyle(
                 // 纸纹只属于内置「纸张」主题；自定义配色下不叠加。
                 grain = settings.activeCustomThemeId == null &&
                     settings.theme == com.mozhi.reader.core.datastore.ReaderTheme.PAPER,
-                typeface = settings.resolveTypeface(),
+                typeface = weightedTypeface(baseTypeface, settings.fontWeight),
+                customFontPath = settings.customFontPath,
+                customFontPaths = settings.fontLibrary.associate { it.id to it.filePath },
+                showHeader = settings.showHeader,
+                showFooter = settings.showFooter,
                 backgroundImagePath = settings.backgroundImagePath,
                 backgroundImageOpacity = settings.backgroundImageOpacity,
-                syntaxHighlightRules = syntaxRules
+                syntaxHighlightRules = syntaxRules,
+                paragraphSpacingEm = settings.paragraphSpacingEm,
+                firstLineIndentEm = settings.firstLineIndentEm,
+                textJustification = settings.textJustification,
+                letterSpacingEm = settings.letterSpacingEm
             )
         }
 
@@ -129,6 +158,13 @@ class ReaderPageStyle(
                 ReaderFont.MONOSPACE -> Typeface.MONOSPACE
             }
         }
+
+        private fun weightedTypeface(base: Typeface, weight: Int): Typeface =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                Typeface.create(base, weight.coerceIn(100, 900), false)
+            } else {
+                Typeface.create(base, if (weight >= 600) Typeface.BOLD else Typeface.NORMAL)
+            }
     }
 }
 

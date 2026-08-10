@@ -2,6 +2,7 @@ package com.mozhi.reader.feature.reader.engine
 
 import com.mozhi.reader.core.datastore.ReaderSyntaxHighlighter
 import com.mozhi.reader.core.datastore.ReaderSyntaxRule
+import com.mozhi.reader.core.datastore.ReaderSyntaxStyleSpan
 import kotlin.math.max
 import kotlin.math.min
 
@@ -18,7 +19,8 @@ data class TypesetSpec(
     val titleTopSpacing: Float,
     val titleBottomSpacing: Float,
     val syntaxHighlightRules: List<ReaderSyntaxRule> = emptyList(),
-    val indentCharCount: Int = 2,
+    val indentCharCount: Float = 2f,
+    val justifyContent: Boolean = true,
     val bottomAlign: Boolean = true
 )
 
@@ -201,7 +203,7 @@ class ChapterTypesetter(
 
             val startX = if (lineIndex == 0) indent else 0f
             val isLastLine = lineIndex == lineStarts.lastIndex
-            val justify = !isTitle && !isLastLine
+            val justify = spec.justifyContent && !isTitle && !isLastLine
             val columns = placeClusters(
                 clusters = clusters,
                 widths = clusterWidths,
@@ -275,8 +277,15 @@ class ChapterTypesetter(
                     start = x,
                     end = x + widths[index],
                     charData = clusters[index],
-                    syntaxColorArgb = style?.first,
-                    syntaxUnderline = style?.second ?: false
+                    syntaxColorArgb = style?.colorArgb,
+                    syntaxBackgroundArgb = style?.backgroundArgb,
+                    syntaxUnderline = style?.underline ?: false,
+                    syntaxFont = style?.font
+                        ?: com.mozhi.reader.core.datastore.ReaderSyntaxFont.INHERIT,
+                    syntaxFontAssetId = style?.fontAssetId,
+                    syntaxBold = style?.bold ?: false,
+                    syntaxItalic = style?.italic ?: false,
+                    syntaxStrikethrough = style?.strikethrough ?: false
                 )
             )
             x += width
@@ -292,11 +301,17 @@ class ChapterTypesetter(
                 if (shift > 0f) {
                     val column = columns[index]
                     columns[index] = TextColumn(
-                        column.start - shift,
-                        column.end - shift,
-                        column.charData,
-                        column.syntaxColorArgb,
-                        column.syntaxUnderline
+                        start = column.start - shift,
+                        end = column.end - shift,
+                        charData = column.charData,
+                        syntaxColorArgb = column.syntaxColorArgb,
+                        syntaxBackgroundArgb = column.syntaxBackgroundArgb,
+                        syntaxUnderline = column.syntaxUnderline,
+                        syntaxFont = column.syntaxFont,
+                        syntaxFontAssetId = column.syntaxFontAssetId,
+                        syntaxBold = column.syntaxBold,
+                        syntaxItalic = column.syntaxItalic,
+                        syntaxStrikethrough = column.syntaxStrikethrough
                     )
                 }
             }
@@ -381,21 +396,16 @@ class ChapterTypesetter(
     }
 
     private class SyntaxStyleMap(text: String, rules: List<ReaderSyntaxRule>) {
-        private val colors = IntArray(text.length)
-        private val styled = BooleanArray(text.length)
-        private val underlines = BooleanArray(text.length)
+        private val styles = arrayOfNulls<ReaderSyntaxStyleSpan>(text.length)
 
         init {
             ReaderSyntaxHighlighter.spans(text, rules).forEach { span ->
                 for (index in span.start until span.endExclusive.coerceAtMost(text.length)) {
-                    colors[index] = span.colorArgb
-                    styled[index] = true
-                    underlines[index] = span.underline
+                    styles[index] = span
                 }
             }
         }
 
-        fun at(index: Int): Pair<Int, Boolean>? =
-            if (index in styled.indices && styled[index]) colors[index] to underlines[index] else null
+        fun at(index: Int): ReaderSyntaxStyleSpan? = styles.getOrNull(index)
     }
 }

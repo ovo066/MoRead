@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -32,6 +33,7 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Bookmarks
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.EditNote
@@ -92,6 +94,7 @@ import com.mozhi.reader.core.database.entity.BookmarkEntity
 import com.mozhi.reader.core.database.entity.IllustrationEntity
 import com.mozhi.reader.core.database.entity.NoteEntity
 import com.mozhi.reader.core.database.entity.tagList
+import com.mozhi.reader.core.datastore.ReaderImageAsset
 import com.mozhi.reader.core.library.NoteRepository
 import com.mozhi.reader.ui.components.FrostedSurface
 import com.mozhi.reader.ui.components.ReadingHeatmap
@@ -290,12 +293,14 @@ fun BookDetailScreen(
         if (showEditor) {
             BookMetadataEditorDialog(
                 book = book,
+                imageLibrary = state.imageLibrary,
                 isWorking = state.isWorking,
                 onPickCover = {
                     coverPicker.launch(
                         PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                     )
                 },
+                onSelectCover = viewModel::selectCover,
                 onDismiss = { showEditor = false },
                 onSave = { title, author, tags ->
                     viewModel.saveMetadata(title, author, tags)
@@ -786,8 +791,10 @@ private fun IllustrationGalleryCard(
 @Composable
 private fun BookMetadataEditorDialog(
     book: BookEntity,
+    imageLibrary: List<ReaderImageAsset>,
     isWorking: Boolean,
     onPickCover: () -> Unit,
+    onSelectCover: (String) -> Unit,
     onDismiss: () -> Unit,
     onSave: (String, String, List<String>) -> Unit
 ) {
@@ -795,6 +802,7 @@ private fun BookMetadataEditorDialog(
     var author by remember(book.id) { mutableStateOf(book.author) }
     var tags by remember(book.id, book.tags) { mutableStateOf(book.tagList()) }
     var tagDraft by remember(book.id) { mutableStateOf("") }
+    var showImageLibrary by remember { mutableStateOf(false) }
 
     fun commitTag() {
         // 逗号是标签的存储分隔符，输入里出现就当多个标签处理。
@@ -880,21 +888,31 @@ private fun BookMetadataEditorDialog(
                 HorizontalDivider(
                     color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
                 )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(modifier = Modifier.weight(1f)) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
                         Text("封面", style = MaterialTheme.typography.titleSmall)
                         Text(
                             text = if (book.coverPath.isNullOrBlank()) "未设置" else "已设置",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                        }
                     }
-                    OutlinedButton(
-                        onClick = onPickCover,
-                        shape = MoReadTokens.CapsuleShape,
-                        enabled = !isWorking
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text(if (isWorking) "处理中…" else "从相册选择")
+                        OutlinedButton(
+                            onClick = { showImageLibrary = true },
+                            shape = MoReadTokens.CapsuleShape,
+                            enabled = !isWorking
+                        ) {
+                            Text("从图片库选择")
+                        }
+                        TextButton(onClick = onPickCover, enabled = !isWorking) {
+                            Text(if (isWorking) "处理中…" else "导入新图片")
+                        }
                     }
                 }
             }
@@ -912,6 +930,81 @@ private fun BookMetadataEditorDialog(
             ) {
                 Text("保存")
             }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
+
+    if (showImageLibrary) {
+        ImageLibraryPickerDialog(
+            images = imageLibrary,
+            currentPath = book.coverPath,
+            onSelect = { image ->
+                onSelectCover(image.id)
+                showImageLibrary = false
+            },
+            onImport = {
+                showImageLibrary = false
+                onPickCover()
+            },
+            onDismiss = { showImageLibrary = false }
+        )
+    }
+}
+
+@Composable
+private fun ImageLibraryPickerDialog(
+    images: List<ReaderImageAsset>,
+    currentPath: String?,
+    onSelect: (ReaderImageAsset) -> Unit,
+    onImport: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("从图片库选择封面") },
+        text = {
+            if (images.isEmpty()) {
+                Text("图片库还是空的，可以先导入一张新图片。")
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(images, key = ReaderImageAsset::id) { image ->
+                        ListItem(
+                            headlineContent = {
+                                Text(image.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            },
+                            supportingContent = {
+                                if (image.width > 0 && image.height > 0) {
+                                    Text("${image.width} × ${image.height}")
+                                }
+                            },
+                            leadingContent = {
+                                AsyncImage(
+                                    model = File(image.filePath),
+                                    contentDescription = image.displayName,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.size(52.dp).clip(RoundedCornerShape(10.dp))
+                                )
+                            },
+                            trailingContent = if (currentPath == image.filePath) {
+                                { Icon(Icons.Outlined.Check, contentDescription = "当前封面") }
+                            } else {
+                                null
+                            },
+                            modifier = Modifier.clip(RoundedCornerShape(14.dp)).clickable {
+                                onSelect(image)
+                            }
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onImport) { Text("导入新图片") }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("取消") }

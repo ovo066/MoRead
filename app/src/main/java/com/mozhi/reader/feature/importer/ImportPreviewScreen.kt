@@ -32,6 +32,7 @@ import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -41,6 +42,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -128,6 +130,8 @@ fun ImportPreviewScreen(
                     onCustomRegexChange = viewModel::setCustomRegex,
                     onSelectRule = viewModel::selectRule,
                     onApplyCustomRegex = viewModel::applyCustomRegex,
+                    onAiDetect = viewModel::detectChapterRuleWithAi,
+                    aiDetectEnabled = !state.isWorking,
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -138,6 +142,52 @@ fun ImportPreviewScreen(
             enabled = !state.isWorking && state.preview != null,
             onConfirm = viewModel::confirm,
             modifier = Modifier.align(Alignment.BottomCenter)
+        )
+    }
+
+    state.aiRuleProposal?.let { proposal ->
+        AlertDialog(
+            onDismissRequest = viewModel::dismissAiRuleProposal,
+            title = { Text("确认 AI 章节规则") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "${proposal.name} · 预计识别 ${proposal.chapterCount} 章",
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                    Text(proposal.reason, style = MaterialTheme.typography.bodyMedium)
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHighest
+                    ) {
+                        Text(
+                            proposal.regex,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(12.dp)
+                        )
+                    }
+                    if (proposal.sampleTitles.isNotEmpty()) {
+                        Text(
+                            "预览：${proposal.sampleTitles.joinToString("、")}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 4,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Text(
+                        "规则只有在你确认后才会应用。",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = viewModel::confirmAiRuleProposal) { Text("确认应用") }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::dismissAiRuleProposal) { Text("取消") }
+            }
         )
     }
 }
@@ -237,6 +287,8 @@ private fun PreviewContent(
     onCustomRegexChange: (String) -> Unit,
     onSelectRule: (Long) -> Unit,
     onApplyCustomRegex: () -> Unit,
+    onAiDetect: () -> Unit,
+    aiDetectEnabled: Boolean,
     modifier: Modifier = Modifier
 ) {
     var ruleMenuExpanded by remember { mutableStateOf(false) }
@@ -425,6 +477,14 @@ private fun PreviewContent(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text("重新识别章节")
+                    }
+                    OutlinedButton(
+                        onClick = onAiDetect,
+                        enabled = aiDetectEnabled,
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("AI 自动识别章节规则")
                     }
                 }
             }

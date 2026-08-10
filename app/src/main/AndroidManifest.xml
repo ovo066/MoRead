@@ -42,6 +42,15 @@
                 <data android:mimeType="application/epub+zip" />
                 <data android:mimeType="application/octet-stream" />
                 <data android:mimeType="text/plain" />
+                <data android:mimeType="font/ttf" />
+                <data android:mimeType="font/otf" />
+                <data android:mimeType="font/collection" />
+                <data android:mimeType="font/sfnt" />
+                <data android:mimeType="application/font-sfnt" />
+                <data android:mimeType="application/x-font-ttf" />
+                <data android:mimeType="application/x-font-truetype" />
+                <data android:mimeType="application/vnd.ms-opentype" />
+                <data android:mimeType="application/x-font-opentype" />
             </intent-filter>
             <!-- 让文件管理器的“分享文件”目标列表显示墨知。 -->
             <intent-filter>
@@ -50,6 +59,15 @@
                 <data android:mimeType="application/epub+zip" />
                 <data android:mimeType="application/octet-stream" />
                 <data android:mimeType="text/plain" />
+                <data android:mimeType="font/ttf" />
+                <data android:mimeType="font/otf" />
+                <data android:mimeType="font/collection" />
+                <data android:mimeType="font/sfnt" />
+                <data android:mimeType="application/font-sfnt" />
+                <data android:mimeType="application/x-font-ttf" />
+                <data android:mimeType="application/x-font-truetype" />
+                <data android:mimeType="application/vnd.ms-opentype" />
+                <data android:mimeType="application/x-font-opentype" />
             </intent-filter>
         </activity>
         <service

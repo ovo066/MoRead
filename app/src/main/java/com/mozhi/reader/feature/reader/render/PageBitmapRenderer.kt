@@ -10,6 +10,7 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import android.util.LruCache
 import android.text.TextPaint
+import com.mozhi.reader.core.datastore.ReaderSyntaxFont
 import com.mozhi.reader.feature.reader.engine.ListenHighlightSpan
 import com.mozhi.reader.feature.reader.engine.ReaderAnnotationMark
 import com.mozhi.reader.feature.reader.engine.ReaderIllustrationMark
@@ -48,6 +49,7 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
     private val imagePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val backgroundProvider = ReaderBackgroundProvider(pageStyle)
     private val syntaxPaints = HashMap<String, TextPaint>()
+    private val syntaxBackgroundPaints = HashMap<Int, Paint>()
     /** (style|colorTag) → Paint；样式实例随 pageStyle 重建，缓存不会跨主题存活。 */
     private val annotationInkPaints = HashMap<String, Paint>()
     private val listenHighlightPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -129,6 +131,7 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
     }
 
     internal fun drawHeader(canvas: Canvas, page: RenderPage) {
+        if (!pageStyle.showHeader) return
         val title = page.chapterTitle.ifBlank { return }
         val maxWidth = pageStyle.contentWidth
         val text = ellipsize(title, tipPaint, maxWidth)
@@ -226,12 +229,36 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
             }
             val paint = if (line.isTitle) titlePaint else contentPaint
             for (column in line.columns) {
-                val resolvedPaint = if (column.syntaxColorArgb != null || column.syntaxUnderline) {
+                column.syntaxBackgroundArgb?.let { color ->
+                    val backgroundPaint = syntaxBackgroundPaints.getOrPut(color) {
+                        Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color }
+                    }
+                    canvas.drawRect(
+                        column.start,
+                        line.lineTop,
+                        column.end,
+                        line.lineBottom,
+                        backgroundPaint
+                    )
+                }
+                val resolvedPaint = if (
+                    column.syntaxColorArgb != null ||
+                    column.syntaxUnderline ||
+                    column.syntaxFont != ReaderSyntaxFont.INHERIT ||
+                    column.syntaxBold ||
+                    column.syntaxItalic ||
+                    column.syntaxStrikethrough
+                ) {
                     syntaxPaint(
                         base = paint,
                         color = column.syntaxColorArgb ?: pageStyle.textColor,
                         underline = column.syntaxUnderline,
-                        title = line.isTitle
+                        title = line.isTitle,
+                        font = column.syntaxFont,
+                        fontAssetId = column.syntaxFontAssetId,
+                        bold = column.syntaxBold,
+                        italic = column.syntaxItalic,
+                        strikethrough = column.syntaxStrikethrough
                     )
                 } else {
                     paint
@@ -356,12 +383,37 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
             Paint(Paint.ANTI_ALIAS_FLAG).apply(configure)
         }
 
-    private fun syntaxPaint(base: TextPaint, color: Int, underline: Boolean, title: Boolean): TextPaint {
-        val key = "$title|$color|$underline"
+    private fun syntaxPaint(
+        base: TextPaint,
+        color: Int,
+        underline: Boolean,
+        title: Boolean,
+        font: ReaderSyntaxFont,
+        fontAssetId: String?,
+        bold: Boolean,
+        italic: Boolean,
+        strikethrough: Boolean
+    ): TextPaint {
+        val key = "$title|$color|$underline|$font|$fontAssetId|$bold|$italic|$strikethrough"
         return syntaxPaints.getOrPut(key) {
             TextPaint(base).apply {
                 this.color = color
                 isUnderlineText = underline
+                isStrikeThruText = strikethrough
+                val family = when (font) {
+                    ReaderSyntaxFont.INHERIT -> base.typeface
+                    ReaderSyntaxFont.SYSTEM -> Typeface.DEFAULT
+                    ReaderSyntaxFont.SERIF -> Typeface.SERIF
+                    ReaderSyntaxFont.SANS_SERIF -> Typeface.SANS_SERIF
+                    ReaderSyntaxFont.MONOSPACE -> Typeface.MONOSPACE
+                    ReaderSyntaxFont.CUSTOM -> (fontAssetId
+                        ?.let(pageStyle.customFontPaths::get) ?: pageStyle.customFontPath)
+                        ?.let { path -> runCatching { Typeface.createFromFile(path) }.getOrNull() }
+                        ?: base.typeface
+                }
+                val style = (if (bold) Typeface.BOLD else Typeface.NORMAL) or
+                    (if (italic) Typeface.ITALIC else Typeface.NORMAL)
+                typeface = if (style == Typeface.NORMAL) family else Typeface.create(family, style)
             }
         }
     }
@@ -472,6 +524,7 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         timeText: String,
         batteryPercent: Int
     ) {
+        if (!pageStyle.showFooter) return
         val baseline = pageStyle.viewHeight - pageStyle.footerHeight + pageStyle.tipSizePx * 1.25f
         val pageText = "${page.pageIndex + 1} / ${page.pageCount} 页"
         canvas.drawText(pageText, pageStyle.paddingHorizontal, baseline, tipPaint)

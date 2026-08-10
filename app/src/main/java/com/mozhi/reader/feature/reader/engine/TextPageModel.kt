@@ -1,5 +1,7 @@
 package com.mozhi.reader.feature.reader.engine
 
+import com.mozhi.reader.core.datastore.ReaderSyntaxFont
+
 /**
  * Layout entities for the self-drawn text engine, ported from Legado's
  * `ui/book/read/page/entities`. Every coordinate is computed once at layout time in content-local
@@ -15,7 +17,13 @@ class TextColumn(
     val end: Float,
     val charData: String,
     val syntaxColorArgb: Int? = null,
-    val syntaxUnderline: Boolean = false
+    val syntaxBackgroundArgb: Int? = null,
+    val syntaxUnderline: Boolean = false,
+    val syntaxFont: ReaderSyntaxFont = ReaderSyntaxFont.INHERIT,
+    val syntaxFontAssetId: String? = null,
+    val syntaxBold: Boolean = false,
+    val syntaxItalic: Boolean = false,
+    val syntaxStrikethrough: Boolean = false
 )
 
 /** Chapter-level source metadata loaded from the EPUB media sidecar. */

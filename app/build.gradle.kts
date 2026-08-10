@@ -14,11 +14,25 @@ providers.gradleProperty("moreadBuildDir")
     ?.takeIf(String::isNotBlank)
     ?.let { customBuildDirectory -> layout.buildDirectory.set(file(customBuildDirectory)) }
 
-// 正式发布签名：密钥与口令在根目录 keystore.properties（已 gitignore，永不入库）。
-// 克隆者没有该文件时 release 输出未签名包，开发构建不受影响。
+// 正式发布签名：本地优先读取 gitignore 的 keystore.properties；CI 只从 GitHub
+// Secrets 注入的环境变量读取。两种方式都不把密钥或口令写进仓库。
 val releaseKeystoreProps: Properties? = rootProject.file("keystore.properties")
     .takeIf { it.exists() }
     ?.let { file -> Properties().apply { file.inputStream().use(::load) } }
+val releaseStoreFile = releaseKeystoreProps?.getProperty("storeFile")
+    ?: System.getenv("MOREAD_RELEASE_STORE_FILE")
+val releaseStorePassword = releaseKeystoreProps?.getProperty("storePassword")
+    ?: System.getenv("MOREAD_RELEASE_STORE_PASSWORD")
+val releaseKeyAlias = releaseKeystoreProps?.getProperty("keyAlias")
+    ?: System.getenv("MOREAD_RELEASE_KEY_ALIAS")
+val releaseKeyPassword = releaseKeystoreProps?.getProperty("keyPassword")
+    ?: System.getenv("MOREAD_RELEASE_KEY_PASSWORD")
+val hasReleaseSigning = listOf(
+    releaseStoreFile,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword
+).all { !it.isNullOrBlank() }
 
 android {
     namespace = "com.mozhi.reader"
@@ -30,8 +44,8 @@ android {
         minSdk = 26
         targetSdk = 37
         // 测试期曾发过仓库外的高编号包，编号跳档保证覆盖安装不降级。
-        versionCode = 46
-        versionName = "0.10.0-beta6"
+        versionCode = 47
+        versionName = "0.10.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
 
@@ -49,12 +63,12 @@ android {
     }
 
     signingConfigs {
-        releaseKeystoreProps?.let { props ->
+        if (hasReleaseSigning) {
             create("release") {
-                storeFile = rootProject.file(props.getProperty("storeFile"))
-                storePassword = props.getProperty("storePassword")
-                keyAlias = props.getProperty("keyAlias")
-                keyPassword = props.getProperty("keyPassword")
+                storeFile = rootProject.file(releaseStoreFile!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
             }
         }
     }

@@ -63,6 +63,8 @@ import com.mozhi.reader.feature.reader.ReaderScreen
 import com.mozhi.reader.feature.settings.ApiLogScreen
 import com.mozhi.reader.feature.settings.AppUpdatePrompt
 import com.mozhi.reader.feature.settings.ImageGenSettingsScreen
+import com.mozhi.reader.feature.settings.FontLibraryScreen
+import com.mozhi.reader.feature.settings.ImageLibraryScreen
 import com.mozhi.reader.feature.settings.GlobalPresetSettingsScreen
 import com.mozhi.reader.feature.settings.BackupSettingsScreen
 import com.mozhi.reader.feature.settings.ProviderDetailScreen
@@ -225,6 +227,8 @@ fun MoReadApp(
                         onOpenWebSearch = { navController.navigate("web-search-settings") },
                         onOpenTtsSettings = { navController.navigate("tts-settings") },
                         onOpenImageGenSettings = { navController.navigate("image-gen-settings") },
+                        onOpenFontLibrary = { navController.navigate("font-library") },
+                        onOpenImageLibrary = { navController.navigate("image-library") },
                         onOpenGlobalPresets = { navController.navigate("global-presets") },
                         onOpenUserMasks = { navController.navigate("user-masks") },
                         onOpenBackup = { navController.navigate("backup-settings") },
@@ -239,6 +243,12 @@ fun MoReadApp(
                 }
                 pushComposable("image-gen-settings") {
                     ImageGenSettingsScreen(onBack = navController::popBackStack)
+                }
+                pushComposable("font-library") {
+                    FontLibraryScreen(onBack = navController::popBackStack)
+                }
+                pushComposable("image-library") {
+                    ImageLibraryScreen(onBack = navController::popBackStack)
                 }
                 pushComposable("global-presets") {
                     GlobalPresetSettingsScreen(onBack = navController::popBackStack)

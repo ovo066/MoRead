@@ -26,6 +26,8 @@ import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Colorize
+import androidx.compose.material.icons.outlined.FontDownload
+import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.PersonOutline
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Tune
@@ -95,6 +97,8 @@ fun SettingsScreen(
     onOpenWebSearch: () -> Unit = {},
     onOpenTtsSettings: () -> Unit = {},
     onOpenImageGenSettings: () -> Unit = {},
+    onOpenFontLibrary: () -> Unit = {},
+    onOpenImageLibrary: () -> Unit = {},
     onOpenGlobalPresets: () -> Unit = {},
     onOpenUserMasks: () -> Unit = {},
     onOpenBackup: () -> Unit = {},
@@ -191,6 +195,8 @@ fun SettingsScreen(
                     onCustomAccent = viewModel::setCustomAccent
                 )
             }
+            item { FontLibraryEntryCard(onClick = onOpenFontLibrary) }
+            item { ImageLibraryEntryCard(onClick = onOpenImageLibrary) }
 
             item { SectionLabel(title = "应用") }
             item {
@@ -229,6 +235,74 @@ fun SettingsScreen(
                 .align(Alignment.BottomCenter)
                 .padding(horizontal = 20.dp, vertical = 18.dp)
         )
+    }
+}
+
+@Composable
+private fun FontLibraryEntryCard(onClick: () -> Unit) {
+    FrostedSurface(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        shape = RoundedCornerShape(20.dp),
+        shadowElevation = 4.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Outlined.FontDownload,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(22.dp)
+            )
+            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                Text("字体库", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "导入、重命名和删除字体，供正文与高亮规则使用",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Icon(
+                Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                contentDescription = "打开",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun ImageLibraryEntryCard(onClick: () -> Unit) {
+    FrostedSurface(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        shape = RoundedCornerShape(20.dp),
+        shadowElevation = 4.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Outlined.PhotoLibrary,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(22.dp)
+            )
+            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                Text("图片库", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "导入、重命名和删除图片，供阅读背景与书籍封面使用",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Icon(
+                Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                contentDescription = "打开",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 

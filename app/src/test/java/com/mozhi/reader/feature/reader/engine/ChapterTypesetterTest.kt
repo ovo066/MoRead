@@ -1,5 +1,7 @@
 package com.mozhi.reader.feature.reader.engine
 
+import com.mozhi.reader.core.datastore.ReaderSyntaxFont
+import com.mozhi.reader.core.datastore.ReaderSyntaxRule
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -185,5 +187,48 @@ class ChapterTypesetterTest {
         val narrowPage = narrow.pages[narrow.pageIndexAt(offset)]
         assertTrue(narrowPage.chapterPosition <= offset)
         assertTrue(offset < narrowPage.chapterPosition + narrowPage.charLength + 1)
+    }
+
+    @Test
+    fun `extended syntax style reaches laid out text columns`() {
+        val rule = ReaderSyntaxRule(
+            id = 21,
+            name = "对白",
+            startDelimiter = "“",
+            endDelimiter = "”",
+            colorArgb = 0xFF123456.toInt(),
+            backgroundArgb = 0x33223344,
+            font = ReaderSyntaxFont.SERIF,
+            fontAssetId = "font-21",
+            bold = true,
+            italic = true,
+            underline = true,
+            strikethrough = true
+        )
+        val chapter = ChapterTypesetter(
+            spec.copy(syntaxHighlightRules = listOf(rule)),
+            FakeMeasure()
+        ).typeset(0, "", "“你好”还有正文")
+        val styled = chapter.pages.flatMap(TextPage::lines)
+            .flatMap(TextLine::columns)
+            .filter { it.syntaxColorArgb != null }
+
+        assertEquals("“你好”", styled.joinToString("") { it.charData })
+        assertTrue(styled.all { it.syntaxBackgroundArgb == rule.backgroundArgb })
+        assertTrue(styled.all { it.syntaxFont == ReaderSyntaxFont.SERIF })
+        assertTrue(styled.all { it.syntaxFontAssetId == "font-21" })
+        assertTrue(styled.all { it.syntaxBold && it.syntaxItalic })
+        assertTrue(styled.all { it.syntaxUnderline && it.syntaxStrikethrough })
+    }
+
+    @Test
+    fun `fractional indent and left alignment are honored`() {
+        val customSpec = spec.copy(indentCharCount = 1.5f, justifyContent = false)
+        val chapter = ChapterTypesetter(customSpec, FakeMeasure()).typeset(0, "", cjkParagraph)
+        val lines = chapter.pages.flatMap(TextPage::lines)
+
+        assertEquals(15f, lines.first().startX, 0.01f)
+        assertEquals(15f, lines.first().columns.first().start, 0.01f)
+        assertTrue(lines.first().columns.last().end < customSpec.visibleWidth)
     }
 }

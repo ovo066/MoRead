@@ -19,6 +19,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 
@@ -64,15 +65,38 @@ data class ReaderSettings(
     val font: ReaderFont = ReaderFont.SYSTEM,
     /** 已导入到应用私有目录的 TTF/OTF 文件。 */
     val customFontPath: String? = null,
+    /** 从字体 name 表自动识别、且允许用户在导入时改写的显示名。 */
+    val customFontName: String? = null,
+    /** 所有已导入字体；正文与语法规则均通过稳定 id 引用。 */
+    val fontLibrary: List<ReaderFontAsset> = emptyList(),
+    val selectedCustomFontId: String? = null,
+    /** 正文字重；Android Typeface 的常用有效区间为 100..900。 */
+    val fontWeight: Int = 400,
     val lineHeight: Float = 1.55f,
     val pageMargin: Float = 1f,
+    /** TextPaint 的 em 字间距。 */
+    val letterSpacingEm: Float = 0f,
+    /** 段后距，以正文字号 em 为单位。 */
+    val paragraphSpacingEm: Float = 0.55f,
+    /** 段首缩进，以全角字符宽度为单位；不向正文注入空格。 */
+    val firstLineIndentEm: Float = 2f,
+    /** 章节标题相对正文字号。 */
+    val titleScale: Float = 1.35f,
+    val textJustification: Boolean = true,
+    val showHeader: Boolean = true,
+    val showFooter: Boolean = true,
     val theme: ReaderTheme = ReaderTheme.SYSTEM,
     val pageMode: PageMode = PageMode.PAGINATED,
     val pageTurnAnimation: PageTurnAnimation = PageTurnAnimation.SIMULATION,
     val shelfLayout: ShelfLayout = ShelfLayout.GRID,
     val keepScreenOn: Boolean = false,
+    /** 音量加=上一页、音量减=下一页；仅阅读页消费按键。 */
+    val volumeKeysPageTurn: Boolean = false,
     /** 已导入到应用私有目录的阅读背景图片。 */
     val backgroundImagePath: String? = null,
+    /** 可供阅读背景、书籍封面等位置复用的图片资产。 */
+    val imageLibrary: List<ReaderImageAsset> = emptyList(),
+    val selectedBackgroundImageId: String? = null,
     /** 背景图片在主题底色之上的不透明度。 */
     val backgroundImageOpacity: Float = 0.28f,
     val syntaxHighlightEnabled: Boolean = false,
@@ -92,14 +116,49 @@ class ReaderSettingsRepository @Inject constructor(
     private val dataStore: DataStore<Preferences>
 ) {
     val settings: Flow<ReaderSettings> = dataStore.data.map { preferences ->
+        val legacyPath = preferences[Keys.CustomFontPath]?.takeIf(String::isNotBlank)
+        val legacyName = preferences[Keys.CustomFontName]?.takeIf(String::isNotBlank)
+        val fontLibrary = ReaderFontLibraryCodec.includeLegacy(
+            ReaderFontLibraryCodec.decode(preferences[Keys.FontLibrary]),
+            legacyPath,
+            legacyName
+        )
+        val selectedFontId = preferences[Keys.SelectedCustomFontId]
+            ?.takeIf { id -> fontLibrary.any { it.id == id } }
+            ?: legacyPath?.let { path -> fontLibrary.firstOrNull { it.filePath == path }?.id }
+            ?: fontLibrary.firstOrNull()?.id
+        val selectedFont = fontLibrary.firstOrNull { it.id == selectedFontId }
+        val legacyBackgroundPath = preferences[Keys.BackgroundImagePath]
+            ?.takeIf(String::isNotBlank)
+        val imageLibrary = ReaderImageLibraryCodec.includeLegacyBackground(
+            ReaderImageLibraryCodec.decode(preferences[Keys.ImageLibrary]),
+            legacyBackgroundPath
+        )
+        val selectedBackgroundId = preferences[Keys.SelectedBackgroundImageId]
+            ?.takeIf { id -> imageLibrary.any { it.id == id } }
+            ?: legacyBackgroundPath?.let { path ->
+                imageLibrary.firstOrNull { it.filePath == path }?.id
+            }
+        val selectedBackground = imageLibrary.firstOrNull { it.id == selectedBackgroundId }
         ReaderSettings(
             fontScale = preferences[Keys.FontScale] ?: 1f,
             font = preferences[Keys.Font]
                 ?.let { runCatching { ReaderFont.valueOf(it) }.getOrNull() }
                 ?: ReaderFont.SYSTEM,
-            customFontPath = preferences[Keys.CustomFontPath]?.takeIf(String::isNotBlank),
+            customFontPath = selectedFont?.filePath,
+            customFontName = selectedFont?.displayName,
+            fontLibrary = fontLibrary,
+            selectedCustomFontId = selectedFontId,
+            fontWeight = (preferences[Keys.FontWeight] ?: 400).coerceIn(300, 700),
             lineHeight = preferences[Keys.LineHeight] ?: 1.55f,
             pageMargin = preferences[Keys.PageMargin] ?: 1f,
+            letterSpacingEm = (preferences[Keys.LetterSpacingEm] ?: 0f).coerceIn(-0.05f, 0.2f),
+            paragraphSpacingEm = (preferences[Keys.ParagraphSpacingEm] ?: 0.55f).coerceIn(0f, 1.5f),
+            firstLineIndentEm = (preferences[Keys.FirstLineIndentEm] ?: 2f).coerceIn(0f, 4f),
+            titleScale = (preferences[Keys.TitleScale] ?: 1.35f).coerceIn(1f, 2f),
+            textJustification = preferences[Keys.TextJustification] ?: true,
+            showHeader = preferences[Keys.ShowHeader] ?: true,
+            showFooter = preferences[Keys.ShowFooter] ?: true,
             theme = preferences[Keys.Theme]
                 ?.let { runCatching { ReaderTheme.valueOf(it) }.getOrNull() }
                 ?: ReaderTheme.SYSTEM,
@@ -114,7 +173,10 @@ class ReaderSettingsRepository @Inject constructor(
                 ?.let { runCatching { ShelfLayout.valueOf(it) }.getOrNull() }
                 ?: ShelfLayout.GRID,
             keepScreenOn = preferences[Keys.KeepScreenOn] ?: false,
-            backgroundImagePath = preferences[Keys.BackgroundImagePath]?.takeIf(String::isNotBlank),
+            volumeKeysPageTurn = preferences[Keys.VolumeKeysPageTurn] ?: false,
+            backgroundImagePath = selectedBackground?.filePath ?: legacyBackgroundPath,
+            imageLibrary = imageLibrary,
+            selectedBackgroundImageId = selectedBackgroundId,
             backgroundImageOpacity = (preferences[Keys.BackgroundImageOpacity] ?: 0.28f)
                 .coerceIn(0.05f, 1f),
             syntaxHighlightEnabled = preferences[Keys.SyntaxHighlightEnabled] ?: false,
@@ -173,16 +235,93 @@ class ReaderSettingsRepository @Inject constructor(
         dataStore.edit { it[Keys.Font] = value.name }
     }
 
-    suspend fun setCustomFontPath(path: String?) {
-        dataStore.edit {
-            if (path.isNullOrBlank()) {
-                it.remove(Keys.CustomFontPath)
-                if (it[Keys.Font] == ReaderFont.CUSTOM.name) it[Keys.Font] = ReaderFont.SYSTEM.name
-            } else {
-                it[Keys.CustomFontPath] = path
-                it[Keys.Font] = ReaderFont.CUSTOM.name
+    suspend fun addCustomFont(font: ReaderFontAsset, select: Boolean = true) {
+        dataStore.edit { preferences ->
+            val existing = fontLibraryFrom(preferences)
+            preferences[Keys.FontLibrary] = ReaderFontLibraryCodec.encode(
+                existing.filterNot { it.id == font.id || it.filePath == font.filePath } + font
+            )
+            preferences.remove(Keys.CustomFontPath)
+            preferences.remove(Keys.CustomFontName)
+            if (select) {
+                preferences[Keys.SelectedCustomFontId] = font.id
+                preferences[Keys.Font] = ReaderFont.CUSTOM.name
             }
         }
+    }
+
+    suspend fun selectCustomFont(id: String) {
+        dataStore.edit { preferences ->
+            require(fontLibraryFrom(preferences).any { it.id == id }) { "字体不存在或已删除" }
+            preferences[Keys.SelectedCustomFontId] = id
+            preferences[Keys.Font] = ReaderFont.CUSTOM.name
+        }
+    }
+
+    suspend fun renameCustomFont(id: String, displayName: String) {
+        val name = displayName.trim().take(48)
+        require(name.isNotBlank()) { "字体名称不能为空" }
+        dataStore.edit { preferences ->
+            val fonts = fontLibraryFrom(preferences)
+            require(fonts.any { it.id == id }) { "字体不存在或已删除" }
+            preferences[Keys.FontLibrary] = ReaderFontLibraryCodec.encode(
+                fonts.map { if (it.id == id) it.copy(displayName = name) else it }
+            )
+            preferences.remove(Keys.CustomFontPath)
+            preferences.remove(Keys.CustomFontName)
+        }
+    }
+
+    suspend fun removeCustomFont(id: String) {
+        dataStore.edit { preferences ->
+            val remaining = fontLibraryFrom(preferences).filterNot { it.id == id }
+            preferences[Keys.FontLibrary] = ReaderFontLibraryCodec.encode(remaining)
+            preferences.remove(Keys.CustomFontPath)
+            preferences.remove(Keys.CustomFontName)
+            if (preferences[Keys.SelectedCustomFontId] == id) {
+                preferences.remove(Keys.SelectedCustomFontId)
+                if (preferences[Keys.Font] == ReaderFont.CUSTOM.name) {
+                    preferences[Keys.Font] = ReaderFont.SYSTEM.name
+                }
+            }
+            val rules = ReaderSyntaxRuleCodec.decode(preferences[Keys.SyntaxHighlightRules])
+            val repaired = rules.map { rule ->
+                if (rule.fontAssetId == id) {
+                    rule.copy(font = ReaderSyntaxFont.INHERIT, fontAssetId = null)
+                } else {
+                    rule
+                }
+            }
+            if (repaired != rules) {
+                preferences[Keys.SyntaxHighlightRules] = ReaderSyntaxRuleCodec.encode(repaired)
+            }
+        }
+    }
+
+    suspend fun setCustomFont(path: String?, displayName: String? = null) {
+        if (path.isNullOrBlank()) {
+            setFont(ReaderFont.SYSTEM)
+            return
+        }
+        addCustomFont(
+            ReaderFontAsset(
+                id = ReaderFontLibraryCodec.legacyId(path),
+                displayName = displayName?.trim()?.takeIf { it.isNotBlank() } ?: "已导入字体",
+                filePath = path
+            )
+        )
+    }
+
+    /** 兼容旧调用；新导入流程应同时传入自动识别的名称。 */
+    suspend fun setCustomFontPath(path: String?) = setCustomFont(path)
+
+    suspend fun renameCustomFont(displayName: String) {
+        val current = settings.first().selectedCustomFontId ?: return
+        renameCustomFont(current, displayName)
+    }
+
+    suspend fun setFontWeight(value: Int) {
+        dataStore.edit { it[Keys.FontWeight] = value.coerceIn(300, 700) }
     }
 
     suspend fun setLineHeight(value: Float) {
@@ -191,6 +330,34 @@ class ReaderSettingsRepository @Inject constructor(
 
     suspend fun setPageMargin(value: Float) {
         dataStore.edit { it[Keys.PageMargin] = value.coerceIn(0f, 2f) }
+    }
+
+    suspend fun setLetterSpacingEm(value: Float) {
+        dataStore.edit { it[Keys.LetterSpacingEm] = value.coerceIn(-0.05f, 0.2f) }
+    }
+
+    suspend fun setParagraphSpacingEm(value: Float) {
+        dataStore.edit { it[Keys.ParagraphSpacingEm] = value.coerceIn(0f, 1.5f) }
+    }
+
+    suspend fun setFirstLineIndentEm(value: Float) {
+        dataStore.edit { it[Keys.FirstLineIndentEm] = value.coerceIn(0f, 4f) }
+    }
+
+    suspend fun setTitleScale(value: Float) {
+        dataStore.edit { it[Keys.TitleScale] = value.coerceIn(1f, 2f) }
+    }
+
+    suspend fun setTextJustification(value: Boolean) {
+        dataStore.edit { it[Keys.TextJustification] = value }
+    }
+
+    suspend fun setShowHeader(value: Boolean) {
+        dataStore.edit { it[Keys.ShowHeader] = value }
+    }
+
+    suspend fun setShowFooter(value: Boolean) {
+        dataStore.edit { it[Keys.ShowFooter] = value }
     }
 
     /** 选内置主题即退出自定义主题，两者互斥（与强调色预设/自定义同款语义）。 */
@@ -245,10 +412,79 @@ class ReaderSettingsRepository @Inject constructor(
         dataStore.edit { it[Keys.KeepScreenOn] = value }
     }
 
+    suspend fun setVolumeKeysPageTurn(value: Boolean) {
+        dataStore.edit { it[Keys.VolumeKeysPageTurn] = value }
+    }
+
     suspend fun setBackgroundImagePath(path: String?) {
-        dataStore.edit {
-            if (path.isNullOrBlank()) it.remove(Keys.BackgroundImagePath)
-            else it[Keys.BackgroundImagePath] = path
+        dataStore.edit { preferences ->
+            if (path.isNullOrBlank()) {
+                preferences.remove(Keys.BackgroundImagePath)
+                preferences.remove(Keys.SelectedBackgroundImageId)
+            } else {
+                val images = imageLibraryFrom(preferences)
+                val image = images.firstOrNull { it.filePath == path }
+                    ?: ReaderImageAsset(
+                        id = ReaderImageLibraryCodec.legacyId(path),
+                        displayName = "原有阅读背景",
+                        filePath = path
+                    ).also { legacy ->
+                        preferences[Keys.ImageLibrary] = ReaderImageLibraryCodec.encode(images + legacy)
+                    }
+                preferences[Keys.SelectedBackgroundImageId] = image.id
+                preferences.remove(Keys.BackgroundImagePath)
+            }
+        }
+    }
+
+    suspend fun addReaderImage(image: ReaderImageAsset, selectAsBackground: Boolean = false) {
+        dataStore.edit { preferences ->
+            val existing = imageLibraryFrom(preferences)
+            preferences[Keys.ImageLibrary] = ReaderImageLibraryCodec.encode(
+                existing.filterNot { it.id == image.id || it.filePath == image.filePath } + image
+            )
+            if (selectAsBackground) {
+                preferences[Keys.SelectedBackgroundImageId] = image.id
+                preferences.remove(Keys.BackgroundImagePath)
+            }
+        }
+    }
+
+    suspend fun selectBackgroundImage(id: String) {
+        dataStore.edit { preferences ->
+            require(imageLibraryFrom(preferences).any { it.id == id }) { "图片不存在或已删除" }
+            preferences[Keys.SelectedBackgroundImageId] = id
+            preferences.remove(Keys.BackgroundImagePath)
+        }
+    }
+
+    suspend fun renameReaderImage(id: String, displayName: String) {
+        val name = displayName.trim().take(48)
+        require(name.isNotBlank()) { "图片名称不能为空" }
+        dataStore.edit { preferences ->
+            val images = imageLibraryFrom(preferences)
+            require(images.any { it.id == id }) { "图片不存在或已删除" }
+            val activeId = activeBackgroundId(preferences, images)
+            preferences[Keys.ImageLibrary] = ReaderImageLibraryCodec.encode(
+                images.map { if (it.id == id) it.copy(displayName = name) else it }
+            )
+            if (activeId != null) preferences[Keys.SelectedBackgroundImageId] = activeId
+            preferences.remove(Keys.BackgroundImagePath)
+        }
+    }
+
+    suspend fun removeReaderImage(id: String) {
+        dataStore.edit { preferences ->
+            val images = imageLibraryFrom(preferences)
+            val activeId = activeBackgroundId(preferences, images)
+            val remaining = images.filterNot { it.id == id }
+            preferences[Keys.ImageLibrary] = ReaderImageLibraryCodec.encode(remaining)
+            if (activeId == id) {
+                preferences.remove(Keys.SelectedBackgroundImageId)
+            } else if (activeId != null) {
+                preferences[Keys.SelectedBackgroundImageId] = activeId
+            }
+            preferences.remove(Keys.BackgroundImagePath)
         }
     }
 
@@ -277,6 +513,28 @@ class ReaderSettingsRepository @Inject constructor(
             preferences[Keys.SyntaxHighlightRules] = ReaderSyntaxRuleCodec.encode(remaining)
         }
     }
+
+    private fun fontLibraryFrom(preferences: Preferences): List<ReaderFontAsset> =
+        ReaderFontLibraryCodec.includeLegacy(
+            ReaderFontLibraryCodec.decode(preferences[Keys.FontLibrary]),
+            preferences[Keys.CustomFontPath],
+            preferences[Keys.CustomFontName]
+        )
+
+    private fun imageLibraryFrom(preferences: Preferences): List<ReaderImageAsset> =
+        ReaderImageLibraryCodec.includeLegacyBackground(
+            ReaderImageLibraryCodec.decode(preferences[Keys.ImageLibrary]),
+            preferences[Keys.BackgroundImagePath]
+        )
+
+    private fun activeBackgroundId(
+        preferences: Preferences,
+        images: List<ReaderImageAsset>
+    ): String? = preferences[Keys.SelectedBackgroundImageId]
+        ?.takeIf { id -> images.any { it.id == id } }
+        ?: preferences[Keys.BackgroundImagePath]?.let { path ->
+            images.firstOrNull { it.filePath == path }?.id
+        }
 
     /** 当前伴读角色（personas.id）；null = 未选择，界面按第一个角色处理。 */
     val activePersonaId: Flow<Long?> = dataStore.data.map { it[Keys.ActivePersonaId] }
@@ -326,14 +584,28 @@ class ReaderSettingsRepository @Inject constructor(
         val FontScale = floatPreferencesKey("reader_font_scale")
         val Font = stringPreferencesKey("reader_font")
         val CustomFontPath = stringPreferencesKey("reader_custom_font_path")
+        val CustomFontName = stringPreferencesKey("reader_custom_font_name")
+        val FontLibrary = stringPreferencesKey("reader_font_library")
+        val SelectedCustomFontId = stringPreferencesKey("reader_selected_custom_font_id")
+        val FontWeight = intPreferencesKey("reader_font_weight")
         val LineHeight = floatPreferencesKey("reader_line_height")
         val PageMargin = floatPreferencesKey("reader_page_margin")
+        val LetterSpacingEm = floatPreferencesKey("reader_letter_spacing_em")
+        val ParagraphSpacingEm = floatPreferencesKey("reader_paragraph_spacing_em")
+        val FirstLineIndentEm = floatPreferencesKey("reader_first_line_indent_em")
+        val TitleScale = floatPreferencesKey("reader_title_scale")
+        val TextJustification = booleanPreferencesKey("reader_text_justification")
+        val ShowHeader = booleanPreferencesKey("reader_show_header")
+        val ShowFooter = booleanPreferencesKey("reader_show_footer")
         val Theme = stringPreferencesKey("reader_theme")
         val PageMode = stringPreferencesKey("reader_page_mode")
         val PageTurnAnimation = stringPreferencesKey("reader_page_turn_animation")
         val ShelfLayout = stringPreferencesKey("shelf_layout")
         val KeepScreenOn = booleanPreferencesKey("keep_screen_on")
+        val VolumeKeysPageTurn = booleanPreferencesKey("reader_volume_keys_page_turn")
         val BackgroundImagePath = stringPreferencesKey("reader_background_image_path")
+        val ImageLibrary = stringPreferencesKey("reader_image_library")
+        val SelectedBackgroundImageId = stringPreferencesKey("reader_selected_background_image_id")
         val BackgroundImageOpacity = floatPreferencesKey("reader_background_image_opacity")
         val SyntaxHighlightEnabled = booleanPreferencesKey("reader_syntax_highlight_enabled")
         val SyntaxHighlightRules = stringPreferencesKey("reader_syntax_highlight_rules")

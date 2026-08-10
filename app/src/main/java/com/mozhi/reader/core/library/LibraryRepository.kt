@@ -86,7 +86,9 @@ class LibraryRepository @Inject constructor(
         val previous = bookDao.getBook(bookId)?.coverPath
         bookDao.replaceBookCover(bookId, coverPath)
         if (previous != null && previous != coverPath) {
-            File(previous).takeIf { it.isFile && it.isInsideAppStorage() }?.delete()
+            File(previous).takeIf {
+                it.isFile && it.isInsideAppStorage() && !it.isImageLibraryAsset()
+            }?.delete()
         }
     }
 
@@ -297,13 +299,22 @@ class LibraryRepository @Inject constructor(
         File(book.epubPath).takeIf { it.isFile && it.isInsideAppStorage() }?.delete()
         book.coverPath
             ?.let(::File)
-            ?.takeIf { it.isFile && it.isInsideAppStorage() }
+            ?.takeIf { it.isFile && it.isInsideAppStorage() && !it.isImageLibraryAsset() }
             ?.delete()
     }
 
     private fun File.isInsideAppStorage(): Boolean {
         val appRoot = context.filesDir.canonicalFile
         return canonicalFile.toPath().startsWith(appRoot.toPath())
+    }
+
+    /** 图片库文件可被多本书和阅读背景复用，书籍生命周期不得删除它。 */
+    private fun File.isImageLibraryAsset(): Boolean {
+        val imageRoot = File(
+            context.filesDir,
+            com.mozhi.reader.core.datastore.ReaderImageImporter.IMAGE_LIBRARY_DIRECTORY
+        ).canonicalFile
+        return canonicalFile.parentFile == imageRoot
     }
 
     companion object {

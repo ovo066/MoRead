@@ -1,8 +1,5 @@
 package com.mozhi.reader.feature.reader
 
-import android.content.Context
-import android.graphics.BitmapFactory
-import android.graphics.Typeface
 import android.net.Uri
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
@@ -16,7 +13,10 @@ import com.mozhi.reader.core.database.entity.ChapterEntity
 import com.mozhi.reader.core.database.entity.IllustrationEntity
 import com.mozhi.reader.core.database.entity.ReadingDailyEntity
 import com.mozhi.reader.core.datastore.PageTurnAnimation
+import com.mozhi.reader.core.datastore.PendingReaderFont
 import com.mozhi.reader.core.datastore.ReaderFont
+import com.mozhi.reader.core.datastore.ReaderFontImporter
+import com.mozhi.reader.core.datastore.ReaderImageImporter
 import com.mozhi.reader.core.datastore.ReaderSettings
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
 import com.mozhi.reader.core.datastore.ReaderTheme
@@ -29,8 +29,6 @@ import com.mozhi.reader.feature.reader.engine.InlineImageSource
 import com.mozhi.reader.feature.reader.engine.ReaderContentController
 import com.mozhi.reader.feature.reader.engine.RenderPage
 import dagger.hilt.android.lifecycle.HiltViewModel
-import dagger.hilt.android.qualifiers.ApplicationContext
-import java.io.File
 import java.time.LocalDate
 import javax.inject.Inject
 import kotlinx.coroutines.Job
@@ -43,7 +41,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 data class ReaderUiState(
     val book: BookEntity? = null,
@@ -89,22 +86,19 @@ enum class PageTurnDirection {
 
 sealed interface ReaderEvent {
     data class ShowMessage(val message: String) : ReaderEvent
-}
-
-private enum class ReaderAssetKind(val maxBytes: Long) {
-    FONT(20L * 1024 * 1024),
-    BACKGROUND(30L * 1024 * 1024)
+    data class ConfirmFontImport(val pending: PendingReaderFont) : ReaderEvent
 }
 
 @HiltViewModel
 class ReaderViewModel @Inject constructor(
-    @ApplicationContext private val context: Context,
     savedStateHandle: SavedStateHandle,
     private val libraryRepository: LibraryRepository,
     private val annotationRepository: AnnotationRepository,
     private val illustrationRepository: IllustrationRepository,
     private val mediaStore: BookMediaStore,
-    private val settingsRepository: ReaderSettingsRepository
+    private val settingsRepository: ReaderSettingsRepository,
+    private val fontImporter: ReaderFontImporter,
+    private val imageImporter: ReaderImageImporter
 ) : ViewModel(), ReaderContentController.Listener {
     private val bookId: Long = when (val value: Any? = savedStateHandle["bookId"]) {
         is Long -> value
@@ -472,14 +466,41 @@ class ReaderViewModel @Inject constructor(
         viewModelScope.launch { settingsRepository.setFont(value) }
     }
 
-    fun importCustomFont(uri: Uri) = importReaderAsset(uri, ReaderAssetKind.FONT)
+    fun selectCustomFont(id: String) {
+        viewModelScope.launch { settingsRepository.selectCustomFont(id) }
+    }
+
+    fun importCustomFont(uri: Uri) {
+        viewModelScope.launch {
+            try {
+                eventChannel.send(ReaderEvent.ConfirmFontImport(fontImporter.prepare(uri)))
+            } catch (error: Throwable) {
+                eventChannel.send(
+                    ReaderEvent.ShowMessage("字体读取失败：${error.message ?: "文件格式不受支持"}")
+                )
+            }
+        }
+    }
+
+    fun confirmCustomFont(pending: PendingReaderFont, displayName: String) {
+        viewModelScope.launch {
+            try {
+                fontImporter.confirm(pending, displayName)
+                eventChannel.send(ReaderEvent.ShowMessage("字体已导入并应用"))
+            } catch (error: Throwable) {
+                eventChannel.send(
+                    ReaderEvent.ShowMessage("字体导入失败：${error.message ?: "文件格式不受支持"}")
+                )
+            }
+        }
+    }
+
+    fun cancelCustomFontImport(pending: PendingReaderFont) {
+        viewModelScope.launch { fontImporter.discard(pending) }
+    }
 
     fun clearCustomFont() {
-        viewModelScope.launch {
-            val path = settingsRepository.settings.first().customFontPath
-            settingsRepository.setCustomFontPath(null)
-            deleteReaderAsset(path)
-        }
+        viewModelScope.launch { settingsRepository.setFont(ReaderFont.SYSTEM) }
     }
 
     fun setLineHeight(value: Float) {
@@ -488,6 +509,38 @@ class ReaderViewModel @Inject constructor(
 
     fun setPageMargin(value: Float) {
         viewModelScope.launch { settingsRepository.setPageMargin(value) }
+    }
+
+    fun setFontWeight(value: Int) {
+        viewModelScope.launch { settingsRepository.setFontWeight(value) }
+    }
+
+    fun setLetterSpacing(value: Float) {
+        viewModelScope.launch { settingsRepository.setLetterSpacingEm(value) }
+    }
+
+    fun setParagraphSpacing(value: Float) {
+        viewModelScope.launch { settingsRepository.setParagraphSpacingEm(value) }
+    }
+
+    fun setFirstLineIndent(value: Float) {
+        viewModelScope.launch { settingsRepository.setFirstLineIndentEm(value) }
+    }
+
+    fun setTitleScale(value: Float) {
+        viewModelScope.launch { settingsRepository.setTitleScale(value) }
+    }
+
+    fun setTextJustification(value: Boolean) {
+        viewModelScope.launch { settingsRepository.setTextJustification(value) }
+    }
+
+    fun setShowHeader(value: Boolean) {
+        viewModelScope.launch { settingsRepository.setShowHeader(value) }
+    }
+
+    fun setShowFooter(value: Boolean) {
+        viewModelScope.launch { settingsRepository.setShowFooter(value) }
     }
 
     fun setTheme(value: ReaderTheme) {
@@ -518,14 +571,32 @@ class ReaderViewModel @Inject constructor(
         viewModelScope.launch { settingsRepository.setKeepScreenOn(value) }
     }
 
-    fun importBackgroundImage(uri: Uri) = importReaderAsset(uri, ReaderAssetKind.BACKGROUND)
+    fun setVolumeKeysPageTurn(value: Boolean) {
+        viewModelScope.launch { settingsRepository.setVolumeKeysPageTurn(value) }
+    }
+
+    fun importBackgroundImage(uri: Uri) {
+        viewModelScope.launch {
+            runCatching { imageImporter.importImage(uri, selectAsBackground = true) }
+                .onSuccess {
+                    eventChannel.send(ReaderEvent.ShowMessage("已加入图片库并设为阅读背景"))
+                }
+                .onFailure { error ->
+                    eventChannel.send(
+                        ReaderEvent.ShowMessage(
+                            "导入失败：${error.message ?: "文件格式不受支持"}"
+                        )
+                    )
+                }
+        }
+    }
+
+    fun selectBackgroundImage(imageId: String) {
+        viewModelScope.launch { settingsRepository.selectBackgroundImage(imageId) }
+    }
 
     fun clearBackgroundImage() {
-        viewModelScope.launch {
-            val path = settingsRepository.settings.first().backgroundImagePath
-            settingsRepository.setBackgroundImagePath(null)
-            deleteReaderAsset(path)
-        }
+        viewModelScope.launch { settingsRepository.setBackgroundImagePath(null) }
     }
 
     fun setBackgroundImageOpacity(value: Float) {
@@ -542,73 +613,6 @@ class ReaderViewModel @Inject constructor(
 
     fun deleteSyntaxHighlightRule(id: Long) {
         viewModelScope.launch { settingsRepository.deleteSyntaxHighlightRule(id) }
-    }
-
-    private fun importReaderAsset(uri: Uri, kind: ReaderAssetKind) {
-        viewModelScope.launch {
-            try {
-                val previous = settingsRepository.settings.first().let {
-                    if (kind == ReaderAssetKind.FONT) it.customFontPath else it.backgroundImagePath
-                }
-                val output = withContext(Dispatchers.IO) {
-                    val directory = File(context.filesDir, "reader-custom").apply { mkdirs() }
-                    val suffix = if (kind == ReaderAssetKind.FONT) ".ttf" else ".image"
-                    val target = File(directory, "${kind.name.lowercase()}-${System.currentTimeMillis()}$suffix")
-                    try {
-                        context.contentResolver.openInputStream(uri)?.use { input ->
-                            target.outputStream().use { output ->
-                                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                                var total = 0L
-                                while (true) {
-                                    val read = input.read(buffer)
-                                    if (read < 0) break
-                                    total += read
-                                    require(total <= kind.maxBytes) { "文件过大" }
-                                    output.write(buffer, 0, read)
-                                }
-                            }
-                        } ?: error("无法读取所选文件")
-                        when (kind) {
-                            ReaderAssetKind.FONT -> Typeface.createFromFile(target)
-                            ReaderAssetKind.BACKGROUND -> {
-                                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                                BitmapFactory.decodeFile(target.absolutePath, bounds)
-                                require(bounds.outWidth > 0 && bounds.outHeight > 0) { "不是可用的图片文件" }
-                                require(
-                                    bounds.outWidth <= MAX_BACKGROUND_DIMENSION &&
-                                        bounds.outHeight <= MAX_BACKGROUND_DIMENSION &&
-                                        bounds.outWidth.toLong() * bounds.outHeight <= MAX_BACKGROUND_PIXELS
-                                ) { "图片尺寸过大" }
-                            }
-                        }
-                        target
-                    } catch (error: Throwable) {
-                        target.delete()
-                        throw error
-                    }
-                }
-                if (kind == ReaderAssetKind.FONT) {
-                    settingsRepository.setCustomFontPath(output.absolutePath)
-                } else {
-                    settingsRepository.setBackgroundImagePath(output.absolutePath)
-                }
-                deleteReaderAsset(previous)
-                eventChannel.send(ReaderEvent.ShowMessage(if (kind == ReaderAssetKind.FONT) "字体已导入并应用" else "阅读背景已应用"))
-            } catch (error: Throwable) {
-                eventChannel.send(
-                    ReaderEvent.ShowMessage(
-                        "导入失败：${error.message ?: "文件格式不受支持"}"
-                    )
-                )
-            }
-        }
-    }
-
-    private suspend fun deleteReaderAsset(path: String?) = withContext(Dispatchers.IO) {
-        val root = File(context.filesDir, "reader-custom").canonicalFile
-        path?.let(::File)?.takeIf(File::exists)?.canonicalFile
-            ?.takeIf { it.parentFile == root }
-            ?.delete()
     }
 
     // ---- reading-time accounting ----
@@ -638,8 +642,6 @@ class ReaderViewModel @Inject constructor(
     }
 
     private companion object {
-        const val MAX_BACKGROUND_DIMENSION = 20_000
-        const val MAX_BACKGROUND_PIXELS = 80_000_000L
         const val PROGRESS_SAVE_DEBOUNCE_MS = 750L
         const val TEXT_WAIT_ATTEMPTS = 20
         const val TEXT_WAIT_INTERVAL_MS = 1500L

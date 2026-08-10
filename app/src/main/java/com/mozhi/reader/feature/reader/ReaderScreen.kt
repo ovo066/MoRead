@@ -53,6 +53,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -70,6 +71,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import coil3.compose.AsyncImage
 import com.mozhi.reader.R
+import com.mozhi.reader.MainActivity
 import com.mozhi.reader.ui.components.blockSheetDrag
 import com.mozhi.reader.core.database.entity.AnnotationColors
 import com.mozhi.reader.core.database.entity.AnnotationEntity
@@ -77,6 +79,7 @@ import com.mozhi.reader.core.database.entity.AnnotationStyle
 import com.mozhi.reader.core.database.entity.BookmarkEntity
 import com.mozhi.reader.core.database.entity.ChapterEntity
 import com.mozhi.reader.core.datastore.ReaderFont
+import com.mozhi.reader.core.datastore.PendingReaderFont
 import com.mozhi.reader.core.datastore.ReaderSettings
 import com.mozhi.reader.core.datastore.ReaderTheme
 import com.mozhi.reader.feature.reader.engine.ReaderAnnotationMark
@@ -128,6 +131,9 @@ fun ReaderScreen(
     var inkFloater by remember { mutableStateOf<AnnotationInkFloater?>(null) }
     var annotationThread by remember { mutableStateOf<AnnotationThreadKey?>(null) }
     var ttsDraft by remember { mutableStateOf<String?>(null) }
+    var hardwarePageTurnRequest by remember { mutableStateOf<ReaderPageTurnRequest?>(null) }
+    var pendingFont by remember { mutableStateOf<PendingReaderFont?>(null) }
+    var pendingFontName by remember { mutableStateOf("") }
     var chromeVisible by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(true) }
     var detailsVisible by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
     val systemDark = com.mozhi.reader.ui.theme.isDarkTheme()
@@ -149,7 +155,7 @@ fun ReaderScreen(
         ActivityResultContracts.OpenDocument()
     ) { uri -> uri?.let(viewModel::importBackgroundImage) }
     val customFontLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument()
+        ActivityResultContracts.GetContent()
     ) { uri -> uri?.let(viewModel::importCustomFont) }
 
     // 听书自动翻页：朗读句越过当前页边界时，直接跳到句首所在页（无翻页动画）。
@@ -203,6 +209,28 @@ fun ReaderScreen(
         } else {
             contentAlpha.snapTo(0f)
         }
+    }
+    val canTurnWithVolume by rememberUpdatedState(
+        contentVisible && activeSheet == null && !detailsVisible && aiRequest == null &&
+            inkFloater == null && annotationThread == null && ttsDraft == null
+    )
+    DisposableEffect(activity, state.settings.volumeKeysPageTurn) {
+        val host = activity as? MainActivity
+        if (state.settings.volumeKeysPageTurn) {
+            host?.setVolumeKeyPageTurnHandler { previous ->
+                if (canTurnWithVolume) {
+                    hardwarePageTurnRequest = ReaderPageTurnRequest(
+                        sequence = (hardwarePageTurnRequest?.sequence ?: 0) + 1,
+                        direction = if (previous) {
+                            PageTurnDirection.PREVIOUS
+                        } else {
+                            PageTurnDirection.NEXT
+                        }
+                    )
+                }
+            }
+        }
+        onDispose { host?.setVolumeKeyPageTurnHandler(null) }
     }
     // 本地书秒开是常态，加载圈闪一下反而像卡顿；只有真慢（导入准备）才转圈。
     var showLoadingHint by remember { mutableStateOf(false) }
@@ -266,6 +294,10 @@ fun ReaderScreen(
         viewModel.events.collect { event ->
             when (event) {
                 is ReaderEvent.ShowMessage -> snackbarHostState.showSnackbar(event.message)
+                is ReaderEvent.ConfirmFontImport -> {
+                    pendingFont = event.pending
+                    pendingFontName = event.pending.detectedName
+                }
             }
         }
     }
@@ -436,6 +468,7 @@ fun ReaderScreen(
                         onIllustrationClick = paneIllustrationClick,
                         onTtsAction = paneTtsAction,
                         onImageAction = paneImageAction,
+                        pageTurnRequest = hardwarePageTurnRequest,
                         modifier = Modifier
                             .fillMaxSize()
                             .graphicsLayer { alpha = contentAlpha.value }
@@ -457,6 +490,7 @@ fun ReaderScreen(
                         onIllustrationClick = paneIllustrationClick,
                         onTtsAction = paneTtsAction,
                         onImageAction = paneImageAction,
+                        pageTurnRequest = hardwarePageTurnRequest,
                         onCenterTap = { chromeVisible = !chromeVisible },
                         onBoundary = viewModel::onBoundaryHit,
                         modifier = Modifier
@@ -682,19 +716,26 @@ fun ReaderScreen(
                 palette = palette,
                 onFontScaleChange = viewModel::setFontScale,
                 onFontChange = viewModel::setFont,
+                onCustomFontSelect = viewModel::selectCustomFont,
                 onImportFont = {
-                    customFontLauncher.launch(
-                        arrayOf("font/ttf", "font/otf", "application/x-font-ttf", "application/octet-stream")
-                    )
+                    customFontLauncher.launch("*/*")
                 },
-                onClearFont = viewModel::clearCustomFont,
                 onLineHeightChange = viewModel::setLineHeight,
                 onPageMarginChange = viewModel::setPageMargin,
+                onFontWeightChange = viewModel::setFontWeight,
+                onLetterSpacingChange = viewModel::setLetterSpacing,
+                onParagraphSpacingChange = viewModel::setParagraphSpacing,
+                onFirstLineIndentChange = viewModel::setFirstLineIndent,
+                onTitleScaleChange = viewModel::setTitleScale,
+                onTextJustificationChange = viewModel::setTextJustification,
+                onShowHeaderChange = viewModel::setShowHeader,
+                onShowFooterChange = viewModel::setShowFooter,
                 onThemeChange = viewModel::setTheme,
                 onCustomThemeSelect = viewModel::selectCustomTheme,
                 onSaveCustomTheme = viewModel::saveCustomTheme,
                 onDeleteCustomTheme = viewModel::deleteCustomTheme,
                 onImportBackground = { backgroundImageLauncher.launch(arrayOf("image/*")) },
+                onBackgroundImageSelect = viewModel::selectBackgroundImage,
                 onClearBackground = viewModel::clearBackgroundImage,
                 onBackgroundOpacityChange = viewModel::setBackgroundImageOpacity,
                 onSyntaxHighlightEnabledChange = viewModel::setSyntaxHighlightEnabled,
@@ -702,7 +743,8 @@ fun ReaderScreen(
                 onDeleteSyntaxRule = viewModel::deleteSyntaxHighlightRule,
                 onAnimationChange = viewModel::setPageTurnAnimation,
                 onPageModeChange = viewModel::setPageMode,
-                onKeepScreenOnChange = viewModel::setKeepScreenOn
+                onKeepScreenOnChange = viewModel::setKeepScreenOn,
+                onVolumeKeysPageTurnChange = viewModel::setVolumeKeysPageTurn
             )
         }
         ReaderSheet.SEARCH -> {
@@ -852,6 +894,48 @@ fun ReaderScreen(
                 }
             )
         }
+    }
+
+    pendingFont?.let { font ->
+        AlertDialog(
+            onDismissRequest = {
+                viewModel.cancelCustomFontImport(font)
+                pendingFont = null
+            },
+            title = { Text("确认导入字体") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "已从 ${font.originalFileName} 识别字体名称，可在保存前修改。",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    OutlinedTextField(
+                        value = pendingFontName,
+                        onValueChange = { pendingFontName = it.take(48) },
+                        label = { Text("字体名称") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = pendingFontName.isNotBlank(),
+                    onClick = {
+                        viewModel.confirmCustomFont(font, pendingFontName)
+                        pendingFont = null
+                    }
+                ) { Text("导入并应用") }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.cancelCustomFontImport(font)
+                        pendingFont = null
+                    }
+                ) { Text("取消") }
+            }
+        )
     }
 }
 

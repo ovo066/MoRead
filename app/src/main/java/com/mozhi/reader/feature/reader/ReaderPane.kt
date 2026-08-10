@@ -120,6 +120,7 @@ fun ReaderPane(
     onIllustrationClick: (illustrationIds: List<Long>) -> Unit = {},
     onTtsAction: (selection: String) -> Unit,
     onImageAction: (selection: String, context: String, range: IntRange) -> Unit,
+    pageTurnRequest: ReaderPageTurnRequest? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -185,6 +186,11 @@ fun ReaderPane(
         PageTurnAnimation.NONE -> PageTurnDriver.Mode.INSTANT
     }
 
+    LaunchedEffect(pageTurnRequest?.sequence) {
+        val request = pageTurnRequest ?: return@LaunchedEffect
+        if (enabled) driver.turnByTap(request.direction)
+    }
+
     // Environment: relayout when the typography inputs change; repaint when only colors change.
     val environment = ReaderEnvironmentKey(
         fontScale = settings.fontScale,
@@ -192,6 +198,16 @@ fun ReaderPane(
         customFontPath = settings.customFontPath,
         lineHeight = settings.lineHeight,
         pageMargin = settings.pageMargin,
+        advancedTypographyHash = listOf(
+            settings.fontWeight,
+            settings.letterSpacingEm,
+            settings.paragraphSpacingEm,
+            settings.firstLineIndentEm,
+            settings.titleScale,
+            settings.textJustification,
+            settings.showHeader,
+            settings.showFooter
+        ).hashCode(),
         syntaxHighlightEnabled = settings.syntaxHighlightEnabled,
         syntaxRulesHash = settings.syntaxHighlightRules.hashCode(),
         width = viewport.width,
@@ -522,12 +538,19 @@ private fun SelectionAiAction.toolbarIcon(): ImageVector = when (this) {
 internal const val PREV_TAP_ZONE = 0.28f
 internal const val NEXT_TAP_ZONE = 0.72f
 
+/** 单调序号确保连续按同一枚音量键也会触发 Compose effect。 */
+data class ReaderPageTurnRequest(
+    val sequence: Int,
+    val direction: PageTurnDirection
+)
+
 private data class ReaderEnvironmentKey(
     val fontScale: Float,
     val font: ReaderFont,
     val customFontPath: String?,
     val lineHeight: Float,
     val pageMargin: Float,
+    val advancedTypographyHash: Int,
     val syntaxHighlightEnabled: Boolean,
     val syntaxRulesHash: Int,
     val width: Int,

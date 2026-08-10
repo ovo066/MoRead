@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -15,6 +16,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ChevronLeft
+import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
@@ -58,25 +65,52 @@ fun StatsScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item {
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text("统计", style = MaterialTheme.typography.headlineLarge)
-                Text(
-                    text = state.monthLabel,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 10.dp, bottom = 6.dp)
-                )
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("统计", style = MaterialTheme.typography.headlineLarge)
+                    Spacer(Modifier.weight(1f))
+                    IconButton(onClick = viewModel::previousPeriod) {
+                        Icon(Icons.Outlined.ChevronLeft, contentDescription = "上一周期")
+                    }
+                    Text(
+                        text = state.periodLabel,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    IconButton(
+                        onClick = viewModel::nextPeriod,
+                        enabled = state.canGoNext
+                    ) {
+                        Icon(Icons.Outlined.ChevronRight, contentDescription = "下一周期")
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    StatsPeriod.entries.forEach { period ->
+                        FilterChip(
+                            selected = state.period == period,
+                            onClick = { viewModel.setPeriod(period) },
+                            label = { Text(period.selectorLabel) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
             }
         }
         item {
-            MonthHeroCard(state = state)
+            PeriodHeroCard(state = state)
         }
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                StatCell("${state.monthReadingDays}", "阅读天数", Modifier.weight(1f))
+                StatCell("${state.periodReadingDays}", "阅读天数", Modifier.weight(1f))
                 StatCell("${state.finishedBooks}", "读完的书", Modifier.weight(1f))
                 StatCell("${state.bookmarkNoteCount}", "笔记", Modifier.weight(1f))
                 StatCell("${state.aiChatCount}", "AI 对话", Modifier.weight(1f))
@@ -106,7 +140,7 @@ fun StatsScreen(
         }
         if (state.topBooks.isNotEmpty()) {
             item {
-                SectionLabel(title = "本月读得最多")
+                SectionLabel(title = state.period.topBooksLabel)
             }
             item {
                 FrostedSurface(
@@ -118,7 +152,7 @@ fun StatsScreen(
                         modifier = Modifier.padding(14.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        val maxDuration = state.topBooks.maxOf(MonthlyBookStat::durationMs)
+                        val maxDuration = state.topBooks.maxOf(PeriodBookStat::durationMs)
                             .coerceAtLeast(1L)
                         state.topBooks.forEach { stat ->
                             TopBookRow(stat = stat, maxDurationMs = maxDuration)
@@ -130,9 +164,9 @@ fun StatsScreen(
     }
 }
 
-/** 双栏 hero 卡：本月阅读时长 ｜ 连续阅读天数。 */
+/** 双栏 hero 卡：所选周期阅读时长 ｜ 连续阅读天数。 */
 @Composable
-private fun MonthHeroCard(state: StatsUiState) {
+private fun PeriodHeroCard(state: StatsUiState) {
     val seal = sealColor()
     FrostedSurface(
         modifier = Modifier.fillMaxWidth(),
@@ -145,19 +179,23 @@ private fun MonthHeroCard(state: StatsUiState) {
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    text = formatDuration(state.monthDurationMs),
+                    text = formatDuration(state.periodDurationMs),
                     style = MaterialTheme.typography.headlineMedium,
                     fontFamily = FontFamily.Serif,
                     fontWeight = FontWeight.SemiBold
                 )
                 Text(
-                    text = "本月阅读",
+                    text = state.period.readingLabel,
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 6.dp)
                 )
                 Text(
-                    text = monthComparison(state.monthDurationMs, state.lastMonthDurationMs),
+                    text = periodComparison(
+                        state.periodDurationMs,
+                        state.previousPeriodDurationMs,
+                        state.period
+                    ),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.padding(top = 2.dp)
@@ -196,7 +234,7 @@ private fun MonthHeroCard(state: StatsUiState) {
 }
 
 @Composable
-private fun TopBookRow(stat: MonthlyBookStat, maxDurationMs: Long) {
+private fun TopBookRow(stat: PeriodBookStat, maxDurationMs: Long) {
     val book = stat.book
     val coverFile = androidx.compose.runtime.remember(book.coverPath) {
         book.coverPath?.let(::File)?.takeIf(File::isFile)
@@ -254,9 +292,9 @@ private fun TopBookRow(stat: MonthlyBookStat, maxDurationMs: Long) {
     }
 }
 
-private fun monthComparison(thisMonth: Long, lastMonth: Long): String = when {
-    lastMonth <= 0 && thisMonth > 0 -> "上月无记录"
-    lastMonth <= 0 -> "开始你的第一分钟阅读"
-    thisMonth >= lastMonth -> "较上月 +${formatDuration(thisMonth - lastMonth)}"
-    else -> "较上月 -${formatDuration(lastMonth - thisMonth)}"
+private fun periodComparison(current: Long, previous: Long, period: StatsPeriod): String = when {
+    previous <= 0 && current > 0 -> "${period.previousLabel}无记录"
+    previous <= 0 -> "该周期暂无阅读"
+    current >= previous -> "较${period.previousLabel} +${formatDuration(current - previous)}"
+    else -> "较${period.previousLabel} -${formatDuration(previous - current)}"
 }

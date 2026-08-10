@@ -106,6 +106,7 @@ fun ReaderScrollPane(
     onIllustrationClick: (illustrationIds: List<Long>) -> Unit = {},
     onTtsAction: (selection: String) -> Unit,
     onImageAction: (selection: String, context: String, range: IntRange) -> Unit,
+    pageTurnRequest: ReaderPageTurnRequest? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -157,6 +158,15 @@ fun ReaderScrollPane(
         }
     }
 
+    LaunchedEffect(pageTurnRequest?.sequence) {
+        val request = pageTurnRequest ?: return@LaunchedEffect
+        if (!enabled) return@LaunchedEffect
+        val distance = holder.viewportHeight * PAGE_STEP_FRACTION
+        animateScrollBy(
+            if (request.direction == PageTurnDirection.PREVIOUS) -distance else distance
+        )
+    }
+
     fun startFling(velocity: Float) {
         holder.interruptScroll()
         holder.scrollJob = scope.launch {
@@ -186,6 +196,16 @@ fun ReaderScrollPane(
         customFontPath = settings.customFontPath,
         lineHeight = settings.lineHeight,
         pageMargin = settings.pageMargin,
+        advancedTypographyHash = listOf(
+            settings.fontWeight,
+            settings.letterSpacingEm,
+            settings.paragraphSpacingEm,
+            settings.firstLineIndentEm,
+            settings.titleScale,
+            settings.textJustification,
+            settings.showHeader,
+            settings.showFooter
+        ).hashCode(),
         syntaxHighlightEnabled = settings.syntaxHighlightEnabled,
         syntaxRulesHash = settings.syntaxHighlightRules.hashCode(),
         width = viewport.width,
@@ -467,6 +487,7 @@ private data class ReaderScrollEnvironmentKey(
     val customFontPath: String?,
     val lineHeight: Float,
     val pageMargin: Float,
+    val advancedTypographyHash: Int,
     val syntaxHighlightEnabled: Boolean,
     val syntaxRulesHash: Int,
     val width: Int,

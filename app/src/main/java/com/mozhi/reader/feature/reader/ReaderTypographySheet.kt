@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
@@ -32,10 +34,11 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.UploadFile
 import androidx.compose.material.icons.outlined.Wallpaper
 import androidx.compose.runtime.Composable
@@ -48,7 +51,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -58,11 +61,15 @@ import com.mozhi.reader.core.datastore.PageMode
 import com.mozhi.reader.core.datastore.PageTurnAnimation
 import com.mozhi.reader.core.datastore.ReaderFont
 import com.mozhi.reader.core.datastore.ReaderSettings
+import com.mozhi.reader.core.datastore.ReaderSyntaxFont
+import com.mozhi.reader.core.datastore.ReaderSyntaxMatchMode
 import com.mozhi.reader.core.datastore.ReaderSyntaxRule
 import com.mozhi.reader.core.datastore.ReaderTheme
 import com.mozhi.reader.feature.reader.render.ReaderPageStyle
 import com.mozhi.reader.ui.components.NoteStyleColorPalette
 import com.mozhi.reader.ui.theme.onAccent
+import coil3.compose.AsyncImage
+import java.io.File
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -77,15 +84,24 @@ fun ReaderTypographySheet(
     palette: ReaderPalette,
     onFontScaleChange: (Float) -> Unit,
     onFontChange: (ReaderFont) -> Unit,
+    onCustomFontSelect: (String) -> Unit,
     onImportFont: () -> Unit,
-    onClearFont: () -> Unit,
     onLineHeightChange: (Float) -> Unit,
     onPageMarginChange: (Float) -> Unit,
+    onFontWeightChange: (Int) -> Unit,
+    onLetterSpacingChange: (Float) -> Unit,
+    onParagraphSpacingChange: (Float) -> Unit,
+    onFirstLineIndentChange: (Float) -> Unit,
+    onTitleScaleChange: (Float) -> Unit,
+    onTextJustificationChange: (Boolean) -> Unit,
+    onShowHeaderChange: (Boolean) -> Unit,
+    onShowFooterChange: (Boolean) -> Unit,
     onThemeChange: (ReaderTheme) -> Unit,
     onCustomThemeSelect: (Long) -> Unit,
     onSaveCustomTheme: (CustomReaderTheme) -> Unit,
     onDeleteCustomTheme: (Long) -> Unit,
     onImportBackground: () -> Unit,
+    onBackgroundImageSelect: (String) -> Unit,
     onClearBackground: () -> Unit,
     onBackgroundOpacityChange: (Float) -> Unit,
     onSyntaxHighlightEnabledChange: (Boolean) -> Unit,
@@ -93,11 +109,12 @@ fun ReaderTypographySheet(
     onDeleteSyntaxRule: (Long) -> Unit,
     onAnimationChange: (PageTurnAnimation) -> Unit,
     onPageModeChange: (PageMode) -> Unit,
-    onKeepScreenOnChange: (Boolean) -> Unit
+    onKeepScreenOnChange: (Boolean) -> Unit,
+    onVolumeKeysPageTurnChange: (Boolean) -> Unit
 ) {
     var editorDraft by remember { mutableStateOf<CustomReaderTheme?>(null) }
     var syntaxDraft by remember { mutableStateOf<ReaderSyntaxRule?>(null) }
-    var advancedExpanded by remember { mutableStateOf(false) }
+    var secondaryPage by remember { mutableStateOf<TypographySecondaryPage?>(null) }
 
     Column(
         modifier = Modifier
@@ -106,6 +123,41 @@ fun ReaderTypographySheet(
             .padding(horizontal = 18.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
+        when (secondaryPage) {
+            TypographySecondaryPage.ADVANCED -> {
+                TypographySecondaryHeader("高级排版") { secondaryPage = null }
+                AdvancedTypographyEditor(
+                    settings = settings,
+                    palette = palette,
+                    onFontWeightChange = onFontWeightChange,
+                    onLetterSpacingChange = onLetterSpacingChange,
+                    onParagraphSpacingChange = onParagraphSpacingChange,
+                    onFirstLineIndentChange = onFirstLineIndentChange,
+                    onTitleScaleChange = onTitleScaleChange,
+                    onTextJustificationChange = onTextJustificationChange,
+                    onShowHeaderChange = onShowHeaderChange,
+                    onShowFooterChange = onShowFooterChange
+                )
+            }
+            TypographySecondaryPage.SYNTAX -> {
+                TypographySecondaryHeader("语法高亮") { secondaryPage = null }
+                SyntaxHighlightEditor(
+                    settings = settings,
+                    palette = palette,
+                    onEnabledChange = onSyntaxHighlightEnabledChange,
+                    onEdit = { syntaxDraft = it },
+                    onAdd = {
+                        syntaxDraft = ReaderSyntaxRule(
+                            id = 0L,
+                            name = "自定义规则",
+                            startDelimiter = "",
+                            endDelimiter = "",
+                            colorArgb = palette.accent.toArgb()
+                        )
+                    }
+                )
+            }
+            null -> {
         Text("排版", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Medium)
 
         SheetRow(label = "字号", palette = palette) {
@@ -162,14 +214,25 @@ fun ReaderTypographySheet(
         }
 
         SheetRow(label = "字体", palette = palette) {
-            ReaderFont.entries.filter { it != ReaderFont.CUSTOM || settings.customFontPath != null }
-                .forEach { font ->
-                SegChip(
-                    text = font.shortLabel(),
-                    selected = settings.font == font,
-                    palette = palette,
-                    modifier = Modifier.weight(1f)
-                ) { onFontChange(font) }
+            Row(
+                modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(7.dp)
+            ) {
+                ReaderFont.entries.filter { it != ReaderFont.CUSTOM }.forEach { font ->
+                    SegChip(
+                        text = font.shortLabel(),
+                        selected = settings.font == font,
+                        palette = palette
+                    ) { onFontChange(font) }
+                }
+                settings.fontLibrary.forEach { font ->
+                    SegChip(
+                        text = font.displayName,
+                        selected = settings.font == ReaderFont.CUSTOM &&
+                            settings.selectedCustomFontId == font.id,
+                        palette = palette
+                    ) { onCustomFontSelect(font.id) }
+                }
             }
         }
         Row(
@@ -189,11 +252,8 @@ fun ReaderTypographySheet(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(Icons.Outlined.UploadFile, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Text("导入 TTF/OTF", style = MaterialTheme.typography.labelMedium)
+                    Text("导入 TTF/OTF/TTC", style = MaterialTheme.typography.labelMedium)
                 }
-            }
-            if (settings.customFontPath != null) {
-                TextButton(onClick = onClearFont) { Text("移除字体") }
             }
         }
 
@@ -244,18 +304,44 @@ fun ReaderTypographySheet(
                     modifier = Modifier.size(18.dp)
                 )
                 Column(modifier = Modifier.weight(1f).padding(start = 8.dp)) {
-                    Text("自定义背景", style = MaterialTheme.typography.bodyMedium)
+                    Text("阅读背景", style = MaterialTheme.typography.bodyMedium)
                     Text(
-                        if (settings.backgroundImagePath == null) "使用主题底色" else "背景图片已启用",
+                        if (settings.backgroundImagePath == null) {
+                            "使用主题底色"
+                        } else {
+                            settings.imageLibrary.firstOrNull {
+                                it.id == settings.selectedBackgroundImageId
+                            }?.displayName ?: "背景图片已启用"
+                        },
                         style = MaterialTheme.typography.labelSmall,
                         color = palette.muted
                     )
                 }
                 TextButton(onClick = onImportBackground) {
-                    Text(if (settings.backgroundImagePath == null) "导入" else "更换")
+                    Text("导入")
                 }
-                if (settings.backgroundImagePath != null) {
-                    TextButton(onClick = onClearBackground) { Text("移除") }
+            }
+            LazyRow(
+                modifier = Modifier.fillMaxWidth().height(98.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                item {
+                    BackgroundChoice(
+                        name = "主题底色",
+                        imagePath = null,
+                        selected = settings.backgroundImagePath == null,
+                        palette = palette,
+                        onClick = onClearBackground
+                    )
+                }
+                items(settings.imageLibrary, key = { it.id }) { image ->
+                    BackgroundChoice(
+                        name = image.displayName,
+                        imagePath = image.filePath,
+                        selected = settings.selectedBackgroundImageId == image.id,
+                        palette = palette,
+                        onClick = { onBackgroundImageSelect(image.id) }
+                    )
                 }
             }
             if (settings.backgroundImagePath != null) {
@@ -319,44 +405,35 @@ fun ReaderTypographySheet(
             )
         }
 
-        Surface(
-            onClick = { advancedExpanded = !advancedExpanded },
-            color = Color.Transparent,
-            shape = RoundedCornerShape(14.dp),
-            border = BorderStroke(1.dp, palette.glassBorder),
-            modifier = Modifier.fillMaxWidth()
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 11.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("高级选项", style = MaterialTheme.typography.bodyMedium)
-                    Text("成对符号内容高亮", style = MaterialTheme.typography.labelSmall, color = palette.muted)
-                }
-                Icon(
-                    Icons.Outlined.ExpandMore,
-                    contentDescription = null,
-                    modifier = Modifier.graphicsLayer { rotationZ = if (advancedExpanded) 180f else 0f }
-                )
+            Column(modifier = Modifier.weight(1f)) {
+                Text("音量键翻页", style = MaterialTheme.typography.bodyMedium)
+                Text("音量加上一页，音量减下一页", style = MaterialTheme.typography.labelSmall, color = palette.muted)
             }
-        }
-        if (advancedExpanded) {
-            SyntaxHighlightEditor(
-                settings = settings,
-                palette = palette,
-                onEnabledChange = onSyntaxHighlightEnabledChange,
-                onEdit = { syntaxDraft = it },
-                onAdd = {
-                    syntaxDraft = ReaderSyntaxRule(
-                        id = 0L,
-                        name = "自定义规则",
-                        startDelimiter = "",
-                        endDelimiter = "",
-                        colorArgb = palette.accent.toArgb()
-                    )
-                }
+            Switch(
+                checked = settings.volumeKeysPageTurn,
+                onCheckedChange = onVolumeKeysPageTurnChange,
+                colors = SwitchDefaults.colors(
+                    checkedTrackColor = palette.accent,
+                    checkedThumbColor = palette.onAccent
+                )
             )
+        }
+
+        SecondaryPageRow(
+            title = "高级排版",
+            summary = "字距、段距、缩进、标题、字重与页眉页脚",
+            palette = palette
+        ) { secondaryPage = TypographySecondaryPage.ADVANCED }
+        SecondaryPageRow(
+            title = "语法高亮",
+            summary = "成对符号、正则与扩展文字样式",
+            palette = palette
+        ) { secondaryPage = TypographySecondaryPage.SYNTAX }
+            }
         }
     }
 
@@ -381,6 +458,7 @@ fun ReaderTypographySheet(
     syntaxDraft?.let { draft ->
         SyntaxRuleEditorDialog(
             initial = draft,
+            fontLibrary = settings.fontLibrary,
             onDismiss = { syntaxDraft = null },
             onSave = {
                 onSaveSyntaxRule(it)
@@ -392,6 +470,249 @@ fun ReaderTypographySheet(
                     syntaxDraft = null
                 }
             } else null
+        )
+    }
+}
+
+@Composable
+private fun BackgroundChoice(
+    name: String,
+    imagePath: String?,
+    selected: Boolean,
+    palette: ReaderPalette,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.width(82.dp).clickable(onClick = onClick),
+        shape = RoundedCornerShape(14.dp),
+        color = if (selected) palette.accentContainer else palette.glass,
+        border = BorderStroke(
+            if (selected) 2.dp else 1.dp,
+            if (selected) palette.accent else palette.muted.copy(alpha = 0.25f)
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Box(
+                modifier = Modifier.fillMaxWidth().height(58.dp)
+                    .background(palette.background, RoundedCornerShape(9.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                if (imagePath == null) {
+                    Icon(
+                        Icons.Outlined.Wallpaper,
+                        contentDescription = null,
+                        tint = palette.muted,
+                        modifier = Modifier.size(22.dp)
+                    )
+                } else {
+                    AsyncImage(
+                        model = File(imagePath),
+                        contentDescription = name,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxWidth().height(58.dp)
+                    )
+                }
+                if (selected) {
+                    Icon(
+                        Icons.Outlined.Check,
+                        contentDescription = "已选择",
+                        tint = palette.onAccent,
+                        modifier = Modifier.align(Alignment.TopEnd).size(18.dp)
+                            .background(palette.accent, CircleShape).padding(2.dp)
+                    )
+                }
+            }
+            Text(
+                name,
+                style = MaterialTheme.typography.labelSmall,
+                color = palette.onBackground,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+private enum class TypographySecondaryPage { ADVANCED, SYNTAX }
+
+@Composable
+private fun TypographySecondaryHeader(title: String, onBack: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Surface(
+            onClick = onBack,
+            shape = CircleShape,
+            color = Color.Transparent
+        ) {
+            Icon(
+                Icons.AutoMirrored.Outlined.ArrowBack,
+                contentDescription = "返回排版",
+                modifier = Modifier.padding(8.dp).size(20.dp)
+            )
+        }
+        Text(
+            title,
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(start = 6.dp)
+        )
+    }
+}
+
+@Composable
+private fun SecondaryPageRow(
+    title: String,
+    summary: String,
+    palette: ReaderPalette,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        color = Color.Transparent,
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.dp, palette.glassBorder),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.bodyMedium)
+                Text(summary, style = MaterialTheme.typography.labelSmall, color = palette.muted)
+            }
+            Icon(Icons.Outlined.ChevronRight, contentDescription = null, tint = palette.muted)
+        }
+    }
+}
+
+@Composable
+private fun AdvancedTypographyEditor(
+    settings: ReaderSettings,
+    palette: ReaderPalette,
+    onFontWeightChange: (Int) -> Unit,
+    onLetterSpacingChange: (Float) -> Unit,
+    onParagraphSpacingChange: (Float) -> Unit,
+    onFirstLineIndentChange: (Float) -> Unit,
+    onTitleScaleChange: (Float) -> Unit,
+    onTextJustificationChange: (Boolean) -> Unit,
+    onShowHeaderChange: (Boolean) -> Unit,
+    onShowFooterChange: (Boolean) -> Unit
+) {
+    Text("正文字重", style = MaterialTheme.typography.labelMedium, color = palette.muted)
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        listOf(300, 400, 500, 600, 700).forEach { weight ->
+            SegChip(
+                text = weight.toString(),
+                selected = settings.fontWeight == weight,
+                palette = palette,
+                modifier = Modifier.weight(1f)
+            ) { onFontWeightChange(weight) }
+        }
+    }
+    TypographyValueSlider(
+        label = "字间距",
+        valueText = String.format(java.util.Locale.ROOT, "%.2f em", settings.letterSpacingEm),
+        value = settings.letterSpacingEm,
+        range = -0.05f..0.2f,
+        steps = 24,
+        palette = palette,
+        onValueChange = onLetterSpacingChange
+    )
+    TypographyValueSlider(
+        label = "段落间距",
+        valueText = String.format(java.util.Locale.ROOT, "%.2f em", settings.paragraphSpacingEm),
+        value = settings.paragraphSpacingEm,
+        range = 0f..1.5f,
+        steps = 29,
+        palette = palette,
+        onValueChange = onParagraphSpacingChange
+    )
+    TypographyValueSlider(
+        label = "段首缩进",
+        valueText = String.format(java.util.Locale.ROOT, "%.1f 字", settings.firstLineIndentEm),
+        value = settings.firstLineIndentEm,
+        range = 0f..4f,
+        steps = 15,
+        palette = palette,
+        onValueChange = onFirstLineIndentChange
+    )
+    TypographyValueSlider(
+        label = "标题比例",
+        valueText = String.format(java.util.Locale.ROOT, "%.2f×", settings.titleScale),
+        value = settings.titleScale,
+        range = 1f..2f,
+        steps = 19,
+        palette = palette,
+        onValueChange = onTitleScaleChange
+    )
+    SheetRow(label = "对齐", palette = palette) {
+        SegChip(
+            text = "两端",
+            selected = settings.textJustification,
+            palette = palette,
+            modifier = Modifier.weight(1f)
+        ) { onTextJustificationChange(true) }
+        SegChip(
+            text = "左对齐",
+            selected = !settings.textJustification,
+            palette = palette,
+            modifier = Modifier.weight(1f)
+        ) { onTextJustificationChange(false) }
+    }
+    AdvancedSwitchRow("显示页眉", "章节标题", settings.showHeader, palette, onShowHeaderChange)
+    AdvancedSwitchRow("显示页脚", "页码、进度、时间与电量", settings.showFooter, palette, onShowFooterChange)
+}
+
+@Composable
+private fun TypographyValueSlider(
+    label: String,
+    valueText: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    steps: Int,
+    palette: ReaderPalette,
+    onValueChange: (Float) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row {
+            Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            Text(valueText, style = MaterialTheme.typography.labelMedium, color = palette.muted)
+        }
+        Slider(
+            value = value,
+            onValueChange = onValueChange,
+            valueRange = range,
+            steps = steps,
+            colors = SliderDefaults.colors(
+                thumbColor = palette.accent,
+                activeTrackColor = palette.accent,
+                inactiveTrackColor = palette.muted.copy(alpha = 0.18f)
+            )
+        )
+    }
+}
+
+@Composable
+private fun AdvancedSwitchRow(
+    title: String,
+    summary: String,
+    checked: Boolean,
+    palette: ReaderPalette,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium)
+            Text(summary, style = MaterialTheme.typography.labelSmall, color = palette.muted)
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = SwitchDefaults.colors(checkedTrackColor = palette.accent)
         )
     }
 }
@@ -439,8 +760,29 @@ private fun SyntaxHighlightEditor(
                     Column(modifier = Modifier.weight(1f).padding(start = 9.dp)) {
                         Text(rule.name, style = MaterialTheme.typography.labelLarge)
                         Text(
-                            "${rule.startDelimiter} 内容 ${rule.endDelimiter}" +
-                                if (rule.underline) " · 下划线" else "",
+                            buildString {
+                                if (rule.matchMode == ReaderSyntaxMatchMode.REGEX) {
+                                    append("正则：")
+                                    append(rule.pattern)
+                                } else {
+                                    append("${rule.startDelimiter} 内容 ${rule.endDelimiter}")
+                                }
+                                if (rule.font != ReaderSyntaxFont.INHERIT) {
+                                    append(" · ")
+                                    append(
+                                        if (rule.font == ReaderSyntaxFont.CUSTOM) {
+                                            settings.fontLibrary
+                                                .firstOrNull { it.id == rule.fontAssetId }
+                                                ?.displayName
+                                                ?: "已删除字体"
+                                        } else {
+                                            rule.font.shortLabel()
+                                        }
+                                    )
+                                }
+                                if (rule.bold) append(" · 粗体")
+                                if (rule.italic) append(" · 斜体")
+                            },
                             style = MaterialTheme.typography.labelSmall,
                             color = palette.muted,
                             maxLines = 1,
@@ -461,6 +803,7 @@ private fun SyntaxHighlightEditor(
 @Composable
 private fun SyntaxRuleEditorDialog(
     initial: ReaderSyntaxRule,
+    fontLibrary: List<com.mozhi.reader.core.datastore.ReaderFontAsset>,
     onDismiss: () -> Unit,
     onSave: (ReaderSyntaxRule) -> Unit,
     onDelete: (() -> Unit)?
@@ -471,8 +814,24 @@ private fun SyntaxRuleEditorDialog(
     var color by remember { mutableStateOf(Color(initial.colorArgb)) }
     var includeDelimiters by remember { mutableStateOf(initial.includeDelimiters) }
     var underline by remember { mutableStateOf(initial.underline) }
+    var matchMode by remember { mutableStateOf(initial.matchMode) }
+    var pattern by remember { mutableStateOf(initial.pattern) }
+    var ignoreCase by remember { mutableStateOf(initial.ignoreCase) }
+    var backgroundEnabled by remember { mutableStateOf(initial.backgroundArgb != null) }
+    var backgroundColor by remember {
+        mutableStateOf(Color(initial.backgroundArgb ?: 0x33D06B42))
+    }
+    var syntaxFont by remember { mutableStateOf(initial.font) }
+    var syntaxFontAssetId by remember { mutableStateOf(initial.fontAssetId) }
+    var bold by remember { mutableStateOf(initial.bold) }
+    var italic by remember { mutableStateOf(initial.italic) }
+    var strikethrough by remember { mutableStateOf(initial.strikethrough) }
     var enabled by remember { mutableStateOf(initial.enabled) }
-    val valid = start.isNotEmpty() && end.isNotEmpty()
+    val valid = when (matchMode) {
+        ReaderSyntaxMatchMode.DELIMITED -> start.isNotEmpty() && end.isNotEmpty()
+        ReaderSyntaxMatchMode.REGEX -> pattern.isNotBlank() && pattern.length <= 256 &&
+            runCatching { Regex(pattern) }.isSuccess
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -492,28 +851,88 @@ private fun SyntaxRuleEditorDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ReaderSyntaxMatchMode.entries.forEach { mode ->
+                        FilterChip(
+                            selected = matchMode == mode,
+                            onClick = { matchMode = mode },
+                            label = { Text(if (mode == ReaderSyntaxMatchMode.DELIMITED) "成对符号" else "正则") }
+                        )
+                    }
+                }
+                if (matchMode == ReaderSyntaxMatchMode.DELIMITED) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = start,
+                            onValueChange = { start = it.take(8) },
+                            label = { Text("开始符号") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = end,
+                            onValueChange = { end = it.take(8) },
+                            label = { Text("结束符号") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                } else {
                     OutlinedTextField(
-                        value = start,
-                        onValueChange = { start = it.take(8) },
-                        label = { Text("开始符号") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f)
+                        value = pattern,
+                        onValueChange = { pattern = it.take(256) },
+                        label = { Text("正则表达式") },
+                        supportingText = { Text("多行模式，匹配到的完整文本会应用样式") },
+                        minLines = 2,
+                        modifier = Modifier.fillMaxWidth()
                     )
-                    OutlinedTextField(
-                        value = end,
-                        onValueChange = { end = it.take(8) },
-                        label = { Text("结束符号") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f)
-                    )
+                    SyntaxRuleSwitch("忽略大小写", ignoreCase) { ignoreCase = it }
                 }
                 Text("文字颜色", style = MaterialTheme.typography.labelMedium)
                 NoteStyleColorPalette(
                     color = color,
                     onColorChange = { color = it }
                 )
-                SyntaxRuleSwitch("符号本身也着色", includeDelimiters) { includeDelimiters = it }
+                SyntaxRuleSwitch("背景色", backgroundEnabled) { backgroundEnabled = it }
+                if (backgroundEnabled) {
+                    NoteStyleColorPalette(
+                        color = backgroundColor,
+                        onColorChange = { backgroundColor = it.copy(alpha = 0.24f) }
+                    )
+                }
+                Text("字体", style = MaterialTheme.typography.labelMedium)
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(7.dp)
+                ) {
+                    ReaderSyntaxFont.entries.filter { it != ReaderSyntaxFont.CUSTOM }.forEach { candidate ->
+                        FilterChip(
+                            selected = syntaxFont == candidate,
+                            onClick = {
+                                syntaxFont = candidate
+                                syntaxFontAssetId = null
+                            },
+                            label = { Text(candidate.shortLabel()) }
+                        )
+                    }
+                    fontLibrary.forEach { font ->
+                        FilterChip(
+                            selected = syntaxFont == ReaderSyntaxFont.CUSTOM &&
+                                syntaxFontAssetId == font.id,
+                            onClick = {
+                                syntaxFont = ReaderSyntaxFont.CUSTOM
+                                syntaxFontAssetId = font.id
+                            },
+                            label = { Text(font.displayName) }
+                        )
+                    }
+                }
+                if (matchMode == ReaderSyntaxMatchMode.DELIMITED) {
+                    SyntaxRuleSwitch("符号本身也着色", includeDelimiters) { includeDelimiters = it }
+                }
+                SyntaxRuleSwitch("粗体", bold) { bold = it }
+                SyntaxRuleSwitch("斜体", italic) { italic = it }
                 SyntaxRuleSwitch("添加下划线", underline) { underline = it }
+                SyntaxRuleSwitch("添加删除线", strikethrough) { strikethrough = it }
                 SyntaxRuleSwitch("启用这条规则", enabled) { enabled = it }
             }
         },
@@ -529,6 +948,15 @@ private fun SyntaxRuleEditorDialog(
                             colorArgb = color.toArgb(),
                             includeDelimiters = includeDelimiters,
                             underline = underline,
+                            matchMode = matchMode,
+                            pattern = pattern.trim(),
+                            ignoreCase = ignoreCase,
+                            backgroundArgb = backgroundColor.toArgb().takeIf { backgroundEnabled },
+                            font = syntaxFont,
+                            fontAssetId = syntaxFontAssetId,
+                            bold = bold,
+                            italic = italic,
+                            strikethrough = strikethrough,
                             enabled = enabled
                         )
                     )
@@ -689,6 +1117,15 @@ private fun ReaderFont.shortLabel(): String = when (this) {
     ReaderFont.SANS_SERIF -> "黑体"
     ReaderFont.MONOSPACE -> "等宽"
     ReaderFont.CUSTOM -> "自定义"
+}
+
+private fun ReaderSyntaxFont.shortLabel(): String = when (this) {
+    ReaderSyntaxFont.INHERIT -> "跟随正文"
+    ReaderSyntaxFont.SYSTEM -> "系统"
+    ReaderSyntaxFont.SERIF -> "宋体"
+    ReaderSyntaxFont.SANS_SERIF -> "黑体"
+    ReaderSyntaxFont.MONOSPACE -> "等宽"
+    ReaderSyntaxFont.CUSTOM -> "导入字体"
 }
 
 private fun PageTurnAnimation.shortLabel(): String = when (this) {

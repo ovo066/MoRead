@@ -38,4 +38,55 @@ class ReaderSyntaxHighlighterTest {
         assertEquals(rule, decoded)
         assertFalse(decoded.includeDelimiters)
     }
+
+    @Test
+    fun `regex rule carries custom font background and text effects`() {
+        val rule = ReaderSyntaxRule(
+            id = 11,
+            name = "提示行",
+            startDelimiter = "",
+            endDelimiter = "",
+            colorArgb = 0xFF102030.toInt(),
+            underline = true,
+            matchMode = ReaderSyntaxMatchMode.REGEX,
+            pattern = "^notice:.+$",
+            ignoreCase = true,
+            backgroundArgb = 0x33112233,
+            font = ReaderSyntaxFont.MONOSPACE,
+            bold = true,
+            italic = true,
+            strikethrough = true
+        )
+        val text = "普通行\nNOTICE: important\n结束"
+
+        val span = ReaderSyntaxHighlighter.spans(text, listOf(rule)).single()
+
+        assertEquals("NOTICE: important", text.substring(span.start, span.endExclusive))
+        assertEquals(rule.backgroundArgb, span.backgroundArgb)
+        assertEquals(ReaderSyntaxFont.MONOSPACE, span.font)
+        assertTrue(span.bold)
+        assertTrue(span.italic)
+        assertTrue(span.underline)
+        assertTrue(span.strikethrough)
+        assertEquals(rule, ReaderSyntaxRuleCodec.decode(ReaderSyntaxRuleCodec.encode(listOf(rule))).single())
+    }
+
+    @Test
+    fun `invalid regex is ignored without affecting later rules`() {
+        val invalid = ReaderSyntaxRule(
+            id = 12,
+            name = "无效",
+            startDelimiter = "",
+            endDelimiter = "",
+            colorArgb = 0,
+            matchMode = ReaderSyntaxMatchMode.REGEX,
+            pattern = "(["
+        )
+        val valid = ReaderSyntaxRule(13, "书名", "《", "》", 0xFF556677.toInt())
+
+        val spans = ReaderSyntaxHighlighter.spans("《可用》", listOf(invalid, valid))
+
+        assertEquals(1, spans.size)
+        assertEquals(13, spans.single().ruleId)
+    }
 }

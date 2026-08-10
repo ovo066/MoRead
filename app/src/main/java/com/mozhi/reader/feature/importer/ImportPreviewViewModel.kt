@@ -28,6 +28,7 @@ data class ImportPreviewUiState(
     val isWorking: Boolean = false,
     val progressMessage: String? = null,
     val progressFraction: Float? = null,
+    val aiRuleProposal: AiChapterRuleProposal? = null,
     val errorMessage: String? = null
 )
 
@@ -39,6 +40,7 @@ sealed interface ImportPreviewEvent {
 class ImportPreviewViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val coordinator: ImportCoordinator,
+    private val aiChapterRuleAgent: AiChapterRuleAgent,
     @ApplicationContext context: Context
 ) : ViewModel() {
     private val sessionId: String = checkNotNull(savedStateHandle["sessionId"])
@@ -96,6 +98,56 @@ class ImportPreviewViewModel @Inject constructor(
             return
         }
         runWorking { coordinator.applyCustomRegex(sessionId, regex) }
+    }
+
+    fun detectChapterRuleWithAi() {
+        if (mutableState.value.isWorking) return
+        viewModelScope.launch {
+            mutableState.update {
+                it.copy(
+                    isWorking = true,
+                    progressMessage = "AI 正在分析章节结构",
+                    progressFraction = null,
+                    aiRuleProposal = null,
+                    errorMessage = null
+                )
+            }
+            runCatching {
+                aiChapterRuleAgent.propose(sessionId) { attempt ->
+                    mutableState.update {
+                        it.copy(progressMessage = "AI 正在探寻规则 · 第 $attempt/3 轮")
+                    }
+                }
+            }.onSuccess { proposal ->
+                mutableState.update {
+                    it.copy(
+                        isWorking = false,
+                        progressMessage = null,
+                        aiRuleProposal = proposal
+                    )
+                }
+            }.onFailure { error ->
+                mutableState.update {
+                    it.copy(
+                        isWorking = false,
+                        progressMessage = null,
+                        errorMessage = error.message ?: "AI 章节识别失败"
+                    )
+                }
+            }
+        }
+    }
+
+    fun dismissAiRuleProposal() {
+        mutableState.update { it.copy(aiRuleProposal = null) }
+    }
+
+    fun confirmAiRuleProposal() {
+        val proposal = mutableState.value.aiRuleProposal ?: return
+        mutableState.update {
+            it.copy(aiRuleProposal = null, customRegex = proposal.regex)
+        }
+        runWorking { coordinator.applyCustomRegex(sessionId, proposal.regex) }
     }
 
     fun confirm() {

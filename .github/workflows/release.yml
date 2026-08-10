@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      MOREAD_RELEASE_STORE_FILE: ${{ runner.temp }}/moread-release.jks
+      MOREAD_RELEASE_STORE_FILE: ${{ github.workspace }}/.ci-release.jks
       MOREAD_RELEASE_STORE_PASSWORD: ${{ secrets.MOREAD_RELEASE_STORE_PASSWORD }}
       MOREAD_RELEASE_KEY_ALIAS: ${{ secrets.MOREAD_RELEASE_KEY_ALIAS }}
       MOREAD_RELEASE_KEY_PASSWORD: ${{ secrets.MOREAD_RELEASE_KEY_PASSWORD }}

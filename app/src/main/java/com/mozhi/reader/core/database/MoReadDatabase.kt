@@ -46,7 +46,7 @@ import com.mozhi.reader.core.database.entity.ReadingDailyEntity
         NoteEntity::class,
         IllustrationEntity::class
     ],
-    version = 15,
+    version = 16,
     exportSchema = true
 )
 @TypeConverters(DatabaseConverters::class)

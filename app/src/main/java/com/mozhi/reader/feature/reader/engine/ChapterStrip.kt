@@ -39,12 +39,9 @@ class ChapterStrip(
             else -> spec.contentLineStep
         }
         val advance = last.lineTop + max(naturalStep, last.lineBottom - last.lineTop)
-        val swallowedGap = when {
-            last.isTitle -> spec.titleBottomSpacing
-            last.isParagraphEnd -> spec.paragraphSpacing
-            else -> 0f
-        }
-        return advance + swallowedGap
+        // 排版器把切缝处已应用的间隙记在 trailingGap 上：空行分段的书这里是段距的两倍，
+        // 靠 isParagraphEnd 反推猜不出来。
+        return advance + page.trailingGap
     }
 
     /** 覆盖 [stripY] 的页：pageTops 中最后一个 <= stripY 的页。 */

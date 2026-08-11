@@ -90,6 +90,8 @@ data class ReaderSettings(
     val pageTurnAnimation: PageTurnAnimation = PageTurnAnimation.SIMULATION,
     val shelfLayout: ShelfLayout = ShelfLayout.GRID,
     val keepScreenOn: Boolean = false,
+    /** 阅读页默认隐藏系统状态栏；离开阅读页时恢复。 */
+    val immersiveReading: Boolean = true,
     /** 音量加=上一页、音量减=下一页；仅阅读页消费按键。 */
     val volumeKeysPageTurn: Boolean = false,
     /** 已导入到应用私有目录的阅读背景图片。 */
@@ -173,6 +175,7 @@ class ReaderSettingsRepository @Inject constructor(
                 ?.let { runCatching { ShelfLayout.valueOf(it) }.getOrNull() }
                 ?: ShelfLayout.GRID,
             keepScreenOn = preferences[Keys.KeepScreenOn] ?: false,
+            immersiveReading = preferences[Keys.ImmersiveReading] ?: true,
             volumeKeysPageTurn = preferences[Keys.VolumeKeysPageTurn] ?: false,
             backgroundImagePath = selectedBackground?.filePath ?: legacyBackgroundPath,
             imageLibrary = imageLibrary,
@@ -412,6 +415,10 @@ class ReaderSettingsRepository @Inject constructor(
         dataStore.edit { it[Keys.KeepScreenOn] = value }
     }
 
+    suspend fun setImmersiveReading(value: Boolean) {
+        dataStore.edit { it[Keys.ImmersiveReading] = value }
+    }
+
     suspend fun setVolumeKeysPageTurn(value: Boolean) {
         dataStore.edit { it[Keys.VolumeKeysPageTurn] = value }
     }
@@ -602,6 +609,7 @@ class ReaderSettingsRepository @Inject constructor(
         val PageTurnAnimation = stringPreferencesKey("reader_page_turn_animation")
         val ShelfLayout = stringPreferencesKey("shelf_layout")
         val KeepScreenOn = booleanPreferencesKey("keep_screen_on")
+        val ImmersiveReading = booleanPreferencesKey("reader_immersive_reading")
         val VolumeKeysPageTurn = booleanPreferencesKey("reader_volume_keys_page_turn")
         val BackgroundImagePath = stringPreferencesKey("reader_background_image_path")
         val ImageLibrary = stringPreferencesKey("reader_image_library")

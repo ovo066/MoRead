@@ -40,6 +40,7 @@ class ReaderContentControllerTest {
         contentLineStep = 25f,
         titleLineStep = 34f,
         paragraphSpacing = 9f,
+        blankLineSpacing = 9f,
         titleTopSpacing = 10f,
         titleBottomSpacing = 25f
     )

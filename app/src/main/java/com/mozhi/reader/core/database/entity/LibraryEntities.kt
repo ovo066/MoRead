@@ -69,8 +69,44 @@ data class BookEntity(
     /** 用户自定义标签，逗号分隔。单书标签量极小，不值得独立表。 */
     val tags: String = "",
     /** 用户手改过书名/作者/封面后置位，此后任何自动回填都不再覆盖。 */
-    val metadataEdited: Boolean = false
+    val metadataEdited: Boolean = false,
+    /**
+     * 手动标记的阅读状态（[BookReadState] 名）；null = 按进度自动推导。
+     * 读完再回顾旧章不该掉回「在读」，所以手动一旦标记就固定下来。
+     */
+    @ColumnInfo(defaultValue = "NULL")
+    val manualReadState: String? = null,
+    /** 置顶时间戳；0 = 未置顶。置顶书在书架里按此倒序排最前。 */
+    @ColumnInfo(defaultValue = "0")
+    val pinnedAt: Long = 0
 )
+
+/** 书架阅读状态。搁置只能手动设，自动推导永远不会得到它。 */
+enum class BookReadState {
+    UNREAD,
+    READING,
+    FINISHED,
+    SHELVED
+}
+
+/** 界面统一叫法（书架筛选、封面角标、详情页胶囊、长按菜单共用）。 */
+fun BookReadState.label(): String = when (this) {
+    BookReadState.UNREAD -> "未读"
+    BookReadState.READING -> "在读"
+    BookReadState.FINISHED -> "已读完"
+    BookReadState.SHELVED -> "搁置"
+}
+
+/** 手动标记优先；没标记过就按进度推导。非法枚举名（降级安装等）按未标记处理。 */
+fun BookEntity.readState(): BookReadState =
+    manualReadState?.let { name -> runCatching { BookReadState.valueOf(name) }.getOrNull() }
+        ?: when {
+            lastReadAt == 0L -> BookReadState.UNREAD
+            totalChapters > 0 && lastReadChapterIndex >= totalChapters - 1 -> BookReadState.FINISHED
+            else -> BookReadState.READING
+        }
+
+val BookEntity.isPinned: Boolean get() = pinnedAt > 0
 
 /** 把逗号分隔的 [BookEntity.tags] 拆成列表，顺手去空去重。 */
 fun BookEntity.tagList(): List<String> = tags

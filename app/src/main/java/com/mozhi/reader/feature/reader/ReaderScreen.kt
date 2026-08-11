@@ -59,7 +59,6 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -69,6 +68,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import coil3.compose.AsyncImage
 import com.mozhi.reader.R
 import com.mozhi.reader.MainActivity
@@ -104,9 +106,6 @@ private enum class ReaderSheet {
     SETTINGS,
     SEARCH
 }
-
-/** 与 MoReadApp 二级页转场时长对齐并留一帧余量：转场结束后才开始排版与首帧渲染。 */
-private const val READER_ENTER_SETTLE_MS = 300L
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -190,26 +189,9 @@ fun ReaderScreen(
         .orEmpty()
     val contextQuote = chapterTitle.ifBlank { state.book?.title.orEmpty() }
     val readerReady = !state.isLoading && state.errorMessage == null
-    // 进场三拍：推入转场期间只画纸色底（排版与首帧位图渲染不与转场动画抢主线程），
-    // 转场结束且数据就绪后正文淡入；返回本页时 rememberSaveable 已置位，不再延迟。
-    var enterSettled by androidx.compose.runtime.saveable.rememberSaveable {
-        mutableStateOf(false)
-    }
-    LaunchedEffect(Unit) {
-        if (!enterSettled) {
-            kotlinx.coroutines.delay(READER_ENTER_SETTLE_MS)
-            enterSettled = true
-        }
-    }
-    val contentVisible = readerReady && enterSettled
-    val contentAlpha = remember { androidx.compose.animation.core.Animatable(if (contentVisible) 1f else 0f) }
-    LaunchedEffect(contentVisible) {
-        if (contentVisible) {
-            contentAlpha.animateTo(1f, androidx.compose.animation.core.tween(220))
-        } else {
-            contentAlpha.snapTo(0f)
-        }
-    }
+    // Pane 一进入组合就直接绘制；不再等导航转场结束，也不额外做正文淡入。
+    // holder 首张位图准备好后会自然出现在下一帧，省掉原先可感知的黑/空纸色停顿。
+    val contentVisible = readerReady && state.isContentReady
     val canTurnWithVolume by rememberUpdatedState(
         contentVisible && activeSheet == null && !detailsVisible && aiRequest == null &&
             inkFloater == null && annotationThread == null && ttsDraft == null
@@ -232,11 +214,11 @@ fun ReaderScreen(
         }
         onDispose { host?.setVolumeKeyPageTurnHandler(null) }
     }
-    // 本地书秒开是常态，加载圈闪一下反而像卡顿；只有真慢（导入准备）才转圈。
+    // 本地书秒开是常态，加载圈闪一下反而像卡顿；只有真慢（导入准备/超长章排版）才转圈。
     var showLoadingHint by remember { mutableStateOf(false) }
-    LaunchedEffect(state.isLoading) {
+    LaunchedEffect(contentVisible) {
         showLoadingHint = false
-        if (state.isLoading) {
+        if (!contentVisible) {
             kotlinx.coroutines.delay(450)
             showLoadingHint = true
         }
@@ -318,6 +300,23 @@ fun ReaderScreen(
             }
         }
     }
+    val hideStatusBar = state.settings.immersiveReading && !chromeVisible
+    DisposableEffect(activity, hideStatusBar) {
+        val statusBars = WindowInsetsCompat.Type.statusBars()
+        val controller = activity?.window?.let { window ->
+            WindowCompat.getInsetsController(window, window.decorView)
+        }
+        if (hideStatusBar) {
+            controller?.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller?.hide(statusBars)
+        } else {
+            controller?.show(statusBars)
+        }
+        onDispose {
+            controller?.show(statusBars)
+        }
+    }
     DisposableEffect(lifecycleOwner, viewModel) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
@@ -365,27 +364,10 @@ fun ReaderScreen(
                 onBack = onBack,
                 modifier = Modifier.align(Alignment.Center)
             )
-            !contentVisible -> if (showLoadingHint || state.isPreparingText) {
-                Column(
-                    modifier = Modifier.align(Alignment.Center),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    CircularProgressIndicator(color = palette.accent)
-                    if (state.isPreparingText) {
-                        Text(
-                            text = "正在准备正文…",
-                            color = palette.muted,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
-                }
-            } else {
-                // 转场期间与秒开加载只画纸色底，正文随后淡入。
-            }
-            else -> {
-                val paneEnabled = activeSheet == null && !detailsVisible && aiRequest == null &&
-                    inkFloater == null && annotationThread == null && ttsDraft == null
+            readerReady -> {
+                val paneEnabled = contentVisible && activeSheet == null && !detailsVisible &&
+                    aiRequest == null && inkFloater == null && annotationThread == null &&
+                    ttsDraft == null
                 val paneListenHighlight = listenState?.takeIf { it.bookId == bookId }?.let { listen ->
                     com.mozhi.reader.feature.reader.engine.ListenHighlightSpan(
                         chapterIndex = listen.chapterIndex,
@@ -469,9 +451,7 @@ fun ReaderScreen(
                         onTtsAction = paneTtsAction,
                         onImageAction = paneImageAction,
                         pageTurnRequest = hardwarePageTurnRequest,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .graphicsLayer { alpha = contentAlpha.value }
+                        modifier = Modifier.fillMaxSize()
                     )
                 } else {
                     ReaderPane(
@@ -493,9 +473,26 @@ fun ReaderScreen(
                         pageTurnRequest = hardwarePageTurnRequest,
                         onCenterTap = { chromeVisible = !chromeVisible },
                         onBoundary = viewModel::onBoundaryHit,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .graphicsLayer { alpha = contentAlpha.value }
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
+            else -> Unit // 书籍数据还没到：只画纸色底，转圈交给下面的慢路径提示
+        }
+
+        // 慢路径才转圈：秒开时 contentVisible 早在这 450ms 之前就为真了。
+        if (!contentVisible && (showLoadingHint || state.isPreparingText)) {
+            Column(
+                modifier = Modifier.align(Alignment.Center),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                CircularProgressIndicator(color = palette.accent)
+                if (state.isPreparingText) {
+                    Text(
+                        text = "正在准备正文…",
+                        color = palette.muted,
+                        style = MaterialTheme.typography.bodyMedium
                     )
                 }
             }
@@ -744,6 +741,7 @@ fun ReaderScreen(
                 onAnimationChange = viewModel::setPageTurnAnimation,
                 onPageModeChange = viewModel::setPageMode,
                 onKeepScreenOnChange = viewModel::setKeepScreenOn,
+                onImmersiveReadingChange = viewModel::setImmersiveReading,
                 onVolumeKeysPageTurnChange = viewModel::setVolumeKeysPageTurn
             )
         }

@@ -105,12 +105,11 @@ internal fun AppUpdateCard(viewModel: AppUpdateViewModel = hiltViewModel()) {
         }
     }
     val update = state.update
-    FrostedSurface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(22.dp),
-        shadowElevation = 5.dp
+    // 外层玻璃卡由 SettingsGroup 提供，这里只出内容，免得卡中套卡。
+    Column(
+        Modifier.padding(horizontal = 16.dp, vertical = 13.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("应用更新", style = MaterialTheme.typography.titleSmall)
@@ -149,11 +148,10 @@ internal fun AppUpdateCard(viewModel: AppUpdateViewModel = hiltViewModel()) {
                     LinearProgressIndicator(Modifier.fillMaxWidth())
                 }
             }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("启动时自动检查", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                Switch(checked = state.autoCheck, onCheckedChange = viewModel::setAutoCheck)
-            }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("启动时自动检查", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            Switch(checked = state.autoCheck, onCheckedChange = viewModel::setAutoCheck)
         }
     }
 }

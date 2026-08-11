@@ -18,16 +18,19 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.statusBarsIgnoringVisibility
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -42,8 +45,6 @@ import androidx.compose.material.icons.outlined.FormatSize
 import androidx.compose.material.icons.outlined.Headphones
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.AutoAwesome
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -78,6 +79,8 @@ import com.mozhi.reader.core.datastore.CustomReaderTheme
 import com.mozhi.reader.core.datastore.ReaderSettings
 import com.mozhi.reader.core.datastore.ReaderTheme
 import com.mozhi.reader.core.datastore.activeCustomTheme
+import com.mozhi.reader.ui.components.MoReadDropdownMenu
+import com.mozhi.reader.ui.components.MoReadMenuItem
 import com.mozhi.reader.ui.theme.onAccent
 
 data class ReaderPalette(
@@ -297,6 +300,7 @@ fun ReaderChrome(
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun ReaderTopBar(
     bookTitle: String,
     chapterTitle: String,
@@ -309,7 +313,7 @@ private fun ReaderTopBar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .statusBarsPadding()
+            .windowInsetsPadding(WindowInsets.statusBarsIgnoringVisibility)
             .padding(horizontal = 14.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -367,21 +371,27 @@ private fun ReaderTopBar(
                 palette = palette,
                 onClick = { menuExpanded = true }
             )
-            DropdownMenu(
+            MoReadDropdownMenu(
                 expanded = menuExpanded,
-                onDismissRequest = { menuExpanded = false }
+                onDismissRequest = { menuExpanded = false },
+                containerColor = palette.glass,
+                contentColor = palette.onBackground,
+                borderColor = palette.glassBorder,
+                offset = androidx.compose.ui.unit.DpOffset(0.dp, 11.dp),
+                minWidth = 160.dp,
+                maxWidth = 160.dp
             ) {
-                DropdownMenuItem(
-                    text = { Text("添加书签") },
-                    leadingIcon = { Icon(Icons.Outlined.BookmarkAdd, contentDescription = null) },
+                MoReadMenuItem(
+                    text = "添加书签",
+                    icon = Icons.Outlined.BookmarkAdd,
                     onClick = {
                         menuExpanded = false
                         onAddBookmark()
                     }
                 )
-                DropdownMenuItem(
-                    text = { Text("书内搜索") },
-                    leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+                MoReadMenuItem(
+                    text = "书内搜索",
+                    icon = Icons.Outlined.Search,
                     onClick = {
                         menuExpanded = false
                         onSearch()
@@ -680,4 +690,3 @@ private fun ReaderDockButton(
         )
     }
 }
-

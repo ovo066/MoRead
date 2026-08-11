@@ -110,6 +110,7 @@ fun ReaderTypographySheet(
     onAnimationChange: (PageTurnAnimation) -> Unit,
     onPageModeChange: (PageMode) -> Unit,
     onKeepScreenOnChange: (Boolean) -> Unit,
+    onImmersiveReadingChange: (Boolean) -> Unit,
     onVolumeKeysPageTurnChange: (Boolean) -> Unit
 ) {
     var editorDraft by remember { mutableStateOf<CustomReaderTheme?>(null) }
@@ -398,6 +399,26 @@ fun ReaderTypographySheet(
             Switch(
                 checked = settings.keepScreenOn,
                 onCheckedChange = onKeepScreenOnChange,
+                colors = SwitchDefaults.colors(
+                    checkedTrackColor = palette.accent,
+                    checkedThumbColor = palette.onAccent
+                )
+            )
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("完全沉浸", style = MaterialTheme.typography.bodyMedium)
+                Text("阅读时隐藏系统状态栏", style = MaterialTheme.typography.labelSmall, color = palette.muted)
+            }
+            Switch(
+                checked = settings.immersiveReading,
+                onCheckedChange = onImmersiveReadingChange,
                 colors = SwitchDefaults.colors(
                     checkedTrackColor = palette.accent,
                     checkedThumbColor = palette.onAccent

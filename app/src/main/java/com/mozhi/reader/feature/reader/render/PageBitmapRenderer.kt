@@ -48,6 +48,10 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
     }
     private val imagePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val backgroundProvider = ReaderBackgroundProvider(pageStyle)
+
+    /** 后台合成背景图；已就绪（无背景图或缓存命中）时不会回调。 */
+    fun prepareBackground(onReady: () -> Unit) = backgroundProvider.prepare(onReady)
+
     private val syntaxPaints = HashMap<String, TextPaint>()
     private val syntaxBackgroundPaints = HashMap<Int, Paint>()
     /** (style|colorTag) → Paint；样式实例随 pageStyle 重建，缓存不会跨主题存活。 */
@@ -127,8 +131,7 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
 
     /** 纸面底色 + 纸纹；滚动模式在实时画布上也走这一笔。 */
     internal fun drawBackdrop(canvas: Canvas, width: Float, height: Float) {
-        backgroundProvider.draw(canvas, width, height)
-    }
+        backgroundProvider.draw(canvas, width, height)    }
 
     internal fun drawHeader(canvas: Canvas, page: RenderPage) {
         if (!pageStyle.showHeader) return

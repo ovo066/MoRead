@@ -459,4 +459,15 @@ object DatabaseMigrations {
             )
         }
     }
+
+    /**
+     * 书架阅读状态与置顶：进度只能推导「未读/在读/已读完」，读完回顾旧章会掉回在读，
+     * 所以给一列手动标记（null = 仍按进度推导），「搁置」只存在于手动标记里。
+     */
+    val Migration15To16 = object : Migration(15, 16) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `books` ADD COLUMN `manualReadState` TEXT DEFAULT NULL")
+            db.execSQL("ALTER TABLE `books` ADD COLUMN `pinnedAt` INTEGER NOT NULL DEFAULT 0")
+        }
+    }
 }

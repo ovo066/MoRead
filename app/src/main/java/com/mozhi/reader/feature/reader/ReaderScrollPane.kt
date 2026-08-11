@@ -229,7 +229,11 @@ fun ReaderScrollPane(
             )
             holder.interruptScroll()
             selection.clear()
-            val relayout = holder.applyStyle(style, environment)
+            // 背景图在后台合成，落地后再重绘——首帧不等它。
+            val relayout = holder.applyStyle(style, environment) {
+                invalidate()
+                backgroundTick++
+            }
             if (relayout) {
                 controller.updateEnvironment(style.spec, style.measure)
             }
@@ -553,12 +557,16 @@ private class ScrollPaneHolder(private val controller: ReaderContentController) 
         return true
     }
 
-    fun applyStyle(style: ReaderPageStyle, environment: ReaderScrollEnvironmentKey): Boolean {
+    fun applyStyle(
+        style: ReaderPageStyle,
+        environment: ReaderScrollEnvironmentKey,
+        onBackgroundReady: () -> Unit
+    ): Boolean {
         val relayout = appliedEnvironment != environment
         appliedEnvironment = environment
         this.style = style
         renderer?.release()
-        renderer = PageBitmapRenderer(style)
+        renderer = PageBitmapRenderer(style).also { it.prepareBackground(onBackgroundReady) }
         strips.clear()
         return relayout
     }

@@ -13,6 +13,7 @@ class ChapterStripTest {
 
     private val lineStep = 24f
     private val paragraphSpacing = 10f
+    private val blankLineSpacing = 16f
     private val textHeight = 20f // FakeMeasure 的正文行高
 
     private fun spec() = TypesetSpec(
@@ -21,6 +22,7 @@ class ChapterStripTest {
         contentLineStep = lineStep,
         titleLineStep = 30f,
         paragraphSpacing = paragraphSpacing,
+        blankLineSpacing = blankLineSpacing,
         titleTopSpacing = 0f,
         titleBottomSpacing = 0f
     )
@@ -114,5 +116,30 @@ class ChapterStripTest {
         assertEquals(100f, strip.totalHeight, 0.01f)
         assertEquals(0, strip.charOffsetAt(0f))
         assertEquals(0f, strip.stripYOf(0), 0.01f)
+    }
+
+    /**
+     * 空行分段的书，被切缝吞掉的是空行间距而不是段距——靠 isParagraphEnd 反推会短一截，
+     * 所以条带必须读排版器记下的 trailingGap。
+     */
+    @Test
+    fun `seams after a blank source line reproduce the blank line gap`() {
+        val body = List(10) { "一".repeat(if (it % 2 == 0) 30 else 15) }.joinToString("\n\n")
+        val chapter = ChapterTypesetter(spec(), FakeMeasure()).typeset(0, "", body)
+        assertTrue("需要多页样本，实际 ${chapter.pages.size} 页", chapter.pages.size >= 3)
+        val strip = ChapterStrip(chapter, spec())
+
+        var blankSeams = 0
+        for (page in 0 until chapter.pages.size - 1) {
+            val prevLast = chapter.pages[page].lines.last()
+            val nextFirst = chapter.pages[page + 1].lines.first()
+            val whiteGap = (strip.pageTops[page + 1] + nextFirst.lineTop) -
+                (strip.pageTops[page] + prevLast.lineTop + textHeight)
+            val expected = (lineStep - textHeight) +
+                if (prevLast.isParagraphEnd) blankLineSpacing else 0f
+            assertEquals("第 $page 页切缝空白", expected, whiteGap, 0.01f)
+            if (prevLast.isParagraphEnd) blankSeams++
+        }
+        assertTrue("样本应包含段尾切缝", blankSeams > 0)
     }
 }

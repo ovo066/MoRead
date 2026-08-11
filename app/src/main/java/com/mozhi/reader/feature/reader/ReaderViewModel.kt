@@ -32,6 +32,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.LocalDate
 import javax.inject.Inject
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
@@ -64,6 +65,8 @@ data class ReaderUiState(
     val readingStats: ReaderStatistics = ReaderStatistics(),
     val isLoading: Boolean = true,
     val isPreparingText: Boolean = false,
+    /** 当前章已排完版、首页可画；进场揭示以它为准，不再掐固定表。 */
+    val isContentReady: Boolean = false,
     val errorMessage: String? = null
 )
 
@@ -180,13 +183,20 @@ class ReaderViewModel @Inject constructor(
 
     private fun loadBook() {
         viewModelScope.launch {
-            val book = libraryRepository.getBook(bookId)
+            // 四件事互不依赖，串行做等于把进书前的等待叠四份 —— 长书的 getChapters
+            // 要拉几千行，串在最后就把排版的起跑时间整个推后了。
+            val bookAsync = async { libraryRepository.getBook(bookId) }
+            val chaptersAsync = async { libraryRepository.getChapters(bookId) }
+            val settingsAsync = async { settingsRepository.settings.first() }
+            val imagesAsync = async { runCatching { loadInlineImages() }.getOrDefault(emptyMap()) }
+
+            val book = bookAsync.await()
             if (book == null) {
                 mutableState.update { it.copy(isLoading = false, errorMessage = "书籍不存在") }
                 return@launch
             }
-            val settings = settingsRepository.settings.first()
-            mutableState.update { it.copy(book = book, settings = settings) }
+            mutableState.update { it.copy(book = book, settings = settingsAsync.await()) }
+            var resolved = book
             if (book.textVersion < 1) {
                 // Imported before plain text existed; the backfill worker runs at app start.
                 mutableState.update { it.copy(isPreparingText = true) }
@@ -198,33 +208,34 @@ class ReaderViewModel @Inject constructor(
                     }
                     return@launch
                 }
+                // 只有走过补齐这条慢路径才需要重读，正常进书不该多打一次库。
+                resolved = libraryRepository.getBook(bookId) ?: book
             }
-            val chapters = libraryRepository.getChapters(bookId)
+            val chapters = chaptersAsync.await()
             if (chapters.isEmpty()) {
                 mutableState.update { it.copy(isLoading = false, errorMessage = "本书没有章节") }
                 return@launch
             }
             chapterEntities = chapters
-            contentController.setInlineImages(loadInlineImages())
+            contentController.setInlineImages(imagesAsync.await())
             contentController.setChapters(
                 chapters.map { ChapterMeta(it.chapterIndex, it.title, it.charCount) }
             )
-            val freshBook = libraryRepository.getBook(bookId) ?: book
             mutableState.update {
                 it.copy(
-                    book = freshBook,
+                    book = resolved,
                     chapters = chapters,
-                    currentChapterIndex = freshBook.lastReadChapterIndex,
-                    currentCharOffset = freshBook.lastReadCharOffset,
+                    currentChapterIndex = resolved.lastReadChapterIndex,
+                    currentCharOffset = resolved.lastReadCharOffset,
                     isLoading = false
                 )
             }
             hasOpenedPosition = true
             contentController.openPosition(
-                chapterIndex = freshBook.lastReadChapterIndex,
-                charOffset = freshBook.lastReadCharOffset
+                chapterIndex = resolved.lastReadChapterIndex,
+                charOffset = resolved.lastReadCharOffset
             )
-            if (freshBook.textVersion < LibraryRepository.CURRENT_TEXT_VERSION) {
+            if (resolved.textVersion < LibraryRepository.CURRENT_TEXT_VERSION) {
                 // v1 正文可立即阅读；后台补齐 EPUB 图片 sidecar 后原位重排，不要求用户重开书。
                 viewModelScope.launch {
                     val upgraded = libraryRepository.observeBook(bookId).first { observed ->
@@ -269,6 +280,10 @@ class ReaderViewModel @Inject constructor(
 
     override fun onContentChanged(relativePosition: Int) {
         contentHook?.invoke(relativePosition)
+        // relativePosition == 0 且窗口已排版 = 当前章首页可画，正文可以露脸了。
+        if (relativePosition == 0 && contentController.isReady && !mutableState.value.isContentReady) {
+            mutableState.update { it.copy(isContentReady = true) }
+        }
     }
 
     override fun onPositionChanged(
@@ -569,6 +584,10 @@ class ReaderViewModel @Inject constructor(
 
     fun setKeepScreenOn(value: Boolean) {
         viewModelScope.launch { settingsRepository.setKeepScreenOn(value) }
+    }
+
+    fun setImmersiveReading(value: Boolean) {
+        viewModelScope.launch { settingsRepository.setImmersiveReading(value) }
     }
 
     fun setVolumeKeysPageTurn(value: Boolean) {

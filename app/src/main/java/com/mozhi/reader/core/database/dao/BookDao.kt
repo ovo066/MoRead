@@ -93,6 +93,12 @@ interface BookDao {
     @Query("UPDATE books SET coverPath = :coverPath, metadataEdited = 1 WHERE id = :bookId")
     suspend fun replaceBookCover(bookId: Long, coverPath: String?)
 
+    @Query("UPDATE books SET manualReadState = :state WHERE id = :bookId")
+    suspend fun updateReadState(bookId: Long, state: String?)
+
+    @Query("UPDATE books SET pinnedAt = :pinnedAt WHERE id = :bookId")
+    suspend fun updatePinnedAt(bookId: Long, pinnedAt: Long)
+
     @Query("DELETE FROM books WHERE id = :bookId")
     suspend fun deleteBook(bookId: Long)
 

@@ -14,6 +14,7 @@ class ChapterTypesetterTest {
         contentLineStep = 25f,
         titleLineStep = 34f,
         paragraphSpacing = 9f,
+        blankLineSpacing = 14f,
         titleTopSpacing = 10f,
         titleBottomSpacing = 25f
     )
@@ -161,16 +162,57 @@ class ChapterTypesetterTest {
     }
 
     @Test
-    fun `blank source line keeps a full line of height`() {
-        val single = typeset("", cjkParagraph + "\n" + cjkParagraph)
-        val separated = typeset("", cjkParagraph + "\n\n" + cjkParagraph)
-        val singleGap = firstGapBetweenParagraphs(single)
-        val separatedGap = firstGapBetweenParagraphs(separated)
+    fun `blank source line contributes spacing instead of a whole line`() {
+        // bottomAlign 会把满页的行距整体拉伸，这里要的是精确间隙，先关掉。
+        val exact = spec.copy(bottomAlign = false)
+        val single = typeset(exact, cjkParagraph + "\n" + cjkParagraph)
+        val separated = typeset(exact, cjkParagraph + "\n\n" + cjkParagraph)
+
         assertTrue(
-            "blank line gap ($separatedGap) must exceed plain paragraph gap ($singleGap) by a line",
-            separatedGap >= singleGap + 20f
+            "空行不应再排成一行（哪怕是空文本行）",
+            separated.pages.flatMap(TextPage::lines).none { it.text.isEmpty() }
+        )
+        // 间隙 = (行距 - 行高) + 结算的段距；空行按 max(段距, 空行间距) 结算。
+        assertEquals(5f + 9f, firstGapBetweenParagraphs(single), 0.01f)
+        assertEquals(5f + 14f, firstGapBetweenParagraphs(separated), 0.01f)
+    }
+
+    @Test
+    fun `consecutive blank lines collapse into one gap`() {
+        val exact = spec.copy(bottomAlign = false)
+        val one = typeset(exact, cjkParagraph + "\n\n" + cjkParagraph)
+        val many = typeset(exact, cjkParagraph + "\n\n\n\n\n" + cjkParagraph)
+        assertEquals(
+            firstGapBetweenParagraphs(one),
+            firstGapBetweenParagraphs(many),
+            0.01f
         )
     }
+
+    /** 防「段落间距滑杆调了没效果」回归：两种分段写法都必须完全跟着设置走。 */
+    @Test
+    fun `paragraph gap tracks the spacing setting for both separator styles`() {
+        val exact = spec.copy(bottomAlign = false)
+        listOf(0f, 4f, 20f).forEach { spacing ->
+            // 渲染层的换算：空行间距 = 段距 × BLANK_LINE_FACTOR(2)。
+            val scaled = exact.copy(paragraphSpacing = spacing, blankLineSpacing = spacing * 2f)
+            assertEquals(
+                "段距 $spacing 时的普通段间隙",
+                5f + spacing,
+                firstGapBetweenParagraphs(typeset(scaled, cjkParagraph + "\n" + cjkParagraph)),
+                0.01f
+            )
+            assertEquals(
+                "段距 $spacing 时的空行段间隙",
+                5f + spacing * 2f,
+                firstGapBetweenParagraphs(typeset(scaled, cjkParagraph + "\n\n" + cjkParagraph)),
+                0.01f
+            )
+        }
+    }
+
+    private fun typeset(spec: TypesetSpec, body: String): TextChapter =
+        ChapterTypesetter(spec, FakeMeasure()).typeset(0, "", body)
 
     private fun firstGapBetweenParagraphs(chapter: TextChapter): Float {
         val lines = chapter.pages.flatMap(TextPage::lines).filter { it.columns.isNotEmpty() }

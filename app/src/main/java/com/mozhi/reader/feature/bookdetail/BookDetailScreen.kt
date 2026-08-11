@@ -37,6 +37,7 @@ import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.EditNote
+import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.FileDownload
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.ChevronRight
@@ -90,9 +91,12 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import com.mozhi.reader.ui.components.blockSheetDrag
 import com.mozhi.reader.core.database.entity.AnnotationEntity
+import com.mozhi.reader.core.database.entity.BookReadState
 import com.mozhi.reader.core.database.entity.BookmarkEntity
 import com.mozhi.reader.core.database.entity.IllustrationEntity
 import com.mozhi.reader.core.database.entity.NoteEntity
+import com.mozhi.reader.core.database.entity.label
+import com.mozhi.reader.core.database.entity.readState
 import com.mozhi.reader.core.database.entity.tagList
 import com.mozhi.reader.core.datastore.ReaderImageAsset
 import com.mozhi.reader.core.library.NoteRepository
@@ -102,6 +106,8 @@ import com.mozhi.reader.ui.components.RingGauge
 import com.mozhi.reader.ui.components.SectionLabel
 import com.mozhi.reader.ui.components.StatCell
 import com.mozhi.reader.ui.components.MoReadBackdrop
+import com.mozhi.reader.ui.components.MoReadDropdownMenu
+import com.mozhi.reader.ui.components.MoReadMenuItem
 import com.mozhi.reader.ui.theme.MoReadTokens
 import com.mozhi.reader.ui.theme.sealColor
 import java.io.File
@@ -117,12 +123,15 @@ fun BookDetailScreen(
     bookId: Long,
     onBack: () -> Unit,
     onContinueReading: (Long) -> Unit,
+    /** 书架长按菜单的深链动作：edit = 直接开信息编辑，cover = 直接开封面选择。 */
+    initialAction: String? = null,
     viewModel: BookDetailViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var showBookmarks by remember { mutableStateOf(false) }
     var showEditor by remember { mutableStateOf(false) }
+    var showCoverPicker by remember { mutableStateOf(false) }
     var selectedNote by remember { mutableStateOf<NoteEntity?>(null) }
     var showAllNotes by remember { mutableStateOf(false) }
     var showAnnotations by remember { mutableStateOf(false) }
@@ -148,6 +157,13 @@ fun BookDetailScreen(
     val coverPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia()
     ) { uri -> uri?.let(viewModel::replaceCover) }
+
+    LaunchedEffect(initialAction) {
+        when (initialAction) {
+            "edit" -> showEditor = true
+            "cover" -> showCoverPicker = true
+        }
+    }
 
     MoReadBackdrop {
         val book = state.book
@@ -177,7 +193,7 @@ fun BookDetailScreen(
                 )
             }
             item {
-                DetailHero(book = book)
+                DetailHero(book = book, onEditReadState = viewModel::setReadState)
             }
             item {
                 RingRow(
@@ -293,19 +309,37 @@ fun BookDetailScreen(
         if (showEditor) {
             BookMetadataEditorDialog(
                 book = book,
-                imageLibrary = state.imageLibrary,
                 isWorking = state.isWorking,
                 onPickCover = {
                     coverPicker.launch(
                         PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                     )
                 },
-                onSelectCover = viewModel::selectCover,
+                onOpenCoverLibrary = { showCoverPicker = true },
                 onDismiss = { showEditor = false },
                 onSave = { title, author, tags ->
                     viewModel.saveMetadata(title, author, tags)
                     showEditor = false
                 }
+            )
+        }
+
+        // 顶层持有：编辑对话框要用，书架长按的「修改封面」深链也直接开这一个。
+        if (showCoverPicker) {
+            ImageLibraryPickerDialog(
+                images = state.imageLibrary,
+                currentPath = book.coverPath,
+                onSelect = { image ->
+                    viewModel.selectCover(image.id)
+                    showCoverPicker = false
+                },
+                onImport = {
+                    showCoverPicker = false
+                    coverPicker.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
+                },
+                onDismiss = { showCoverPicker = false }
             )
         }
     }
@@ -791,10 +825,9 @@ private fun IllustrationGalleryCard(
 @Composable
 private fun BookMetadataEditorDialog(
     book: BookEntity,
-    imageLibrary: List<ReaderImageAsset>,
     isWorking: Boolean,
     onPickCover: () -> Unit,
-    onSelectCover: (String) -> Unit,
+    onOpenCoverLibrary: () -> Unit,
     onDismiss: () -> Unit,
     onSave: (String, String, List<String>) -> Unit
 ) {
@@ -802,7 +835,6 @@ private fun BookMetadataEditorDialog(
     var author by remember(book.id) { mutableStateOf(book.author) }
     var tags by remember(book.id, book.tags) { mutableStateOf(book.tagList()) }
     var tagDraft by remember(book.id) { mutableStateOf("") }
-    var showImageLibrary by remember { mutableStateOf(false) }
 
     fun commitTag() {
         // 逗号是标签的存储分隔符，输入里出现就当多个标签处理。
@@ -904,7 +936,7 @@ private fun BookMetadataEditorDialog(
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         OutlinedButton(
-                            onClick = { showImageLibrary = true },
+                            onClick = onOpenCoverLibrary,
                             shape = MoReadTokens.CapsuleShape,
                             enabled = !isWorking
                         ) {
@@ -935,22 +967,6 @@ private fun BookMetadataEditorDialog(
             TextButton(onClick = onDismiss) { Text("取消") }
         }
     )
-
-    if (showImageLibrary) {
-        ImageLibraryPickerDialog(
-            images = imageLibrary,
-            currentPath = book.coverPath,
-            onSelect = { image ->
-                onSelectCover(image.id)
-                showImageLibrary = false
-            },
-            onImport = {
-                showImageLibrary = false
-                onPickCover()
-            },
-            onDismiss = { showImageLibrary = false }
-        )
-    }
 }
 
 @Composable
@@ -1051,7 +1067,7 @@ private fun DetailTopBar(onBack: () -> Unit, onEdit: () -> Unit, onBookmarks: ()
 }
 
 @Composable
-private fun DetailHero(book: BookEntity) {
+private fun DetailHero(book: BookEntity, onEditReadState: (BookReadState?) -> Unit) {
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -1075,15 +1091,62 @@ private fun DetailHero(book: BookEntity) {
             modifier = Modifier.padding(top = 6.dp)
         )
         val tags = remember(book.tags) { book.tagList() }
-        if (tags.isNotEmpty()) {
-            FlowRow(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 12.dp, start = 24.dp, end = 24.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+        FlowRow(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 12.dp, start = 24.dp, end = 24.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            ReadStateChip(state = book.readState(), onSelect = onEditReadState)
+            tags.forEach { tag -> TagChip(tag) }
+        }
+    }
+}
+
+/** 阅读状态胶囊：点开就能手动改四态，和书架长按菜单是同一份写入。 */
+@Composable
+private fun ReadStateChip(state: BookReadState, onSelect: (BookReadState?) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        Surface(
+            onClick = { expanded = true },
+            shape = MoReadTokens.CapsuleShape,
+            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f),
+            contentColor = MaterialTheme.colorScheme.primary
+        ) {
+            Row(
+                modifier = Modifier.padding(start = 10.dp, end = 7.dp, top = 5.dp, bottom = 5.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                tags.forEach { tag -> TagChip(tag) }
+                Text(text = state.label(), style = MaterialTheme.typography.labelSmall)
+                Icon(
+                    imageVector = Icons.Outlined.ExpandMore,
+                    contentDescription = "修改阅读状态",
+                    modifier = Modifier
+                        .padding(start = 2.dp)
+                        .size(14.dp)
+                )
+            }
+        }
+        MoReadDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            MoReadMenuItem(
+                text = "按进度自动判断",
+                selected = false,
+                onClick = {
+                    expanded = false
+                    onSelect(null)
+                }
+            )
+            BookReadState.entries.forEach { candidate ->
+                MoReadMenuItem(
+                    text = candidate.label(),
+                    selected = candidate == state,
+                    onClick = {
+                        expanded = false
+                        onSelect(candidate)
+                    }
+                )
             }
         }
     }

@@ -68,7 +68,12 @@ class TextPage(
     /** Body offset of the first body character on this page. */
     val chapterPosition: Int,
     val charLength: Int,
-    val height: Float
+    val height: Float,
+    /**
+     * 本页最后一行之后已经应用、但被页切吞掉的纵向间隙（段距，或空行贡献的更大间隙）。
+     * 滚动模式拼接条带时必须补回来，否则接缝会比页内段距紧。排版器写入，绘制不读。
+     */
+    val trailingGap: Float = 0f
 )
 
 /** A fully laid out chapter. Layout is atomic: once published, all pages exist. */

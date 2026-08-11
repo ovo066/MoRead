@@ -632,6 +632,41 @@ class MigrationTest {
         }
     }
 
+    /** v16：书架阅读状态与置顶两列；老书按「未标记 + 未置顶」进来，仍由进度推导状态。 */
+    @Test
+    fun migrate15To16AddsReadStateAndPinColumns() {
+        helper.createDatabase(DB_NAME, 15).use { db ->
+            db.execSQL(
+                """
+                INSERT INTO books (
+                    id, title, author, coverPath, epubPath, sourceType, importedAt,
+                    totalChapters, lastReadLocator, lastReadChapterIndex, lastReadCharOffset,
+                    lastReadAt, textVersion, tags, metadataEdited
+                ) VALUES (1, '测试书', '', NULL, '/book.epub', 'EPUB', 1,
+                          3, NULL, 2, 20, 2, 1, '玄幻', 0)
+                """.trimIndent()
+            )
+        }
+
+        val db = helper.runMigrationsAndValidate(
+            DB_NAME,
+            16,
+            true,
+            DatabaseMigrations.Migration15To16
+        )
+        db.query("SELECT manualReadState, pinnedAt FROM books WHERE id = 1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue("老书不应带手动标记", cursor.isNull(0))
+            assertEquals(0L, cursor.getLong(1))
+        }
+        db.execSQL("UPDATE books SET manualReadState = 'SHELVED', pinnedAt = 42 WHERE id = 1")
+        db.query("SELECT manualReadState, pinnedAt FROM books WHERE id = 1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("SHELVED", cursor.getString(0))
+            assertEquals(42L, cursor.getLong(1))
+        }
+    }
+
     private companion object {
         const val DB_NAME = "migration-test.db"
     }

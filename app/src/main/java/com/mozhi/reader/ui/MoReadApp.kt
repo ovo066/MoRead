@@ -41,18 +41,23 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.navigation.NamedNavArgument
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavGraphBuilder
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import com.mozhi.reader.feature.bookdetail.BookDetailScreen
 import com.mozhi.reader.feature.bookshelf.BookshelfScreen
 import com.mozhi.reader.feature.companion.CompanionScreen
@@ -60,6 +65,7 @@ import com.mozhi.reader.feature.companion.PersonaEditorScreen
 import com.mozhi.reader.feature.importer.ImportPreviewScreen
 import com.mozhi.reader.feature.reader.CompanionChatScreen
 import com.mozhi.reader.feature.reader.ReaderScreen
+import com.mozhi.reader.feature.settings.AiServiceScreen
 import com.mozhi.reader.feature.settings.ApiLogScreen
 import com.mozhi.reader.feature.settings.AppUpdatePrompt
 import com.mozhi.reader.feature.settings.ImageGenSettingsScreen
@@ -69,6 +75,7 @@ import com.mozhi.reader.feature.settings.GlobalPresetSettingsScreen
 import com.mozhi.reader.feature.settings.BackupSettingsScreen
 import com.mozhi.reader.feature.settings.ProviderDetailScreen
 import com.mozhi.reader.feature.settings.SettingsScreen
+import com.mozhi.reader.feature.settings.SettingsViewModel
 import com.mozhi.reader.feature.settings.TtsSettingsScreen
 import com.mozhi.reader.feature.settings.UserMaskSettingsScreen
 import com.mozhi.reader.feature.settings.WebSearchSettingsScreen
@@ -102,9 +109,11 @@ private fun rootExit(): ExitTransition =
 /** 二级页统一注册入口：带 shared-axis X 转场的 composable。 */
 private fun NavGraphBuilder.pushComposable(
     route: String,
+    arguments: List<NamedNavArgument> = emptyList(),
     content: @Composable AnimatedContentScope.(NavBackStackEntry) -> Unit
 ) = composable(
     route = route,
+    arguments = arguments,
     enterTransition = {
         slideInHorizontally(tween(PUSH_MS, easing = FastOutSlowInEasing)) { it / 4 } +
             fadeIn(tween(PUSH_MS, easing = LinearOutSlowInEasing))
@@ -200,7 +209,13 @@ fun MoReadApp(
                         externalImportUri = incomingBookUri,
                         onExternalImportConsumed = onIncomingBookConsumed,
                         onOpenBook = { bookId -> navController.navigate("reader/$bookId") },
-                        onOpenBookDetail = { bookId -> navController.navigate("book/$bookId") },
+                        onOpenBookDetail = { bookId, action ->
+                            // 长按菜单的「编辑详情 / 修改封面」直接深链到详情页对应的对话框，
+                            // 免得把同一套编辑器在书架再实现一遍。
+                            navController.navigate(
+                                if (action == null) "book/$bookId" else "book/$bookId?action=$action"
+                            )
+                        },
                         onOpenImportPreview = { sessionId ->
                             navController.navigate("import/$sessionId")
                         }
@@ -218,12 +233,11 @@ fun MoReadApp(
                         onCreatePersona = { navController.navigate("persona/0") }
                     )
                 }
-                composable(RootDestination.Settings.route) {
+                composable(RootDestination.Settings.route) { entry ->
                     SettingsScreen(
                         contentPadding = padding,
-                        onOpenProvider = { providerId ->
-                            navController.navigate("provider/$providerId")
-                        },
+                        viewModel = hiltViewModel(entry),
+                        onOpenAiServices = { navController.navigate("ai-services") },
                         onOpenWebSearch = { navController.navigate("web-search-settings") },
                         onOpenTtsSettings = { navController.navigate("tts-settings") },
                         onOpenImageGenSettings = { navController.navigate("image-gen-settings") },
@@ -233,6 +247,20 @@ fun MoReadApp(
                         onOpenUserMasks = { navController.navigate("user-masks") },
                         onOpenBackup = { navController.navigate("backup-settings") },
                         onOpenApiLog = { navController.navigate("api-log") }
+                    )
+                }
+                pushComposable("ai-services") { entry ->
+                    // AI 服务与设置页共用同一个热状态，避免推入二级页时重新订阅数据库，
+                    // 先画一帧空列表再补内容造成的闪烁。
+                    val settingsEntry = remember(entry) {
+                        navController.getBackStackEntry(RootDestination.Settings.route)
+                    }
+                    AiServiceScreen(
+                        onBack = navController::popBackStack,
+                        onOpenProvider = { providerId ->
+                            navController.navigate("provider/$providerId")
+                        },
+                        viewModel = hiltViewModel<SettingsViewModel>(settingsEntry)
                     )
                 }
                 pushComposable("tts-settings") {
@@ -262,10 +290,20 @@ fun MoReadApp(
                 pushComposable("api-log") {
                     ApiLogScreen(onBack = navController::popBackStack)
                 }
-                pushComposable("book/{bookId}") { entry ->
+                pushComposable(
+                    route = "book/{bookId}?action={action}",
+                    arguments = listOf(
+                        navArgument("action") {
+                            type = NavType.StringType
+                            nullable = true
+                            defaultValue = null
+                        }
+                    )
+                ) { entry ->
                     BookDetailScreen(
                         bookId = entry.arguments?.getString("bookId")?.toLongOrNull()
                             ?: return@pushComposable,
+                        initialAction = entry.arguments?.getString("action"),
                         onBack = navController::popBackStack,
                         onContinueReading = { bookId ->
                             navController.navigate("reader/$bookId")

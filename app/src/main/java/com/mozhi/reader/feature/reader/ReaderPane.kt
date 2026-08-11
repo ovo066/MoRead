@@ -234,7 +234,13 @@ fun ReaderPane(
             val relayout = holder.applyStyle(
                 style = style,
                 environment = environment,
-                includeBackgroundInPages = settings.pageTurnAnimation.usesEmbeddedPageBackground()
+                includeBackgroundInPages = settings.pageTurnAnimation.usesEmbeddedPageBackground(),
+                // 背景图在后台合成，落地后才重画页面位图——首帧不等它。
+                onBackgroundReady = {
+                    holder.refresh(0)
+                    frameTick++
+                    backgroundTick++
+                }
             )
             if (relayout) {
                 controller.updateEnvironment(style.spec, style.measure)
@@ -763,6 +769,9 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
     private var listenHighlight: ListenHighlightSpan? = null
     private var dirty = true
     private var preparedTurn: PageTurnDirection? = null
+    /** 邻页渲染已排到下一帧、尚未执行。 */
+    private var pendingNeighbors = false
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     var curBitmap: Bitmap? = null
         private set
@@ -780,7 +789,8 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
     fun applyStyle(
         style: ReaderPageStyle,
         environment: ReaderEnvironmentKey,
-        includeBackgroundInPages: Boolean
+        includeBackgroundInPages: Boolean,
+        onBackgroundReady: () -> Unit
     ): Boolean {
         val relayout = appliedEnvironment != environment
         appliedEnvironment = environment
@@ -788,7 +798,7 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
         this.includeBackgroundInPages = includeBackgroundInPages
         backgroundColor = style.backgroundColor
         renderer?.release()
-        renderer = PageBitmapRenderer(style)
+        renderer = PageBitmapRenderer(style).also { it.prepareBackground(onBackgroundReady) }
         dirty = true
         return relayout
     }
@@ -887,6 +897,8 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
 
     fun ensureFresh() {
         if (dirty) refresh(0)
+        // 翻页真要用到邻页了，把推迟的那两张立刻补上。
+        if (pendingNeighbors) renderNeighborsNow()
     }
 
     fun prepareTurn(direction: PageTurnDirection) {
@@ -911,11 +923,25 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
             1 -> nextBitmap = renderPage(renderer, nextBitmap, RelativePage.NEXT)
             else -> {
                 curBitmap = renderPage(renderer, curBitmap, RelativePage.CUR)
-                nextBitmap = renderPage(renderer, nextBitmap, RelativePage.NEXT)
-                prevBitmap = renderPage(renderer, prevBitmap, RelativePage.PREV)
+                // 邻页推到下一帧：一张全屏 ARGB_8888 就是十来兆，进书时三张连着画
+                // 必然顶掉首帧。邻页在翻页前不上屏，晚一帧毫无代价。
+                scheduleNeighbors()
             }
         }
         dirty = false
+    }
+
+    private fun scheduleNeighbors() {
+        if (pendingNeighbors) return
+        pendingNeighbors = true
+        mainHandler.post { if (pendingNeighbors) renderNeighborsNow() }
+    }
+
+    private fun renderNeighborsNow() {
+        pendingNeighbors = false
+        val renderer = renderer ?: return
+        nextBitmap = renderPage(renderer, nextBitmap, RelativePage.NEXT)
+        prevBitmap = renderPage(renderer, prevBitmap, RelativePage.PREV)
     }
 
     private fun rotateAndRenderNeighbor(
@@ -983,6 +1009,8 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
     }
 
     fun release() {
+        pendingNeighbors = false
+        mainHandler.removeCallbacksAndMessages(null)
         renderer?.release()
         renderer = null
         curBitmap?.recycle()

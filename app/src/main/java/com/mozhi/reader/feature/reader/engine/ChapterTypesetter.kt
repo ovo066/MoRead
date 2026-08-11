@@ -16,6 +16,12 @@ data class TypesetSpec(
     val contentLineStep: Float,
     val titleLineStep: Float,
     val paragraphSpacing: Float,
+    /**
+     * 源文空行贡献的段间隙，与 [paragraphSpacing] 取较大者结算。空行不再占一整行正文
+     * 高度——否则「空行分段」的 TXT 会有一个拿不掉的地板（整行 + 两次段距），用户拖
+     * 段距滑杆几乎看不出变化。取 max 也让连续空行天然折叠成一份。
+     */
+    val blankLineSpacing: Float,
     val titleTopSpacing: Float,
     val titleBottomSpacing: Float,
     val syntaxHighlightRules: List<ReaderSyntaxRule> = emptyList(),
@@ -56,6 +62,9 @@ class ChapterTypesetter(
         val trimmedTitle = title.trim()
         var cursor = 0
         var firstParagraph = true
+        // 段间隙在「下一段之前」结算，而不是段后立即加：空行只抬高这个待结算值，
+        // 于是连续空行天然折叠，页顶折叠也仍由 addSpacing 自己负责。
+        var pendingGap = 0f
 
         while (cursor <= body.length) {
             val newline = body.indexOf('\n', cursor)
@@ -68,30 +77,34 @@ class ChapterTypesetter(
                 state.addSpacing(spec.titleTopSpacing, atPageTop = true)
                 if (trimmedTitle.isNotEmpty() && paragraph.trim() == trimmedTitle) {
                     layoutParagraph(state, paragraph, cursor, isTitle = true, synthetic = false, syntax = syntax)
-                    state.addSpacing(spec.titleBottomSpacing)
+                    pendingGap = spec.titleBottomSpacing
                     cursor = end + 1
                     if (isLastParagraph) break
                     continue
                 }
                 if (trimmedTitle.isNotEmpty()) {
                     layoutParagraph(state, trimmedTitle, cursor, isTitle = true, synthetic = true, syntax = syntax)
-                    state.addSpacing(spec.titleBottomSpacing)
+                    pendingGap = spec.titleBottomSpacing
                 }
             }
 
             val isImageToken = paragraph == IMAGE_PLACEHOLDER ||
                 (paragraph.length == 1 && paragraph[0] == INLINE_IMAGE_CHAR)
             val inlineImage = if (isImageToken) imagesByOffset[cursor] else null
-            if (inlineImage != null) {
-                layoutInlineImage(state, inlineImage, cursor, paragraph.length)
-            } else if (paragraph.isNotEmpty()) {
-                layoutParagraph(state, paragraph, cursor, isTitle = false, synthetic = false, syntax = syntax)
-            } else {
-                // A blank source line keeps a full line of height, like Legado laying out "" —
-                // TXT scene separators must stay visibly wider than an ordinary paragraph gap.
-                blankLine(state, cursor)
+            when {
+                inlineImage != null -> {
+                    state.addSpacing(pendingGap)
+                    layoutInlineImage(state, inlineImage, cursor, paragraph.length)
+                    pendingGap = spec.paragraphSpacing
+                }
+                paragraph.isNotEmpty() -> {
+                    state.addSpacing(pendingGap)
+                    layoutParagraph(state, paragraph, cursor, isTitle = false, synthetic = false, syntax = syntax)
+                    pendingGap = spec.paragraphSpacing
+                }
+                // 空行只是分段信号：抬高待结算间隙，不再占一整行正文高度。
+                else -> pendingGap = max(pendingGap, spec.blankLineSpacing)
             }
-            state.addSpacing(spec.paragraphSpacing)
 
             cursor = end + 1
             if (isLastParagraph) break
@@ -144,29 +157,6 @@ class ChapterTypesetter(
                 )
             ),
             lineStep = height
-        )
-    }
-
-    private fun blankLine(state: LayoutState, bodyOffset: Int) {
-        if (state.pendingLines.isEmpty() && state.pages.isEmpty()) return
-        state.prepareForLine(contentMetrics.textHeight)
-        if (state.pendingLines.isEmpty()) return // never open a page with a blank line
-        val lineTop = state.durY
-        val lineBottom = lineTop + contentMetrics.textHeight
-        state.addLine(
-            TextLine(
-                text = "",
-                columns = emptyList(),
-                lineTop = lineTop,
-                lineBase = lineBottom - contentMetrics.descent,
-                lineBottom = lineBottom,
-                startX = 0f,
-                isTitle = false,
-                isParagraphEnd = true,
-                chapterPosition = bodyOffset,
-                charLength = 0
-            ),
-            lineStep = spec.contentLineStep
         )
     }
 
@@ -324,10 +314,16 @@ class ChapterTypesetter(
         val pendingLines = ArrayList<TextLine>()
         var durY = 0f
 
+        /** 已应用、还没有行「跟上」的间隙；页在这里切开时要记进 [TextPage.trailingGap]。 */
+        private var openGap = 0f
+
         /** Spacing collapses at the top of a page: Legado resets `durY` on page break too. */
         fun addSpacing(spacing: Float, atPageTop: Boolean = false) {
             if (spacing <= 0f) return
-            if (pendingLines.isNotEmpty() || atPageTop) durY += spacing
+            if (pendingLines.isNotEmpty() || atPageTop) {
+                durY += spacing
+                openGap += spacing
+            }
         }
 
         fun prepareForLine(textHeight: Float) {
@@ -339,6 +335,7 @@ class ChapterTypesetter(
         fun addLine(line: TextLine, lineStep: Float) {
             pendingLines.add(line)
             durY = line.lineTop + max(lineStep, line.lineBottom - line.lineTop)
+            openGap = 0f
         }
 
         fun closePage(force: Boolean) {
@@ -358,11 +355,13 @@ class ChapterTypesetter(
                     lines = ArrayList(pendingLines),
                     chapterPosition = start,
                     charLength = length,
-                    height = pendingLines.last().lineBottom
+                    height = pendingLines.last().lineBottom,
+                    trailingGap = openGap
                 )
             )
             pendingLines.clear()
             durY = 0f
+            openGap = 0f
         }
 
         /**

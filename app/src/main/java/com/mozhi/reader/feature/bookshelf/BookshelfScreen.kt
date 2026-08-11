@@ -4,10 +4,12 @@ import android.net.Uri
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -42,22 +44,24 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.List
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.FilterAltOff
 import androidx.compose.material.icons.outlined.GridView
-import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.PushPin
+import androidx.compose.material.icons.outlined.Sell
+import androidx.compose.material.icons.outlined.TaskAlt
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -73,16 +77,26 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -90,8 +104,16 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.mozhi.reader.core.database.entity.BookEntity
+import com.mozhi.reader.core.database.entity.BookReadState
+import com.mozhi.reader.core.database.entity.label
+import com.mozhi.reader.core.database.entity.isPinned
+import com.mozhi.reader.core.database.entity.readState
 import com.mozhi.reader.core.datastore.ShelfLayout
 import com.mozhi.reader.ui.components.FrostedSurface
+import com.mozhi.reader.ui.components.MoReadMenuDivider
+import com.mozhi.reader.ui.components.MoReadMenuExpandableItem
+import com.mozhi.reader.ui.components.MoReadMenuItem
+import com.mozhi.reader.ui.components.MoReadStableDropdownMenu
 import com.mozhi.reader.ui.theme.MoReadTokens
 import com.mozhi.reader.ui.theme.accentColor
 import com.mozhi.reader.ui.theme.isDarkTheme
@@ -110,13 +132,15 @@ fun BookshelfScreen(
     externalImportUri: Uri? = null,
     onExternalImportConsumed: () -> Unit = {},
     onOpenBook: (Long) -> Unit,
-    onOpenBookDetail: (Long) -> Unit,
+    onOpenBookDetail: (bookId: Long, action: String?) -> Unit,
     onOpenImportPreview: (String) -> Unit,
     viewModel: BookshelfViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var deleteTarget by remember { mutableStateOf<BookEntity?>(null) }
+    var longPressTarget by remember { mutableStateOf<BookLongPressTarget?>(null) }
+    var rootSize by remember { mutableStateOf(IntSize.Zero) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
     val context = LocalContext.current
     // ACTION_GET_CONTENT 而不是 OPEN_DOCUMENT：后者只能用系统 DocumentsUI（简陋），
@@ -162,6 +186,7 @@ fun BookshelfScreen(
         }
     }
 
+    // 搜索是叠在筛选之上的第二层过滤，留在 UI 层：输入是本地状态，没必要绕一圈 VM。
     val filteredBooks = remember(state.books, searchQuery) {
         val query = searchQuery.trim()
         if (query.isEmpty()) {
@@ -178,57 +203,89 @@ fun BookshelfScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .padding(contentPadding)
+            .onSizeChanged { rootSize = it }
     ) {
-        if (state.books.isEmpty()) {
-            EmptyBookshelfFeed(onImport = requestImport)
-        } else {
-            Crossfade(
-                targetState = state.layout,
-                animationSpec = tween(durationMillis = 260),
-                label = "bookshelf-layout"
-            ) { layout ->
-                when (layout) {
-                    ShelfLayout.GRID -> BookGrid(
-                        books = filteredBooks,
-                        allBooks = state.books,
-                        recentChapterTitle = state.recentChapterTitle,
-                        searchQuery = searchQuery,
-                        onSearchChange = { searchQuery = it },
-                        onOpenBook = onOpenBook,
-                        onOpenBookDetail = onOpenBookDetail,
-                        onDeleteBook = { deleteTarget = it },
-                        onToggleLayout = viewModel::toggleLayout,
-                        onImport = requestImport
-                    )
-                    ShelfLayout.LIST -> BookList(
-                        books = filteredBooks,
-                        allBooks = state.books,
-                        recentChapterTitle = state.recentChapterTitle,
-                        searchQuery = searchQuery,
-                        onSearchChange = { searchQuery = it },
-                        onOpenBook = onOpenBook,
-                        onOpenBookDetail = onOpenBookDetail,
-                        onDeleteBook = { deleteTarget = it },
-                        onToggleLayout = viewModel::toggleLayout,
-                        onImport = requestImport
-                    )
+        // 长按浮层出现时内容整体虚化（API 31+；以下靠更重的压暗兜底）。
+        val blurRadius by animateDpAsState(
+            targetValue = if (longPressTarget != null) 18.dp else 0.dp,
+            animationSpec = tween(durationMillis = 160),
+            label = "shelf-blur"
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .blur(blurRadius, BlurredEdgeTreatment.Unbounded)
+                .padding(contentPadding)
+        ) {
+            if (state.totalBooks == 0) {
+                EmptyBookshelfFeed(onImport = requestImport)
+            } else {
+                val onLongPress: (BookEntity, Rect) -> Unit = { book, bounds ->
+                    longPressTarget = BookLongPressTarget(book, bounds)
                 }
+                Crossfade(
+                    targetState = state.layout,
+                    animationSpec = tween(durationMillis = 260),
+                    label = "bookshelf-layout"
+                ) { layout ->
+                    when (layout) {
+                        ShelfLayout.GRID -> BookGrid(
+                            books = filteredBooks,
+                            state = state,
+                            searchQuery = searchQuery,
+                            onSearchChange = { searchQuery = it },
+                            onOpenBook = onOpenBook,
+                            onOpenBookDetail = { onOpenBookDetail(it, null) },
+                            onLongPress = onLongPress,
+                            onSetLayout = viewModel::setLayout,
+                            onSetReadStateFilter = viewModel::setReadStateFilter,
+                            onSetTagFilter = viewModel::setTagFilter,
+                            onImport = requestImport
+                        )
+                        ShelfLayout.LIST -> BookList(
+                            books = filteredBooks,
+                            state = state,
+                            searchQuery = searchQuery,
+                            onSearchChange = { searchQuery = it },
+                            onOpenBook = onOpenBook,
+                            onOpenBookDetail = { onOpenBookDetail(it, null) },
+                            onLongPress = onLongPress,
+                            onSetLayout = viewModel::setLayout,
+                            onSetReadStateFilter = viewModel::setReadStateFilter,
+                            onSetTagFilter = viewModel::setTagFilter,
+                            onImport = requestImport
+                        )
+                    }
+                }
+            }
+
+            SnackbarHost(
+                hostState = snackbarHostState,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(horizontal = 20.dp, vertical = 82.dp)
+            )
+            AnimatedVisibility(
+                visible = state.isImporting,
+                enter = fadeIn(tween(160)),
+                exit = fadeOut(tween(180))
+            ) {
+                ImportProgressOverlay()
             }
         }
 
-        SnackbarHost(
-            hostState = snackbarHostState,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(horizontal = 20.dp, vertical = 82.dp)
-        )
-        AnimatedVisibility(
-            visible = state.isImporting,
-            enter = fadeIn(tween(160)),
-            exit = fadeOut(tween(180))
-        ) {
-            ImportProgressOverlay()
+        longPressTarget?.let { target ->
+            BackHandler { longPressTarget = null }
+            BookLongPressOverlay(
+                target = target,
+                rootSize = rootSize,
+                onDismiss = { longPressTarget = null },
+                onSetReadState = { viewModel.setReadState(target.book, it) },
+                onEditDetails = { onOpenBookDetail(target.book.id, "edit") },
+                onChangeCover = { onOpenBookDetail(target.book.id, "cover") },
+                onTogglePinned = { viewModel.togglePinned(target.book) },
+                onDelete = { deleteTarget = target.book }
+            )
         }
     }
 
@@ -268,14 +325,15 @@ private fun EmptyBookshelfFeed(onImport: () -> Unit) {
 @Composable
 private fun BookGrid(
     books: List<BookEntity>,
-    allBooks: List<BookEntity>,
-    recentChapterTitle: String,
+    state: BookshelfUiState,
     searchQuery: String,
     onSearchChange: (String) -> Unit,
     onOpenBook: (Long) -> Unit,
     onOpenBookDetail: (Long) -> Unit,
-    onDeleteBook: (BookEntity) -> Unit,
-    onToggleLayout: () -> Unit,
+    onLongPress: (BookEntity, Rect) -> Unit,
+    onSetLayout: (ShelfLayout) -> Unit,
+    onSetReadStateFilter: (BookReadState?) -> Unit,
+    onSetTagFilter: (String?) -> Unit,
     onImport: () -> Unit
 ) {
     LazyVerticalGrid(
@@ -287,8 +345,8 @@ private fun BookGrid(
     ) {
         item(span = { GridItemSpan(maxLineSpan) }) {
             BookshelfHeader(
-                books = allBooks,
-                recentChapterTitle = recentChapterTitle,
+                recentBook = state.recentBook,
+                recentChapterTitle = state.recentChapterTitle,
                 searchQuery = searchQuery,
                 onSearchChange = onSearchChange,
                 onOpenBook = onOpenBook
@@ -298,22 +356,23 @@ private fun BookGrid(
             LibraryToolbar(
                 bookCount = books.size,
                 searching = searchQuery.isNotBlank(),
-                layout = ShelfLayout.GRID,
-                onToggleLayout = onToggleLayout,
+                state = state,
+                onSetLayout = onSetLayout,
+                onSetReadStateFilter = onSetReadStateFilter,
+                onSetTagFilter = onSetTagFilter,
                 onImport = onImport
             )
         }
         if (books.isEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }) {
-                NoSearchResults(query = searchQuery)
+                NoShelfResults(query = searchQuery, filter = state.filter)
             }
         }
         gridItems(books, key = BookEntity::id) { book ->
             GridBookItem(
                 book = book,
                 onOpen = { onOpenBookDetail(book.id) },
-                onOpenDetail = { onOpenBookDetail(book.id) },
-                onDelete = { onDeleteBook(book) }
+                onLongPress = { bounds -> onLongPress(book, bounds) }
             )
         }
     }
@@ -322,14 +381,15 @@ private fun BookGrid(
 @Composable
 private fun BookList(
     books: List<BookEntity>,
-    allBooks: List<BookEntity>,
-    recentChapterTitle: String,
+    state: BookshelfUiState,
     searchQuery: String,
     onSearchChange: (String) -> Unit,
     onOpenBook: (Long) -> Unit,
     onOpenBookDetail: (Long) -> Unit,
-    onDeleteBook: (BookEntity) -> Unit,
-    onToggleLayout: () -> Unit,
+    onLongPress: (BookEntity, Rect) -> Unit,
+    onSetLayout: (ShelfLayout) -> Unit,
+    onSetReadStateFilter: (BookReadState?) -> Unit,
+    onSetTagFilter: (String?) -> Unit,
     onImport: () -> Unit
 ) {
     LazyColumn(
@@ -339,8 +399,8 @@ private fun BookList(
     ) {
         item {
             BookshelfHeader(
-                books = allBooks,
-                recentChapterTitle = recentChapterTitle,
+                recentBook = state.recentBook,
+                recentChapterTitle = state.recentChapterTitle,
                 searchQuery = searchQuery,
                 onSearchChange = onSearchChange,
                 onOpenBook = onOpenBook
@@ -351,20 +411,21 @@ private fun BookList(
             LibraryToolbar(
                 bookCount = books.size,
                 searching = searchQuery.isNotBlank(),
-                layout = ShelfLayout.LIST,
-                onToggleLayout = onToggleLayout,
+                state = state,
+                onSetLayout = onSetLayout,
+                onSetReadStateFilter = onSetReadStateFilter,
+                onSetTagFilter = onSetTagFilter,
                 onImport = onImport
             )
         }
         if (books.isEmpty()) {
-            item { NoSearchResults(query = searchQuery) }
+            item { NoShelfResults(query = searchQuery, filter = state.filter) }
         }
         listItems(books, key = BookEntity::id) { book ->
             ListBookItem(
                 book = book,
                 onOpen = { onOpenBookDetail(book.id) },
-                onOpenDetail = { onOpenBookDetail(book.id) },
-                onDelete = { onDeleteBook(book) }
+                onLongPress = { bounds -> onLongPress(book, bounds) }
             )
         }
     }
@@ -373,7 +434,7 @@ private fun BookList(
 /** 问候语抬头 + 搜索胶囊 + 正在阅读卡（design/ui-adaptation-plan.md §2.1–2.3）。 */
 @Composable
 private fun BookshelfHeader(
-    books: List<BookEntity>,
+    recentBook: BookEntity?,
     recentChapterTitle: String,
     searchQuery: String,
     onSearchChange: (String) -> Unit,
@@ -385,7 +446,7 @@ private fun BookshelfHeader(
         // 搜索时让位给结果：此刻用户找的是别的书，不是手头这本。
         if (searchQuery.isBlank()) {
             ReadingNowCard(
-                books = books,
+                recentBook = recentBook,
                 recentChapterTitle = recentChapterTitle,
                 onOpenBook = onOpenBook
             )
@@ -477,15 +538,10 @@ private fun SearchCapsule(query: String, onQueryChange: (String) -> Unit) {
  */
 @Composable
 private fun ReadingNowCard(
-    books: List<BookEntity>,
+    recentBook: BookEntity?,
     recentChapterTitle: String,
     onOpenBook: (Long) -> Unit
 ) {
-    val recentBook = remember(books) {
-        books.asSequence()
-            .filter { it.lastReadAt > 0L }
-            .maxByOrNull(BookEntity::lastReadAt)
-    }
     val seal = sealColor()
     val darkTheme = isDarkTheme()
     val accent = accentColor()
@@ -644,10 +700,17 @@ private fun ReadingNowCard(
 private fun LibraryToolbar(
     bookCount: Int,
     searching: Boolean,
-    layout: ShelfLayout,
-    onToggleLayout: () -> Unit,
+    state: BookshelfUiState,
+    onSetLayout: (ShelfLayout) -> Unit,
+    onSetReadStateFilter: (BookReadState?) -> Unit,
+    onSetTagFilter: (String?) -> Unit,
     onImport: () -> Unit
 ) {
+    var viewMenuExpanded by remember { mutableStateOf(false) }
+    var availableMenuHeight by remember { mutableStateOf(SHELF_MENU_MAX_HEIGHT) }
+    val density = LocalDensity.current
+    val localView = LocalView.current
+    val filter = state.filter
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -656,24 +719,65 @@ private fun LibraryToolbar(
         Column {
             Text("书架", style = MaterialTheme.typography.headlineSmall)
             Text(
-                if (searching) "找到 $bookCount 本" else "$bookCount 本 · 按最近阅读",
+                text = buildString {
+                    if (searching) append("找到 $bookCount 本") else append("$bookCount 本")
+                    filter.readState?.let { append(" · ").append(it.label()) }
+                    filter.tag?.let { append(" · #").append(it) }
+                    if (!searching && !filter.isActive) append(" · 按最近阅读")
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(top = 2.dp)
             )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FrostedSurface(shape = CircleShape, shadowElevation = 3.dp) {
-                IconButton(onClick = onToggleLayout, modifier = Modifier.size(44.dp)) {
-                    Icon(
-                        imageVector = if (layout == ShelfLayout.GRID) {
-                            Icons.AutoMirrored.Outlined.List
-                        } else {
-                            Icons.Outlined.GridView
-                        },
-                        contentDescription = "切换书架布局"
-                    )
+            Box(
+                modifier = Modifier.onGloballyPositioned { coordinates ->
+                    val remainingPx = localView.height - coordinates.boundsInWindow().bottom
+                    availableMenuHeight = with(density) {
+                        remainingPx.coerceAtLeast(0f).toDp() - 14.dp
+                    }.coerceIn(SHELF_MENU_MIN_HEIGHT, SHELF_MENU_MAX_HEIGHT)
                 }
+            ) {
+                FrostedSurface(shape = CircleShape, shadowElevation = 3.dp) {
+                    Box {
+                        IconButton(
+                            onClick = { viewMenuExpanded = true },
+                            modifier = Modifier.size(44.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Tune,
+                                contentDescription = "视图与筛选",
+                                tint = if (filter.isActive) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    LocalContentColor.current
+                                }
+                            )
+                        }
+                        // 筛选生效时给个小圆点，免得用户忘了自己开着筛选还以为书丢了。
+                        if (filter.isActive) {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(top = 11.dp, end = 11.dp)
+                                    .size(7.dp)
+                                    .background(MaterialTheme.colorScheme.primary, CircleShape)
+                            )
+                        }
+                    }
+                }
+                ShelfViewMenu(
+                    expanded = viewMenuExpanded,
+                    onDismiss = { viewMenuExpanded = false },
+                    state = state,
+                    maxHeight = availableMenuHeight,
+                    onSetLayout = onSetLayout,
+                    onSetReadStateFilter = onSetReadStateFilter,
+                    onSetTagFilter = onSetTagFilter
+                )
             }
             Surface(
                 onClick = onImport,
@@ -695,34 +799,143 @@ private fun LibraryToolbar(
     }
 }
 
+/**
+ * 视图菜单：布局 / 阅读状态 / 标签三组各占一行，右侧显示当前取值，点开才就地展开。
+ * 全摊开会长到半屏，和触发它的 44dp 圆按钮完全不成比例。
+ */
+@Composable
+private fun ShelfViewMenu(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    state: BookshelfUiState,
+    maxHeight: androidx.compose.ui.unit.Dp,
+    onSetLayout: (ShelfLayout) -> Unit,
+    onSetReadStateFilter: (BookReadState?) -> Unit,
+    onSetTagFilter: (String?) -> Unit
+) {
+    // 手风琴：同时只展开一组，菜单高度始终可控。菜单关掉后回到全收起。
+    var section by remember(expanded) { mutableStateOf<ShelfMenuSection?>(null) }
+    fun toggle(target: ShelfMenuSection) {
+        section = if (section == target) null else target
+    }
+
+    MoReadStableDropdownMenu(
+        expanded = expanded,
+        onDismissRequest = onDismiss,
+        width = SHELF_MENU_WIDTH,
+        maxHeight = maxHeight
+    ) {
+        MoReadMenuExpandableItem(
+            text = "布局",
+            valueText = if (state.layout == ShelfLayout.GRID) "网格" else "列表",
+            icon = Icons.Outlined.GridView,
+            expanded = section == ShelfMenuSection.LAYOUT,
+            onToggle = { toggle(ShelfMenuSection.LAYOUT) }
+        ) {
+            MoReadMenuItem(
+                text = "网格",
+                indent = MENU_INDENT,
+                selected = state.layout == ShelfLayout.GRID,
+                onClick = { onSetLayout(ShelfLayout.GRID) }
+            )
+            MoReadMenuItem(
+                text = "列表",
+                indent = MENU_INDENT,
+                selected = state.layout == ShelfLayout.LIST,
+                onClick = { onSetLayout(ShelfLayout.LIST) }
+            )
+        }
+
+        MoReadMenuExpandableItem(
+            text = "阅读状态",
+            valueText = state.filter.readState?.label() ?: "全部",
+            icon = Icons.Outlined.TaskAlt,
+            expanded = section == ShelfMenuSection.READ_STATE,
+            onToggle = { toggle(ShelfMenuSection.READ_STATE) }
+        ) {
+            MoReadMenuItem(
+                text = "全部",
+                indent = MENU_INDENT,
+                selected = state.filter.readState == null,
+                onClick = { onSetReadStateFilter(null) }
+            )
+            BookReadState.entries.forEach { readState ->
+                MoReadMenuItem(
+                    text = readState.label(),
+                    indent = MENU_INDENT,
+                    selected = state.filter.readState == readState,
+                    onClick = { onSetReadStateFilter(readState) }
+                )
+            }
+        }
+
+        if (state.tags.isNotEmpty()) {
+            MoReadMenuExpandableItem(
+                text = "标签",
+                valueText = state.filter.tag ?: "全部",
+                icon = Icons.Outlined.Sell,
+                expanded = section == ShelfMenuSection.TAG,
+                onToggle = { toggle(ShelfMenuSection.TAG) }
+            ) {
+                MoReadMenuItem(
+                    text = "全部",
+                    indent = MENU_INDENT,
+                    selected = state.filter.tag == null,
+                    onClick = { onSetTagFilter(null) }
+                )
+                state.tags.forEach { tag ->
+                    MoReadMenuItem(
+                        text = tag,
+                        indent = MENU_INDENT,
+                        selected = state.filter.tag == tag,
+                        onClick = { onSetTagFilter(tag) }
+                    )
+                }
+            }
+        }
+
+        if (state.filter.isActive) {
+            MoReadMenuDivider()
+            MoReadMenuItem(
+                text = "清除筛选",
+                icon = Icons.Outlined.FilterAltOff,
+                onClick = {
+                    onSetReadStateFilter(null)
+                    onSetTagFilter(null)
+                    onDismiss()
+                }
+            )
+        }
+    }
+}
+
+private enum class ShelfMenuSection { LAYOUT, READ_STATE, TAG }
+
+private val MENU_INDENT = 22.dp
+private val SHELF_MENU_WIDTH = 244.dp
+private val SHELF_MENU_MIN_HEIGHT = 120.dp
+private val SHELF_MENU_MAX_HEIGHT = 390.dp
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun GridBookItem(
     book: BookEntity,
     onOpen: () -> Unit,
-    onOpenDetail: () -> Unit,
-    onDelete: () -> Unit
+    onLongPress: (Rect) -> Unit
 ) {
-    var menuExpanded by remember { mutableStateOf(false) }
+    var bounds by remember { mutableStateOf(Rect.Zero) }
     Column {
-        Box {
-            BookCover(
-                book = book,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(0.69f)
-                    .combinedClickable(
-                        onClick = onOpen,
-                        onLongClick = { menuExpanded = true }
-                    )
-            )
-            BookItemMenu(
-                expanded = menuExpanded,
-                onDismiss = { menuExpanded = false },
-                onOpenDetail = onOpenDetail,
-                onDelete = onDelete
-            )
-        }
+        BookCover(
+            book = book,
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(0.69f)
+                .onGloballyPositioned { bounds = it.boundsInRoot() }
+                .combinedClickable(
+                    onClick = onOpen,
+                    onLongClick = { onLongPress(bounds) }
+                )
+        )
         Text(
             text = book.title,
             style = MaterialTheme.typography.titleSmall,
@@ -741,106 +954,84 @@ private fun GridBookItem(
     }
 }
 
-@Composable
-private fun BookItemMenu(
-    expanded: Boolean,
-    onDismiss: () -> Unit,
-    onOpenDetail: () -> Unit,
-    onDelete: () -> Unit
-) {
-    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
-        DropdownMenuItem(
-            text = { Text("书籍详情") },
-            leadingIcon = { Icon(Icons.Outlined.Info, contentDescription = null) },
-            onClick = {
-                onDismiss()
-                onOpenDetail()
-            }
-        )
-        DropdownMenuItem(
-            text = { Text("删除") },
-            leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null) },
-            onClick = {
-                onDismiss()
-                onDelete()
-            }
-        )
-    }
-}
-
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ListBookItem(
     book: BookEntity,
     onOpen: () -> Unit,
-    onOpenDetail: () -> Unit,
-    onDelete: () -> Unit
+    onLongPress: (Rect) -> Unit
 ) {
-    var menuExpanded by remember { mutableStateOf(false) }
+    var bounds by remember { mutableStateOf(Rect.Zero) }
     val progress = readProgress(book)
-    Box {
-        FrostedSurface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .combinedClickable(
-                    onClick = onOpen,
-                    onLongClick = { menuExpanded = true }
-                ),
-            shape = RoundedCornerShape(24.dp),
-            shadowElevation = 4.dp
+    FrostedSurface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .onGloballyPositioned { bounds = it.boundsInRoot() }
+            .combinedClickable(
+                onClick = onOpen,
+                onLongClick = { onLongPress(bounds) }
+            ),
+        shape = RoundedCornerShape(24.dp),
+        shadowElevation = 4.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(13.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                modifier = Modifier.padding(13.dp),
-                verticalAlignment = Alignment.CenterVertically
+            CompactBookArtwork(
+                book = book,
+                modifier = Modifier.size(width = 68.dp, height = 96.dp)
+            )
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 14.dp)
             ) {
-                CompactBookArtwork(
-                    book = book,
-                    modifier = Modifier.size(width = 68.dp, height = 96.dp)
-                )
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 14.dp)
-                ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (book.isPinned) {
+                        Icon(
+                            imageVector = Icons.Outlined.PushPin,
+                            contentDescription = "已置顶",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .size(13.dp)
+                                .padding(end = 1.dp)
+                        )
+                        Spacer(Modifier.width(5.dp))
+                    }
                     Text(
                         book.title,
                         style = MaterialTheme.typography.titleMedium,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
-                    Text(
-                        book.author.ifBlank { "未知作者" },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
-                    Text(
-                        progressText(book),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(top = 9.dp)
-                    )
-                    LinearProgressIndicator(
-                        progress = { progress },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 9.dp)
-                            .height(4.dp)
-                            .clip(CircleShape),
-                        color = MaterialTheme.colorScheme.primary,
-                        trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                        gapSize = 0.dp,
-                        drawStopIndicator = {}
-                    )
                 }
+                Text(
+                    book.author.ifBlank { "未知作者" },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+                Text(
+                    progressText(book),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 9.dp)
+                )
+                LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 9.dp)
+                        .height(4.dp)
+                        .clip(CircleShape),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    gapSize = 0.dp,
+                    drawStopIndicator = {}
+                )
             }
         }
-        BookItemMenu(
-            expanded = menuExpanded,
-            onDismiss = { menuExpanded = false },
-            onOpenDetail = onOpenDetail,
-            onDelete = onDelete
-        )
     }
 }
 
@@ -886,18 +1077,39 @@ private fun BookCover(
                     .padding(8.dp)
             ) {
                 Text(
-                    text = if (book.lastReadAt == 0L) "未开始" else "${(animatedProgress * 100).toInt()}%",
+                    text = when (val state = book.readState()) {
+                        BookReadState.READING -> "${(animatedProgress * 100).toInt()}%"
+                        else -> state.label()
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                 )
+            }
+            if (book.isPinned) {
+                Surface(
+                    shape = CircleShape,
+                    color = Color.Black.copy(alpha = 0.38f),
+                    contentColor = Color.White,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(7.dp)
+                        .size(22.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Outlined.PushPin,
+                            contentDescription = "已置顶",
+                            modifier = Modifier.size(13.dp)
+                        )
+                    }
+                }
             }
         }
     }
 }
 
 @Composable
-private fun CompactBookArtwork(book: BookEntity, modifier: Modifier) {
-    val coverFile = remember(book.coverPath) {
+internal fun CompactBookArtwork(book: BookEntity, modifier: Modifier) {    val coverFile = remember(book.coverPath) {
         book.coverPath?.let(::File)?.takeIf(File::isFile)
     }
     Surface(
@@ -1015,9 +1227,10 @@ private fun VerticalBookTitle(
     }
 }
 
-/** 搜索无结果：书架非空但过滤后为零，给个明确说法而不是一片空白。 */
+/** 书架非空但过滤后为零：搜索与筛选都可能造成，得说清是哪一种。 */
 @Composable
-private fun NoSearchResults(query: String) {
+private fun NoShelfResults(query: String, filter: ShelfFilter) {
+    val searching = query.isNotBlank()
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1025,19 +1238,28 @@ private fun NoSearchResults(query: String) {
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Icon(
-            imageVector = Icons.Outlined.Search,
+            imageVector = if (searching) Icons.Outlined.Search else Icons.Outlined.Tune,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
             modifier = Modifier.size(34.dp)
         )
         Text(
-            text = "没有匹配「${query.trim()}」的书",
+            text = when {
+                searching -> "没有匹配「${query.trim()}」的书"
+                filter.tag != null -> "没有标着「${filter.tag}」的书"
+                filter.readState != null -> "没有${filter.readState.label()}的书"
+                else -> "书架是空的"
+            },
             style = MaterialTheme.typography.titleSmall,
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(top = 12.dp)
         )
         Text(
-            text = "试试书名、作者或标签的其他关键词",
+            text = if (searching) {
+                "试试书名、作者或标签的其他关键词"
+            } else {
+                "在右上角的视图菜单里可以改回「全部」"
+            },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -1161,7 +1383,7 @@ private fun ImportProgressOverlay() {
     }
 }
 
-private fun readProgress(book: BookEntity): Float = when {
+internal fun readProgress(book: BookEntity): Float = when {
     book.totalChapters <= 0 || book.lastReadAt == 0L -> 0f
     else -> ((book.lastReadChapterIndex + 1f) / book.totalChapters).coerceIn(0f, 1f)
 }

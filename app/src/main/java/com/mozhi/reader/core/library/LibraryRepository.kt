@@ -5,6 +5,7 @@ import androidx.room.withTransaction
 import com.mozhi.reader.core.database.MoReadDatabase
 import com.mozhi.reader.core.database.dao.BookDao
 import com.mozhi.reader.core.database.entity.BookEntity
+import com.mozhi.reader.core.database.entity.BookReadState
 import com.mozhi.reader.core.database.entity.BookSourceType
 import com.mozhi.reader.core.database.entity.BookmarkEntity
 import com.mozhi.reader.core.database.entity.ChapterEntity
@@ -76,6 +77,18 @@ class LibraryRepository @Inject constructor(
             author = author.trim(),
             tags = tags.joinToString(TAG_SEPARATOR) { it.trim() }.trim()
         )
+    }
+
+    /**
+     * 手动标记阅读状态；传 null 表示交还给按进度自动推导。
+     * 标为已读完/搁置只写这一列，不动 lastRead*，回顾旧章不会把标记冲掉。
+     */
+    suspend fun setReadState(bookId: Long, state: BookReadState?) {
+        bookDao.updateReadState(bookId, state?.name)
+    }
+
+    suspend fun setPinned(bookId: Long, pinned: Boolean) {
+        bookDao.updatePinnedAt(bookId, if (pinned) System.currentTimeMillis() else 0L)
     }
 
     /**

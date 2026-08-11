@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mozhi.reader.core.database.entity.AnnotationEntity
 import com.mozhi.reader.core.database.entity.BookEntity
+import com.mozhi.reader.core.database.entity.BookReadState
 import com.mozhi.reader.core.database.entity.BookmarkEntity
 import com.mozhi.reader.core.database.entity.ChapterEntity
 import com.mozhi.reader.core.database.entity.IllustrationEntity
@@ -232,8 +233,15 @@ class BookDetailViewModel @Inject constructor(
         viewModelScope.launch { illustrationRepository.delete(illustration) }
     }
 
-    /** 保存用户手改的书名/作者/标签。校验规则与 TXT 导入路径一致。 */
-    fun saveMetadata(title: String, author: String, tags: List<String>) {
+    /** 手动标记阅读状态；传 null 交还给按进度自动推导。与书架长按菜单同一份写入。 */
+    fun setReadState(state: BookReadState?) {
+        viewModelScope.launch {
+            runCatching { libraryRepository.setReadState(bookId, state) }
+                .onFailure { eventChannel.send(BookDetailEvent.ShowMessage("操作失败，请稍后重试")) }
+        }
+    }
+
+    /** 保存用户手改的书名/作者/标签。校验规则与 TXT 导入路径一致。 */    fun saveMetadata(title: String, author: String, tags: List<String>) {
         val cleanTitle = title.trim()
         viewModelScope.launch {
             val message = when {

@@ -56,6 +56,7 @@ class ReaderPageStyle(
         contentLineStep = lineStep,
         titleLineStep = titleSizePx * TITLE_LINE_HEIGHT,
         paragraphSpacing = contentSizePx * paragraphSpacingEm,
+        blankLineSpacing = contentSizePx * paragraphSpacingEm * BLANK_LINE_FACTOR,
         titleTopSpacing = lineStep * TITLE_TOP_LINES,
         titleBottomSpacing = lineStep * TITLE_BOTTOM_LINES,
         syntaxHighlightRules = syntaxHighlightRules,
@@ -75,6 +76,13 @@ class ReaderPageStyle(
         const val TITLE_SCALE = 1.35f
         const val TITLE_LINE_HEIGHT = 1.4f
         const val PARAGRAPH_SPACING_EM = 0.55f
+        /**
+         * 源文空行相对普通段距的倍率。段距按「取较大者」结算，所以空行分段的 TXT
+         * 每段之间拿到 2× 段距，而只在少数位置留空行的书，那几处场景分隔同样是 2×、
+         * 明显宽于普通段距——两种意图都成立，且全程跟着「段落间距」滑杆走，
+         * 不再有一整行正文高度的地板把滑杆的效果盖掉。
+         */
+        const val BLANK_LINE_FACTOR = 2f
         const val TITLE_TOP_LINES = 0.4f
         const val TITLE_BOTTOM_LINES = 1f
         const val TIP_SP = 11f

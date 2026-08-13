@@ -50,6 +50,11 @@ class BookTextStore @Inject constructor(
 
     suspend fun delete(bookId: Long) {
         withContext(Dispatchers.IO) { bookDirectory(bookId).deleteRecursively() }
+        invalidate(bookId)
+    }
+
+    /** A rewrite changes byte ranges and content, so every decoded slice for this book is stale. */
+    fun invalidate(bookId: Long) {
         synchronized(decoded) { decoded.keys.removeAll { it.bookId == bookId } }
     }
 

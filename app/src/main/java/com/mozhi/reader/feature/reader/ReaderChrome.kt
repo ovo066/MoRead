@@ -255,7 +255,9 @@ fun ReaderChrome(
     onSettings: () -> Unit,
     onTts: () -> Unit,
     onCompanion: () -> Unit,
-    onSearch: () -> Unit
+    onSearch: () -> Unit,
+    onReidentifyChapters: () -> Unit,
+    onTextReplacementRules: () -> Unit
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
         AnimatedVisibility(
@@ -271,7 +273,9 @@ fun ReaderChrome(
                 onBack = onBack,
                 onOpenDetails = onOpenDetails,
                 onAddBookmark = onAddBookmark,
-                onSearch = onSearch
+                onSearch = onSearch,
+                onReidentifyChapters = onReidentifyChapters,
+                onTextReplacementRules = onTextReplacementRules
             )
         }
 
@@ -308,7 +312,9 @@ private fun ReaderTopBar(
     onBack: () -> Unit,
     onOpenDetails: () -> Unit,
     onAddBookmark: () -> Unit,
-    onSearch: () -> Unit
+    onSearch: () -> Unit,
+    onReidentifyChapters: () -> Unit,
+    onTextReplacementRules: () -> Unit
 ) {
     Row(
         modifier = Modifier
@@ -395,6 +401,22 @@ private fun ReaderTopBar(
                     onClick = {
                         menuExpanded = false
                         onSearch()
+                    }
+                )
+                MoReadMenuItem(
+                    text = "重新识别章节",
+                    icon = Icons.AutoMirrored.Outlined.MenuBook,
+                    onClick = {
+                        menuExpanded = false
+                        onReidentifyChapters()
+                    }
+                )
+                MoReadMenuItem(
+                    text = "文本清洗规则",
+                    icon = Icons.Outlined.AutoAwesome,
+                    onClick = {
+                        menuExpanded = false
+                        onTextReplacementRules()
                     }
                 )
             }

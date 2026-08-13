@@ -24,7 +24,17 @@ data class SelectionMediaUiState(
     val isWorking: Boolean = false,
     val isPlaying: Boolean = false,
     val imagePath: String? = null,
-    val imagePrompt: String? = null
+    val imagePrompt: String? = null,
+    /** Non-null only for an image created from the current text selection, enabling re-roll. */
+    val imageGeneration: SelectionImageGeneration? = null
+)
+
+data class SelectionImageGeneration(
+    val bookId: Long,
+    val chapterIndex: Int,
+    val charOffset: Int?,
+    val sourceText: String,
+    val basePrompt: String
 )
 
 sealed interface SelectionMediaEvent {
@@ -159,38 +169,70 @@ class ReaderSelectionMediaViewModel @Inject constructor(
     ) {
         val selected = selection.trim().take(MAX_IMAGE_SOURCE_CHARS)
         if (selected.isEmpty()) return
+        val nearby = contextText.trim().take(MAX_IMAGE_CONTEXT_CHARS)
+        val fallbackPrompt = buildString {
+            append("小说插画，忠实表现以下选段；无文字、无水印。")
+            if (bookTitle.isNotBlank()) append("书名《").append(bookTitle).append("》。")
+            if (chapterTitle.isNotBlank()) append("章节：").append(chapterTitle).append("。")
+            append("画面内容：").append(selected)
+            if (nearby.isNotBlank()) append("。附近语境：").append(nearby)
+        }
+        generateImage(
+            SelectionImageGeneration(
+                bookId = bookId,
+                chapterIndex = chapterIndex,
+                charOffset = charOffset,
+                sourceText = selected,
+                basePrompt = fallbackPrompt
+            ),
+            prompt = fallbackPrompt,
+            keepPreview = false
+        )
+    }
+
+    /** Reuses the original selection/anchor while letting the user re-roll or revise the prompt. */
+    fun rerollImage(prompt: String, improvement: String = "") {
+        val generation = mutableState.value.imageGeneration ?: return
+        val revised = buildString {
+            append(prompt.trim().ifBlank { generation.basePrompt })
+            improvement.trim().takeIf(String::isNotBlank)?.let {
+                append("\n\n改进要求：").append(it)
+            }
+        }
+        generateImage(generation.copy(basePrompt = revised), revised, keepPreview = true)
+    }
+
+    private fun generateImage(
+        generation: SelectionImageGeneration,
+        prompt: String,
+        keepPreview: Boolean
+    ) {
         operationJob?.cancel()
         stopAudio()
         operationJob = viewModelScope.launch {
             mutableState.value = mutableState.value.copy(
                 status = "正在把选段整理成画面…",
                 isWorking = true,
-                imagePath = null,
-                imagePrompt = null
+                imagePath = if (keepPreview) mutableState.value.imagePath else null,
+                imagePrompt = if (keepPreview) mutableState.value.imagePrompt else null,
+                imageGeneration = generation
             )
             try {
-                val nearby = contextText.trim().take(MAX_IMAGE_CONTEXT_CHARS)
-                val fallbackPrompt = buildString {
-                    append("小说插画，忠实表现以下选段；无文字、无水印。")
-                    if (bookTitle.isNotBlank()) append("书名《").append(bookTitle).append("》。")
-                    if (chapterTitle.isNotBlank()) append("章节：").append(chapterTitle).append("。")
-                    append("画面内容：").append(selected)
-                    if (nearby.isNotBlank()) append("。附近语境：").append(nearby)
-                }
                 mutableState.value = mutableState.value.copy(status = "正在生成插图…")
                 val illustration = mediaService.generateIllustration(
-                    bookId = bookId,
-                    chapterIndex = chapterIndex,
-                    charOffset = charOffset,
-                    sourceText = selected,
-                    prompt = fallbackPrompt,
+                    bookId = generation.bookId,
+                    chapterIndex = generation.chapterIndex,
+                    charOffset = generation.charOffset,
+                    sourceText = generation.sourceText,
+                    prompt = prompt,
                     personaId = null
                 )
                 mutableState.value = mutableState.value.copy(
                     status = null,
                     isWorking = false,
                     imagePath = illustration.imagePath,
-                    imagePrompt = illustration.prompt
+                    imagePrompt = illustration.prompt,
+                    imageGeneration = generation.copy(basePrompt = prompt)
                 )
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
@@ -216,11 +258,19 @@ class ReaderSelectionMediaViewModel @Inject constructor(
             viewModelScope.launch { eventChannel.send(SelectionMediaEvent.Message("插图文件不存在")) }
             return
         }
-        mutableState.value = mutableState.value.copy(imagePath = path, imagePrompt = prompt)
+        mutableState.value = mutableState.value.copy(
+            imagePath = path,
+            imagePrompt = prompt,
+            imageGeneration = null
+        )
     }
 
     fun dismissImage() {
-        mutableState.value = mutableState.value.copy(imagePath = null, imagePrompt = null)
+        mutableState.value = mutableState.value.copy(
+            imagePath = null,
+            imagePrompt = null,
+            imageGeneration = null
+        )
     }
 
     fun cancelOperation() {

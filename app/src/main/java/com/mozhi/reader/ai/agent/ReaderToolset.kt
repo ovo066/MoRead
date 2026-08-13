@@ -53,7 +53,8 @@ class ReaderToolset @Inject constructor(
         bookId: Long,
         personaId: Long? = null,
         conversationId: Long? = null,
-        enabledTools: Collection<String>? = null
+        enabledTools: Collection<String>? = null,
+        spoilerProtectionEnabled: Boolean = true
     ): List<AgentTool> {
         val embedQuery: suspend (String) -> FloatArray = { query ->
             val resolved = clientFactory.get().forRole(ModelRole.EMBEDDING)
@@ -90,10 +91,11 @@ class ReaderToolset @Inject constructor(
                     },
                     embedQuery = embedQuery,
                     store = { vectorStore.get() },
-                    requestIndex = { embeddingScheduler.enqueueForBook(bookId) }
+                    requestIndex = { embeddingScheduler.enqueueForBook(bookId) },
+                    spoilerProtectionEnabled = spoilerProtectionEnabled
                 )
             )
-            add(ReadBookSectionTool(libraryRepository, bookId))
+            add(ReadBookSectionTool(libraryRepository, bookId, spoilerProtectionEnabled))
             add(WebSearchTool(webSearchService))
             add(WebScrapeTool(webSearchService))
             if (personaId != null) {
@@ -287,13 +289,18 @@ internal data class ChapterDocument(
  */
 internal class ReadBookSectionTool(
     private val libraryRepository: LibraryRepository,
-    private val bookId: Long
+    private val bookId: Long,
+    private val spoilerProtectionEnabled: Boolean = true
 ) : AgentTool {
     override val displayName: String = "读取指定已读章节"
 
     override val spec: ToolSpec = ToolSpec(
         name = "read_book_section",
-        description = "读取用户指定的已读章节或章节范围原文。概括第几章、第几章到第几章、某一部分时优先使用；不依赖向量索引。章节号从 1 开始，当前章内容只会返回到用户实际阅读位置。",
+        description = if (spoilerProtectionEnabled) {
+            "读取用户指定的已读章节或章节范围原文。概括第几章、第几章到第几章、某一部分时优先使用；不依赖向量索引。章节号从 1 开始，当前章内容只会返回到用户实际阅读位置。"
+        } else {
+            "读取用户指定的章节或章节范围原文。概括第几章、第几章到第几章、某一部分时优先使用；不依赖向量索引。章节号从 1 开始。"
+        },
         parameters = buildJsonObject {
             put("type", "object")
             putJsonObject("properties") {
@@ -328,9 +335,17 @@ internal class ReadBookSectionTool(
         if (fromChapter < 1 || toChapter < fromChapter) return "章节范围无效：$fromChapter-$toChapter"
 
         val book = libraryRepository.getBook(bookId) ?: return "未找到当前书籍"
-        val maxReadableChapter = book.lastReadChapterIndex + 1
+        val maxReadableChapter = if (spoilerProtectionEnabled) {
+            book.lastReadChapterIndex + 1
+        } else {
+            book.totalChapters
+        }
         if (toChapter > maxReadableChapter) {
-            return "超出已读范围：用户只读到第 $maxReadableChapter 章，不能读取第 $toChapter 章。"
+            return if (spoilerProtectionEnabled) {
+                "超出已读范围：用户只读到第 $maxReadableChapter 章，不能读取第 $toChapter 章。"
+            } else {
+                "章节超出本书范围：本书共 $maxReadableChapter 章，不能读取第 $toChapter 章。"
+            }
         }
         val chapterEntities = libraryRepository.getChapters(bookId).associateBy { it.chapterIndex }
         val readableChapters = buildList {
@@ -342,7 +357,7 @@ internal class ReadBookSectionTool(
                     ChapterDocument(
                         chapterIndex = chapterIndex,
                         title = chapter.title,
-                        body = if (chapterIndex == book.lastReadChapterIndex) {
+                        body = if (spoilerProtectionEnabled && chapterIndex == book.lastReadChapterIndex) {
                             fullBody.take(book.lastReadCharOffset.coerceAtLeast(0))
                         } else {
                             fullBody
@@ -832,14 +847,19 @@ internal class SearchBookTool(
     private val store: () -> BoxStore,
     private val loadChapter: suspend (Int) -> ChapterDocument? = { null },
     private val loadChaptersThrough: suspend (Int) -> List<ChapterDocument> = { emptyList() },
-    private val requestIndex: () -> Unit = {}
+    private val requestIndex: () -> Unit = {},
+    private val spoilerProtectionEnabled: Boolean = true
 ) : AgentTool {
 
     override val displayName: String = "检索书中原文"
 
     override val spec: ToolSpec = ToolSpec(
         name = "search_book",
-        description = "在用户已读范围内搜索人物、场景或情节。优先语义向量检索，向量服务不可用时会自动本地关键词检索；若用户指定明确章节范围并要求概括，应改用 read_book_section。",
+        description = if (spoilerProtectionEnabled) {
+            "在用户已读范围内搜索人物、场景或情节。优先语义向量检索，向量服务不可用时会自动本地关键词检索；若用户指定明确章节范围并要求概括，应改用 read_book_section。"
+        } else {
+            "在整本书中搜索人物、场景或情节。优先语义向量检索，向量服务不可用时会自动本地关键词检索；若用户指定明确章节范围并要求概括，应改用 read_book_section。"
+        },
         parameters = buildJsonObject {
             put("type", "object")
             putJsonObject("properties") {
@@ -861,7 +881,11 @@ internal class SearchBookTool(
         if (query.isEmpty()) return "缺少检索词 query"
         val topK = (arguments["top_k"]?.jsonPrimitive?.intOrNull ?: DEFAULT_TOP_K).coerceIn(1, 8)
         val book = getBook() ?: return "未找到当前书籍"
-        val maxChapterIndex = book.lastReadChapterIndex
+        val maxChapterIndex = if (spoilerProtectionEnabled) {
+            book.lastReadChapterIndex
+        } else {
+            (book.totalChapters - 1).coerceAtLeast(0)
+        }
         var vectorFailure: String? = null
 
         // 懒索引：这本书还没有任何切片时按需排队单书 embedding，本轮先走词法降级
@@ -879,7 +903,9 @@ internal class SearchBookTool(
                 topK * VECTOR_CANDIDATE_MULTIPLIER,
                 maxChapterIndex
             ).map { it.get() }
-            val currentPrefix = if (candidates.any { it.chapterIndex == maxChapterIndex }) {
+            val currentPrefix = if (
+                spoilerProtectionEnabled && candidates.any { it.chapterIndex == maxChapterIndex }
+            ) {
                 loadChapter(maxChapterIndex)?.body
                     ?.take(book.lastReadCharOffset.coerceAtLeast(0))
             } else {
@@ -887,7 +913,7 @@ internal class SearchBookTool(
             }
             candidates.asSequence()
                 .filter { chunk ->
-                    chunk.chapterIndex < maxChapterIndex ||
+                    !spoilerProtectionEnabled || chunk.chapterIndex < maxChapterIndex ||
                         (chunk.chapterIndex == maxChapterIndex &&
                             currentPrefix != null &&
                             chunk.text?.takeIf(String::isNotBlank)?.let(currentPrefix::contains) == true)
@@ -906,7 +932,7 @@ internal class SearchBookTool(
         val combined = vectorResults.toMutableList()
         if (combined.size < topK) {
             val documents = loadChaptersThrough(maxChapterIndex).map { document ->
-                if (document.chapterIndex == maxChapterIndex) {
+                if (spoilerProtectionEnabled && document.chapterIndex == maxChapterIndex) {
                     document.copy(
                         body = document.body.take(book.lastReadCharOffset.coerceAtLeast(0))
                     )
@@ -922,7 +948,7 @@ internal class SearchBookTool(
 
         if (combined.isEmpty()) {
             if (vectorFailure != null) {
-                return "向量检索不可用：$vectorFailure；已自动尝试本地关键词检索，但已读范围内没有找到与「$query」相关的原文。"
+                return "向量检索不可用：$vectorFailure；已自动尝试本地关键词检索，但${searchRangeLabel(maxChapterIndex)}没有找到与「$query」相关的原文。"
             }
             val indexedInRange = runCatching {
                 VectorQueries.chaptersWithChunks(store(), bookId).any { it <= maxChapterIndex }
@@ -930,12 +956,18 @@ internal class SearchBookTool(
             return if (!indexedInRange) {
                 "本书向量索引正在后台建立；已自动尝试本地关键词检索，但没有找到与「$query」相关的原文。"
             } else {
-                "已读范围内没有找到与「$query」相关的原文。"
+                "${searchRangeLabel(maxChapterIndex)}没有找到与「$query」相关的原文。"
             }
         }
 
         return buildString {
-            append("以下片段全部来自用户实际已读范围（第 1 至 ${maxChapterIndex + 1} 章）：\n")
+            append(
+                if (spoilerProtectionEnabled) {
+                    "以下片段全部来自用户实际已读范围（第 1 至 ${maxChapterIndex + 1} 章）：\n"
+                } else {
+                    "以下片段来自整本书（第 1 至 ${maxChapterIndex + 1} 章）：\n"
+                }
+            )
             if (vectorFailure != null) {
                 append("（向量服务当前不可用，已自动切换到本地关键词检索。）\n")
             } else if (!hasIndex) {
@@ -949,6 +981,12 @@ internal class SearchBookTool(
                 append("】\n").append(hit.text).append('\n')
             }
         }
+    }
+
+    private fun searchRangeLabel(maxChapterIndex: Int): String = if (spoilerProtectionEnabled) {
+        "已读范围内"
+    } else {
+        "全书（第 1 至 ${maxChapterIndex + 1} 章）中"
     }
 
     private companion object {

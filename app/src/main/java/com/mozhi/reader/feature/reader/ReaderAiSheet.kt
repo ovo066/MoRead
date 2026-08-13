@@ -39,7 +39,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.mozhi.reader.core.database.entity.MessageEntity
 
 /**
  * The selection-AI bottom panel: streaming reply, stop/retry, follow-up questions. Assistant
@@ -57,17 +56,24 @@ fun ReaderAiSheet(
     val request = state.request ?: return
     val listState = rememberLazyListState()
     var input by remember { mutableStateOf("") }
+    val timeline = remember(state.messages) { buildCompanionTimeline(state.messages) }
+    val liveExecutionSteps = remember(timeline, state.executionSteps) {
+        val historicalCallIds = timeline.filterIsInstance<CompanionTimelineItem.Tools>()
+            .flatMap { it.steps }
+            .mapTo(hashSetOf()) { it.callId }
+        state.executionSteps.filterNot { it.callId in historicalCallIds }
+    }
 
     // 只在结构变化（消息条数、流式开始/结束、工具阶段）时定位到最新；
     // 流式正文逐 token 长高不再触发滚动——回答在视口下方生长，用户随时可以
     // 上滑回看而不会被拽回底部。
     LaunchedEffect(
-        state.messages.size,
+        timeline.size,
         state.streamingText != null,
         state.toolStatus,
-        state.executionSteps.size
+        liveExecutionSteps.size
     ) {
-        val itemCount = state.messages.size + (if (state.streamingText != null) 1 else 0) + 1
+        val itemCount = timeline.size + (if (state.streamingText != null) 1 else 0) + 1
         if (itemCount > 0) listState.scrollToItem(itemCount - 1)
     }
 
@@ -108,15 +114,22 @@ fun ReaderAiSheet(
                 .padding(top = 12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            items(state.messages, key = MessageEntity::id) { message ->
-                when (message.role) {
-                    "user" -> UserBubble(message.content, palette)
-                    else -> AssistantBubble(
-                        text = message.content,
-                        palette = palette,
-                        streaming = false,
-                        onCopy = { onCopy(message.content) }
+            items(timeline, key = CompanionTimelineItem::key) { item ->
+                when (item) {
+                    is CompanionTimelineItem.Bubble -> when (item.message.role) {
+                        "user" -> UserBubble(item.message.content, palette)
+                        else -> AssistantBubble(
+                            text = item.message.content,
+                            palette = palette,
+                            streaming = false,
+                            onCopy = { onCopy(item.message.content) }
+                        )
+                    }
+                    is CompanionTimelineItem.Tools -> AgentExecutionCard(
+                        steps = item.steps,
+                        palette = palette
                     )
+                    is CompanionTimelineItem.Media -> Unit
                 }
             }
             state.streamingText?.let { streaming ->
@@ -129,9 +142,9 @@ fun ReaderAiSheet(
                     )
                 }
             }
-            if (state.executionSteps.isNotEmpty()) {
-                item(key = "tool-timeline") {
-                    AgentExecutionCard(steps = state.executionSteps, palette = palette)
+            if (liveExecutionSteps.isNotEmpty()) {
+                item(key = "live-tool-timeline") {
+                    AgentExecutionCard(steps = liveExecutionSteps, palette = palette)
                 }
             } else {
                 state.toolStatus?.let { status ->

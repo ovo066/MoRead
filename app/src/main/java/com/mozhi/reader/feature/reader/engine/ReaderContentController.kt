@@ -171,6 +171,22 @@ class ReaderContentController(
         rebindWindow()
     }
 
+    /** Drops the three-chapter cache after local text was edited, then reads the window again. */
+    fun reloadFromSource(
+        chapterIndex: Int = this.chapterIndex,
+        charOffset: Int = this.charOffset
+    ) {
+        relayoutJob?.cancel()
+        environmentVersion++
+        this.chapterIndex = chapterIndex.coerceIn(0, (chapters.size - 1).coerceAtLeast(0))
+        this.charOffset = charOffset.coerceAtLeast(0)
+        prevSlot = null
+        curSlot = null
+        nextSlot = null
+        loadingIndices.clear()
+        rebindWindow()
+    }
+
     /** Jump by whole-book fraction, resolved through cumulative char counts. */
     fun jumpToProgress(progress: Float) {
         if (chapters.isEmpty() || totalChars <= 0) return

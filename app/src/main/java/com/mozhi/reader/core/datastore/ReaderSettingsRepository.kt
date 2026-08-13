@@ -73,7 +73,20 @@ data class ReaderSettings(
     /** 正文字重；Android Typeface 的常用有效区间为 100..900。 */
     val fontWeight: Int = 400,
     val lineHeight: Float = 1.55f,
+    /** 旧版统一边距；保留用于迁移，运行时请使用四边独立值。 */
     val pageMargin: Float = 1f,
+    /** 阅读正文左侧边距，0..2 对应紧凑到宽松。 */
+    val pageMarginLeft: Float = 1f,
+    /** 阅读正文右侧边距，0..2 对应紧凑到宽松。 */
+    val pageMarginRight: Float = 1f,
+    /** 阅读正文上侧边距，0..2 对应紧凑到宽松。 */
+    val pageMarginTop: Float = 0f,
+    /** 阅读正文下侧边距，0..2 对应紧凑到宽松。 */
+    val pageMarginBottom: Float = 0f,
+    /** 页眉相对默认位置继续向下偏移，0..2。 */
+    val headerMarginTop: Float = 0f,
+    /** 页脚相对默认位置继续向上偏移，0..2。 */
+    val footerMarginBottom: Float = 0f,
     /** TextPaint 的 em 字间距。 */
     val letterSpacingEm: Float = 0f,
     /** 段后距，以正文字号 em 为单位。 */
@@ -82,6 +95,10 @@ data class ReaderSettings(
     val firstLineIndentEm: Float = 2f,
     /** 章节标题相对正文字号。 */
     val titleScale: Float = 1.35f,
+    /** 章节标题上方留白，以正文行高为单位。 */
+    val titleTopSpacing: Float = 0.4f,
+    /** 章节标题与正文之间留白，以正文行高为单位。 */
+    val titleBottomSpacing: Float = 1f,
     val textJustification: Boolean = true,
     val showHeader: Boolean = true,
     val showFooter: Boolean = true,
@@ -103,6 +120,8 @@ data class ReaderSettings(
     val backgroundImageOpacity: Float = 0.28f,
     val syntaxHighlightEnabled: Boolean = false,
     val syntaxHighlightRules: List<ReaderSyntaxRule> = ReaderSyntaxHighlighter.DEFAULT_RULES,
+    /** 正文清洗/替换规则；规则本身可复用，应用范围由阅读页工具决定。 */
+    val textReplacementRules: List<ReaderTextReplacementRule> = emptyList(),
     /** 用户保存的自定义主题预设。 */
     val customThemes: List<CustomReaderTheme> = emptyList(),
     /** 非空表示自定义主题生效，覆盖 [theme]；选内置主题时清空。 */
@@ -152,12 +171,24 @@ class ReaderSettingsRepository @Inject constructor(
             fontLibrary = fontLibrary,
             selectedCustomFontId = selectedFontId,
             fontWeight = (preferences[Keys.FontWeight] ?: 400).coerceIn(300, 700),
-            lineHeight = preferences[Keys.LineHeight] ?: 1.55f,
-            pageMargin = preferences[Keys.PageMargin] ?: 1f,
+            lineHeight = (preferences[Keys.LineHeight] ?: 1.55f).coerceIn(1f, 2.2f),
+            pageMargin = (preferences[Keys.PageMargin] ?: 1f).coerceIn(0f, 2f),
+            pageMarginLeft = (preferences[Keys.PageMarginLeft]
+                ?: preferences[Keys.PageMargin]
+                ?: 1f).coerceIn(0f, 2f),
+            pageMarginRight = (preferences[Keys.PageMarginRight]
+                ?: preferences[Keys.PageMargin]
+                ?: 1f).coerceIn(0f, 2f),
+            pageMarginTop = (preferences[Keys.PageMarginTop] ?: 0f).coerceIn(0f, 2f),
+            pageMarginBottom = (preferences[Keys.PageMarginBottom] ?: 0f).coerceIn(0f, 2f),
+            headerMarginTop = (preferences[Keys.HeaderMarginTop] ?: 0f).coerceIn(0f, 2f),
+            footerMarginBottom = (preferences[Keys.FooterMarginBottom] ?: 0f).coerceIn(0f, 2f),
             letterSpacingEm = (preferences[Keys.LetterSpacingEm] ?: 0f).coerceIn(-0.05f, 0.2f),
             paragraphSpacingEm = (preferences[Keys.ParagraphSpacingEm] ?: 0.55f).coerceIn(0f, 1.5f),
             firstLineIndentEm = (preferences[Keys.FirstLineIndentEm] ?: 2f).coerceIn(0f, 4f),
             titleScale = (preferences[Keys.TitleScale] ?: 1.35f).coerceIn(1f, 2f),
+            titleTopSpacing = (preferences[Keys.TitleTopSpacing] ?: 0.4f).coerceIn(0f, 3f),
+            titleBottomSpacing = (preferences[Keys.TitleBottomSpacing] ?: 1f).coerceIn(0f, 3f),
             textJustification = preferences[Keys.TextJustification] ?: true,
             showHeader = preferences[Keys.ShowHeader] ?: true,
             showFooter = preferences[Keys.ShowFooter] ?: true,
@@ -184,6 +215,9 @@ class ReaderSettingsRepository @Inject constructor(
                 .coerceIn(0.05f, 1f),
             syntaxHighlightEnabled = preferences[Keys.SyntaxHighlightEnabled] ?: false,
             syntaxHighlightRules = ReaderSyntaxRuleCodec.decode(preferences[Keys.SyntaxHighlightRules]),
+            textReplacementRules = ReaderTextReplacementRuleCodec.decode(
+                preferences[Keys.TextReplacementRules]
+            ),
             customThemes = CustomReaderThemeCodec.decode(preferences[Keys.CustomThemes]),
             activeCustomThemeId = preferences[Keys.ActiveCustomThemeId]
         )
@@ -332,7 +366,38 @@ class ReaderSettingsRepository @Inject constructor(
     }
 
     suspend fun setPageMargin(value: Float) {
-        dataStore.edit { it[Keys.PageMargin] = value.coerceIn(0f, 2f) }
+        val safe = value.coerceIn(0f, 2f)
+        dataStore.edit {
+            it[Keys.PageMargin] = safe
+            it[Keys.PageMarginLeft] = safe
+            it[Keys.PageMarginRight] = safe
+            it[Keys.PageMarginTop] = safe
+            it[Keys.PageMarginBottom] = safe
+        }
+    }
+
+    suspend fun setPageMarginLeft(value: Float) {
+        dataStore.edit { it[Keys.PageMarginLeft] = value.coerceIn(0f, 2f) }
+    }
+
+    suspend fun setPageMarginRight(value: Float) {
+        dataStore.edit { it[Keys.PageMarginRight] = value.coerceIn(0f, 2f) }
+    }
+
+    suspend fun setPageMarginTop(value: Float) {
+        dataStore.edit { it[Keys.PageMarginTop] = value.coerceIn(0f, 2f) }
+    }
+
+    suspend fun setPageMarginBottom(value: Float) {
+        dataStore.edit { it[Keys.PageMarginBottom] = value.coerceIn(0f, 2f) }
+    }
+
+    suspend fun setHeaderMarginTop(value: Float) {
+        dataStore.edit { it[Keys.HeaderMarginTop] = value.coerceIn(0f, 2f) }
+    }
+
+    suspend fun setFooterMarginBottom(value: Float) {
+        dataStore.edit { it[Keys.FooterMarginBottom] = value.coerceIn(0f, 2f) }
     }
 
     suspend fun setLetterSpacingEm(value: Float) {
@@ -349,6 +414,14 @@ class ReaderSettingsRepository @Inject constructor(
 
     suspend fun setTitleScale(value: Float) {
         dataStore.edit { it[Keys.TitleScale] = value.coerceIn(1f, 2f) }
+    }
+
+    suspend fun setTitleTopSpacing(value: Float) {
+        dataStore.edit { it[Keys.TitleTopSpacing] = value.coerceIn(0f, 3f) }
+    }
+
+    suspend fun setTitleBottomSpacing(value: Float) {
+        dataStore.edit { it[Keys.TitleBottomSpacing] = value.coerceIn(0f, 3f) }
     }
 
     suspend fun setTextJustification(value: Boolean) {
@@ -521,6 +594,27 @@ class ReaderSettingsRepository @Inject constructor(
         }
     }
 
+    suspend fun saveTextReplacementRule(rule: ReaderTextReplacementRule) {
+        dataStore.edit { preferences ->
+            val existing = ReaderTextReplacementRuleCodec.decode(preferences[Keys.TextReplacementRules])
+            val id = rule.id.takeIf { it != 0L } ?: ((existing.maxOfOrNull { it.id } ?: 0L) + 1L)
+            val saved = rule.copy(id = id)
+            val next = existing.toMutableList()
+            val index = next.indexOfFirst { it.id == id }
+            if (index >= 0) next[index] = saved else next += saved
+            preferences[Keys.TextReplacementRules] = ReaderTextReplacementRuleCodec.encode(next)
+        }
+    }
+
+    suspend fun deleteTextReplacementRule(id: Long) {
+        dataStore.edit { preferences ->
+            val existing = ReaderTextReplacementRuleCodec.decode(preferences[Keys.TextReplacementRules])
+            preferences[Keys.TextReplacementRules] = ReaderTextReplacementRuleCodec.encode(
+                existing.filterNot { it.id == id }
+            )
+        }
+    }
+
     private fun fontLibraryFrom(preferences: Preferences): List<ReaderFontAsset> =
         ReaderFontLibraryCodec.includeLegacy(
             ReaderFontLibraryCodec.decode(preferences[Keys.FontLibrary]),
@@ -564,6 +658,14 @@ class ReaderSettingsRepository @Inject constructor(
         dataStore.edit { it[Keys.SuggestionReplies] = value }
     }
 
+    /** 伴读默认只读取用户已读范围；关闭后可检索整本书。 */
+    val companionSpoilerProtectionEnabled: Flow<Boolean> =
+        dataStore.data.map { it[Keys.CompanionSpoilerProtection] ?: true }
+
+    suspend fun setCompanionSpoilerProtectionEnabled(value: Boolean) {
+        dataStore.edit { it[Keys.CompanionSpoilerProtection] = value }
+    }
+
     /** 显示 AI 批注：关闭后角色划线与「评」标记不再渲染，书籍详情仍可回顾。默认开。 */
     val showAiAnnotations: Flow<Boolean> =
         dataStore.data.map { it[Keys.ShowAiAnnotations] ?: true }
@@ -597,10 +699,18 @@ class ReaderSettingsRepository @Inject constructor(
         val FontWeight = intPreferencesKey("reader_font_weight")
         val LineHeight = floatPreferencesKey("reader_line_height")
         val PageMargin = floatPreferencesKey("reader_page_margin")
+        val PageMarginLeft = floatPreferencesKey("reader_page_margin_left")
+        val PageMarginRight = floatPreferencesKey("reader_page_margin_right")
+        val PageMarginTop = floatPreferencesKey("reader_page_margin_top")
+        val PageMarginBottom = floatPreferencesKey("reader_page_margin_bottom")
+        val HeaderMarginTop = floatPreferencesKey("reader_header_margin_top")
+        val FooterMarginBottom = floatPreferencesKey("reader_footer_margin_bottom")
         val LetterSpacingEm = floatPreferencesKey("reader_letter_spacing_em")
         val ParagraphSpacingEm = floatPreferencesKey("reader_paragraph_spacing_em")
         val FirstLineIndentEm = floatPreferencesKey("reader_first_line_indent_em")
         val TitleScale = floatPreferencesKey("reader_title_scale")
+        val TitleTopSpacing = floatPreferencesKey("reader_title_top_spacing")
+        val TitleBottomSpacing = floatPreferencesKey("reader_title_bottom_spacing")
         val TextJustification = booleanPreferencesKey("reader_text_justification")
         val ShowHeader = booleanPreferencesKey("reader_show_header")
         val ShowFooter = booleanPreferencesKey("reader_show_footer")
@@ -617,11 +727,13 @@ class ReaderSettingsRepository @Inject constructor(
         val BackgroundImageOpacity = floatPreferencesKey("reader_background_image_opacity")
         val SyntaxHighlightEnabled = booleanPreferencesKey("reader_syntax_highlight_enabled")
         val SyntaxHighlightRules = stringPreferencesKey("reader_syntax_highlight_rules")
+        val TextReplacementRules = stringPreferencesKey("reader_text_replacement_rules")
         val ThemeMode = stringPreferencesKey("app_theme_mode")
         val AccentPreset = stringPreferencesKey("accent_preset")
         val AccentCustomArgb = intPreferencesKey("accent_custom_argb")
         val ActivePersonaId = longPreferencesKey("active_persona_id")
         val SuggestionReplies = booleanPreferencesKey("companion_suggestion_replies")
+        val CompanionSpoilerProtection = booleanPreferencesKey("companion_spoiler_protection")
         val ShowAiAnnotations = booleanPreferencesKey("companion_show_ai_annotations")
         val LastAnnotationStyle = stringPreferencesKey("reader_annotation_last_style")
         val LastAnnotationColor = stringPreferencesKey("reader_annotation_last_color")

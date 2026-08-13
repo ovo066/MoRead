@@ -50,6 +50,7 @@ class CompanionContextBuilder @Inject constructor(
         scene: String? = null,
         memoryQuery: String? = null,
         toolNames: Collection<String> = emptySet(),
+        spoilerProtectionEnabled: Boolean = true,
         budgetChars: Int = DEFAULT_BUDGET_CHARS
     ): String {
         val progress = bookId?.let { id ->
@@ -77,6 +78,7 @@ class CompanionContextBuilder @Inject constructor(
             scene = scene,
             memories = memories,
             toolNames = toolNames,
+            spoilerProtectionEnabled = spoilerProtectionEnabled,
             // 关键词触发的世界书条目拿「场景原文 + 用户最新输入」当命中材料。
             loreTrigger = listOfNotNull(scene, memoryQuery).joinToString("\n"),
             budgetChars = budgetChars
@@ -111,6 +113,7 @@ class CompanionContextBuilder @Inject constructor(
             scene: String?,
             memories: List<String>,
             toolNames: Collection<String> = emptySet(),
+            spoilerProtectionEnabled: Boolean = true,
             loreTrigger: String = "",
             budgetChars: Int = DEFAULT_BUDGET_CHARS
         ): String {
@@ -118,8 +121,8 @@ class CompanionContextBuilder @Inject constructor(
                 personaBlock(persona, loreTrigger),
                 userMaskBlock(userMask),
                 progressBlock(progress),
-                spoilerBlock(progress),
-                toolsBlock(toolNames)
+                spoilerBlock(progress, spoilerProtectionEnabled),
+                toolsBlock(toolNames, spoilerProtectionEnabled)
             )
             val closing = "回答使用简体中文。"
             var memoryBlock = memoryBlock(memories)
@@ -219,17 +222,34 @@ class CompanionContextBuilder @Inject constructor(
             }
         }
 
-        private fun spoilerBlock(progress: BookProgress?): String? = progress?.let {
-            "【防剧透铁律】你的知识范围截止到第 ${it.currentChapterIndex + 1} 章：" +
-                "之后的情节你一概不知道，不得叙述、推测或暗示。" +
-                "用户问到后续内容时，坦率说明你也只读到这里；" +
-                "可以基于已读内容一起猜想，但必须说明那只是猜想。"
+        private fun spoilerBlock(
+            progress: BookProgress?,
+            spoilerProtectionEnabled: Boolean
+        ): String? = progress?.let {
+            if (spoilerProtectionEnabled) {
+                "【防剧透铁律】你的知识范围截止到第 ${it.currentChapterIndex + 1} 章：" +
+                    "之后的情节你一概不知道，不得叙述、推测或暗示。" +
+                    "用户问到后续内容时，坦率说明你也只读到这里；" +
+                    "可以基于已读内容一起猜想，但必须说明那只是猜想。"
+            } else {
+                "【阅读范围】用户已关闭防剧透模式。你可以检索和讨论整本《${it.title}》的内容，" +
+                    "但仍应按用户的问题组织回答，并在涉及后续剧情时清楚说明范围。"
+            }
         }
 
-        private fun toolsBlock(toolNames: Collection<String>): String? {
+        private fun toolsBlock(
+            toolNames: Collection<String>,
+            spoilerProtectionEnabled: Boolean
+        ): String? {
             val lines = buildList {
                 if ("search_book" in toolNames) {
-                    add("需要引用或核对前文细节时，先用 search_book 检索原文（向量失败会自动本地回退，结果严格按用户实际进度过滤）。")
+                    add(
+                        if (spoilerProtectionEnabled) {
+                            "需要引用或核对前文细节时，先用 search_book 检索原文（向量失败会自动本地回退，结果严格按用户实际进度过滤）。"
+                        } else {
+                            "需要引用或核对全书细节时，先用 search_book 检索原文（向量失败会自动本地回退）。"
+                        }
+                    )
                 }
                 if ("read_book_section" in toolNames) {
                     add("用户要求概括指定章节或章节范围时，用 read_book_section 读取该范围，不要用零散搜索结果代替完整指定内容；长内容按工具返回的 start_char 继续读取。")
@@ -241,7 +261,13 @@ class CompanionContextBuilder @Inject constructor(
                     add("回答与进度相关的问题前，用 get_reading_progress 确认最新进度。")
                 }
                 if ("web_search" in toolNames) {
-                    add("遇到书外知识、近期事实或用户明确要求联网时，用 web_search 搜索并在回答中附上来源链接；本书剧情仍只用书内工具，严禁借联网搜索绕过防剧透范围。")
+                    add(
+                        if (spoilerProtectionEnabled) {
+                            "遇到书外知识、近期事实或用户明确要求联网时，用 web_search 搜索并在回答中附上来源链接；本书剧情仍只用书内工具，严禁借联网搜索绕过防剧透范围。"
+                        } else {
+                            "遇到书外知识、近期事实或用户明确要求联网时，用 web_search 搜索并在回答中附上来源链接；本书剧情优先使用书内工具。"
+                        }
+                    )
                 }
                 if ("web_scrape" in toolNames) {
                     add("当搜索摘要不足或用户给出了具体网址时，用 web_scrape 抓取正文后再回答；不要无必要地抓取每条搜索结果。")

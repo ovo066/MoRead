@@ -10,6 +10,9 @@ import com.mozhi.reader.core.database.entity.BookSourceType
 import com.mozhi.reader.core.database.entity.BookmarkEntity
 import com.mozhi.reader.core.database.entity.ChapterEntity
 import com.mozhi.reader.core.database.entity.ReadingDailyEntity
+import com.mozhi.reader.core.datastore.ReaderTextReplacementRule
+import com.mozhi.reader.core.datastore.compileRegex
+import com.mozhi.reader.core.datastore.validationError
 import com.mozhi.reader.core.vector.VectorQueries
 import dagger.hilt.android.qualifiers.ApplicationContext
 import io.objectbox.BoxStore
@@ -25,6 +28,14 @@ data class ChapterDraft(
     val title: String,
     val href: String,
     val charCount: Int
+)
+
+/** A complete chapter replacement used by reader-side editing and chapter re-recognition. */
+data class EditableChapterDraft(
+    val index: Int,
+    val title: String,
+    val href: String,
+    val body: String
 )
 
 @Singleton
@@ -186,6 +197,7 @@ class LibraryRepository @Inject constructor(
         markReady: Boolean = true
     ) {
         val ranges = textWriter.write(textStore.textFile(bookId), chapters)
+        textStore.invalidate(bookId)
         database.withTransaction {
             ranges.forEach { range ->
                 bookDao.updateChapterTextRange(
@@ -197,6 +209,102 @@ class LibraryRepository @Inject constructor(
                 )
             }
             if (markReady) bookDao.updateTextVersion(bookId, CURRENT_TEXT_VERSION)
+        }
+    }
+
+    /** Replaces exactly one selected range and returns the new cursor position after the edit. */
+    suspend fun replaceChapterText(
+        bookId: Long,
+        chapterIndex: Int,
+        range: IntRange,
+        replacement: String
+    ): Int {
+        val chapters = bookDao.getChapters(bookId)
+        val current = chapters.firstOrNull { it.chapterIndex == chapterIndex }
+            ?: error("章节不存在")
+        val body = readChapterText(bookId, current)
+        val start = range.first.coerceIn(0, body.length)
+        val endExclusive = (range.last + 1).coerceIn(start, body.length)
+        val updated = body.replaceRange(start, endExclusive, replacement)
+        if (updated == body) return start + replacement.length
+        val inputs = chapters.map { chapter ->
+            ChapterTextInput(
+                index = chapter.chapterIndex,
+                body = if (chapter.chapterIndex == chapterIndex) updated else {
+                    readChapterText(bookId, chapter)
+                }
+            )
+        }
+        materializeBookText(bookId, inputs)
+        return (start + replacement.length).coerceIn(0, updated.length)
+    }
+
+    /** Applies enabled regex rules in list order. The text is only rewritten when a match exists. */
+    suspend fun applyTextReplacementRules(
+        bookId: Long,
+        rules: List<ReaderTextReplacementRule>
+    ): Int {
+        val activeRules = rules.filter(ReaderTextReplacementRule::enabled)
+        activeRules.forEach { rule ->
+            require(rule.validationError() == null) { "规则「${rule.name}」无效" }
+        }
+        if (activeRules.isEmpty()) return 0
+        val compiled = activeRules.map { it to it.compileRegex() }
+        val chapters = bookDao.getChapters(bookId)
+        var matches = 0
+        val inputs = chapters.map { chapter ->
+            var body = readChapterText(bookId, chapter)
+            compiled.forEach { (rule, regex) ->
+                val count = regex.findAll(body).count()
+                if (count > 0) {
+                    matches += count
+                    body = regex.replace(body, rule.replacement)
+                }
+            }
+            ChapterTextInput(index = chapter.chapterIndex, body = body)
+        }
+        if (matches > 0) materializeBookText(bookId, inputs)
+        return matches
+    }
+
+    /** Replaces the chapter table and text blob together after TXT chapter recognition changes. */
+    suspend fun replaceBookChapters(bookId: Long, chapters: List<EditableChapterDraft>) {
+        require(chapters.isNotEmpty()) { "没有可写入的章节" }
+        val book = requireNotNull(bookDao.getBook(bookId)) { "书籍不存在" }
+        val normalized = chapters.sortedBy(EditableChapterDraft::index).mapIndexed { index, chapter ->
+            chapter.copy(index = index)
+        }
+        val ranges = textWriter.write(
+            textStore.textFile(bookId),
+            normalized.map { chapter -> ChapterTextInput(chapter.index, chapter.body) }
+        )
+        textStore.invalidate(bookId)
+        database.withTransaction {
+            bookDao.deleteChaptersForBook(bookId)
+            val rangeByIndex = ranges.associateBy(ChapterTextRange::index)
+            bookDao.insertChapters(
+                normalized.map { chapter ->
+                    val range = requireNotNull(rangeByIndex[chapter.index])
+                    ChapterEntity(
+                        bookId = bookId,
+                        chapterIndex = chapter.index,
+                        title = chapter.title,
+                        href = chapter.href,
+                        charCount = range.charCount,
+                        textByteOffset = range.byteOffset,
+                        textByteLength = range.byteLength
+                    )
+                }
+            )
+            bookDao.updateBook(
+                book.copy(
+                    totalChapters = normalized.size,
+                    lastReadLocator = null,
+                    lastReadChapterIndex = 0,
+                    lastReadCharOffset = 0,
+                    textVersion = CURRENT_TEXT_VERSION
+                )
+            )
         }
     }
 

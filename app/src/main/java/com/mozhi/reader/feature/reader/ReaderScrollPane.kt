@@ -106,6 +106,7 @@ fun ReaderScrollPane(
     onIllustrationClick: (illustrationIds: List<Long>) -> Unit = {},
     onTtsAction: (selection: String) -> Unit,
     onImageAction: (selection: String, context: String, range: IntRange) -> Unit,
+    onEditText: (selection: String, range: IntRange) -> Unit,
     pageTurnRequest: ReaderPageTurnRequest? = null,
     modifier: Modifier = Modifier
 ) {
@@ -195,16 +196,25 @@ fun ReaderScrollPane(
         font = settings.font,
         customFontPath = settings.customFontPath,
         lineHeight = settings.lineHeight,
-        pageMargin = settings.pageMargin,
+        pageMarginsHash = listOf(
+            settings.pageMarginLeft,
+            settings.pageMarginRight,
+            settings.pageMarginTop,
+            settings.pageMarginBottom
+        ).hashCode(),
         advancedTypographyHash = listOf(
             settings.fontWeight,
             settings.letterSpacingEm,
             settings.paragraphSpacingEm,
             settings.firstLineIndentEm,
             settings.titleScale,
+            settings.titleTopSpacing,
+            settings.titleBottomSpacing,
             settings.textJustification,
             settings.showHeader,
-            settings.showFooter
+            settings.showFooter,
+            settings.headerMarginTop,
+            settings.footerMarginBottom
         ).hashCode(),
         syntaxHighlightEnabled = settings.syntaxHighlightEnabled,
         syntaxRulesHash = settings.syntaxHighlightRules.hashCode(),
@@ -471,6 +481,12 @@ fun ReaderScrollPane(
                     }
                     selection.clear()
                 },
+                onEdit = {
+                    val text = selection.selectedText()
+                    val range = selection.bodyRange()
+                    if (text.isNotBlank() && range != null) onEditText(text, range)
+                    selection.clear()
+                },
                 onCopy = {
                     val text = selection.selectedText()
                     if (text.isNotEmpty()) {
@@ -490,7 +506,7 @@ private data class ReaderScrollEnvironmentKey(
     val font: com.mozhi.reader.core.datastore.ReaderFont,
     val customFontPath: String?,
     val lineHeight: Float,
-    val pageMargin: Float,
+    val pageMarginsHash: Int,
     val advancedTypographyHash: Int,
     val syntaxHighlightEnabled: Boolean,
     val syntaxRulesHash: Int,
@@ -546,8 +562,8 @@ private class ScrollPaneHolder(private val controller: ReaderContentController) 
     private var lastSyncedOffset = -1
 
     val viewportHeight: Float get() = style?.contentHeight ?: 1f
-    private val contentTop: Float get() = style?.headerHeight ?: 0f
-    private val contentBottom: Float get() = viewHeight - (style?.footerHeight ?: 0f)
+    private val contentTop: Float get() = style?.contentTop ?: 0f
+    private val contentBottom: Float get() = style?.contentBottom ?: viewHeight.toFloat()
     private val placeholderHeight: Float get() = style?.contentHeight ?: 1f
 
     fun setViewport(width: Int, height: Int): Boolean {
@@ -759,7 +775,7 @@ private class ScrollPaneHolder(private val controller: ReaderContentController) 
                 pageIndex = pageIndex,
                 page = page,
                 local = Offset(
-                    position.x - style.paddingHorizontal,
+                    position.x - style.paddingLeft,
                     stripY - strip.pageTops[pageIndex]
                 )
             )
@@ -773,7 +789,7 @@ private class ScrollPaneHolder(private val controller: ReaderContentController) 
         val block = visibleBlocks().firstOrNull { it.chapterIndex == chapterIndex } ?: return null
         val strip = block.strip ?: return null
         val top = strip.pageTops.getOrNull(pageIndex) ?: return null
-        return Offset(style.paddingHorizontal, contentTop + block.originY + top)
+        return Offset(style.paddingLeft, contentTop + block.originY + top)
     }
 
     fun annotationIdsAt(position: Offset): List<Long> {
@@ -784,7 +800,7 @@ private class ScrollPaneHolder(private val controller: ReaderContentController) 
             annotations.filter { it.chapterIndex == hit.chapterIndex },
             markerRadius = markerRadius,
             markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.ANNOTATION_MARKER_GAP_RATIO,
-            maxRight = currentStyle.contentWidth + currentStyle.paddingHorizontal * 0.9f
+            maxRight = currentStyle.contentWidth + currentStyle.paddingRight * 0.9f
         )
         val hitRadius = (currentStyle.tipSizePx * 1.35f).coerceAtLeast(18f)
         geometry.markers.firstOrNull { marker ->
@@ -808,7 +824,7 @@ private class ScrollPaneHolder(private val controller: ReaderContentController) 
             illustrations.filter { it.chapterIndex == hit.chapterIndex },
             markerRadius,
             markerRadius * com.mozhi.reader.feature.reader.engine.ANNOTATION_MARKER_GAP_RATIO,
-            currentStyle.contentWidth + currentStyle.paddingHorizontal * 0.9f
+            currentStyle.contentWidth + currentStyle.paddingRight * 0.9f
         )
         val hitRadius = (currentStyle.tipSizePx * 1.35f).coerceAtLeast(18f)
         return markers.firstOrNull { marker ->
@@ -856,7 +872,7 @@ private class ScrollPaneHolder(private val controller: ReaderContentController) 
                 if (pageTop + pageExtent < contentTop || pageTop > contentBottom) continue
                 val page = chapter.pages[pageIndex]
                 canvas.save()
-                canvas.translate(style.paddingHorizontal, pageTop)
+                canvas.translate(style.paddingLeft, pageTop)
                 renderer.drawContent(
                     canvas = canvas,
                     page = RenderPage.Laid(

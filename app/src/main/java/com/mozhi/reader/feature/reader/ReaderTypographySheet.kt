@@ -87,12 +87,19 @@ fun ReaderTypographySheet(
     onCustomFontSelect: (String) -> Unit,
     onImportFont: () -> Unit,
     onLineHeightChange: (Float) -> Unit,
-    onPageMarginChange: (Float) -> Unit,
+    onPageMarginLeftChange: (Float) -> Unit,
+    onPageMarginRightChange: (Float) -> Unit,
+    onPageMarginTopChange: (Float) -> Unit,
+    onPageMarginBottomChange: (Float) -> Unit,
+    onHeaderMarginTopChange: (Float) -> Unit,
+    onFooterMarginBottomChange: (Float) -> Unit,
     onFontWeightChange: (Int) -> Unit,
     onLetterSpacingChange: (Float) -> Unit,
     onParagraphSpacingChange: (Float) -> Unit,
     onFirstLineIndentChange: (Float) -> Unit,
     onTitleScaleChange: (Float) -> Unit,
+    onTitleTopSpacingChange: (Float) -> Unit,
+    onTitleBottomSpacingChange: (Float) -> Unit,
     onTextJustificationChange: (Boolean) -> Unit,
     onShowHeaderChange: (Boolean) -> Unit,
     onShowFooterChange: (Boolean) -> Unit,
@@ -135,9 +142,13 @@ fun ReaderTypographySheet(
                     onParagraphSpacingChange = onParagraphSpacingChange,
                     onFirstLineIndentChange = onFirstLineIndentChange,
                     onTitleScaleChange = onTitleScaleChange,
+                    onTitleTopSpacingChange = onTitleTopSpacingChange,
+                    onTitleBottomSpacingChange = onTitleBottomSpacingChange,
                     onTextJustificationChange = onTextJustificationChange,
                     onShowHeaderChange = onShowHeaderChange,
-                    onShowFooterChange = onShowFooterChange
+                    onShowFooterChange = onShowFooterChange,
+                    onHeaderMarginTopChange = onHeaderMarginTopChange,
+                    onFooterMarginBottomChange = onFooterMarginBottomChange
                 )
             }
             TypographySecondaryPage.SYNTAX -> {
@@ -188,31 +199,53 @@ fun ReaderTypographySheet(
                 ) { onLineHeightChange(value) }
             }
         }
-        Slider(
+        TypographyValueSlider(
+            label = "自由调整",
+            valueText = String.format(java.util.Locale.ROOT, "%.2f×", settings.lineHeight),
             value = settings.lineHeight,
-            onValueChange = onLineHeightChange,
-            valueRange = 1f..2.2f,
-            colors = SliderDefaults.colors(
-                thumbColor = palette.accent,
-                activeTrackColor = palette.accent,
-                inactiveTrackColor = palette.muted.copy(alpha = 0.18f)
-            ),
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(22.dp)
-                .padding(horizontal = 2.dp)
+            range = 1f..2.2f,
+            steps = 23,
+            palette = palette,
+            onValueChange = onLineHeightChange
         )
 
-        SheetRow(label = "边距", palette = palette) {
-            MARGIN_PRESETS.forEach { (label, value) ->
-                SegChip(
-                    text = label,
-                    selected = abs(settings.pageMargin - value) < 0.11f,
-                    palette = palette,
-                    modifier = Modifier.weight(1f)
-                ) { onPageMarginChange(value) }
-            }
-        }
+        Text("正文边距", style = MaterialTheme.typography.labelMedium, color = palette.muted)
+        TypographyValueSlider(
+            label = "正文左边距",
+            valueText = horizontalMarginText(settings.pageMarginLeft),
+            value = settings.pageMarginLeft,
+            range = 0f..2f,
+            steps = 19,
+            palette = palette,
+            onValueChange = onPageMarginLeftChange
+        )
+        TypographyValueSlider(
+            label = "正文右边距",
+            valueText = horizontalMarginText(settings.pageMarginRight),
+            value = settings.pageMarginRight,
+            range = 0f..2f,
+            steps = 19,
+            palette = palette,
+            onValueChange = onPageMarginRightChange
+        )
+        TypographyValueSlider(
+            label = "正文上边距",
+            valueText = verticalMarginText(settings.pageMarginTop),
+            value = settings.pageMarginTop,
+            range = 0f..2f,
+            steps = 19,
+            palette = palette,
+            onValueChange = onPageMarginTopChange
+        )
+        TypographyValueSlider(
+            label = "正文下边距",
+            valueText = verticalMarginText(settings.pageMarginBottom),
+            value = settings.pageMarginBottom,
+            range = 0f..2f,
+            steps = 19,
+            palette = palette,
+            onValueChange = onPageMarginBottomChange
+        )
 
         SheetRow(label = "字体", palette = palette) {
             Row(
@@ -619,9 +652,13 @@ private fun AdvancedTypographyEditor(
     onParagraphSpacingChange: (Float) -> Unit,
     onFirstLineIndentChange: (Float) -> Unit,
     onTitleScaleChange: (Float) -> Unit,
+    onTitleTopSpacingChange: (Float) -> Unit,
+    onTitleBottomSpacingChange: (Float) -> Unit,
     onTextJustificationChange: (Boolean) -> Unit,
     onShowHeaderChange: (Boolean) -> Unit,
-    onShowFooterChange: (Boolean) -> Unit
+    onShowFooterChange: (Boolean) -> Unit,
+    onHeaderMarginTopChange: (Float) -> Unit,
+    onFooterMarginBottomChange: (Float) -> Unit
 ) {
     Text("正文字重", style = MaterialTheme.typography.labelMedium, color = palette.muted)
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -661,6 +698,7 @@ private fun AdvancedTypographyEditor(
         palette = palette,
         onValueChange = onFirstLineIndentChange
     )
+    Text("标题", style = MaterialTheme.typography.labelMedium, color = palette.muted)
     TypographyValueSlider(
         label = "标题比例",
         valueText = String.format(java.util.Locale.ROOT, "%.2f×", settings.titleScale),
@@ -669,6 +707,24 @@ private fun AdvancedTypographyEditor(
         steps = 19,
         palette = palette,
         onValueChange = onTitleScaleChange
+    )
+    TypographyValueSlider(
+        label = "标题上边距",
+        valueText = spacingLineText(settings.titleTopSpacing),
+        value = settings.titleTopSpacing,
+        range = 0f..3f,
+        steps = 29,
+        palette = palette,
+        onValueChange = onTitleTopSpacingChange
+    )
+    TypographyValueSlider(
+        label = "标题下边距",
+        valueText = spacingLineText(settings.titleBottomSpacing),
+        value = settings.titleBottomSpacing,
+        range = 0f..3f,
+        steps = 29,
+        palette = palette,
+        onValueChange = onTitleBottomSpacingChange
     )
     SheetRow(label = "对齐", palette = palette) {
         SegChip(
@@ -684,8 +740,27 @@ private fun AdvancedTypographyEditor(
             modifier = Modifier.weight(1f)
         ) { onTextJustificationChange(false) }
     }
+    Text("页眉与页脚", style = MaterialTheme.typography.labelMedium, color = palette.muted)
     AdvancedSwitchRow("显示页眉", "章节标题", settings.showHeader, palette, onShowHeaderChange)
+    TypographyValueSlider(
+        label = "页眉上边距",
+        valueText = chromeMarginText(settings.headerMarginTop),
+        value = settings.headerMarginTop,
+        range = 0f..2f,
+        steps = 19,
+        palette = palette,
+        onValueChange = onHeaderMarginTopChange
+    )
     AdvancedSwitchRow("显示页脚", "页码、进度、时间与电量", settings.showFooter, palette, onShowFooterChange)
+    TypographyValueSlider(
+        label = "页脚边距",
+        valueText = chromeMarginText(settings.footerMarginBottom),
+        value = settings.footerMarginBottom,
+        range = 0f..2f,
+        steps = 19,
+        palette = palette,
+        onValueChange = onFooterMarginBottomChange
+    )
 }
 
 @Composable
@@ -1130,7 +1205,18 @@ private fun ThemeSwatch(
 }
 
 private val LINE_HEIGHT_PRESETS = listOf("紧凑" to 1.4f, "标准" to 1.7f, "宽松" to 2.0f)
-private val MARGIN_PRESETS = listOf("窄" to 0.4f, "标准" to 1.0f, "宽" to 1.8f)
+
+private fun horizontalMarginText(value: Float): String =
+    "${(ReaderPageStyle.MARGIN_BASE_DP + ReaderPageStyle.MARGIN_RANGE_DP * value).roundToInt()} dp"
+
+private fun verticalMarginText(value: Float): String =
+    "额外 ${(ReaderPageStyle.VERTICAL_MARGIN_RANGE_DP * value).roundToInt()} dp"
+
+private fun chromeMarginText(value: Float): String =
+    "额外 ${(ReaderPageStyle.CHROME_MARGIN_RANGE_DP * value).roundToInt()} dp"
+
+private fun spacingLineText(value: Float): String =
+    String.format(java.util.Locale.ROOT, "%.1f 行", value)
 
 private fun ReaderFont.shortLabel(): String = when (this) {
     ReaderFont.SYSTEM -> "默认"

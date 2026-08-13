@@ -138,8 +138,8 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         val title = page.chapterTitle.ifBlank { return }
         val maxWidth = pageStyle.contentWidth
         val text = ellipsize(title, tipPaint, maxWidth)
-        val y = pageStyle.headerHeight - pageStyle.tipSizePx * 0.45f
-        canvas.drawText(text, pageStyle.paddingHorizontal, y, tipPaint)
+        val y = pageStyle.headerBaseline
+        canvas.drawText(text, pageStyle.paddingLeft, y, tipPaint)
     }
 
     private fun drawBody(
@@ -150,7 +150,7 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         listenHighlight: ListenHighlightSpan?
     ) {
         canvas.save()
-        canvas.translate(pageStyle.paddingHorizontal, pageStyle.headerHeight)
+        canvas.translate(pageStyle.paddingLeft, pageStyle.contentTop)
         drawContent(canvas, page, annotations, illustrations, listenHighlight)
         canvas.restore()
     }
@@ -184,7 +184,7 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
                 ),
                 markerRadius = markerRadius,
                 markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.ANNOTATION_MARKER_GAP_RATIO,
-                maxRight = pageStyle.contentWidth + pageStyle.paddingHorizontal * 0.9f
+                maxRight = pageStyle.contentWidth + pageStyle.paddingRight * 0.9f
             )
             listenGeometry.highlights.forEach { rect ->
                 if (rect.bottom < clipTop || rect.top > clipBottom) return@forEach
@@ -200,7 +200,7 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
             annotations = annotations,
             markerRadius = markerRadius,
             markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.ANNOTATION_MARKER_GAP_RATIO,
-            maxRight = pageStyle.contentWidth + pageStyle.paddingHorizontal * 0.9f
+            maxRight = pageStyle.contentWidth + pageStyle.paddingRight * 0.9f
         )
         val markById = annotations.associateBy(ReaderAnnotationMark::id)
         // 荧光垫在正文之下；直线/波浪画在字形基线下沿，也一并先画（都在文字层之下不糊字形）
@@ -286,7 +286,7 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
             illustrations = illustrations,
             markerRadius = markerRadius,
             markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.ANNOTATION_MARKER_GAP_RATIO,
-            maxRight = pageStyle.contentWidth + pageStyle.paddingHorizontal * 0.9f
+            maxRight = pageStyle.contentWidth + pageStyle.paddingRight * 0.9f
         ).forEach { marker ->
             if (marker.centerY + markerRadius < clipTop || marker.centerY - markerRadius > clipBottom) {
                 return@forEach
@@ -495,7 +495,7 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
 
     private fun drawPlaceholder(canvas: Canvas, page: RenderPage.Placeholder) {
         val centerX = pageStyle.viewWidth / 2f
-        val centerY = pageStyle.headerHeight + pageStyle.contentHeight / 2f
+        val centerY = pageStyle.contentTop + pageStyle.contentHeight / 2f
         if (page.chapterTitle.isNotBlank()) {
             val titleText = ellipsize(page.chapterTitle, placeholderPaint, pageStyle.contentWidth)
             canvas.drawText(titleText, centerX, centerY - pageStyle.lineStep, placeholderPaint)
@@ -528,15 +528,15 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         batteryPercent: Int
     ) {
         if (!pageStyle.showFooter) return
-        val baseline = pageStyle.viewHeight - pageStyle.footerHeight + pageStyle.tipSizePx * 1.25f
+        val baseline = pageStyle.footerBaseline
         val pageText = "${page.pageIndex + 1} / ${page.pageCount} 页"
-        canvas.drawText(pageText, pageStyle.paddingHorizontal, baseline, tipPaint)
+        canvas.drawText(pageText, pageStyle.paddingLeft, baseline, tipPaint)
 
         val progressText = String.format(Locale.ROOT, "%.1f%%", bookProgress * 100)
         val rightText = "$progressText · $timeText"
         val batteryWidth = pageStyle.tipSizePx * 1.7f
         val textWidth = tipPaint.measureText(rightText)
-        val rightEdge = pageStyle.viewWidth - pageStyle.paddingHorizontal
+        val rightEdge = pageStyle.viewWidth - pageStyle.paddingRight
         canvas.drawText(rightText, rightEdge - batteryWidth - textWidth, baseline, tipPaint)
         drawBattery(
             canvas,

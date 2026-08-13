@@ -148,11 +148,9 @@ class ReaderAiViewModel @Inject constructor(
         messagesJob = viewModelScope.launch {
             chatRepository.observeMessages(conversationId).collect { messages ->
                 mutableState.value = mutableState.value.copy(
-                    // Tool plumbing stays out of the transcript: hide tool results and
-                    // assistant turns that only carried tool calls.
-                    messages = messages.filter {
-                        it.role != "system" && it.role != "tool" && it.content.isNotBlank()
-                    }
+                    // Keep tool rows here so the UI can place execution cards immediately after
+                    // their originating assistant round instead of collecting them at the tail.
+                    messages = messages.filter { it.role != "system" }
                 )
             }
         }

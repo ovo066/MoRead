@@ -66,6 +66,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -607,6 +608,34 @@ fun CompanionChatScreen(
                                             pendingQuestionAnchor = true
                                             companionViewModel.generatePlotSummary(sceneQuote)
                                         }
+                                    }
+                                )
+                                HorizontalDivider()
+                                DropdownMenuItem(
+                                    text = {
+                                        Column {
+                                            Text("防剧透模式")
+                                            Text(
+                                                if (state.spoilerProtectionEnabled) {
+                                                    "仅检索已读内容（默认）"
+                                                } else {
+                                                    "允许伴读检索整本书"
+                                                },
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = palette.muted
+                                            )
+                                        }
+                                    },
+                                    trailingIcon = {
+                                        Switch(
+                                            checked = state.spoilerProtectionEnabled,
+                                            onCheckedChange = companionViewModel::setSpoilerProtectionEnabled
+                                        )
+                                    },
+                                    onClick = {
+                                        companionViewModel.setSpoilerProtectionEnabled(
+                                            !state.spoilerProtectionEnabled
+                                        )
                                     }
                                 )
                             }

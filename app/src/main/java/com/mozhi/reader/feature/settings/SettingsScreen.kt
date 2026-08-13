@@ -570,15 +570,15 @@ private fun AboutCard() {
                     modifier = Modifier.padding(top = 2.dp)
                 )
             }
-        Column {
-            Text("开源许可", style = MaterialTheme.typography.titleSmall)
-            Text(
-                "本项目以 GPL-3.0 许可开源，基于 Readium Kotlin Toolkit、Legado 章节规则等开源成果构建，完整第三方清单可在开源仓库中查看。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 2.dp)
-            )
-        }
+            Column {
+                Text("开源许可", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "本项目以 GPL-3.0 许可开源，基于 Readium Kotlin Toolkit、Legado 章节规则等开源成果构建，完整清单见仓库内 THIRD_PARTY_NOTICES.md。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
     }
 }
 

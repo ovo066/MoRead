@@ -83,6 +83,7 @@ import com.mozhi.reader.core.database.entity.ChapterEntity
 import com.mozhi.reader.core.datastore.ReaderFont
 import com.mozhi.reader.core.datastore.PendingReaderFont
 import com.mozhi.reader.core.datastore.ReaderSettings
+import com.mozhi.reader.core.datastore.ReaderTextReplacementRule
 import com.mozhi.reader.core.datastore.ReaderTheme
 import com.mozhi.reader.feature.reader.engine.ReaderAnnotationMark
 import com.mozhi.reader.feature.reader.engine.ReaderIllustrationMark
@@ -100,11 +101,19 @@ private data class AnnotationThreadKey(
     val endCharOffset: Int
 )
 
+private data class TextEditDraft(
+    val chapterIndex: Int,
+    val range: IntRange,
+    val originalText: String
+)
+
 private enum class ReaderSheet {
     CONTENTS,
     BOOKMARKS,
     SETTINGS,
-    SEARCH
+    SEARCH,
+    REIDENTIFY_CHAPTERS,
+    TEXT_REPLACEMENT_RULES
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -130,6 +139,9 @@ fun ReaderScreen(
     var inkFloater by remember { mutableStateOf<AnnotationInkFloater?>(null) }
     var annotationThread by remember { mutableStateOf<AnnotationThreadKey?>(null) }
     var ttsDraft by remember { mutableStateOf<String?>(null) }
+    var textEditDraft by remember { mutableStateOf<TextEditDraft?>(null) }
+    var textRuleDraft by remember { mutableStateOf<ReaderTextReplacementRule?>(null) }
+    var aiTextRuleDialogVisible by remember { mutableStateOf(false) }
     var hardwarePageTurnRequest by remember { mutableStateOf<ReaderPageTurnRequest?>(null) }
     var pendingFont by remember { mutableStateOf<PendingReaderFont?>(null) }
     var pendingFontName by remember { mutableStateOf("") }
@@ -189,8 +201,6 @@ fun ReaderScreen(
         .orEmpty()
     val contextQuote = chapterTitle.ifBlank { state.book?.title.orEmpty() }
     val readerReady = !state.isLoading && state.errorMessage == null
-    // Pane 一进入组合就直接绘制；不再等导航转场结束，也不额外做正文淡入。
-    // holder 首张位图准备好后会自然出现在下一帧，省掉原先可感知的黑/空纸色停顿。
     val contentVisible = readerReady && state.isContentReady
     val canTurnWithVolume by rememberUpdatedState(
         contentVisible && activeSheet == null && !detailsVisible && aiRequest == null &&
@@ -280,6 +290,7 @@ fun ReaderScreen(
                     pendingFont = event.pending
                     pendingFontName = event.pending.detectedName
                 }
+                is ReaderEvent.TextReplacementRuleSuggested -> textRuleDraft = event.rule
             }
         }
     }
@@ -367,7 +378,7 @@ fun ReaderScreen(
             readerReady -> {
                 val paneEnabled = contentVisible && activeSheet == null && !detailsVisible &&
                     aiRequest == null && inkFloater == null && annotationThread == null &&
-                    ttsDraft == null
+                    ttsDraft == null && textEditDraft == null
                 val paneListenHighlight = listenState?.takeIf { it.bookId == bookId }?.let { listen ->
                     com.mozhi.reader.feature.reader.engine.ListenHighlightSpan(
                         chapterIndex = listen.chapterIndex,
@@ -418,6 +429,13 @@ fun ReaderScreen(
                     }
                 }
                 val paneTtsAction: (String) -> Unit = { selection -> ttsDraft = selection }
+                val paneEditText: (String, IntRange) -> Unit = { selection, range ->
+                    textEditDraft = TextEditDraft(
+                        chapterIndex = state.currentChapterIndex,
+                        range = range,
+                        originalText = selection
+                    )
+                }
                 val paneImageAction: (String, String, IntRange) -> Unit =
                     { selectionText, contextText, range ->
                         selectionMediaViewModel.generateImage(
@@ -450,6 +468,7 @@ fun ReaderScreen(
                         onIllustrationClick = paneIllustrationClick,
                         onTtsAction = paneTtsAction,
                         onImageAction = paneImageAction,
+                        onEditText = paneEditText,
                         pageTurnRequest = hardwarePageTurnRequest,
                         modifier = Modifier.fillMaxSize()
                     )
@@ -470,6 +489,7 @@ fun ReaderScreen(
                         onIllustrationClick = paneIllustrationClick,
                         onTtsAction = paneTtsAction,
                         onImageAction = paneImageAction,
+                        onEditText = paneEditText,
                         pageTurnRequest = hardwarePageTurnRequest,
                         onCenterTap = { chromeVisible = !chromeVisible },
                         onBoundary = viewModel::onBoundaryHit,
@@ -536,7 +556,9 @@ fun ReaderScreen(
                     }
                 },
                 onCompanion = { onOpenCompanionChat(bookId) },
-                onSearch = { activeSheet = ReaderSheet.SEARCH }
+                onSearch = { activeSheet = ReaderSheet.SEARCH },
+                onReidentifyChapters = { activeSheet = ReaderSheet.REIDENTIFY_CHAPTERS },
+                onTextReplacementRules = { activeSheet = ReaderSheet.TEXT_REPLACEMENT_RULES }
             )
         }
 
@@ -718,12 +740,19 @@ fun ReaderScreen(
                     customFontLauncher.launch("*/*")
                 },
                 onLineHeightChange = viewModel::setLineHeight,
-                onPageMarginChange = viewModel::setPageMargin,
+                onPageMarginLeftChange = viewModel::setPageMarginLeft,
+                onPageMarginRightChange = viewModel::setPageMarginRight,
+                onPageMarginTopChange = viewModel::setPageMarginTop,
+                onPageMarginBottomChange = viewModel::setPageMarginBottom,
+                onHeaderMarginTopChange = viewModel::setHeaderMarginTop,
+                onFooterMarginBottomChange = viewModel::setFooterMarginBottom,
                 onFontWeightChange = viewModel::setFontWeight,
                 onLetterSpacingChange = viewModel::setLetterSpacing,
                 onParagraphSpacingChange = viewModel::setParagraphSpacing,
                 onFirstLineIndentChange = viewModel::setFirstLineIndent,
                 onTitleScaleChange = viewModel::setTitleScale,
+                onTitleTopSpacingChange = viewModel::setTitleTopSpacing,
+                onTitleBottomSpacingChange = viewModel::setTitleBottomSpacing,
                 onTextJustificationChange = viewModel::setTextJustification,
                 onShowHeaderChange = viewModel::setShowHeader,
                 onShowFooterChange = viewModel::setShowFooter,
@@ -743,6 +772,47 @@ fun ReaderScreen(
                 onKeepScreenOnChange = viewModel::setKeepScreenOn,
                 onImmersiveReadingChange = viewModel::setImmersiveReading,
                 onVolumeKeysPageTurnChange = viewModel::setVolumeKeysPageTurn
+            )
+        }
+        ReaderSheet.REIDENTIFY_CHAPTERS -> ModalBottomSheet(
+            onDismissRequest = { activeSheet = null },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            containerColor = palette.glassStrong,
+            contentColor = palette.onBackground,
+            scrimColor = palette.scrim
+        ) {
+            ReidentifyChaptersSheet(
+                palette = palette,
+                onApply = { regex ->
+                    activeSheet = null
+                    viewModel.reidentifyChapters(regex)
+                }
+            )
+        }
+        ReaderSheet.TEXT_REPLACEMENT_RULES -> ModalBottomSheet(
+            onDismissRequest = { activeSheet = null },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            containerColor = palette.glassStrong,
+            contentColor = palette.onBackground,
+            scrimColor = palette.scrim
+        ) {
+            TextReplacementRulesSheet(
+                rules = state.settings.textReplacementRules,
+                palette = palette,
+                onAdd = {
+                    textRuleDraft = ReaderTextReplacementRule(
+                        id = 0L,
+                        name = "",
+                        pattern = ""
+                    )
+                },
+                onEdit = { rule -> textRuleDraft = rule },
+                onDelete = { rule -> viewModel.deleteTextReplacementRule(rule.id) },
+                onToggle = { rule, enabled ->
+                    viewModel.saveTextReplacementRule(rule.copy(enabled = enabled))
+                },
+                onRequestAi = { aiTextRuleDialogVisible = true },
+                onApply = viewModel::applyTextReplacementRules
             )
         }
         ReaderSheet.SEARCH -> {
@@ -772,6 +842,27 @@ fun ReaderScreen(
             }
         }
         null -> Unit
+    }
+
+    textRuleDraft?.let { rule ->
+        TextReplacementRuleEditorDialog(
+            initial = rule,
+            onDismiss = { textRuleDraft = null },
+            onSave = { updated ->
+                viewModel.saveTextReplacementRule(updated)
+                textRuleDraft = null
+            }
+        )
+    }
+
+    if (aiTextRuleDialogVisible) {
+        AiTextReplacementRuleDialog(
+            onDismiss = { aiTextRuleDialogVisible = false },
+            onGenerate = { requirement ->
+                aiTextRuleDialogVisible = false
+                viewModel.generateTextReplacementRule(requirement)
+            }
+        )
     }
 
     // 参数已迁到「设置 › 语音朗读」；这里只确认朗读范围，直接按配置开读
@@ -832,6 +923,11 @@ fun ReaderScreen(
     }
 
     selectionMediaState.imagePath?.let { imagePath ->
+        var editablePrompt by remember(imagePath) {
+            mutableStateOf(selectionMediaState.imagePrompt.orEmpty())
+        }
+        var improvement by remember(imagePath) { mutableStateOf("") }
+        val imageGeneration = selectionMediaState.imageGeneration
         AlertDialog(
             onDismissRequest = selectionMediaViewModel::dismissImage,
             title = { Text("选段插图") },
@@ -844,14 +940,50 @@ fun ReaderScreen(
                             .fillMaxWidth()
                             .heightIn(max = 460.dp)
                     )
-                    selectionMediaState.imagePrompt?.let { prompt ->
-                        Text(
-                            prompt,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    if (imageGeneration != null) {
+                        OutlinedTextField(
+                            value = editablePrompt,
+                            onValueChange = { editablePrompt = it.take(8_000) },
+                            label = { Text("生图提示词（可编辑）") },
+                            minLines = 3,
+                            maxLines = 6,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        OutlinedTextField(
+                            value = improvement,
+                            onValueChange = { improvement = it.take(2_000) },
+                            label = { Text("告诉 AI 如何改进（可选）") },
+                            minLines = 2,
                             maxLines = 4,
                             modifier = Modifier.fillMaxWidth()
                         )
+                        selectionMediaState.status?.let { status ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (selectionMediaState.isWorking) {
+                                    CircularProgressIndicator(
+                                        strokeWidth = 2.dp,
+                                        color = palette.accent,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                                Text(
+                                    status,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(start = if (selectionMediaState.isWorking) 8.dp else 0.dp)
+                                )
+                            }
+                        }
+                    } else {
+                        selectionMediaState.imagePrompt?.let { prompt ->
+                            Text(
+                                prompt,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 4,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
                     }
                     Text(
                         "图片已保存到本机应用目录。",
@@ -861,7 +993,67 @@ fun ReaderScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = selectionMediaViewModel::dismissImage) { Text("完成") }
+                if (imageGeneration != null) {
+                    Row {
+                        TextButton(
+                            enabled = !selectionMediaState.isWorking,
+                            onClick = {
+                                selectionMediaViewModel.rerollImage(imageGeneration.basePrompt)
+                            }
+                        ) { Text("直接重绘") }
+                        TextButton(
+                            enabled = !selectionMediaState.isWorking && editablePrompt.isNotBlank(),
+                            onClick = {
+                                selectionMediaViewModel.rerollImage(editablePrompt, improvement)
+                                improvement = ""
+                            }
+                        ) { Text("按提示词重绘") }
+                    }
+                } else {
+                    TextButton(onClick = selectionMediaViewModel::dismissImage) { Text("完成") }
+                }
+            },
+            dismissButton = {
+                if (imageGeneration != null) {
+                    TextButton(onClick = selectionMediaViewModel::dismissImage) { Text("完成") }
+                }
+            }
+        )
+    }
+
+    textEditDraft?.let { draft ->
+        var editedText by remember(draft) { mutableStateOf(draft.originalText) }
+        AlertDialog(
+            onDismissRequest = { textEditDraft = null },
+            title = { Text("编辑选中文本") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "保存后会更新本书本地正文。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = editedText,
+                        onValueChange = { editedText = it.take(20_000) },
+                        label = { Text("正文") },
+                        minLines = 4,
+                        maxLines = 10,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = editedText != draft.originalText,
+                    onClick = {
+                        viewModel.editSelectedText(draft.chapterIndex, draft.range, editedText)
+                        textEditDraft = null
+                    }
+                ) { Text("保存") }
+            },
+            dismissButton = {
+                TextButton(onClick = { textEditDraft = null }) { Text("取消") }
             }
         )
     }

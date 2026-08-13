@@ -75,6 +75,8 @@ data class CompanionChatUiState(
     val toolStatus: String? = null,
     val executionSteps: List<AgentExecutionStep> = emptyList(),
     val embeddingProgress: BookEmbeddingProgress? = null,
+    /** Default-on guard that limits book tools to the user's current reading position. */
+    val spoilerProtectionEnabled: Boolean = true,
     /** AI 回合结束后生成的建议回复，点击即发送；发送/切换会话时清空。 */
     val suggestions: List<String> = emptyList(),
     val error: String? = null
@@ -167,8 +169,9 @@ class ReaderCompanionViewModel @Inject constructor(
     val uiState = combine(
         activePersona,
         session,
-        embeddingProgress
-    ) { (personas, active), session, embedding ->
+        embeddingProgress,
+        settingsRepository.companionSpoilerProtectionEnabled
+    ) { (personas, active), session, embedding, spoilerProtectionEnabled ->
         CompanionChatUiState(
             personas = personas,
             activePersona = active,
@@ -180,6 +183,7 @@ class ReaderCompanionViewModel @Inject constructor(
             toolStatus = session.toolStatus,
             executionSteps = session.executionSteps,
             embeddingProgress = embedding,
+            spoilerProtectionEnabled = spoilerProtectionEnabled,
             suggestions = session.suggestions,
             error = session.error
         )
@@ -223,6 +227,10 @@ class ReaderCompanionViewModel @Inject constructor(
     /** 切换伴读角色：写 DataStore，与伴读页共用同一份选择。 */
     fun selectPersona(personaId: Long) {
         viewModelScope.launch { settingsRepository.setActivePersonaId(personaId) }
+    }
+
+    fun setSpoilerProtectionEnabled(value: Boolean) {
+        viewModelScope.launch { settingsRepository.setCompanionSpoilerProtectionEnabled(value) }
     }
 
     fun retryEmbedding() {
@@ -471,7 +479,11 @@ class ReaderCompanionViewModel @Inject constructor(
             title = AiChatRepository.NEW_CONVERSATION_TITLE,
             type = CONVERSATION_TYPE,
             // 落库的 system 只是快照；每轮真正生效的由 ContextBuilder 重建。
-            systemPrompt = contextBuilder.build(persona = persona, bookId = book),
+            systemPrompt = contextBuilder.build(
+                persona = persona,
+                bookId = book,
+                spoilerProtectionEnabled = settingsRepository.companionSpoilerProtectionEnabled.first()
+            ),
             firstUserMessage = null,
             personaId = persona.id
         )
@@ -549,18 +561,23 @@ class ReaderCompanionViewModel @Inject constructor(
                 } else {
                     emptySet()
                 }
+                val spoilerProtectionEnabled = settingsRepository
+                    .companionSpoilerProtectionEnabled
+                    .first()
                 val tools = readerToolset.forBook(
                     bookId = book,
                     personaId = persona.id,
                     conversationId = conversationId,
-                    enabledTools = persona.enabledTools().toSet() + requiredTools + globallyEnabledTools
+                    enabledTools = persona.enabledTools().toSet() + requiredTools + globallyEnabledTools,
+                    spoilerProtectionEnabled = spoilerProtectionEnabled
                 )
                 val systemPrompt = contextBuilder.build(
                     persona = persona,
                     bookId = book,
                     scene = sceneQuote.takeIf(String::isNotBlank),
                     memoryQuery = memoryQuery,
-                    toolNames = tools.map { it.spec.name }
+                    toolNames = tools.map { it.spec.name },
+                    spoilerProtectionEnabled = spoilerProtectionEnabled
                 )
                 agentLoop.run(conversationId, tools, systemPrompt).collect { event ->
                     when (event) {

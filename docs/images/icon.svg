@@ -4,12 +4,11 @@
   </defs>
   <g clip-path="url(#mask)">
     <rect width="512" height="512" fill="#FFFFFF"/>
-    <g transform="scale(7.1111) translate(-18,-18)" fill="none" stroke="#0F0F0F" stroke-width="7" stroke-linecap="round">
+    <g transform="scale(4.7407407)" fill="none" stroke="#0F0F0F" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
       <path d="M30,40 C39,48 47,53 52.5,54.5"/>
       <path d="M78,40 C69,48 61,53 55.5,54.5"/>
       <path d="M32,55 C40,62 47,66.5 52.5,67.5"/>
       <path d="M76,55 C68,62 61,66.5 55.5,67.5"/>
     </g>
   </g>
-  <rect x="4" y="4" width="504" height="504" rx="112" fill="none" stroke="#E5E4DF" stroke-width="8"/>
 </svg>

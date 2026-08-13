@@ -169,6 +169,9 @@ interface BookDao {
     @Insert
     suspend fun insertChapters(chapters: List<ChapterEntity>)
 
+    @Query("DELETE FROM chapters WHERE bookId = :bookId")
+    suspend fun deleteChaptersForBook(bookId: Long)
+
     @Query("SELECT * FROM chapters WHERE bookId = :bookId ORDER BY chapterIndex")
     fun observeChapters(bookId: Long): Flow<List<ChapterEntity>>
 

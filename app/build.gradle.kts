@@ -44,8 +44,8 @@ android {
         minSdk = 26
         targetSdk = 37
         // 测试期曾发过仓库外的高编号包，编号跳档保证覆盖安装不降级。
-        versionCode = 48
-        versionName = "0.10.1"
+        versionCode = 49
+        versionName = "0.10.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
 

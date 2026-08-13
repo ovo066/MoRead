@@ -8,6 +8,7 @@ import com.mozhi.reader.core.database.entity.AnnotationColors
 import com.mozhi.reader.core.database.entity.AnnotationEntity
 import com.mozhi.reader.core.database.entity.AnnotationStyle
 import com.mozhi.reader.core.database.entity.BookEntity
+import com.mozhi.reader.core.database.entity.BookSourceType
 import com.mozhi.reader.core.database.entity.BookmarkEntity
 import com.mozhi.reader.core.database.entity.ChapterEntity
 import com.mozhi.reader.core.database.entity.IllustrationEntity
@@ -19,11 +20,16 @@ import com.mozhi.reader.core.datastore.ReaderFontImporter
 import com.mozhi.reader.core.datastore.ReaderImageImporter
 import com.mozhi.reader.core.datastore.ReaderSettings
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
+import com.mozhi.reader.core.datastore.ReaderTextReplacementRule
+import com.mozhi.reader.core.datastore.validationError
+import com.mozhi.reader.core.library.EditableChapterDraft
 import com.mozhi.reader.core.datastore.ReaderTheme
 import com.mozhi.reader.core.library.AnnotationRepository
 import com.mozhi.reader.core.library.BookMediaStore
 import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.library.IllustrationRepository
+import com.mozhi.reader.feature.importer.TxtChapterSplitter
+import com.mozhi.reader.feature.importer.TxtTocRuleLoader
 import com.mozhi.reader.feature.reader.engine.ChapterMeta
 import com.mozhi.reader.feature.reader.engine.InlineImageSource
 import com.mozhi.reader.feature.reader.engine.ReaderContentController
@@ -90,6 +96,7 @@ enum class PageTurnDirection {
 sealed interface ReaderEvent {
     data class ShowMessage(val message: String) : ReaderEvent
     data class ConfirmFontImport(val pending: PendingReaderFont) : ReaderEvent
+    data class TextReplacementRuleSuggested(val rule: ReaderTextReplacementRule) : ReaderEvent
 }
 
 @HiltViewModel
@@ -101,7 +108,10 @@ class ReaderViewModel @Inject constructor(
     private val mediaStore: BookMediaStore,
     private val settingsRepository: ReaderSettingsRepository,
     private val fontImporter: ReaderFontImporter,
-    private val imageImporter: ReaderImageImporter
+    private val imageImporter: ReaderImageImporter,
+    private val chapterSplitter: TxtChapterSplitter,
+    private val tocRuleLoader: TxtTocRuleLoader,
+    private val textReplacementRuleAgent: TextReplacementRuleAgent
 ) : ViewModel(), ReaderContentController.Listener {
     private val bookId: Long = when (val value: Any? = savedStateHandle["bookId"]) {
         is Long -> value
@@ -217,7 +227,6 @@ class ReaderViewModel @Inject constructor(
                 return@launch
             }
             chapterEntities = chapters
-            contentController.setInlineImages(imagesAsync.await())
             contentController.setChapters(
                 chapters.map { ChapterMeta(it.chapterIndex, it.title, it.charCount) }
             )
@@ -235,6 +244,7 @@ class ReaderViewModel @Inject constructor(
                 chapterIndex = resolved.lastReadChapterIndex,
                 charOffset = resolved.lastReadCharOffset
             )
+            contentController.setInlineImages(imagesAsync.await())
             if (resolved.textVersion < LibraryRepository.CURRENT_TEXT_VERSION) {
                 // v1 正文可立即阅读；后台补齐 EPUB 图片 sidecar 后原位重排，不要求用户重开书。
                 viewModelScope.launch {
@@ -471,6 +481,155 @@ class ReaderViewModel @Inject constructor(
         viewModelScope.launch { annotationRepository.delete(annotationId) }
     }
 
+    /** Saves an edited selection back into the local book text and reloads the visible window. */
+    fun editSelectedText(chapterIndex: Int, range: IntRange, replacement: String) {
+        viewModelScope.launch {
+            runCatching {
+                val cursor = libraryRepository.replaceChapterText(
+                    bookId = bookId,
+                    chapterIndex = chapterIndex,
+                    range = range,
+                    replacement = replacement
+                )
+                refreshTextWindow(chapterIndex, cursor)
+            }.onSuccess {
+                eventChannel.send(ReaderEvent.ShowMessage("正文已修改"))
+            }.onFailure { error ->
+                eventChannel.send(
+                    ReaderEvent.ShowMessage("修改正文失败：${error.message ?: "未知错误"}")
+                )
+            }
+        }
+    }
+
+    /** Applies all currently enabled text-cleanup rules to this book only. */
+    fun applyTextReplacementRules() {
+        viewModelScope.launch {
+            runCatching {
+                val rules = settingsRepository.settings.first().textReplacementRules
+                val matches = libraryRepository.applyTextReplacementRules(bookId, rules)
+                if (matches > 0) {
+                    refreshTextWindow(contentController.chapterIndex, contentController.charOffset)
+                }
+                matches
+            }.onSuccess { matches ->
+                eventChannel.send(
+                    ReaderEvent.ShowMessage(
+                        if (matches > 0) "已应用规则，处理 $matches 处文本" else "没有匹配到需要处理的文本"
+                    )
+                )
+            }.onFailure { error ->
+                eventChannel.send(
+                    ReaderEvent.ShowMessage("应用替换规则失败：${error.message ?: "请检查正则表达式"}")
+                )
+            }
+        }
+    }
+
+    fun saveTextReplacementRule(rule: ReaderTextReplacementRule) {
+        viewModelScope.launch {
+            rule.validationError()?.let { error ->
+                eventChannel.send(ReaderEvent.ShowMessage("规则无效：$error"))
+                return@launch
+            }
+            runCatching { settingsRepository.saveTextReplacementRule(rule) }
+                .onSuccess { eventChannel.send(ReaderEvent.ShowMessage("已保存清洗规则")) }
+                .onFailure { error ->
+                    eventChannel.send(
+                        ReaderEvent.ShowMessage("保存规则失败：${error.message ?: "未知错误"}")
+                    )
+                }
+        }
+    }
+
+    fun deleteTextReplacementRule(ruleId: Long) {
+        viewModelScope.launch { settingsRepository.deleteTextReplacementRule(ruleId) }
+    }
+
+    /** Lets the model inspect excerpts from all chapters and return an editable regex draft. */
+    fun generateTextReplacementRule(requirement: String) {
+        viewModelScope.launch {
+            runCatching { textReplacementRuleAgent.propose(bookId, requirement) }
+                .onSuccess { rule -> eventChannel.send(ReaderEvent.TextReplacementRuleSuggested(rule)) }
+                .onFailure { error ->
+                    eventChannel.send(
+                        ReaderEvent.ShowMessage("AI 生成规则失败：${error.message ?: "请检查模型配置"}")
+                    )
+                }
+        }
+    }
+
+    /** Rebuilds a TXT book's chapter table from the current local text. */
+    fun reidentifyChapters(customRegex: String) {
+        viewModelScope.launch {
+            runCatching {
+                val book = requireNotNull(libraryRepository.getBook(bookId)) { "书籍不存在" }
+                require(book.sourceType == BookSourceType.TXT) { "当前仅支持重新识别 TXT 书籍的章节" }
+                val existing = libraryRepository.getChapters(bookId)
+                val source = buildString {
+                    existing.forEachIndexed { index, chapter ->
+                        if (index > 0) append("\n\n")
+                        append(chapter.title).append('\n')
+                        append(libraryRepository.readChapterText(bookId, chapter))
+                    }
+                }
+                val split = customRegex.trim().takeIf(String::isNotBlank)
+                    ?.let { regex ->
+                        chapterSplitter.splitWithCustomRegex(source, regex)
+                            ?: error("该表达式没有识别到足够的章节")
+                    }
+                    ?: chapterSplitter.chooseBest(source, tocRuleLoader.rules)
+                require(split.chapters.isNotEmpty()) { "没有识别到可用章节" }
+                libraryRepository.replaceBookChapters(
+                    bookId = bookId,
+                    chapters = split.chapters.mapIndexed { index, chapter ->
+                        EditableChapterDraft(
+                            index = index,
+                            title = chapter.title.ifBlank { "第 ${index + 1} 章" },
+                            href = "reader-reidentified/${index + 1}",
+                            body = chapter.content
+                        )
+                    }
+                )
+                refreshTextWindow(0, 0)
+                split
+            }.onSuccess { split ->
+                eventChannel.send(
+                    ReaderEvent.ShowMessage(
+                        "已重新识别 ${split.chapters.size} 章（${split.rule?.name ?: "自动分节"}）"
+                    )
+                )
+            }.onFailure { error ->
+                eventChannel.send(
+                    ReaderEvent.ShowMessage("重新识别章节失败：${error.message ?: "未知错误"}")
+                )
+            }
+        }
+    }
+
+    private suspend fun refreshTextWindow(chapterIndex: Int, charOffset: Int) {
+        val chapters = libraryRepository.getChapters(bookId)
+        val book = libraryRepository.getBook(bookId)
+        val targetChapter = chapterIndex.coerceIn(0, (chapters.size - 1).coerceAtLeast(0))
+        val targetOffset = charOffset.coerceIn(
+            0,
+            (chapters.firstOrNull { it.chapterIndex == targetChapter }?.charCount ?: 0)
+        )
+        chapterEntities = chapters
+        contentController.setChapters(
+            chapters.map { ChapterMeta(it.chapterIndex, it.title, it.charCount) }
+        )
+        contentController.reloadFromSource(targetChapter, targetOffset)
+        mutableState.update {
+            it.copy(
+                book = book ?: it.book,
+                chapters = chapters,
+                currentChapterIndex = targetChapter,
+                currentCharOffset = targetOffset
+            )
+        }
+    }
+
     // ---- settings ----
 
     fun setFontScale(value: Float) {
@@ -526,6 +685,30 @@ class ReaderViewModel @Inject constructor(
         viewModelScope.launch { settingsRepository.setPageMargin(value) }
     }
 
+    fun setPageMarginLeft(value: Float) {
+        viewModelScope.launch { settingsRepository.setPageMarginLeft(value) }
+    }
+
+    fun setPageMarginRight(value: Float) {
+        viewModelScope.launch { settingsRepository.setPageMarginRight(value) }
+    }
+
+    fun setPageMarginTop(value: Float) {
+        viewModelScope.launch { settingsRepository.setPageMarginTop(value) }
+    }
+
+    fun setPageMarginBottom(value: Float) {
+        viewModelScope.launch { settingsRepository.setPageMarginBottom(value) }
+    }
+
+    fun setHeaderMarginTop(value: Float) {
+        viewModelScope.launch { settingsRepository.setHeaderMarginTop(value) }
+    }
+
+    fun setFooterMarginBottom(value: Float) {
+        viewModelScope.launch { settingsRepository.setFooterMarginBottom(value) }
+    }
+
     fun setFontWeight(value: Int) {
         viewModelScope.launch { settingsRepository.setFontWeight(value) }
     }
@@ -544,6 +727,14 @@ class ReaderViewModel @Inject constructor(
 
     fun setTitleScale(value: Float) {
         viewModelScope.launch { settingsRepository.setTitleScale(value) }
+    }
+
+    fun setTitleTopSpacing(value: Float) {
+        viewModelScope.launch { settingsRepository.setTitleTopSpacing(value) }
+    }
+
+    fun setTitleBottomSpacing(value: Float) {
+        viewModelScope.launch { settingsRepository.setTitleBottomSpacing(value) }
     }
 
     fun setTextJustification(value: Boolean) {

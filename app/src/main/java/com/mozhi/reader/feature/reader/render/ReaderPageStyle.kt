@@ -20,9 +20,16 @@ import com.mozhi.reader.feature.reader.engine.TypesetSpec
 class ReaderPageStyle(
     val viewWidth: Int,
     val viewHeight: Int,
-    val paddingHorizontal: Float,
+    /** Left/right are independent so content origin and hit-testing share exact geometry. */
+    val paddingLeft: Float,
+    val paddingRight: Float,
+    /** Fixed chrome bands. Body and chrome offsets are resolved independently below. */
     val headerHeight: Float,
     val footerHeight: Float,
+    val contentPaddingTop: Float,
+    val contentPaddingBottom: Float,
+    val headerOffset: Float,
+    val footerOffset: Float,
     val contentSizePx: Float,
     val titleSizePx: Float,
     val tipSizePx: Float,
@@ -42,13 +49,19 @@ class ReaderPageStyle(
     val backgroundImagePath: String?,
     val backgroundImageOpacity: Float,
     val syntaxHighlightRules: List<ReaderSyntaxRule>,
+    val titleTopSpacingLines: Float,
+    val titleBottomSpacingLines: Float,
     val paragraphSpacingEm: Float,
     val firstLineIndentEm: Float,
     val textJustification: Boolean,
     val letterSpacingEm: Float
 ) {
-    val contentWidth: Float = (viewWidth - paddingHorizontal * 2).coerceAtLeast(1f)
-    val contentHeight: Float = (viewHeight - headerHeight - footerHeight).coerceAtLeast(1f)
+    val contentWidth: Float = (viewWidth - paddingLeft - paddingRight).coerceAtLeast(1f)
+    val contentTop: Float = headerHeight + contentPaddingTop
+    val contentBottom: Float = viewHeight - footerHeight - contentPaddingBottom
+    val contentHeight: Float = (contentBottom - contentTop).coerceAtLeast(1f)
+    val headerBaseline: Float = headerHeight - tipSizePx * 0.45f + headerOffset
+    val footerBaseline: Float = viewHeight - footerHeight + tipSizePx * 1.25f - footerOffset
 
     val spec: TypesetSpec = TypesetSpec(
         visibleWidth = contentWidth,
@@ -57,8 +70,8 @@ class ReaderPageStyle(
         titleLineStep = titleSizePx * TITLE_LINE_HEIGHT,
         paragraphSpacing = contentSizePx * paragraphSpacingEm,
         blankLineSpacing = contentSizePx * paragraphSpacingEm * BLANK_LINE_FACTOR,
-        titleTopSpacing = lineStep * TITLE_TOP_LINES,
-        titleBottomSpacing = lineStep * TITLE_BOTTOM_LINES,
+        titleTopSpacing = lineStep * titleTopSpacingLines,
+        titleBottomSpacing = lineStep * titleBottomSpacingLines,
         syntaxHighlightRules = syntaxHighlightRules,
         indentCharCount = firstLineIndentEm,
         justifyContent = textJustification
@@ -88,9 +101,13 @@ class ReaderPageStyle(
         const val TIP_SP = 11f
         const val HEADER_PADDING_DP = 10f
         const val FOOTER_PADDING_DP = 12f
-        /** pageMargin setting 0..2 maps to 14..34dp of horizontal padding. */
+        /** Each edge setting 0..2 maps to 14..34dp of horizontal padding. */
         const val MARGIN_BASE_DP = 14f
         const val MARGIN_RANGE_DP = 10f
+        /** Body top/bottom padding; it never moves header or footer chrome. */
+        const val VERTICAL_MARGIN_RANGE_DP = 18f
+        /** Independent header/footer offset range. */
+        const val CHROME_MARGIN_RANGE_DP = 18f
 
         fun resolve(
             settings: ReaderSettings,
@@ -105,8 +122,23 @@ class ReaderPageStyle(
             val tipSize = with(density) { TIP_SP.sp.toPx() }
             val headerPadding = with(density) { HEADER_PADDING_DP.dp.toPx() }
             val footerPadding = with(density) { FOOTER_PADDING_DP.dp.toPx() }
-            val horizontal = with(density) {
-                (MARGIN_BASE_DP + MARGIN_RANGE_DP * settings.pageMargin).dp.toPx()
+            val left = with(density) {
+                (MARGIN_BASE_DP + MARGIN_RANGE_DP * settings.pageMarginLeft).dp.toPx()
+            }
+            val right = with(density) {
+                (MARGIN_BASE_DP + MARGIN_RANGE_DP * settings.pageMarginRight).dp.toPx()
+            }
+            val top = with(density) {
+                (VERTICAL_MARGIN_RANGE_DP * settings.pageMarginTop).dp.toPx()
+            }
+            val bottom = with(density) {
+                (VERTICAL_MARGIN_RANGE_DP * settings.pageMarginBottom).dp.toPx()
+            }
+            val headerOffset = with(density) {
+                (CHROME_MARGIN_RANGE_DP * settings.headerMarginTop).dp.toPx()
+            }
+            val footerOffset = with(density) {
+                (CHROME_MARGIN_RANGE_DP * settings.footerMarginBottom).dp.toPx()
             }
             val syntaxRules = settings.syntaxHighlightRules.takeIf {
                 settings.syntaxHighlightEnabled
@@ -115,7 +147,8 @@ class ReaderPageStyle(
             return ReaderPageStyle(
                 viewWidth = viewWidth,
                 viewHeight = viewHeight,
-                paddingHorizontal = horizontal,
+                paddingLeft = left,
+                paddingRight = right,
                 headerHeight = if (settings.showHeader) {
                     statusBarPx + headerPadding + tipSize * 1.6f
                 } else {
@@ -126,6 +159,10 @@ class ReaderPageStyle(
                 } else {
                     navigationBarPx + footerPadding * 0.35f
                 },
+                contentPaddingTop = top,
+                contentPaddingBottom = bottom,
+                headerOffset = headerOffset,
+                footerOffset = footerOffset,
                 contentSizePx = contentSize,
                 titleSizePx = contentSize * settings.titleScale,
                 tipSizePx = tipSize,
@@ -146,6 +183,8 @@ class ReaderPageStyle(
                 backgroundImagePath = settings.backgroundImagePath,
                 backgroundImageOpacity = settings.backgroundImageOpacity,
                 syntaxHighlightRules = syntaxRules,
+                titleTopSpacingLines = settings.titleTopSpacing,
+                titleBottomSpacingLines = settings.titleBottomSpacing,
                 paragraphSpacingEm = settings.paragraphSpacingEm,
                 firstLineIndentEm = settings.firstLineIndentEm,
                 textJustification = settings.textJustification,

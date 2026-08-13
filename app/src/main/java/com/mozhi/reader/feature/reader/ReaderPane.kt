@@ -29,6 +29,7 @@ import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.BorderColor
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Headphones
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Psychology
@@ -120,6 +121,7 @@ fun ReaderPane(
     onIllustrationClick: (illustrationIds: List<Long>) -> Unit = {},
     onTtsAction: (selection: String) -> Unit,
     onImageAction: (selection: String, context: String, range: IntRange) -> Unit,
+    onEditText: (selection: String, range: IntRange) -> Unit,
     pageTurnRequest: ReaderPageTurnRequest? = null,
     modifier: Modifier = Modifier
 ) {
@@ -197,16 +199,25 @@ fun ReaderPane(
         font = settings.font,
         customFontPath = settings.customFontPath,
         lineHeight = settings.lineHeight,
-        pageMargin = settings.pageMargin,
+        pageMarginsHash = listOf(
+            settings.pageMarginLeft,
+            settings.pageMarginRight,
+            settings.pageMarginTop,
+            settings.pageMarginBottom
+        ).hashCode(),
         advancedTypographyHash = listOf(
             settings.fontWeight,
             settings.letterSpacingEm,
             settings.paragraphSpacingEm,
             settings.firstLineIndentEm,
             settings.titleScale,
+            settings.titleTopSpacing,
+            settings.titleBottomSpacing,
             settings.textJustification,
             settings.showHeader,
-            settings.showFooter
+            settings.showFooter,
+            settings.headerMarginTop,
+            settings.footerMarginBottom
         ).hashCode(),
         syntaxHighlightEnabled = settings.syntaxHighlightEnabled,
         syntaxRulesHash = settings.syntaxHighlightRules.hashCode(),
@@ -444,6 +455,12 @@ fun ReaderPane(
                     }
                     selection.clear()
                 },
+                onEdit = {
+                    val text = selection.selectedText()
+                    val range = selection.bodyRange()
+                    if (text.isNotBlank() && range != null) onEditText(text, range)
+                    selection.clear()
+                },
                 onCopy = {
                     val text = selection.selectedText()
                     if (text.isNotEmpty()) {
@@ -466,6 +483,7 @@ internal fun BoxScope.SelectionToolbar(
     onAnnotation: () -> Unit,
     onTts: () -> Unit,
     onImage: () -> Unit,
+    onEdit: () -> Unit,
     onCopy: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -496,6 +514,7 @@ internal fun BoxScope.SelectionToolbar(
             SelectionToolItem(Icons.Outlined.BorderColor, "划线", palette.accent, palette, onAnnotation)
             SelectionToolItem(Icons.Outlined.Headphones, "朗读", palette.accent, palette, onTts)
             SelectionToolItem(Icons.Outlined.Image, "生图", palette.accent, palette, onImage)
+            SelectionToolItem(Icons.Outlined.Edit, "编辑", palette.accent, palette, onEdit)
             SelectionToolItem(Icons.Outlined.ContentCopy, "复制", palette.onBackground, palette, onCopy)
             SelectionToolItem(Icons.Outlined.Close, "取消", palette.muted, palette, onDismiss)
         }
@@ -555,7 +574,7 @@ private data class ReaderEnvironmentKey(
     val font: ReaderFont,
     val customFontPath: String?,
     val lineHeight: Float,
-    val pageMargin: Float,
+    val pageMarginsHash: Int,
     val advancedTypographyHash: Int,
     val syntaxHighlightEnabled: Boolean,
     val syntaxRulesHash: Int,
@@ -753,7 +772,7 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
         private set
     var viewHeight = 0
         private set
-    var backgroundColor: Int = android.graphics.Color.WHITE
+    var backgroundColor: Int = android.graphics.Color.TRANSPARENT
         private set
 
     val compositor = PageTurnCompositor()
@@ -836,7 +855,7 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
     }
 
     /** Top-left of the typeset content area in view coordinates, or null before the first style. */
-    fun contentOrigin(): Offset? = style?.let { Offset(it.paddingHorizontal, it.headerHeight) }
+    fun contentOrigin(): Offset? = style?.let { Offset(it.paddingLeft, it.contentTop) }
 
     fun annotationIdsAt(position: Offset): List<Long> {
         val currentStyle = style ?: return emptyList()
@@ -848,7 +867,7 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
             annotations.filter { it.chapterIndex == page.chapterIndex },
             markerRadius = markerRadius,
             markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.ANNOTATION_MARKER_GAP_RATIO,
-            maxRight = currentStyle.contentWidth + currentStyle.paddingHorizontal * 0.9f
+            maxRight = currentStyle.contentWidth + currentStyle.paddingRight * 0.9f
         )
         val hitRadius = (currentStyle.tipSizePx * 1.35f).coerceAtLeast(18f)
         geometry.markers.firstOrNull { marker ->
@@ -874,7 +893,7 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
             illustrations.filter { it.chapterIndex == page.chapterIndex },
             markerRadius,
             markerRadius * com.mozhi.reader.feature.reader.engine.ANNOTATION_MARKER_GAP_RATIO,
-            currentStyle.contentWidth + currentStyle.paddingHorizontal * 0.9f
+            currentStyle.contentWidth + currentStyle.paddingRight * 0.9f
         )
         val hitRadius = (currentStyle.tipSizePx * 1.35f).coerceAtLeast(18f)
         return markers.firstOrNull { marker ->

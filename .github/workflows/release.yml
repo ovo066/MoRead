@@ -4,20 +4,35 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to build and publish (for example v0.10.2)"
+        required: true
+        type: string
+      note:
+        description: "Optional note appended to the release description"
+        required: false
+        type: string
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
   cancel-in-progress: false
 
 jobs:
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      RELEASE_NOTE: ${{ github.event_name == 'workflow_dispatch' && inputs.note || '' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -28,12 +43,14 @@ jobs:
         shell: bash
         env:
           KEYSTORE_BASE64: ${{ secrets.MOREAD_RELEASE_KEYSTORE_BASE64 }}
-        run: printf '%s' "$KEYSTORE_BASE64" | base64 --decode > .ci-release.jks
+        run: |
+          test -n "$KEYSTORE_BASE64"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > .ci-release.jks
       - name: Verify tag matches app version
         shell: bash
         run: |
           VERSION_NAME=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -1)
-          test "$VERSION_NAME" = "${GITHUB_REF_NAME#v}"
+          test "$VERSION_NAME" = "${RELEASE_TAG#v}"
       - name: Test and build signed release
         env:
           MOREAD_RELEASE_STORE_FILE: .ci-release.jks
@@ -41,16 +58,47 @@ jobs:
           MOREAD_RELEASE_KEY_ALIAS: ${{ secrets.MOREAD_RELEASE_KEY_ALIAS }}
           MOREAD_RELEASE_KEY_PASSWORD: ${{ secrets.MOREAD_RELEASE_KEY_PASSWORD }}
         run: ./gradlew :app:testDebugUnitTest :app:assembleRelease --console=plain
-      - name: Verify signature and prepare artifact
+      - name: Verify official signature and prepare artifact
         shell: bash
         run: |
+          set -euo pipefail
           VERSION_NAME=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -1)
           VERSION_CODE=$(sed -n 's/.*versionCode = \([0-9]*\).*/\1/p' app/build.gradle.kts | head -1)
-          "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --verbose app/build/outputs/apk/release/app-release.apk
+          APK=app/build/outputs/apk/release/app-release.apk
+          EXPECTED_CERT_SHA256=f3c59d4dc6a5bcea989434c735350e2ad88ed31efae04a83731eac36a6ef39fd
+
+          "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --verbose --print-certs "$APK" | tee apksigner-report.txt
+          ACTUAL_CERT_SHA256=$(sed -n 's/^V2 Signer: certificate SHA-256 digest: //p' apksigner-report.txt | head -1)
+          test "$ACTUAL_CERT_SHA256" = "$EXPECTED_CERT_SHA256"
+
           mkdir -p dist
-          cp app/build/outputs/apk/release/app-release.apk "dist/mozhi-${VERSION_NAME}-vc${VERSION_CODE}.apk"
-      - name: Publish GitHub Latest release
+          cp "$APK" "dist/mozhi-${VERSION_NAME}-vc${VERSION_CODE}.apk"
+      - name: Create or repair GitHub release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/*.apk --verify-tag --generate-notes --latest --title "墨知 ${GITHUB_REF_NAME#v}"
+        run: |
+          set -euo pipefail
+          TITLE="墨知 ${RELEASE_TAG#v}"
+          APK_PATH=$(find dist -maxdepth 1 -type f -name '*.apk' -print -quit)
+
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --generate-notes --latest --title "$TITLE"
+          fi
+
+          gh release upload "$RELEASE_TAG" "$APK_PATH" --clobber
+
+          while IFS= read -r asset; do
+            test -n "$asset" || continue
+            gh release delete-asset "$RELEASE_TAG" "$asset" --yes
+          done < <(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name | select(endswith("-performance.apk"))')
+
+          if test -n "$RELEASE_NOTE"; then
+            CURRENT_BODY=$(gh release view "$RELEASE_TAG" --json body --jq '.body // ""')
+            if [[ "$CURRENT_BODY" != *"$RELEASE_NOTE"* ]]; then
+              printf '%s\n\n%s\n' "$CURRENT_BODY" "$RELEASE_NOTE" > release-notes.md
+              gh release edit "$RELEASE_TAG" --notes-file release-notes.md
+            fi
+          fi
+
+          gh release edit "$RELEASE_TAG" --latest --title "$TITLE"

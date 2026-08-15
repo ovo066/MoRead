@@ -5,6 +5,7 @@ import com.mozhi.reader.core.database.entity.ModelRole
 import com.mozhi.reader.core.database.entity.PersonaEntity
 import com.mozhi.reader.core.database.entity.exampleDialogs
 import com.mozhi.reader.core.database.entity.worldBook
+import com.mozhi.reader.core.datastore.ReaderSettingsRepository
 import com.mozhi.reader.core.datastore.UserMask
 import com.mozhi.reader.core.datastore.UserMaskStore
 import com.mozhi.reader.core.library.LibraryRepository
@@ -14,6 +15,7 @@ import io.objectbox.BoxStore
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.flow.first
 
 /** 组装系统提示词用的书籍进度快照。 */
 data class BookProgress(
@@ -37,7 +39,8 @@ class CompanionContextBuilder @Inject constructor(
     private val libraryRepository: LibraryRepository,
     private val clientFactory: dagger.Lazy<AiClientFactory>,
     private val vectorStore: dagger.Lazy<BoxStore>,
-    private val userMaskStore: UserMaskStore
+    private val userMaskStore: UserMaskStore,
+    private val settingsRepository: ReaderSettingsRepository
 ) {
     /**
      * @param scene 调用方备好的场景原文（选段及其邻域，或章节开头），可空
@@ -65,18 +68,35 @@ class CompanionContextBuilder @Inject constructor(
                 )
             }
         }
-        val memories = if (persona != null && !memoryQuery.isNullOrBlank()) {
-            retrieveMemories(persona.id, memoryQuery)
+        val userMask = userMaskStore.activeMask()
+        val memorySettings = settingsRepository.companionMemorySettings.first()
+        val memories = if (
+            persona != null &&
+            persona.memoryEnabled &&
+            memorySettings.longTermEnabled &&
+            !memoryQuery.isNullOrBlank()
+        ) {
+            retrieveMemories(
+                personaId = persona.id,
+                query = memoryQuery,
+                // 关闭跨书记忆＝把召回收窄到当前书；跨书的全局记忆（bookId 为 null）
+                // 同样不参与，这正是该开关的语义。
+                bookId = bookId.takeUnless { memorySettings.crossBookEnabled },
+                maskId = userMask?.id ?: 0L
+            )
         } else {
             emptyList()
         }
-        val userMask = userMaskStore.activeMask()
         return assemble(
             persona = persona,
             userMask = userMask,
             progress = progress,
             scene = scene,
             memories = memories,
+            userProfile = persona
+                ?.takeIf { it.memoryEnabled && memorySettings.longTermEnabled }
+                ?.userProfile
+                .orEmpty(),
             toolNames = toolNames,
             spoilerProtectionEnabled = spoilerProtectionEnabled,
             // 关键词触发的世界书条目拿「场景原文 + 用户最新输入」当命中材料。
@@ -86,11 +106,22 @@ class CompanionContextBuilder @Inject constructor(
     }
 
     /** 记忆是增益项：embedding 未配置、检索失败一律静默降级为空。 */
-    private suspend fun retrieveMemories(personaId: Long, query: String): List<String> = try {
+    private suspend fun retrieveMemories(
+        personaId: Long,
+        query: String,
+        bookId: Long?,
+        maskId: Long
+    ): List<String> = try {
         val resolved = clientFactory.get().forRole(ModelRole.EMBEDDING)
         val vector = Embeddings.conformToIndex(resolved.client.embed(listOf(query)).first())
-        VectorQueries.searchMemories(vectorStore.get(), personaId, vector, MEMORY_TOP_K)
-            .map { it.get().summary }
+        VectorQueries.searchMemories(
+            vectorStore.get(),
+            personaId,
+            vector,
+            MEMORY_TOP_K,
+            bookId,
+            maskId
+        ).map { it.get().summary }
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (_: Exception) {
@@ -112,6 +143,7 @@ class CompanionContextBuilder @Inject constructor(
             progress: BookProgress?,
             scene: String?,
             memories: List<String>,
+            userProfile: String = "",
             toolNames: Collection<String> = emptySet(),
             spoilerProtectionEnabled: Boolean = true,
             loreTrigger: String = "",
@@ -119,6 +151,8 @@ class CompanionContextBuilder @Inject constructor(
         ): String {
             val fixedBlocks = listOfNotNull(
                 personaBlock(persona, loreTrigger),
+                // 画像与人设同级：它是「你认识的这个人是谁」，裁掉它角色立刻变得陌生。
+                userProfileBlock(userProfile),
                 userMaskBlock(userMask),
                 progressBlock(progress),
                 spoilerBlock(progress, spoilerProtectionEnabled),
@@ -195,6 +229,11 @@ class CompanionContextBuilder @Inject constructor(
                 }
             }
         }
+
+        private fun userProfileBlock(userProfile: String): String? = userProfile
+            .trim()
+            .takeIf(String::isNotEmpty)
+            ?.let { "【关于用户】你在过往交流中积累的了解：\n" + it }
 
         private fun userMaskBlock(mask: UserMask?): String? = mask?.let {
             buildString {

@@ -24,6 +24,7 @@ import javax.inject.Singleton
 @InstallIn(SingletonComponent::class)
 interface MemoryConsolidationEntryPoint {
     fun memoryConsolidator(): MemoryConsolidator
+    fun rollingSummarizer(): RollingSummarizer
 }
 
 class MemoryConsolidationWorker(
@@ -40,12 +41,15 @@ class MemoryConsolidationWorker(
     override suspend fun doWork(): Result {
         val conversationId = inputData.getLong(KEY_CONVERSATION_ID, 0)
         if (conversationId == 0L) return Result.failure()
-        return when (
-            val outcome = entryPoint.memoryConsolidator().consolidateAvailable(
-                conversationId = conversationId,
-                forceOnClose = inputData.getBoolean(KEY_FORCE_ON_CLOSE, false)
-            )
-        ) {
+        // 固化在前、提要在后：固化推进的水位会让提要把已成为长期记忆的那段丢掉，
+        // 否则同一段内容会既在记忆里又在提要里重复占用上下文。
+        val outcome = entryPoint.memoryConsolidator().consolidateAvailable(
+            conversationId = conversationId,
+            forceOnClose = inputData.getBoolean(KEY_FORCE_ON_CLOSE, false)
+        )
+        // 提要是纯增益：它失败不该让固化的成功结果变成 retry。
+        runCatching { entryPoint.rollingSummarizer().refresh(conversationId) }
+        return when (outcome) {
             is MemoryConsolidationOutcome.Completed,
             MemoryConsolidationOutcome.NotReady,
             is MemoryConsolidationOutcome.Skipped -> Result.success()

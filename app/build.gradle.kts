@@ -44,8 +44,8 @@ android {
         minSdk = 26
         targetSdk = 37
         // 测试期曾发过仓库外的高编号包，编号跳档保证覆盖安装不降级。
-        versionCode = 49
-        versionName = "0.10.2"
+        versionCode = 50
+        versionName = "0.11.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
 
@@ -155,6 +155,8 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.material.icons.extended)
+    implementation(libs.haze)
+    implementation(libs.haze.materials)
     implementation(libs.markdown.renderer.m3)
 
     implementation(libs.hilt.android)
@@ -175,6 +177,7 @@ dependencies {
     implementation(libs.juniversalchardet)
     implementation(libs.jsoup)
     implementation(libs.android.svg)
+    implementation(libs.zxing.core)
 
     implementation(libs.readium.shared)
     implementation(libs.readium.streamer)

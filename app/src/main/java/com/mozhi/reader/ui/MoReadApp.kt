@@ -15,7 +15,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -49,6 +48,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NamedNavArgument
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavGraphBuilder
@@ -62,8 +62,12 @@ import com.mozhi.reader.feature.bookdetail.BookDetailScreen
 import com.mozhi.reader.feature.bookshelf.BookshelfScreen
 import com.mozhi.reader.feature.companion.CompanionScreen
 import com.mozhi.reader.feature.companion.PersonaEditorScreen
+import com.mozhi.reader.feature.companion.PersonaMemoryScreen
+import com.mozhi.reader.feature.importer.ImportPickerScreen
 import com.mozhi.reader.feature.importer.ImportPreviewScreen
+import com.mozhi.reader.feature.importer.LanTransferScreen
 import com.mozhi.reader.feature.reader.CompanionChatScreen
+import com.mozhi.reader.feature.reader.ReaderLocateRequest
 import com.mozhi.reader.feature.reader.ReaderScreen
 import com.mozhi.reader.feature.settings.AiServiceScreen
 import com.mozhi.reader.feature.settings.ApiLogScreen
@@ -76,15 +80,19 @@ import com.mozhi.reader.feature.settings.BackupSettingsScreen
 import com.mozhi.reader.feature.settings.ProviderDetailScreen
 import com.mozhi.reader.feature.settings.SettingsScreen
 import com.mozhi.reader.feature.settings.SettingsViewModel
+import com.mozhi.reader.feature.settings.SpeechCacheScreen
 import com.mozhi.reader.feature.settings.TtsSettingsScreen
 import com.mozhi.reader.feature.settings.UserMaskSettingsScreen
 import com.mozhi.reader.feature.settings.WebSearchSettingsScreen
 import com.mozhi.reader.feature.stats.StatsScreen
+import com.mozhi.reader.ui.components.BlurredGlassSurface
 import com.mozhi.reader.ui.components.MoReadBackdrop
 import com.mozhi.reader.ui.theme.MoReadTokens
-import com.mozhi.reader.ui.theme.isDarkTheme
 import com.mozhi.reader.ui.theme.navSelectedColor
 import com.mozhi.reader.ui.theme.onNavSelectedColor
+import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.hazeSource
+import dev.chrisbanes.haze.rememberHazeState
 
 /**
  * 页面转场（Material 3 motion）：
@@ -92,6 +100,11 @@ import com.mozhi.reader.ui.theme.onNavSelectedColor
  *   叠帧绘制。Navigation 默认的 700ms 双页叠加淡入淡出既拖沓又让重列表掉帧。
  * - 二级页推入用 shared-axis X：入场从右侧 1/4 滑入，底页微退场；返回镜像。
  */
+/** 聊天页 →（返回）→ 阅读页的一次性跳转参数。 */
+private const val LOCATE_CHAPTER_KEY = "locate-chapter"
+private const val LOCATE_START_KEY = "locate-start"
+private const val LOCATE_END_KEY = "locate-end"
+
 private const val ROOT_FADE_OUT_MS = 90
 private const val ROOT_FADE_IN_MS = 210
 private const val PUSH_MS = 280
@@ -174,6 +187,7 @@ fun MoReadApp(
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
     val showBottomBar = RootDestination.entries.any { it.route == currentRoute }
+    val hazeState = rememberHazeState()
 
     LaunchedEffect(incomingBookUri) {
         if (incomingBookUri != null && currentRoute != RootDestination.Bookshelf.route) {
@@ -197,7 +211,9 @@ fun MoReadApp(
                 NavHost(
                     navController = navController,
                     startDestination = RootDestination.Bookshelf.route,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .hazeSource(hazeState),
                     enterTransition = { rootEnter() },
                     exitTransition = { rootExit() },
                     popEnterTransition = { rootEnter() },
@@ -218,7 +234,11 @@ fun MoReadApp(
                         },
                         onOpenImportPreview = { sessionId ->
                             navController.navigate("import/$sessionId")
-                        }
+                        },
+                        onOpenFolderPicker = { treeUri ->
+                            navController.navigate("import-picker?treeUri=${Uri.encode(treeUri.toString())}")
+                        },
+                        onOpenLanTransfer = { navController.navigate("import-lan") }
                     )
                 }
                 composable(RootDestination.Stats.route) {
@@ -264,7 +284,16 @@ fun MoReadApp(
                     )
                 }
                 pushComposable("tts-settings") {
-                    TtsSettingsScreen(onBack = navController::popBackStack)
+                    TtsSettingsScreen(
+                        onBack = navController::popBackStack,
+                        onOpenSpeechCache = { navController.navigate("speech-cache") }
+                    )
+                }
+                pushComposable("speech-cache") {
+                    SpeechCacheScreen(
+                        onBack = navController::popBackStack,
+                        onOpenBackupSettings = { navController.navigate("backup-settings") }
+                    )
                 }
                 pushComposable("web-search-settings") {
                     WebSearchSettingsScreen(onBack = navController::popBackStack)
@@ -310,6 +339,27 @@ fun MoReadApp(
                         }
                     )
                 }
+                pushComposable(
+                    route = "import-picker?treeUri={treeUri}",
+                    arguments = listOf(
+                        navArgument("treeUri") {
+                            type = NavType.StringType
+                            nullable = true
+                            defaultValue = null
+                        }
+                    )
+                ) {
+                    ImportPickerScreen(
+                        onBack = navController::popBackStack,
+                        onImported = { navController.popBackStack() }
+                    )
+                }
+                pushComposable("import-lan") {
+                    LanTransferScreen(
+                        onBack = navController::popBackStack,
+                        onImported = { navController.popBackStack() }
+                    )
+                }
                 pushComposable("import/{sessionId}") {
                     ImportPreviewScreen(
                         onBack = navController::popBackStack,
@@ -321,12 +371,35 @@ fun MoReadApp(
                     )
                 }
                 pushComposable("reader/{bookId}") { entry ->
+                    // 聊天页是压在阅读页之上的二级页，跳转请求经它的 savedStateHandle 回传；
+                    // 这样阅读页不必常驻监听，也不会在没打开过聊天时凭空多一条状态。
+                    val locateChapter = entry.savedStateHandle
+                        .getStateFlow<Int?>(LOCATE_CHAPTER_KEY, null)
+                        .collectAsStateWithLifecycle()
+                    val locateStart = entry.savedStateHandle
+                        .getStateFlow<Int?>(LOCATE_START_KEY, null)
+                        .collectAsStateWithLifecycle()
+                    val locateEnd = entry.savedStateHandle
+                        .getStateFlow<Int?>(LOCATE_END_KEY, null)
+                        .collectAsStateWithLifecycle()
                     ReaderScreen(
                         bookId = entry.arguments?.getString("bookId")?.toLongOrNull()
                             ?: return@pushComposable,
                         onBack = navController::popBackStack,
                         onOpenCompanionChat = { bookId ->
                             navController.navigate("companion-chat/$bookId")
+                        },
+                        pendingLocate = locateChapter.value?.let { chapter ->
+                            ReaderLocateRequest(
+                                chapterIndex = chapter,
+                                startCharOffset = locateStart.value ?: 0,
+                                endCharOffset = locateEnd.value ?: 0
+                            )
+                        },
+                        onPendingLocateConsumed = {
+                            entry.savedStateHandle[LOCATE_CHAPTER_KEY] = null
+                            entry.savedStateHandle[LOCATE_START_KEY] = null
+                            entry.savedStateHandle[LOCATE_END_KEY] = null
                         }
                     )
                 }
@@ -334,11 +407,27 @@ fun MoReadApp(
                     CompanionChatScreen(
                         bookId = entry.arguments?.getString("bookId")?.toLongOrNull()
                             ?: return@pushComposable,
-                        onBack = navController::popBackStack
+                        onBack = navController::popBackStack,
+                        onLocateInBook = { chapterIndex, start, end ->
+                            navController.previousBackStackEntry?.savedStateHandle?.let { handle ->
+                                handle[LOCATE_CHAPTER_KEY] = chapterIndex
+                                handle[LOCATE_START_KEY] = start
+                                handle[LOCATE_END_KEY] = end
+                            }
+                            navController.popBackStack()
+                        }
                     )
                 }
                 pushComposable("persona/{personaId}") {
-                    PersonaEditorScreen(onBack = navController::popBackStack)
+                    PersonaEditorScreen(
+                        onBack = navController::popBackStack,
+                        onOpenMemory = { personaId ->
+                            navController.navigate("persona-memory/$personaId")
+                        }
+                    )
+                }
+                pushComposable("persona-memory/{personaId}") {
+                    PersonaMemoryScreen(onBack = navController::popBackStack)
                 }
                 pushComposable("provider/{providerId}") {
                     ProviderDetailScreen(onBack = navController::popBackStack)
@@ -350,6 +439,7 @@ fun MoReadApp(
             // 否则 Scaffold 会在整屏底部预留一条矩形空白，看起来像胶囊背后的白横条。
             if (showBottomBar) {
                 BottomNavDock(
+                    hazeState = hazeState,
                     modifier = Modifier.align(Alignment.BottomCenter),
                     selectedRoute = currentRoute,
                     onSelect = { item ->
@@ -367,22 +457,16 @@ fun MoReadApp(
 }
 
 /**
- * 轻量玻璃导航舱：用高透明度表面、描边与小阴影保留玻璃层次，但不做实时背景
- * 采样/模糊。Dock 覆盖面积虽小，实时 blur 仍会让整个滚动内容进入离屏合成，
- * 对中低端 GPU 的帧时间影响与书籍数量无关。
+ * Haze 玻璃导航舱：只对这块小面积常驻浮层做真实背景采样与模糊；长列表卡片仍使用
+ * 低成本玻璃材质，避免整页大量离屏合成。
  */
 @Composable
 private fun BottomNavDock(
+    hazeState: HazeState,
     modifier: Modifier = Modifier,
     selectedRoute: String?,
     onSelect: (RootDestination) -> Unit
 ) {
-    val darkTheme = isDarkTheme()
-    val borderColor = if (darkTheme) {
-        Color.White.copy(alpha = 0.12f)
-    } else {
-        Color.White.copy(alpha = 0.65f)
-    }
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -390,14 +474,11 @@ private fun BottomNavDock(
             .padding(bottom = 10.dp),
         contentAlignment = Alignment.Center
     ) {
-        Surface(
+        BlurredGlassSurface(
+            hazeState = hazeState,
             shape = MoReadTokens.CapsuleShape,
-            color = MaterialTheme.colorScheme.surface.copy(
-                alpha = if (darkTheme) 0.92f else 0.96f
-            ),
-            tonalElevation = 0.dp,
-            shadowElevation = 8.dp,
-            border = BorderStroke(1.dp, borderColor)
+            tint = MaterialTheme.colorScheme.surface,
+            shadowElevation = 6.dp
         ) {
             Row(
                 modifier = Modifier.padding(6.dp),

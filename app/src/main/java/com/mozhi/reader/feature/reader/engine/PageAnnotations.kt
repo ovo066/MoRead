@@ -24,8 +24,11 @@ data class ReaderIllustrationMark(
     val endCharOffset: Int
 )
 
-/** 听书当前句（章内 UTF-16 区间）；render 层据此画一条跟随朗读进度的柔和底色。 */
-data class ListenHighlightSpan(
+/**
+ * 一段临时高亮（章内 UTF-16 区间），render 层据此画一条柔和底色，画在批注色之下。
+ * 两个来源共用它：听书当前句（跟随朗读推进）与聊天引文定位（跳过来后短暂点亮）。
+ */
+data class TransientHighlightSpan(
     val chapterIndex: Int,
     val startCharOffset: Int,
     val endCharOffset: Int

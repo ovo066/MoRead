@@ -293,4 +293,50 @@ class CompanionContextBuilderTest {
         assertFalse(prompt.contains("多".repeat(2_001)))
         assertTrue(prompt.contains("多".repeat(2_000)))
     }
+
+    @Test
+    fun userProfileIsInjectedRightAfterThePersona() {
+        val prompt = CompanionContextBuilder.assemble(
+            persona = null,
+            progress = progress,
+            scene = null,
+            memories = emptyList(),
+            userProfile = "称呼：老周。偏爱冷峻的叙述，讨厌被剧透。"
+        )
+
+        assertTrue(prompt.contains("【关于用户】"))
+        assertTrue(prompt.contains("称呼：老周"))
+        // 画像排在进度之前——它属于「你在跟谁说话」，先于「读到哪了」。
+        assertTrue(prompt.indexOf("【关于用户】") < prompt.indexOf("用户正在阅读"))
+    }
+
+    @Test
+    fun blankProfileAddsNoBlock() {
+        val prompt = CompanionContextBuilder.assemble(
+            persona = null,
+            progress = progress,
+            scene = null,
+            memories = emptyList(),
+            userProfile = "   "
+        )
+
+        assertFalse(prompt.contains("【关于用户】"))
+    }
+
+    /** 画像与人设同级：预算再紧也不能裁掉它，否则角色瞬间对用户变得陌生。 */
+    @Test
+    fun profileSurvivesEvenWhenSceneAndMemoriesAreSacrificed() {
+        val profile = "称呼：老周。共读过《三体》与《活着》。"
+        val prompt = CompanionContextBuilder.assemble(
+            persona = null,
+            progress = progress,
+            scene = "景".repeat(3_000),
+            memories = List(5) { "记忆${it}".padEnd(200, '忆') },
+            userProfile = profile,
+            budgetChars = 800
+        )
+
+        assertTrue(prompt.contains(profile))
+        assertFalse(prompt.contains("【长期记忆】"))
+    }
 }

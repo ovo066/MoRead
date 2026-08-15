@@ -17,6 +17,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -146,7 +148,12 @@ fun SettingsRow(
     }
 }
 
-/** 开关行：与 [SettingsRow] 同一套版式，尾部换成 Switch，整行可点。 */
+/**
+ * 开关行：与 [SettingsRow] 同一套版式，尾部换成 Switch，整行可点。
+ *
+ * [enabled] 为 false 时整行变淡且不可点——用于「总开关关掉后，子开关不再生效」这类
+ * 从属关系；此时子开关的值原样显示，重新打开总开关即恢复，不擅自改写用户的选择。
+ */
 @Composable
 fun SettingsSwitchRow(
     icon: ImageVector,
@@ -154,16 +161,37 @@ fun SettingsSwitchRow(
     subtitle: String?,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true
 ) {
-    SettingsRow(
-        icon = icon,
-        title = title,
-        subtitle = subtitle,
-        onClick = { onCheckedChange(!checked) },
-        modifier = modifier,
-        trailing = { Switch(checked = checked, onCheckedChange = onCheckedChange) }
-    )
+    val content = @Composable {
+        SettingsRow(
+            icon = icon,
+            title = title,
+            subtitle = subtitle,
+            onClick = if (enabled) {
+                { onCheckedChange(!checked) }
+            } else {
+                null
+            },
+            modifier = modifier,
+            trailing = {
+                Switch(
+                    checked = checked,
+                    onCheckedChange = onCheckedChange,
+                    enabled = enabled
+                )
+            }
+        )
+    }
+    if (enabled) {
+        content()
+    } else {
+        CompositionLocalProvider(
+            LocalContentColor provides LocalContentColor.current.copy(alpha = 0.38f),
+            content = content
+        )
+    }
 }
 
 /**

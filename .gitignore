@@ -21,6 +21,8 @@ secrets.properties
 app/objectbox-jni-*.dll
 app/objectbox-jni-*.so
 app/objectbox-jni-*.dylib
+# 注解处理器每次改模型都会留一份旧模型副本，default.json 本身已入库，副本不需要
+app/objectbox-models/*.json.bak
 
 # ---- 开源边界：以下内容只保留在本地，不进入公开仓库 ----
 # 维护者私有工作文档（新克隆中没有这些文件属正常）

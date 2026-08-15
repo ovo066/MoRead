@@ -1,6 +1,7 @@
 package com.mozhi.reader.feature.importer
 
 import com.mozhi.reader.ai.embedding.BookEmbeddingScheduler
+import com.mozhi.reader.core.importer.BatchImportScheduler
 import com.mozhi.reader.core.importer.BookImportGateway
 import dagger.Binds
 import dagger.Module
@@ -12,6 +13,11 @@ import dagger.hilt.components.SingletonComponent
 abstract class ImportModule {
     @Binds
     abstract fun bindBookImportGateway(implementation: ImportCoordinator): BookImportGateway
+
+    @Binds
+    abstract fun bindBatchImportScheduler(
+        implementation: WorkBatchImportScheduler
+    ): BatchImportScheduler
 
     @Binds
     abstract fun bindBookEmbeddingScheduler(

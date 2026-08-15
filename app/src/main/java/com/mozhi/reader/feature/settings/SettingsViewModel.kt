@@ -9,6 +9,7 @@ import com.mozhi.reader.ai.provider.AiProviderRepository
 import com.mozhi.reader.core.database.entity.AiModelEntity
 import com.mozhi.reader.core.database.entity.AiProviderEntity
 import com.mozhi.reader.core.database.entity.ModelRole
+import com.mozhi.reader.core.datastore.CompanionMemorySettings
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
 import com.mozhi.reader.core.datastore.ShelfLayout
 import com.mozhi.reader.core.library.LibraryRepository
@@ -42,6 +43,7 @@ data class SettingsUiState(
     val appearance: AppearanceSettings = AppearanceSettings(),
     val shelfLayout: ShelfLayout = ShelfLayout.GRID,
     val suggestionRepliesEnabled: Boolean = true,
+    val memory: CompanionMemorySettings = CompanionMemorySettings(),
     val showAiAnnotations: Boolean = true,
     val isWorking: Boolean = false,
     /** 封面缓存占用字节数；null = 还没统计。 */
@@ -70,14 +72,18 @@ class SettingsViewModel @Inject constructor(
     private data class AppPrefs(
         val shelfLayout: ShelfLayout,
         val suggestionRepliesEnabled: Boolean,
-        val showAiAnnotations: Boolean
+        val showAiAnnotations: Boolean,
+        val memory: CompanionMemorySettings
     )
 
     private val appPrefs = combine(
         readerSettingsRepository.settings.map { it.shelfLayout },
         readerSettingsRepository.suggestionRepliesEnabled,
-        readerSettingsRepository.showAiAnnotations
-    ) { layout, suggestions, aiAnnotations -> AppPrefs(layout, suggestions, aiAnnotations) }
+        readerSettingsRepository.showAiAnnotations,
+        readerSettingsRepository.companionMemorySettings
+    ) { layout, suggestions, aiAnnotations, memory ->
+        AppPrefs(layout, suggestions, aiAnnotations, memory)
+    }
 
     private data class AiConfig(
         val providers: List<AiProviderEntity>,
@@ -111,6 +117,7 @@ class SettingsViewModel @Inject constructor(
             shelfLayout = prefs.shelfLayout,
             suggestionRepliesEnabled = prefs.suggestionRepliesEnabled,
             showAiAnnotations = prefs.showAiAnnotations,
+            memory = prefs.memory,
             isWorking = isWorking,
             coverCacheBytes = usage?.coverBytes,
             bookStorageBytes = usage?.bookBytes
@@ -166,6 +173,18 @@ class SettingsViewModel @Inject constructor(
 
     fun setSuggestionReplies(enabled: Boolean) {
         viewModelScope.launch { readerSettingsRepository.setSuggestionRepliesEnabled(enabled) }
+    }
+
+    fun setLongTermMemory(enabled: Boolean) {
+        viewModelScope.launch { readerSettingsRepository.setCompanionLongTermMemory(enabled) }
+    }
+
+    fun setCrossBookMemory(enabled: Boolean) {
+        viewModelScope.launch { readerSettingsRepository.setCompanionCrossBookMemory(enabled) }
+    }
+
+    fun setCrossBookChatSearch(enabled: Boolean) {
+        viewModelScope.launch { readerSettingsRepository.setCompanionCrossBookChatSearch(enabled) }
     }
 
     fun setShowAiAnnotations(enabled: Boolean) {

@@ -1,6 +1,7 @@
 package com.mozhi.reader.feature.reader
 
 import android.provider.OpenableColumns
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -30,7 +31,6 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -97,7 +97,9 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.mozhi.reader.core.database.entity.MessageEntity
+import com.mozhi.reader.ui.components.rememberChatFontFamily
 import com.mozhi.reader.ui.components.MoReadBackdrop
+import com.mozhi.reader.ui.components.safeTopPadding
 import com.mozhi.reader.ui.components.PersonaAvatarImage
 import com.mozhi.reader.ui.components.blockSheetDrag
 import com.mozhi.reader.ui.theme.isDarkTheme
@@ -116,6 +118,7 @@ import kotlinx.coroutines.launch
 fun CompanionChatScreen(
     bookId: Long,
     onBack: () -> Unit,
+    onLocateInBook: (chapterIndex: Int, startCharOffset: Int, endCharOffset: Int) -> Unit = { _, _, _ -> },
     companionViewModel: ReaderCompanionViewModel = hiltViewModel(),
     mediaViewModel: ReaderSelectionMediaViewModel = hiltViewModel()
 ) {
@@ -140,6 +143,22 @@ fun CompanionChatScreen(
     var previewImagePath by remember { mutableStateOf<String?>(null) }
 
     val context = LocalContext.current
+
+    LaunchedEffect(companionViewModel) {
+        companionViewModel.events.collect { event ->
+            when (event) {
+                is CompanionChatEvent.LocateInBook -> onLocateInBook(
+                    event.chapterIndex,
+                    event.startCharOffset,
+                    event.endCharOffset
+                )
+                // 定位失败要说出来：静默无反应会让人以为是点击没生效，反复戳。
+                is CompanionChatEvent.Message ->
+                    Toast.makeText(context, event.text, Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     val imagePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.PickMultipleVisualMedia(maxItems = 4)
     ) { uris ->
@@ -235,11 +254,29 @@ fun CompanionChatScreen(
         pendingAttachments = emptyList()
     }
 
+    val chatFont = rememberChatFontFamily(state.appearance.fontId, state.fontLibrary)
+
     MoReadBackdrop {
+        // 角色自定义的聊天背景：铺在最底，上面压一层主题底色做蒙版，
+        // 蒙版强度由用户拉——图看得见和字看得清之间的取舍只有他自己知道。
+        state.backgroundImagePath?.let { path ->
+            AsyncImage(
+                model = java.io.File(path),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(palette.background.copy(alpha = state.appearance.backgroundDim))
+            )
+        }
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .statusBarsPadding()
+                // 同书籍详情：沉浸阅读隐藏状态栏后不能让顶栏贴到屏幕上沿。
+                .safeTopPadding()
                 .imePadding()
         ) {
             // 顶栏：返回｜角色 + 书名｜会话管理
@@ -369,7 +406,9 @@ fun CompanionChatScreen(
                             is ChatEntry.Greeting -> CompanionBubble(
                                 text = entry.text,
                                 fromUser = false,
-                                palette = palette
+                                palette = palette,
+                                appearance = state.appearance,
+                                fontFamily = chatFont
                             )
                             is ChatEntry.History -> when (val item = entry.item) {
                                 is CompanionTimelineItem.Bubble -> CompanionMessageBubble(
@@ -384,7 +423,10 @@ fun CompanionChatScreen(
                                     onReroll = {
                                         companionViewModel.reroll(item.message.id, sceneQuote)
                                     },
-                                    onBranch = { companionViewModel.branchFrom(item.message.id) }
+                                    onBranch = { companionViewModel.branchFrom(item.message.id) },
+                                    appearance = state.appearance,
+                                    fontFamily = chatFont,
+                                    onLocateCitation = companionViewModel::locate
                                 )
                                 is CompanionTimelineItem.Tools -> AgentExecutionCard(
                                     steps = item.steps,
@@ -405,7 +447,9 @@ fun CompanionChatScreen(
                                 text = entry.text,
                                 fromUser = false,
                                 palette = palette,
-                                streaming = true
+                                streaming = true,
+                                appearance = state.appearance,
+                                fontFamily = chatFont
                             )
                             is ChatEntry.LiveStatus -> Text(
                                 text = entry.text,

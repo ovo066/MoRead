@@ -93,4 +93,18 @@ interface ChatDao {
             "WHERE id = :conversationId AND memoryConsolidatedThroughMessageId < :messageId"
     )
     suspend fun advanceMemoryConsolidationWatermark(conversationId: Long, messageId: Long)
+
+    /** 前情提要与它的水位一起写：两者分开更新会出现「提要旧、水位新」的空窗。 */
+    @Query(
+        "UPDATE conversations SET rollingSummary = :summary, " +
+            "summarizedThroughMessageId = :messageId WHERE id = :conversationId"
+    )
+    suspend fun updateRollingSummary(conversationId: Long, summary: String, messageId: Long)
+
+    /** 历史被编辑/删除后提要可能引用了不存在的内容，直接清空重来。 */
+    @Query(
+        "UPDATE conversations SET rollingSummary = '', summarizedThroughMessageId = 0 " +
+            "WHERE id = :conversationId"
+    )
+    suspend fun clearRollingSummary(conversationId: Long)
 }

@@ -262,6 +262,15 @@ data class ConversationEntity(
     /** 已固化为长期记忆的最大 messages.id；0 表示尚未固化。 */
     @ColumnInfo(defaultValue = "0")
     val memoryConsolidatedThroughMessageId: Long = 0,
+    /**
+     * 会话前情提要（Memory 2.0 批次 A）：固化水位之后、历史窗口之前那段消息的滚动摘要。
+     * 每轮以 system 块注入但从不作为消息落库。
+     */
+    @ColumnInfo(defaultValue = "''")
+    val rollingSummary: String = "",
+    /** [rollingSummary] 已覆盖到的最大 messages.id；0 表示还没摘过。 */
+    @ColumnInfo(defaultValue = "0")
+    val summarizedThroughMessageId: Long = 0,
     val createdAt: Long,
     /** 会话列表按最近实际交互排序；老库迁移时回填 createdAt。 */
     @ColumnInfo(defaultValue = "0")
@@ -293,7 +302,13 @@ data class MessageEntity(
     /** null = 从未编辑；保留原 createdAt 以维持管道顺序。 */
     val editedAt: Long? = null,
     /** 附件清单 JSON（[MessageAttachment] 数组）；null = 无附件。文件在 filesDir/attachments。 */
-    val attachmentsJson: String? = null
+    val attachmentsJson: String? = null,
+    /**
+     * 发送时生效的用户面具 id；0 = 未启用面具（本人）。记忆固化据此区分本人偏好与
+     * 面具内经历，面具删除后此列悬空留存（同 personaId 不设 FK 的惯例）。
+     */
+    @ColumnInfo(defaultValue = "0")
+    val maskId: Long = 0
 )
 
 /** RikkaHub-style assignment: a role points at one concrete model, not a whole provider. */

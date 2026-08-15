@@ -46,7 +46,7 @@
     },
     {
       "id": "2:6440457849962055940",
-      "lastPropertyId": "9:7519625019676345909",
+      "lastPropertyId": "10:4060345454505170008",
       "name": "MemoryEntry",
       "properties": [
         {
@@ -95,6 +95,11 @@
         {
           "id": "9:7519625019676345909",
           "name": "sourceMessageId",
+          "type": 6
+        },
+        {
+          "id": "10:4060345454505170008",
+          "name": "maskId",
           "type": 6
         }
       ],

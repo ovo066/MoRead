@@ -28,7 +28,10 @@ class PersonaRepository @Inject constructor(
         val entity = persona.copy(
             name = persona.name.trim(),
             createdAt = existing?.createdAt ?: System.currentTimeMillis(),
-            isBuiltIn = existing?.isBuiltIn ?: false
+            isBuiltIn = existing?.isBuiltIn ?: false,
+            // 画像归记忆系统所有（固化任务与记忆管理页各自直写该列），角色卡保存一律
+            // 沿用库里的值——否则每次编辑人设都会把角色对用户的了解清空。
+            userProfile = existing?.userProfile ?: persona.userProfile
         )
         val savedId = if (existing == null) {
             personaDao.insert(entity.copy(id = 0))

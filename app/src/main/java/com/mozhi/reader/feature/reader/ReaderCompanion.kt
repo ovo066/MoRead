@@ -4,6 +4,7 @@ import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -56,7 +57,11 @@ import com.mozhi.reader.ai.client.ToolCall
 import com.mozhi.reader.ai.embedding.BookEmbeddingProgress
 import com.mozhi.reader.ai.embedding.EmbeddingIndexStage
 import com.mozhi.reader.ai.media.AgentMediaResult
+import androidx.compose.ui.text.font.FontFamily
+import com.mozhi.reader.ui.components.ChatTextStyling
+import com.mozhi.reader.ui.components.rememberChatBubbleStyle
 import com.mozhi.reader.core.database.entity.MessageEntity
+import com.mozhi.reader.core.database.entity.PersonaChatAppearance
 import com.mozhi.reader.core.library.MessageAttachment
 import kotlinx.serialization.builtins.ListSerializer
 
@@ -384,12 +389,16 @@ internal fun CompanionMessageBubble(
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     onReroll: () -> Unit,
-    onBranch: () -> Unit
+    onBranch: () -> Unit,
+    appearance: PersonaChatAppearance = PersonaChatAppearance.DEFAULT,
+    fontFamily: FontFamily? = null,
+    onLocateCitation: (CompanionCitation) -> Unit = {}
 ) {
     val fromUser = message.role == "user"
     var showActions by remember(message.id) { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
+    val style = chatBubbleStyleFor(appearance, fromUser, palette)
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (fromUser) Arrangement.End else Arrangement.Start,
@@ -406,14 +415,12 @@ internal fun CompanionMessageBubble(
                         onClick = { showActions = !showActions },
                         onLongClick = { showActions = true }
                     ),
-                color = if (fromUser) palette.accent else palette.accentContainer.copy(alpha = 0.48f),
-                contentColor = if (fromUser) palette.onAccent else palette.onBackground,
-                shape = if (fromUser) {
-                    RoundedCornerShape(16.dp, 16.dp, 5.dp, 16.dp)
-                } else {
-                    RoundedCornerShape(16.dp, 16.dp, 16.dp, 5.dp)
-                }
+                color = style.container,
+                contentColor = style.content,
+                border = style.border,
+                shape = style.shape(fromUser)
             ) {
+                ChatTextStyling(appearance, fontFamily) {
                 Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
                     val attachments = remember(message.id) {
                         MessageAttachment.decode(message.attachmentsJson)
@@ -469,16 +476,28 @@ internal fun CompanionMessageBubble(
                     if (fromUser) {
                         Text(text = message.content, style = MaterialTheme.typography.bodyMedium)
                     } else {
-                        AiRichText(content = message.content, palette = palette)
+                        // 引用标记是给程序看的，渲染前摘掉；引文本身留在正文里保持句子通顺。
+                        val parsed = remember(message.content) {
+                            CompanionCitationParser.parse(message.content)
+                        }
+                        AiRichText(content = parsed.displayText, palette = palette)
+                        if (parsed.citations.isNotEmpty()) {
+                            CitationChips(
+                                citations = parsed.citations,
+                                palette = palette,
+                                onClick = onLocateCitation
+                            )
+                        }
                     }
                     if (message.editedAt != null) {
                         Text(
                             "已编辑",
                             style = MaterialTheme.typography.labelSmall,
-                            color = (if (fromUser) palette.onAccent else palette.muted).copy(alpha = 0.65f),
+                            color = style.content.copy(alpha = 0.65f),
                             modifier = Modifier.padding(top = 3.dp)
                         )
                     }
+                }
                 }
             }
             AnimatedVisibility(visible = showActions, enter = fadeIn(), exit = fadeOut()) {
@@ -538,22 +557,23 @@ internal fun CompanionBubble(
     text: String,
     fromUser: Boolean,
     palette: ReaderPalette,
-    streaming: Boolean = false
+    streaming: Boolean = false,
+    appearance: PersonaChatAppearance = PersonaChatAppearance.DEFAULT,
+    fontFamily: FontFamily? = null
 ) {
+    val style = chatBubbleStyleFor(appearance, fromUser, palette)
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (fromUser) Arrangement.End else Arrangement.Start
     ) {
         Surface(
             modifier = Modifier.fillMaxWidth(0.82f),
-            color = if (fromUser) palette.accent else palette.accentContainer.copy(alpha = 0.48f),
-            contentColor = if (fromUser) palette.onAccent else palette.onBackground,
-            shape = if (fromUser) {
-                RoundedCornerShape(16.dp, 16.dp, 5.dp, 16.dp)
-            } else {
-                RoundedCornerShape(16.dp, 16.dp, 16.dp, 5.dp)
-            }
+            color = style.container,
+            contentColor = style.content,
+            border = style.border,
+            shape = style.shape(fromUser)
         ) {
+            ChatTextStyling(appearance, fontFamily) {
             when {
                 fromUser -> Text(
                     text = text,
@@ -571,6 +591,69 @@ internal fun CompanionBubble(
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
                 )
             }
+            }
         }
     }
 }
+
+/** 「跳到原文」胶囊：一条引用一枚，点了退回阅读页并高亮那句话。 */
+@Composable
+private fun CitationChips(
+    citations: List<CompanionCitation>,
+    palette: ReaderPalette,
+    onClick: (CompanionCitation) -> Unit
+) {
+    Column(
+        modifier = Modifier.padding(top = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        citations.forEach { citation ->
+            Surface(
+                onClick = { onClick(citation) },
+                shape = RoundedCornerShape(9.dp),
+                color = palette.glass,
+                contentColor = palette.onBackground,
+                border = BorderStroke(1.dp, palette.glassBorder)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Outlined.MenuBook,
+                        contentDescription = null,
+                        tint = palette.accent,
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Text(
+                        text = CompanionCitationParser.label(citation),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = palette.muted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(start = 5.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 默认外观下必须与改动前逐像素一致，因此把阅读页调色板作为「未自定义」时的取值传进去，
+ * 而不是让共享实现回落到 MaterialTheme。
+ */
+@Composable
+private fun chatBubbleStyleFor(
+    appearance: PersonaChatAppearance,
+    fromUser: Boolean,
+    palette: ReaderPalette
+) = rememberChatBubbleStyle(
+    appearance = appearance,
+    fromUser = fromUser,
+    defaultUserContainer = palette.accent,
+    defaultUserContent = palette.onAccent,
+    defaultAssistantContainer = palette.accentContainer.copy(alpha = 0.48f),
+    defaultAssistantContent = palette.onBackground,
+    surfaceContent = palette.onBackground
+)

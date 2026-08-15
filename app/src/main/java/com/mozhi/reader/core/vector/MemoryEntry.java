@@ -16,6 +16,8 @@ public class MemoryEntry {
     /** 来源会话与本批最后一条消息；用于跨 Room/ObjectBox 的幂等固化。 */
     public long conversationId;
     public long sourceMessageId;
+    /** 产出这条记忆时生效的用户面具 id；0 = 本人层，永远参与召回。 */
+    public long maskId;
     public String summary;
     /** CHAT_SUMMARY | EVENT。 */
     public String sourceType;

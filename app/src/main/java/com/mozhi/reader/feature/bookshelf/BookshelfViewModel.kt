@@ -12,6 +12,7 @@ import com.mozhi.reader.core.datastore.ReaderSettingsRepository
 import com.mozhi.reader.core.datastore.ShelfLayout
 import com.mozhi.reader.core.importer.BookImportGateway
 import com.mozhi.reader.core.importer.PreparedImport
+import com.mozhi.reader.core.importer.BatchImportScheduler
 import com.mozhi.reader.core.library.LibraryRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -58,7 +59,8 @@ sealed interface BookshelfEvent {
 class BookshelfViewModel @Inject constructor(
     libraryRepository: LibraryRepository,
     private val settingsRepository: ReaderSettingsRepository,
-    private val importGateway: BookImportGateway
+    private val importGateway: BookImportGateway,
+    private val batchImportScheduler: BatchImportScheduler
 ) : ViewModel() {
     private val importing = kotlinx.coroutines.flow.MutableStateFlow(false)
     private val filter = kotlinx.coroutines.flow.MutableStateFlow(ShelfFilter())
@@ -136,6 +138,20 @@ class BookshelfViewModel @Inject constructor(
                     )
                 }
             importing.value = false
+        }
+    }
+
+    /**
+     * 多选导入：排进批量导入任务逐本处理。TXT 自动取最佳分章规则，不逐本弹预览——
+     * 真要调整，阅读页的「重新分章」随时可用。
+     */
+    fun importBatch(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        batchImportScheduler.enqueue(uris)
+        viewModelScope.launch {
+            eventChannel.send(
+                BookshelfEvent.ShowMessage("已开始导入 ${uris.size} 本，完成后会出现在书架")
+            )
         }
     }
 

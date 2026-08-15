@@ -7,6 +7,7 @@ import io.objectbox.Box;
 import io.objectbox.BoxStore;
 import io.objectbox.query.ObjectWithScore;
 import io.objectbox.query.Query;
+import io.objectbox.query.QueryCondition;
 
 /**
  * 向量检索门面（生成的 *_ 条件类只在这里出现，理由见 {@link VectorDb}）。
@@ -51,13 +52,75 @@ public final class VectorQueries {
             float[] queryVector,
             int topK
     ) {
+        return searchMemories(store, personaId, queryVector, topK, null, 0L);
+    }
+
+    /**
+     * 带范围过滤的角色记忆检索。
+     *
+     * @param bookId 非 null 时只召回这本书产生的记忆（「跨书记忆」开关关闭时用）。
+     *   注意跨书的全局记忆 bookId 为 null，收窄时它们同样不参与——这正是关闭该开关的语义。
+     * @param maskId 当前生效的用户面具（0 = 未启用面具）。本人层记忆（maskId=0）永远可见；
+     *   面具内的经历只在同一面具下可见，不同面具之间互相穿帮是绝对不能出现的。
+     */
+    public static List<ObjectWithScore<MemoryEntry>> searchMemories(
+            BoxStore store,
+            long personaId,
+            float[] queryVector,
+            int topK,
+            Long bookId,
+            long maskId
+    ) {
         Box<MemoryEntry> box = store.boxFor(MemoryEntry.class);
-        return adaptiveSearch(box.count(), topK, fetchCount -> box
-                .query(
-                        MemoryEntry_.embedding.nearestNeighbors(queryVector, fetchCount)
-                                .and(MemoryEntry_.personaId.equal(personaId))
-                )
-                .build());
+        return adaptiveSearch(box.count(), topK, fetchCount -> {
+            QueryCondition<MemoryEntry> condition =
+                    MemoryEntry_.embedding.nearestNeighbors(queryVector, fetchCount)
+                            .and(MemoryEntry_.personaId.equal(personaId));
+            if (bookId != null) {
+                condition = condition.and(MemoryEntry_.bookId.equal(bookId));
+            }
+            condition = condition.and(
+                    maskId == 0L
+                            ? MemoryEntry_.maskId.equal(0L)
+                            : MemoryEntry_.maskId.equal(0L).or(MemoryEntry_.maskId.equal(maskId))
+            );
+            return box.query(condition).build();
+        });
+    }
+
+    /** 记忆管理页用：按时间倒序分页列出某角色的全部记忆。 */
+    public static List<MemoryEntry> listMemories(
+            BoxStore store,
+            long personaId,
+            int offset,
+            int limit
+    ) {
+        Query<MemoryEntry> query = store.boxFor(MemoryEntry.class)
+                .query(MemoryEntry_.personaId.equal(personaId))
+                .orderDesc(MemoryEntry_.createdAt)
+                .build();
+        try {
+            return query.find(offset, limit);
+        } finally {
+            query.close();
+        }
+    }
+
+    /** 删除单条记忆（记忆管理页的左滑删除）。 */
+    public static void removeMemory(BoxStore store, long id) {
+        store.boxFor(MemoryEntry.class).remove(id);
+    }
+
+    /** 清空某角色的全部记忆；角色卡本身与它写下的批注笔记不受影响。 */
+    public static void removeMemoriesForPersona(BoxStore store, long personaId) {
+        Query<MemoryEntry> query = store.boxFor(MemoryEntry.class)
+                .query(MemoryEntry_.personaId.equal(personaId))
+                .build();
+        try {
+            query.remove();
+        } finally {
+            query.close();
+        }
     }
 
     /** 已有切片的章节集合。写入按章原子（embedding 管线保证），出现即完整。 */
@@ -72,7 +135,7 @@ public final class VectorQueries {
         }
     }
 
-    /** 角色的长期记忆条数（伴读页指标胶囊）。 */
+    /** 角色的长期记忆条数（伴读页与角色编辑页的指标胶囊）。 */
     public static long countMemories(BoxStore store, long personaId) {
         Query<MemoryEntry> query = store.boxFor(MemoryEntry.class)
                 .query(MemoryEntry_.personaId.equal(personaId))

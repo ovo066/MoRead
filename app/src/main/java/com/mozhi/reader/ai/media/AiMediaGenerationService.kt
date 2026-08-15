@@ -6,6 +6,7 @@ import com.mozhi.reader.ai.client.AiClientFactory
 import com.mozhi.reader.core.database.entity.IllustrationEntity
 import com.mozhi.reader.core.database.entity.ModelRole
 import com.mozhi.reader.core.library.IllustrationRepository
+import com.mozhi.reader.core.speech.SpeechCacheStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.security.MessageDigest
@@ -46,7 +47,8 @@ class AiMediaGenerationService @Inject constructor(
     @ApplicationContext private val context: Context,
     private val clientFactory: AiClientFactory,
     private val imagePromptComposer: ImagePromptComposer,
-    private val illustrations: IllustrationRepository
+    private val illustrations: IllustrationRepository,
+    private val speechCache: SpeechCacheStore
 ) {
     private val speechMutex = Mutex()
 
@@ -128,8 +130,9 @@ class AiMediaGenerationService @Inject constructor(
         )
         return speechMutex.withLock {
             withContext(Dispatchers.IO) {
-                val directory = File(context.cacheDir, "agent-speech/$bookId").apply { mkdirs() }
+                val directory = speechCache.directoryFor(bookId)
                 directory.listFiles()?.firstOrNull { it.nameWithoutExtension == key }?.let {
+                    // 命中即续命：容量淘汰按最后使用时间来，常听的段落不该被先删。
                     it.setLastModified(System.currentTimeMillis())
                     return@withContext CachedSpeech(it.absolutePath, mediaTypeForExtension(it.extension), true)
                 }
@@ -145,13 +148,12 @@ class AiMediaGenerationService @Inject constructor(
                 )
                 require(generated.bytes.size <= MAX_MEDIA_BYTES) { "生成语音超过 30 MB，已取消缓存" }
                 withContext(Dispatchers.IO) {
-                    val directory = File(context.cacheDir, "agent-speech/$bookId").apply { mkdirs() }
+                    val directory = speechCache.directoryFor(bookId)
                     val output = File(directory, "$key.${audioExtension(generated.mediaType, format)}")
                     output.writeBytes(generated.bytes)
-                    directory.listFiles()
-                        ?.sortedByDescending(File::lastModified)
-                        ?.drop(MAX_CACHED_SPEECH_FILES)
-                        ?.forEach(File::delete)
+                    // 淘汰按全局容量而不是每本书的文件数：听一章长篇就能把文件名额用光，
+                    // 而「60 个文件」到底占多少空间用户也无从判断。
+                    speechCache.enforceBudget()
                     CachedSpeech(output.absolutePath, generated.mediaType, false)
                 }
             }
@@ -188,6 +190,5 @@ class AiMediaGenerationService @Inject constructor(
         const val MAX_SOURCE_CHARS = 8_000
         const val MAX_SPEECH_CHARS = 8_000
         const val MAX_MEDIA_BYTES = 30 * 1024 * 1024
-        const val MAX_CACHED_SPEECH_FILES = 60
     }
 }

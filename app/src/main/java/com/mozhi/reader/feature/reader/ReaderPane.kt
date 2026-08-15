@@ -76,7 +76,7 @@ import com.mozhi.reader.ai.prompt.SelectionAiAction
 import com.mozhi.reader.core.datastore.PageTurnAnimation
 import com.mozhi.reader.core.datastore.ReaderFont
 import com.mozhi.reader.core.datastore.ReaderSettings
-import com.mozhi.reader.feature.reader.engine.ListenHighlightSpan
+import com.mozhi.reader.feature.reader.engine.TransientHighlightSpan
 import com.mozhi.reader.feature.reader.engine.ReaderAnnotationMark
 import com.mozhi.reader.feature.reader.engine.ReaderIllustrationMark
 import com.mozhi.reader.feature.reader.engine.ReaderContentController
@@ -114,7 +114,7 @@ fun ReaderPane(
     onNotice: (String) -> Unit,
     annotations: List<ReaderAnnotationMark>,
     illustrations: List<ReaderIllustrationMark> = emptyList(),
-    listenHighlight: ListenHighlightSpan? = null,
+    transientHighlight: TransientHighlightSpan? = null,
     onAiAction: (action: SelectionAiAction, selection: String, context: String) -> Unit,
     onAnnotationAction: (selection: String, range: IntRange, anchorTopPx: Int) -> Unit,
     onAnnotationClick: (annotationIds: List<Long>) -> Unit,
@@ -291,8 +291,8 @@ fun ReaderPane(
     }
 
     // 听书当前句变化时重绘页面位图，让底色跟随朗读进度。
-    LaunchedEffect(listenHighlight) {
-        if (holder.setListenHighlight(listenHighlight)) {
+    LaunchedEffect(transientHighlight) {
+        if (holder.setTransientHighlight(transientHighlight)) {
             holder.refresh(0)
             frameTick++
         }
@@ -785,7 +785,7 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
     private var batteryPercent: Int = 100
     private var annotations: List<ReaderAnnotationMark> = emptyList()
     private var illustrations: List<ReaderIllustrationMark> = emptyList()
-    private var listenHighlight: ListenHighlightSpan? = null
+    private var transientHighlight: TransientHighlightSpan? = null
     private var dirty = true
     private var preparedTurn: PageTurnDirection? = null
     /** 邻页渲染已排到下一帧、尚未执行。 */
@@ -847,9 +847,9 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
         return true
     }
 
-    fun setListenHighlight(value: ListenHighlightSpan?): Boolean {
-        if (listenHighlight == value) return false
-        listenHighlight = value
+    fun setTransientHighlight(value: TransientHighlightSpan?): Boolean {
+        if (transientHighlight == value) return false
+        transientHighlight = value
         dirty = true
         return true
     }
@@ -1005,7 +1005,7 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
             batteryPercent = batteryPercent,
             annotations = annotations.filter { it.chapterIndex == page.chapterIndex },
             illustrations = illustrations.filter { it.chapterIndex == page.chapterIndex },
-            listenHighlight = listenHighlight?.takeIf { it.chapterIndex == page.chapterIndex },
+            transientHighlight = transientHighlight?.takeIf { it.chapterIndex == page.chapterIndex },
             includeBackground = includeBackgroundInPages
         )
     }

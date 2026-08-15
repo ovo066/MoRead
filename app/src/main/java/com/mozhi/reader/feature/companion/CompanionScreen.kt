@@ -34,6 +34,7 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mozhi.reader.core.database.entity.PersonaEntity
 import com.mozhi.reader.ui.components.PersonaAvatarImage
+import com.mozhi.reader.core.database.entity.chatAppearance
 import com.mozhi.reader.core.database.entity.worldBook
 import com.mozhi.reader.ui.components.DashedAddRow
 import com.mozhi.reader.ui.components.FrostedSurface
@@ -73,11 +74,22 @@ fun CompanionScreen(
                     )
                 }
             }
-            items(state.personas, key = PersonaEntity::id) { persona ->
+            if (!state.longTermMemoryEnabled && state.personas.isNotEmpty()) {
+                item {
+                    Text(
+                        text = "长期记忆已在设置里全局关闭：下面的记忆条数只是历史存档，" +
+                            "当前不会被回忆，也不会新增。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            items(state.orderedPersonas, key = PersonaEntity::id) { persona ->
                 PersonaCard(
                     persona = persona,
                     active = persona.id == state.activePersonaId,
                     memoryCount = state.memoryCounts[persona.id] ?: 0L,
+                    memoryGloballyEnabled = state.longTermMemoryEnabled,
                     onClick = { viewModel.activate(persona.id) },
                     onEdit = { onEditPersona(persona.id) }
                 )
@@ -104,10 +116,12 @@ private fun PersonaCard(
     persona: PersonaEntity,
     active: Boolean,
     memoryCount: Long,
+    memoryGloballyEnabled: Boolean,
     onClick: () -> Unit,
     onEdit: () -> Unit
 ) {
     val worldBookCount = remember(persona.worldBookJson) { persona.worldBook().size }
+    val appearance = remember(persona.chatAppearanceJson) { persona.chatAppearance() }
     FrostedSurface(
         modifier = Modifier
             .fillMaxWidth()
@@ -189,8 +203,17 @@ private fun PersonaCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 MetricPill(if (persona.isRoleplay) "扮演型" else "工具型")
-                MetricPill("世界书 $worldBookCount 条")
-                MetricPill("记忆 $memoryCount 段")
+                if (worldBookCount > 0) MetricPill("世界书 $worldBookCount 条")
+                // 记忆胶囊要如实反映「现在还记不记」，而不只是数据库里堆了多少条。
+                MetricPill(
+                    when {
+                        !persona.memoryEnabled -> "记忆已关"
+                        !memoryGloballyEnabled -> "记忆 $memoryCount 段（全局已关）"
+                        memoryCount > 0 -> "记忆 $memoryCount 段"
+                        else -> "尚无记忆"
+                    }
+                )
+                if (!appearance.isDefault) MetricPill("已换装")
             }
         }
     }

@@ -1,0 +1,122 @@
+:root {
+  --ink: #17171a;
+  --paper: #f6f4ef;
+  --muted: #7b7b82;
+  --line: #dcd8cf;
+  --accent: #1f1f24;
+  --danger: #b3261e;
+  --ok: #2f6d4f;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #ece9e2;
+    --paper: #131316;
+    --muted: #8f8f98;
+    --line: #2c2c31;
+    --accent: #ece9e2;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 40px 20px 64px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  line-height: 1.6;
+}
+
+.shell { max-width: 640px; margin: 0 auto; }
+
+.head { display: flex; gap: 16px; align-items: center; margin-bottom: 28px; }
+
+/* 一枚墨滴，与应用图标同源，不引入任何外部图片资源 */
+.mark {
+  width: 38px;
+  height: 38px;
+  flex: none;
+  border-radius: 0 50% 50% 50%;
+  transform: rotate(45deg);
+  background: var(--accent);
+}
+
+h1 { font-size: 20px; margin: 0; font-weight: 600; letter-spacing: .02em; }
+
+.sub { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+
+.drop {
+  border: 1.5px dashed var(--line);
+  border-radius: 18px;
+  padding: 52px 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .18s ease, background .18s ease, transform .18s ease;
+  outline: none;
+}
+
+.drop:hover, .drop:focus-visible { border-color: var(--accent); }
+
+.drop.over {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  transform: scale(1.01);
+}
+
+.drop-title { margin: 0; font-size: 17px; font-weight: 600; }
+
+.drop-hint { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+
+.link { color: var(--ink); border-bottom: 1px solid var(--line); padding-bottom: 1px; }
+
+.queue { margin-top: 24px; display: flex; flex-direction: column; gap: 10px; }
+
+.item {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--ink) 3%, transparent);
+}
+
+.item-head { display: flex; gap: 12px; align-items: baseline; }
+
+.item-name {
+  flex: 1;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.item-state { font-size: 12px; color: var(--muted); flex: none; }
+
+.item.done .item-state { color: var(--ok); }
+
+.item.fail .item-state { color: var(--danger); }
+
+.bar {
+  margin-top: 9px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.bar span {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width .2s ease;
+}
+
+.item.done .bar, .item.fail .bar { display: none; }
+
+.foot { margin-top: 34px; font-size: 12px; color: var(--muted); }
+
+.foot p { margin: 4px 0; }
+
+.warn { color: var(--danger); }

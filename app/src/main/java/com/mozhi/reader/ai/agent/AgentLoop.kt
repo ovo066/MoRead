@@ -10,6 +10,7 @@ import com.mozhi.reader.ai.client.ChatPart
 import com.mozhi.reader.ai.client.ChatRole
 import com.mozhi.reader.ai.client.ToolCall
 import com.mozhi.reader.ai.client.ToolSpec
+import com.mozhi.reader.ai.memory.RollingSummarizer
 import com.mozhi.reader.core.database.dao.ChatDao
 import com.mozhi.reader.core.database.entity.MessageEntity
 import com.mozhi.reader.core.database.entity.ModelRole
@@ -62,7 +63,8 @@ sealed interface AgentEvent {
 class AgentLoop @Inject constructor(
     private val chatDao: ChatDao,
     private val clientFactory: dagger.Lazy<AiClientFactory>,
-    private val attachmentStore: dagger.Lazy<AttachmentStore>
+    private val attachmentStore: dagger.Lazy<AttachmentStore>,
+    private val rollingSummarizer: dagger.Lazy<RollingSummarizer>
 ) {
     /**
      * Streams one agent turn for the conversation's current history.
@@ -178,8 +180,8 @@ class AgentLoop @Inject constructor(
         resolve: suspend () -> Streamer
     ): Flow<AgentEvent> = flow {
         val entities = chatDao.getMessages(conversationId)
-        val consolidatedThrough = chatDao.getConversation(conversationId)
-            ?.memoryConsolidatedThroughMessageId ?: 0L
+        val conversation = chatDao.getConversation(conversationId)
+        val consolidatedThrough = conversation?.memoryConsolidatedThroughMessageId ?: 0L
         val persistedSystem = entities
             .takeWhile { it.role == ChatRole.SYSTEM.wire }
             .map(::toChatMessage)
@@ -196,8 +198,14 @@ class AgentLoop @Inject constructor(
             }
         val system = systemPrompt?.let { listOf(ChatMessage(ChatRole.SYSTEM, it)) }
             ?: persistedSystem
+        // 前情提要补的是「已滑出 20 条窗口、又没攒够 30 条去固化」那段的裂缝。
+        // 与 systemPrompt 覆写同一纪律：只在组装请求时注入，永不作为消息落库。
+        val summary = rollingSummarizer.get()
+            .block(conversation?.rollingSummary.orEmpty())
+            ?.let { listOf(ChatMessage(ChatRole.SYSTEM, it)) }
+            .orEmpty()
         val rest = persisted
-        val history = (system + rest.drop(windowStart(rest))).toMutableList()
+        val history = (system + summary + rest.drop(windowStart(rest))).toMutableList()
         if (history.none { it.role == ChatRole.USER }) throw AiClientException.Empty()
         val streamer = resolve()
         val specs = tools.map { it.spec }

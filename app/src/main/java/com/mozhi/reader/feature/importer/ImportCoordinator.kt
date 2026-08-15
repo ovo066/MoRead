@@ -84,6 +84,36 @@ class ImportCoordinator @Inject constructor(
         }
     }
 
+    /**
+     * 批量导入的单本入口：TXT 不再停下来等用户确认分章规则，直接用
+     * [TxtChapterSplitter.chooseBest] 的最佳规则入库——一次导二十本却要点二十次确认，
+     * 批量就没有意义了。分章不理想时用阅读页三点菜单里的「重新分章」补救。
+     */
+    override suspend fun importDirectly(uri: Uri): Long = withContext(Dispatchers.IO) {
+        takeReadPermission(uri)
+        val displayName = queryDisplayName(uri) ?: "未命名书籍"
+        val mimeType = context.contentResolver.getType(uri).orEmpty()
+        when {
+            displayName.endsWith(".epub", ignoreCase = true) ||
+                mimeType == "application/epub+zip" -> importEpub(uri, displayName)
+            displayName.endsWith(".txt", ignoreCase = true) || mimeType.startsWith("text/") -> {
+                val prepared = prepareTxt(uri, displayName) as PreparedImport.PreviewReady
+                val session = requireNotNull(sessionStore.get(prepared.sessionId)) { "导入会话已失效" }
+                try {
+                    confirmTxt(
+                        sessionId = session.id,
+                        title = session.suggestedTitle,
+                        author = ""
+                    )
+                } catch (error: Throwable) {
+                    sessionStore.remove(session.id)
+                    throw error
+                }
+            }
+            else -> error("仅支持 TXT 与 EPUB 文件")
+        }
+    }
+
     suspend fun preview(sessionId: String): TxtImportPreview? = withContext(Dispatchers.IO) {
         sessionStore.get(sessionId)?.toPreview()
     }
@@ -453,11 +483,19 @@ class ImportCoordinator @Inject constructor(
 
     private fun coversDirectory(): File = File(context.filesDir, "covers").apply { mkdirs() }
 
+    /**
+     * 显示名优先取 SAF 的 DISPLAY_NAME；局域网收件箱交来的是 `file://` Uri，
+     * ContentResolver 查不到列，此时退回路径末段——文件名决定按 TXT 还是 EPUB 分流，
+     * 拿不到就会误判成「不支持的类型」。
+     */
     private fun queryDisplayName(uri: Uri): String? =
-        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
-            ?.use { cursor ->
-                if (cursor.moveToFirst()) cursor.getString(0) else null
-            }
+        runCatching {
+            context.contentResolver
+                .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+                ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+        }.getOrNull()
+            ?.takeIf(String::isNotBlank)
+            ?: uri.lastPathSegment?.substringAfterLast('/')?.takeIf(String::isNotBlank)
 
     private fun queryDocumentSize(uri: Uri): Long? =
         context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)

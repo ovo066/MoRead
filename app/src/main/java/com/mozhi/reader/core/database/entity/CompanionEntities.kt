@@ -44,6 +44,18 @@ data class PersonaEntity(
     val worldBookEnabled: Boolean = true,
     /** 覆盖全局 CHAT 分配的模型（ai_models.id）；null 用全局。悬空引用按未设置处理。 */
     val chatModelId: Long? = null,
+    /**
+     * 常驻用户画像（Memory 2.0 批次 B）：称呼、偏好与雷点、阅读口味、关系进展、共读书目。
+     * 整段覆盖式改写，与人设同级注入且永不裁；只记本人，面具设定不进这里。
+     */
+    @ColumnInfo(defaultValue = "''")
+    val userProfile: String = "",
+    /** 关掉后该角色不固化、不召回长期记忆，也不注入画像（会话内滚动摘要不受此控）。 */
+    @ColumnInfo(defaultValue = "1")
+    val memoryEnabled: Boolean = true,
+    /** 聊天外观 JSON（见 [PersonaChatAppearance]）；空对象 = 跟随阅读主题。 */
+    @ColumnInfo(defaultValue = "'{}'")
+    val chatAppearanceJson: String = "{}",
     /** 内置模板角色标记：仅记录出身，可改可删，删了不自动复活。 */
     val isBuiltIn: Boolean = false,
     val createdAt: Long

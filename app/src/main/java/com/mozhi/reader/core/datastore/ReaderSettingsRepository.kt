@@ -666,6 +666,30 @@ class ReaderSettingsRepository @Inject constructor(
         dataStore.edit { it[Keys.CompanionSpoilerProtection] = value }
     }
 
+    /**
+     * 伴读记忆的范围开关（Memory 2.0 第 5 节）。**默认全开**：记忆是陪伴感的地基，
+     * 且改动前的行为本就是跨书召回，默认关闭属于行为回退。偏好纯问答的用户关掉总开关即可。
+     */
+    val companionMemorySettings: Flow<CompanionMemorySettings> = dataStore.data.map { preferences ->
+        CompanionMemorySettings(
+            longTermEnabled = preferences[Keys.CompanionLongTermMemory] ?: true,
+            crossBookEnabled = preferences[Keys.CompanionCrossBookMemory] ?: true,
+            crossBookChatSearchEnabled = preferences[Keys.CompanionCrossBookChatSearch] ?: true
+        )
+    }
+
+    suspend fun setCompanionLongTermMemory(value: Boolean) {
+        dataStore.edit { it[Keys.CompanionLongTermMemory] = value }
+    }
+
+    suspend fun setCompanionCrossBookMemory(value: Boolean) {
+        dataStore.edit { it[Keys.CompanionCrossBookMemory] = value }
+    }
+
+    suspend fun setCompanionCrossBookChatSearch(value: Boolean) {
+        dataStore.edit { it[Keys.CompanionCrossBookChatSearch] = value }
+    }
+
     /** 显示 AI 批注：关闭后角色划线与「评」标记不再渲染，书籍详情仍可回顾。默认开。 */
     val showAiAnnotations: Flow<Boolean> =
         dataStore.data.map { it[Keys.ShowAiAnnotations] ?: true }
@@ -735,6 +759,9 @@ class ReaderSettingsRepository @Inject constructor(
         val SuggestionReplies = booleanPreferencesKey("companion_suggestion_replies")
         val CompanionSpoilerProtection = booleanPreferencesKey("companion_spoiler_protection")
         val ShowAiAnnotations = booleanPreferencesKey("companion_show_ai_annotations")
+        val CompanionLongTermMemory = booleanPreferencesKey("companion_long_term_memory")
+        val CompanionCrossBookMemory = booleanPreferencesKey("companion_cross_book_memory")
+        val CompanionCrossBookChatSearch = booleanPreferencesKey("companion_cross_book_chat_search")
         val LastAnnotationStyle = stringPreferencesKey("reader_annotation_last_style")
         val LastAnnotationColor = stringPreferencesKey("reader_annotation_last_color")
         val CustomThemes = stringPreferencesKey("reader_custom_themes")

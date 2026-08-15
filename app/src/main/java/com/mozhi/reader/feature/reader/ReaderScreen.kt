@@ -122,6 +122,9 @@ fun ReaderScreen(
     bookId: Long,
     onBack: () -> Unit,
     onOpenCompanionChat: (Long) -> Unit = {},
+    /** 从聊天页「跳到原文」带回来的位置；消费一次后由调用方清空。 */
+    pendingLocate: ReaderLocateRequest? = null,
+    onPendingLocateConsumed: () -> Unit = {},
     viewModel: ReaderViewModel = hiltViewModel(),
     aiViewModel: ReaderAiViewModel = hiltViewModel(),
     companionViewModel: ReaderCompanionViewModel = hiltViewModel(),
@@ -139,6 +142,9 @@ fun ReaderScreen(
     var inkFloater by remember { mutableStateOf<AnnotationInkFloater?>(null) }
     var annotationThread by remember { mutableStateOf<AnnotationThreadKey?>(null) }
     var ttsDraft by remember { mutableStateOf<String?>(null) }
+    var locateHighlight by remember {
+        mutableStateOf<com.mozhi.reader.feature.reader.engine.TransientHighlightSpan?>(null)
+    }
     var textEditDraft by remember { mutableStateOf<TextEditDraft?>(null) }
     var textRuleDraft by remember { mutableStateOf<ReaderTextReplacementRule?>(null) }
     var aiTextRuleDialogVisible by remember { mutableStateOf(false) }
@@ -201,6 +207,27 @@ fun ReaderScreen(
         .orEmpty()
     val contextQuote = chapterTitle.ifBlank { state.book?.title.orEmpty() }
     val readerReady = !state.isLoading && state.errorMessage == null
+
+    LaunchedEffect(pendingLocate, readerReady) {
+        val request = pendingLocate ?: return@LaunchedEffect
+        if (!readerReady) return@LaunchedEffect
+        viewModel.goToPosition(request.chapterIndex, request.startCharOffset)
+        locateHighlight = com.mozhi.reader.feature.reader.engine.TransientHighlightSpan(
+            chapterIndex = request.chapterIndex,
+            startCharOffset = request.startCharOffset,
+            endCharOffset = request.endCharOffset
+        )
+        onPendingLocateConsumed()
+    }
+
+    // 退场计时必须独立成一个 effect：它若和消费请求写在一起，onPendingLocateConsumed()
+    // 把 pendingLocate 置空会立刻改变 key、连同还没跑完的 delay 一起取消，
+    // 高亮就再也不会熄灭——那就成了「永久划线」而不是「示意一下」。
+    LaunchedEffect(locateHighlight) {
+        if (locateHighlight == null) return@LaunchedEffect
+        kotlinx.coroutines.delay(LOCATE_HIGHLIGHT_MS)
+        locateHighlight = null
+    }
     val contentVisible = readerReady && state.isContentReady
     val canTurnWithVolume by rememberUpdatedState(
         contentVisible && activeSheet == null && !detailsVisible && aiRequest == null &&
@@ -379,13 +406,14 @@ fun ReaderScreen(
                 val paneEnabled = contentVisible && activeSheet == null && !detailsVisible &&
                     aiRequest == null && inkFloater == null && annotationThread == null &&
                     ttsDraft == null && textEditDraft == null
+                // 听书当前句优先：正在朗读时它才是「此刻读到哪」，引文高亮已完成使命。
                 val paneListenHighlight = listenState?.takeIf { it.bookId == bookId }?.let { listen ->
-                    com.mozhi.reader.feature.reader.engine.ListenHighlightSpan(
+                    com.mozhi.reader.feature.reader.engine.TransientHighlightSpan(
                         chapterIndex = listen.chapterIndex,
                         startCharOffset = listen.sentenceStart,
                         endCharOffset = listen.sentenceEnd
                     )
-                }
+                } ?: locateHighlight
                 val paneNotice: (String) -> Unit = { message ->
                     coroutineScope.launch { snackbarHostState.showSnackbar(message) }
                 }
@@ -460,7 +488,7 @@ fun ReaderScreen(
                         onNotice = paneNotice,
                         annotations = annotationMarks,
                         illustrations = illustrationMarks,
-                        listenHighlight = paneListenHighlight,
+                        transientHighlight = paneListenHighlight,
                         listenPlaying = listenState?.takeIf { it.bookId == bookId }?.isPlaying == true,
                         onAiAction = paneAiAction,
                         onAnnotationAction = paneAnnotationAction,
@@ -482,7 +510,7 @@ fun ReaderScreen(
                         onNotice = paneNotice,
                         annotations = annotationMarks,
                         illustrations = illustrationMarks,
-                        listenHighlight = paneListenHighlight,
+                        transientHighlight = paneListenHighlight,
                         onAiAction = paneAiAction,
                         onAnnotationAction = paneAnnotationAction,
                         onAnnotationClick = paneAnnotationClick,
@@ -728,50 +756,54 @@ fun ReaderScreen(
         ReaderSheet.SETTINGS -> ModalBottomSheet(
             onDismissRequest = { activeSheet = null },
             containerColor = palette.glassStrong,
-            contentColor = palette.onBackground
+            contentColor = palette.onBackground,
+            // 不加遮罩：调字号/行距时正文必须看得见，否则「改完什么样」要关掉面板才知道。
+            // 半高吸附让正文留在视野里，重排当场可见。
+            scrimColor = Color.Transparent,
+            sheetState = rememberModalBottomSheetState()
         ) {
             ReaderTypographySheet(
                 settings = state.settings,
                 palette = palette,
-                onFontScaleChange = viewModel::setFontScale,
-                onFontChange = viewModel::setFont,
-                onCustomFontSelect = viewModel::selectCustomFont,
-                onImportFont = {
-                    customFontLauncher.launch("*/*")
-                },
-                onLineHeightChange = viewModel::setLineHeight,
-                onPageMarginLeftChange = viewModel::setPageMarginLeft,
-                onPageMarginRightChange = viewModel::setPageMarginRight,
-                onPageMarginTopChange = viewModel::setPageMarginTop,
-                onPageMarginBottomChange = viewModel::setPageMarginBottom,
-                onHeaderMarginTopChange = viewModel::setHeaderMarginTop,
-                onFooterMarginBottomChange = viewModel::setFooterMarginBottom,
-                onFontWeightChange = viewModel::setFontWeight,
-                onLetterSpacingChange = viewModel::setLetterSpacing,
-                onParagraphSpacingChange = viewModel::setParagraphSpacing,
-                onFirstLineIndentChange = viewModel::setFirstLineIndent,
-                onTitleScaleChange = viewModel::setTitleScale,
-                onTitleTopSpacingChange = viewModel::setTitleTopSpacing,
-                onTitleBottomSpacingChange = viewModel::setTitleBottomSpacing,
-                onTextJustificationChange = viewModel::setTextJustification,
-                onShowHeaderChange = viewModel::setShowHeader,
-                onShowFooterChange = viewModel::setShowFooter,
-                onThemeChange = viewModel::setTheme,
-                onCustomThemeSelect = viewModel::selectCustomTheme,
-                onSaveCustomTheme = viewModel::saveCustomTheme,
-                onDeleteCustomTheme = viewModel::deleteCustomTheme,
-                onImportBackground = { backgroundImageLauncher.launch(arrayOf("image/*")) },
-                onBackgroundImageSelect = viewModel::selectBackgroundImage,
-                onClearBackground = viewModel::clearBackgroundImage,
-                onBackgroundOpacityChange = viewModel::setBackgroundImageOpacity,
-                onSyntaxHighlightEnabledChange = viewModel::setSyntaxHighlightEnabled,
-                onSaveSyntaxRule = viewModel::saveSyntaxHighlightRule,
-                onDeleteSyntaxRule = viewModel::deleteSyntaxHighlightRule,
-                onAnimationChange = viewModel::setPageTurnAnimation,
-                onPageModeChange = viewModel::setPageMode,
-                onKeepScreenOnChange = viewModel::setKeepScreenOn,
-                onImmersiveReadingChange = viewModel::setImmersiveReading,
-                onVolumeKeysPageTurnChange = viewModel::setVolumeKeysPageTurn
+                actions = ReaderTypographyActions(
+                    onFontScaleChange = viewModel::setFontScale,
+                    onFontChange = viewModel::setFont,
+                    onCustomFontSelect = viewModel::selectCustomFont,
+                    onImportFont = { customFontLauncher.launch("*/*") },
+                    onLineHeightChange = viewModel::setLineHeight,
+                    onPageMarginLeftChange = viewModel::setPageMarginLeft,
+                    onPageMarginRightChange = viewModel::setPageMarginRight,
+                    onPageMarginTopChange = viewModel::setPageMarginTop,
+                    onPageMarginBottomChange = viewModel::setPageMarginBottom,
+                    onHeaderMarginTopChange = viewModel::setHeaderMarginTop,
+                    onFooterMarginBottomChange = viewModel::setFooterMarginBottom,
+                    onFontWeightChange = viewModel::setFontWeight,
+                    onLetterSpacingChange = viewModel::setLetterSpacing,
+                    onParagraphSpacingChange = viewModel::setParagraphSpacing,
+                    onFirstLineIndentChange = viewModel::setFirstLineIndent,
+                    onTitleScaleChange = viewModel::setTitleScale,
+                    onTitleTopSpacingChange = viewModel::setTitleTopSpacing,
+                    onTitleBottomSpacingChange = viewModel::setTitleBottomSpacing,
+                    onTextJustificationChange = viewModel::setTextJustification,
+                    onShowHeaderChange = viewModel::setShowHeader,
+                    onShowFooterChange = viewModel::setShowFooter,
+                    onThemeChange = viewModel::setTheme,
+                    onCustomThemeSelect = viewModel::selectCustomTheme,
+                    onSaveCustomTheme = viewModel::saveCustomTheme,
+                    onDeleteCustomTheme = viewModel::deleteCustomTheme,
+                    onImportBackground = { backgroundImageLauncher.launch(arrayOf("image/*")) },
+                    onBackgroundImageSelect = viewModel::selectBackgroundImage,
+                    onClearBackground = viewModel::clearBackgroundImage,
+                    onBackgroundOpacityChange = viewModel::setBackgroundImageOpacity,
+                    onSyntaxHighlightEnabledChange = viewModel::setSyntaxHighlightEnabled,
+                    onSaveSyntaxRule = viewModel::saveSyntaxHighlightRule,
+                    onDeleteSyntaxRule = viewModel::deleteSyntaxHighlightRule,
+                    onAnimationChange = viewModel::setPageTurnAnimation,
+                    onPageModeChange = viewModel::setPageMode,
+                    onKeepScreenOnChange = viewModel::setKeepScreenOn,
+                    onImmersiveReadingChange = viewModel::setImmersiveReading,
+                    onVolumeKeysPageTurnChange = viewModel::setVolumeKeysPageTurn
+                )
             )
         }
         ReaderSheet.REIDENTIFY_CHAPTERS -> ModalBottomSheet(
@@ -1356,3 +1388,13 @@ private tailrec fun Context.findComponentActivity(): ComponentActivity? = when (
     is ContextWrapper -> baseContext.findComponentActivity()
     else -> null
 }
+
+/** 聊天页「跳到原文」交回阅读页的一次性请求。 */
+data class ReaderLocateRequest(
+    val chapterIndex: Int,
+    val startCharOffset: Int,
+    val endCharOffset: Int
+)
+
+/** 引文高亮只是「我把你带到这儿了」的提示，亮一下即可，不该长期占据视觉。 */
+private const val LOCATE_HIGHLIGHT_MS = 2_600L

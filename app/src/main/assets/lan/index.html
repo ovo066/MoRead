@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>墨知 · 局域网传书</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main class="shell">
+  <header class="head">
+    <div class="mark" aria-hidden="true"></div>
+    <div>
+      <h1>墨知 · 局域网传书</h1>
+      <p class="sub">把 TXT / EPUB 拖进下面的方框，手机会直接收下</p>
+    </div>
+  </header>
+
+  <section id="drop" class="drop" tabindex="0" role="button"
+           aria-label="选择或拖入书籍文件">
+    <p class="drop-title">拖拽文件到这里</p>
+    <p class="drop-hint">或者<span class="link">点击选择文件</span>，支持一次多选</p>
+    <input id="picker" type="file" accept=".txt,.epub" multiple hidden>
+  </section>
+
+  <section id="queue" class="queue" hidden></section>
+
+  <footer class="foot">
+    <p>单个文件上限 200 MB，只接受 .txt 与 .epub。</p>
+    <p class="warn">此服务没有密码：同一 Wi-Fi 下的任何人都能上传。传完请在手机上关闭。</p>
+  </footer>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

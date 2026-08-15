@@ -24,8 +24,14 @@ data class CompanionUiState(
     val activePersonaId: Long? = null,
     /** personaId → 长期记忆条数。 */
     val memoryCounts: Map<Long, Long> = emptyMap(),
+    /** 全局长期记忆开关；关掉时每张卡上的记忆条数都只是历史存档，界面要说清楚。 */
+    val longTermMemoryEnabled: Boolean = true,
     val loaded: Boolean = false
-)
+) {
+    /** 伴读中的角色排在最前：它是这一页唯一「正在生效」的东西。 */
+    val orderedPersonas: List<PersonaEntity>
+        get() = personas.sortedByDescending { it.id == activePersonaId }
+}
 
 @HiltViewModel
 class CompanionViewModel @Inject constructor(
@@ -61,13 +67,15 @@ class CompanionViewModel @Inject constructor(
     val uiState = combine(
         personas,
         settingsRepository.activePersonaId,
-        memoryCounts
-    ) { personas, storedActiveId, counts ->
+        memoryCounts,
+        settingsRepository.companionMemorySettings
+    ) { personas, storedActiveId, counts, memory ->
         CompanionUiState(
             personas = personas,
             activePersonaId = storedActiveId.takeIf { id -> personas.any { it.id == id } }
                 ?: personas.firstOrNull()?.id,
             memoryCounts = counts,
+            longTermMemoryEnabled = memory.longTermEnabled,
             loaded = true
         )
     }.stateIn(

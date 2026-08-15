@@ -79,6 +79,11 @@
             android:name=".ai.listen.ListenService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
+        <!-- 局域网传书：切到别的应用或熄屏时也别把正在传的书掐断。 -->
+        <service
+            android:name=".core.importer.lan.LanTransferService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
         <!-- 笔记导出分享用：cache/export 下的 Markdown 经内容 URI 交给其他应用。 -->
         <provider
             android:name="androidx.core.content.FileProvider"

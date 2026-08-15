@@ -52,7 +52,7 @@ import androidx.compose.ui.unit.dp
 import com.mozhi.reader.ai.prompt.SelectionAiAction
 import com.mozhi.reader.core.datastore.ReaderSettings
 import com.mozhi.reader.feature.reader.engine.ChapterStrip
-import com.mozhi.reader.feature.reader.engine.ListenHighlightSpan
+import com.mozhi.reader.feature.reader.engine.TransientHighlightSpan
 import com.mozhi.reader.feature.reader.engine.ReaderAnnotationMark
 import com.mozhi.reader.feature.reader.engine.ReaderIllustrationMark
 import com.mozhi.reader.feature.reader.engine.ReaderContentController
@@ -98,7 +98,7 @@ fun ReaderScrollPane(
     onNotice: (String) -> Unit,
     annotations: List<ReaderAnnotationMark>,
     illustrations: List<ReaderIllustrationMark> = emptyList(),
-    listenHighlight: ListenHighlightSpan? = null,
+    transientHighlight: TransientHighlightSpan? = null,
     listenPlaying: Boolean = false,
     onAiAction: (action: SelectionAiAction, selection: String, context: String) -> Unit,
     onAnnotationAction: (selection: String, range: IntRange, anchorTopPx: Int) -> Unit,
@@ -261,15 +261,15 @@ fun ReaderScrollPane(
         holder.illustrations = illustrations
         frameTick++
     }
-    LaunchedEffect(listenHighlight) {
-        holder.listenHighlight = listenHighlight
+    LaunchedEffect(transientHighlight) {
+        holder.transientHighlight = transientHighlight
         invalidate()
     }
 
     // 听书温和跟读：句子快出视口才追，用户滚去别处浏览时不硬拽回来。
-    LaunchedEffect(listenHighlight, listenPlaying) {
+    LaunchedEffect(transientHighlight, listenPlaying) {
         if (!listenPlaying) return@LaunchedEffect
-        val highlight = listenHighlight ?: return@LaunchedEffect
+        val highlight = transientHighlight ?: return@LaunchedEffect
         if (holder.dragging || selection.isActive) return@LaunchedEffect
         holder.listenFollowDelta(highlight)?.let { delta -> animateScrollBy(delta) }
     }
@@ -549,7 +549,7 @@ private class ScrollPaneHolder(private val controller: ReaderContentController) 
 
     var annotations: List<ReaderAnnotationMark> = emptyList()
     var illustrations: List<ReaderIllustrationMark> = emptyList()
-    var listenHighlight: ListenHighlightSpan? = null
+    var transientHighlight: TransientHighlightSpan? = null
 
     /** 内容带顶边在当前章条带里的 Y；draw phase 逐帧读。 */
     var anchorY by mutableFloatStateOf(0f)
@@ -726,7 +726,7 @@ private class ScrollPaneHolder(private val controller: ReaderContentController) 
     // ---- 听书跟读 ----
 
     /** 需要追读时返回滚动量；句子已舒适可见或用户在远处浏览时返回 null。 */
-    fun listenFollowDelta(highlight: ListenHighlightSpan): Float? {
+    fun listenFollowDelta(highlight: TransientHighlightSpan): Float? {
         val relative = highlight.chapterIndex - controller.chapterIndex
         if (relative !in -1..1) return null
         val strip = stripFor(highlight.chapterIndex) ?: return null
@@ -861,7 +861,7 @@ private class ScrollPaneHolder(private val controller: ReaderContentController) 
             val chapter = strip.chapter
             val chapterAnnotations = annotations.filter { it.chapterIndex == chapter.chapterIndex }
             val chapterIllustrations = illustrations.filter { it.chapterIndex == chapter.chapterIndex }
-            val highlight = listenHighlight?.takeIf { it.chapterIndex == chapter.chapterIndex }
+            val highlight = transientHighlight?.takeIf { it.chapterIndex == chapter.chapterIndex }
             for (pageIndex in chapter.pages.indices) {
                 val pageTop = blockTop + strip.pageTops[pageIndex]
                 val pageExtent = if (pageIndex + 1 < strip.pageTops.size) {
@@ -884,7 +884,7 @@ private class ScrollPaneHolder(private val controller: ReaderContentController) 
                     ),
                     annotations = chapterAnnotations,
                     illustrations = chapterIllustrations,
-                    listenHighlight = highlight,
+                    transientHighlight = highlight,
                     clipTop = contentTop - pageTop,
                     clipBottom = contentBottom - pageTop
                 )

@@ -52,6 +52,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 @Composable
 fun TtsSettingsScreen(
     onBack: () -> Unit,
+    onOpenSpeechCache: () -> Unit = {},
     viewModel: TtsSettingsViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -75,8 +76,10 @@ fun TtsSettingsScreen(
                 Text(
                     "语音朗读",
                     style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Medium
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.weight(1f)
                 )
+                TextButton(onClick = onOpenSpeechCache) { Text("语音缓存") }
             }
 
             Column(

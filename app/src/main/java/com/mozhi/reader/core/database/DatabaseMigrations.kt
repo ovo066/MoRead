@@ -470,4 +470,30 @@ object DatabaseMigrations {
             db.execSQL("ALTER TABLE `books` ADD COLUMN `pinnedAt` INTEGER NOT NULL DEFAULT 0")
         }
     }
+
+    /**
+     * 记忆 2.0 与伴读外观 v17 一次建齐（沿用 v15 的「列先行、UI 后接」经验，省掉后续两轮迁移）：
+     * - conversations：会话滚动摘要与它的水位，补「出窗口但未固化」的上下文裂缝
+     * - personas：常驻用户画像、每角色记忆开关、聊天外观（单 JSON 列，同 worldBookJson 先例）
+     * - messages：发送时的用户面具，固化时据此区分本人记忆与面具内经历
+     */
+    val Migration16To17 = object : Migration(16, 17) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "ALTER TABLE `conversations` ADD COLUMN `rollingSummary` TEXT NOT NULL DEFAULT ''"
+            )
+            db.execSQL(
+                "ALTER TABLE `conversations` " +
+                    "ADD COLUMN `summarizedThroughMessageId` INTEGER NOT NULL DEFAULT 0"
+            )
+            db.execSQL("ALTER TABLE `personas` ADD COLUMN `userProfile` TEXT NOT NULL DEFAULT ''")
+            db.execSQL(
+                "ALTER TABLE `personas` ADD COLUMN `memoryEnabled` INTEGER NOT NULL DEFAULT 1"
+            )
+            db.execSQL(
+                "ALTER TABLE `personas` ADD COLUMN `chatAppearanceJson` TEXT NOT NULL DEFAULT '{}'"
+            )
+            db.execSQL("ALTER TABLE `messages` ADD COLUMN `maskId` INTEGER NOT NULL DEFAULT 0")
+        }
+    }
 }

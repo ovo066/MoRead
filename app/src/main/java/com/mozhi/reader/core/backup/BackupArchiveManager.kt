@@ -141,7 +141,9 @@ class BackupArchiveManager @Inject constructor(
         const val DATASTORE_ENTRY = "datastore/reader_settings.preferences_pb"
         const val MANIFEST_ENTRY = "manifest.json"
         const val CURRENT_FORMAT_VERSION = 1
-        const val CURRENT_DATABASE_VERSION = 15
+        // 必须与 MoReadDatabase 的 version 同步升：低于实际库版本会让本机刚导出的备份
+        // 在 validate() 里被判成「来自更新版本」而无法恢复。
+        const val CURRENT_DATABASE_VERSION = 17
         const val PENDING_RESTORE_NAME = "pending-restore.moread.zip"
         val MANAGED_FILE_DIRECTORIES = listOf(
             "books",
@@ -152,6 +154,8 @@ class BackupArchiveManager @Inject constructor(
             "attachments",
             "avatars",
             "reader-custom"
+            // 故意不含 speech-cache：它可再生、体量大，而且已有自己的 WebDAV 同步通道，
+            // 塞进备份包只会让整包膨胀到难以上传。
         )
         private const val MAX_ENTRIES = 100_000
         private const val MAX_EXPANDED_BYTES = 16L * 1024 * 1024 * 1024

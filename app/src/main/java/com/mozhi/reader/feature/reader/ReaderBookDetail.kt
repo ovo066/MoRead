@@ -22,7 +22,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
@@ -58,6 +57,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.mozhi.reader.core.database.entity.BookEntity
+import com.mozhi.reader.ui.components.safeTopPadding
 import java.io.File
 import java.time.LocalDate
 import java.time.format.TextStyle
@@ -153,7 +153,8 @@ private fun DetailHeader(palette: ReaderPalette, onBack: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .statusBarsPadding()
+            // 沉浸模式藏了状态栏，statusBarsPadding() 会归零；safeTopPadding 兼顾挖孔与最小留白。
+            .safeTopPadding()
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {

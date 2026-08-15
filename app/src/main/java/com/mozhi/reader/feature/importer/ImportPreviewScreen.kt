@@ -38,8 +38,9 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -59,7 +60,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.mozhi.reader.ui.components.BlurredGlassSurface
 import com.mozhi.reader.ui.components.FrostedSurface
+import com.mozhi.reader.ui.theme.isDarkTheme
+import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.hazeSource
+import dev.chrisbanes.haze.rememberHazeState
 import java.util.Locale
 
 @Composable
@@ -69,6 +75,7 @@ fun ImportPreviewScreen(
     viewModel: ImportPreviewViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val hazeState = rememberHazeState()
 
     LaunchedEffect(viewModel) {
         viewModel.events.collect { event ->
@@ -83,7 +90,11 @@ fun ImportPreviewScreen(
             .fillMaxSize()
             .imePadding()
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .hazeSource(hazeState)
+        ) {
             ImportTopBar(onBack = onBack)
 
             if (state.isWorking) {
@@ -138,6 +149,7 @@ fun ImportPreviewScreen(
         }
 
         BottomImportDock(
+            hazeState = hazeState,
             chapterCount = state.preview?.chapterTitles?.size ?: 0,
             enabled = !state.isWorking && state.preview != null,
             onConfirm = viewModel::confirm,
@@ -207,10 +219,17 @@ private fun ImportTopBar(onBack: () -> Unit) {
                 .clickable(onClick = onBack),
             shape = CircleShape,
             color = MaterialTheme.colorScheme.surface.copy(alpha = 0.76f),
-            shadowElevation = 6.dp
+            shadowElevation = 3.dp
         ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回")
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
+                    contentDescription = "返回",
+                    modifier = Modifier.size(24.dp)
+                )
             }
         }
         Column(modifier = Modifier.padding(start = 13.dp)) {
@@ -230,6 +249,7 @@ private fun ImportTopBar(onBack: () -> Unit) {
 
 @Composable
 private fun BottomImportDock(
+    hazeState: HazeState,
     chapterCount: Int,
     enabled: Boolean,
     onConfirm: () -> Unit,
@@ -241,10 +261,12 @@ private fun BottomImportDock(
             .navigationBarsPadding()
             .padding(16.dp)
     ) {
-        FrostedSurface(
+        BlurredGlassSurface(
+            hazeState = hazeState,
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(26.dp),
-            shadowElevation = 16.dp
+            tint = MaterialTheme.colorScheme.surface,
+            shadowElevation = 7.dp
         ) {
             Row(
                 modifier = Modifier.padding(10.dp),
@@ -292,6 +314,11 @@ private fun PreviewContent(
     modifier: Modifier = Modifier
 ) {
     var ruleMenuExpanded by remember { mutableStateOf(false) }
+    val colors = MaterialTheme.colorScheme
+    val darkTheme = isDarkTheme()
+    val insetSurfaceColor = colors.surfaceContainerHigh.copy(
+        alpha = if (darkTheme) 0.72f else 0.84f
+    )
 
     LazyColumn(
         modifier = modifier.fillMaxWidth(),
@@ -301,8 +328,8 @@ private fun PreviewContent(
         item {
             FrostedSurface(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(30.dp),
-                shadowElevation = 10.dp
+                shape = RoundedCornerShape(28.dp),
+                shadowElevation = 6.dp
             ) {
                 Row(
                     modifier = Modifier.padding(17.dp),
@@ -349,20 +376,22 @@ private fun PreviewContent(
                             .padding(start = 14.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        OutlinedTextField(
+                        TextField(
                             value = title,
                             onValueChange = onTitleChange,
                             label = { Text("书名") },
                             singleLine = true,
                             shape = RoundedCornerShape(16.dp),
+                            colors = glassTextFieldColors(),
                             modifier = Modifier.fillMaxWidth()
                         )
-                        OutlinedTextField(
+                        TextField(
                             value = author,
                             onValueChange = onAuthorChange,
                             label = { Text("作者（可选）") },
                             singleLine = true,
                             shape = RoundedCornerShape(16.dp),
+                            colors = glassTextFieldColors(),
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
@@ -385,9 +414,8 @@ private fun PreviewContent(
         item {
             FrostedSurface(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(26.dp),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
-                shadowElevation = 7.dp
+                shape = RoundedCornerShape(24.dp),
+                shadowElevation = 5.dp
             ) {
                 Column(
                     modifier = Modifier.padding(17.dp),
@@ -415,18 +443,27 @@ private fun PreviewContent(
                         }
                     }
                     Box {
-                        OutlinedButton(
+                        Surface(
                             onClick = { ruleMenuExpanded = true },
                             shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier.fillMaxWidth()
+                            color = insetSurfaceColor,
+                            contentColor = MaterialTheme.colorScheme.onSurface,
+                            tonalElevation = 0.dp
                         ) {
-                            Text(
-                                text = preview.selectedRuleName,
-                                modifier = Modifier.weight(1f),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Icon(Icons.Outlined.ArrowDropDown, contentDescription = null)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = preview.selectedRuleName,
+                                    modifier = Modifier.weight(1f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Icon(Icons.Outlined.ArrowDropDown, contentDescription = null)
+                            }
                         }
                         DropdownMenu(
                             expanded = ruleMenuExpanded,
@@ -461,16 +498,17 @@ private fun PreviewContent(
                             }
                         }
                     }
-                    OutlinedTextField(
+                    TextField(
                         value = customRegex,
                         onValueChange = onCustomRegexChange,
                         label = { Text("自定义章节正则") },
                         supportingText = { Text("使用多行模式，匹配完整章节标题行") },
                         minLines = 2,
                         shape = RoundedCornerShape(16.dp),
+                        colors = glassTextFieldColors(),
                         modifier = Modifier.fillMaxWidth()
                     )
-                    OutlinedButton(
+                    FilledTonalButton(
                         onClick = onApplyCustomRegex,
                         enabled = customRegex.isNotBlank(),
                         shape = RoundedCornerShape(16.dp),
@@ -478,7 +516,7 @@ private fun PreviewContent(
                     ) {
                         Text("重新识别章节")
                     }
-                    OutlinedButton(
+                    Button(
                         onClick = onAiDetect,
                         enabled = aiDetectEnabled,
                         shape = RoundedCornerShape(16.dp),
@@ -516,11 +554,15 @@ private fun PreviewContent(
             }
         }
         itemsIndexed(preview.chapterTitles) { index, chapterTitle ->
-            FrostedSurface(
+            Surface(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(19.dp),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.66f),
-                shadowElevation = 3.dp
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.surface.copy(
+                    alpha = if (darkTheme) 0.62f else 0.88f
+                ),
+                contentColor = MaterialTheme.colorScheme.onSurface,
+                tonalElevation = 0.dp,
+                shadowElevation = 1.dp
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 13.dp, vertical = 12.dp),
@@ -552,10 +594,35 @@ private fun PreviewContent(
 }
 
 @Composable
+private fun glassTextFieldColors() = with(MaterialTheme.colorScheme) {
+    val darkTheme = isDarkTheme()
+    TextFieldDefaults.colors(
+        focusedContainerColor = if (darkTheme) {
+            surfaceContainerHighest.copy(alpha = 0.78f)
+        } else {
+            primaryContainer.copy(alpha = 0.72f)
+        },
+        unfocusedContainerColor = surfaceContainerHigh.copy(
+            alpha = if (darkTheme) 0.68f else 0.82f
+        ),
+        disabledContainerColor = surfaceContainerHigh.copy(
+            alpha = if (darkTheme) 0.42f else 0.52f
+        ),
+        focusedIndicatorColor = Color.Transparent,
+        unfocusedIndicatorColor = Color.Transparent,
+        disabledIndicatorColor = Color.Transparent,
+        errorIndicatorColor = error.copy(alpha = 0.70f)
+    )
+}
+
+@Composable
 private fun InfoChip(text: String) {
     Surface(
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.70f),
-        shape = RoundedCornerShape(16.dp)
+        color = MaterialTheme.colorScheme.surface.copy(
+            alpha = if (isDarkTheme()) 0.62f else 0.90f
+        ),
+        shape = RoundedCornerShape(16.dp),
+        shadowElevation = 1.dp
     ) {
         Text(
             text = text,

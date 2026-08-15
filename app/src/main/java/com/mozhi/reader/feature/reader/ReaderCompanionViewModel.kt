@@ -7,8 +7,10 @@ import com.mozhi.reader.ai.agent.AgentEvent
 import com.mozhi.reader.ai.agent.AgentLoop
 import com.mozhi.reader.ai.agent.ReaderToolset
 import com.mozhi.reader.ai.chat.AiChatRepository
+import com.mozhi.reader.ai.chat.CompanionGenerationTracker
 import com.mozhi.reader.ai.chat.ReplySuggestionService
 import com.mozhi.reader.ai.client.AiClientException
+import com.mozhi.reader.ai.agent.MemoryScope
 import com.mozhi.reader.ai.memory.MemoryConsolidationScheduler
 import com.mozhi.reader.ai.embedding.BookEmbeddingProgress
 import com.mozhi.reader.ai.embedding.EmbeddingProgressTracker
@@ -17,9 +19,13 @@ import com.mozhi.reader.ai.prompt.CompanionContextBuilder
 import com.mozhi.reader.ai.search.WebSearchSettingsStore
 import com.mozhi.reader.core.database.entity.ConversationEntity
 import com.mozhi.reader.core.database.entity.MessageEntity
+import com.mozhi.reader.core.database.entity.PersonaChatAppearance
 import com.mozhi.reader.core.database.entity.PersonaEntity
+import com.mozhi.reader.core.database.entity.chatAppearance
+import com.mozhi.reader.core.datastore.ReaderFontAsset
 import com.mozhi.reader.core.database.entity.enabledTools
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
+import com.mozhi.reader.core.di.ApplicationScope
 import com.mozhi.reader.core.datastore.UserMaskStore
 import com.mozhi.reader.core.library.AttachmentStore
 import com.mozhi.reader.core.library.LibraryRepository
@@ -27,6 +33,12 @@ import com.mozhi.reader.core.library.MessageAttachment
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
+import com.mozhi.reader.core.library.BookQuoteLocator
+import com.mozhi.reader.core.library.QuoteChapter
+import com.mozhi.reader.core.library.QuoteLocation
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -58,6 +70,18 @@ data class PendingAttachment(
 )
 
 /** 全屏聊天页顶栏与 sceneQuote 素材。 */
+/** 聊天页要交给阅读页去做的事。 */
+sealed interface CompanionChatEvent {
+    /** 跳到正文某处并短暂高亮；坐标是章内 UTF-16 偏移。 */
+    data class LocateInBook(
+        val chapterIndex: Int,
+        val startCharOffset: Int,
+        val endCharOffset: Int
+    ) : CompanionChatEvent
+
+    data class Message(val text: String) : CompanionChatEvent
+}
+
 data class CompanionChatContext(
     val bookTitle: String = "",
     val sceneQuote: String = ""
@@ -79,6 +103,12 @@ data class CompanionChatUiState(
     val spoilerProtectionEnabled: Boolean = true,
     /** AI 回合结束后生成的建议回复，点击即发送；发送/切换会话时清空。 */
     val suggestions: List<String> = emptyList(),
+    /** 当前角色的聊天外观；未自定义时是 DEFAULT，界面据此跟随阅读主题。 */
+    val appearance: PersonaChatAppearance = PersonaChatAppearance.DEFAULT,
+    /** 外观选中的背景图的真实路径；图片被删掉时为 null。 */
+    val backgroundImagePath: String? = null,
+    /** 共享字体库，供气泡按 [appearance] 的 fontId 取字体。 */
+    val fontLibrary: List<ReaderFontAsset> = emptyList(),
     val error: String? = null
 )
 
@@ -102,7 +132,9 @@ class ReaderCompanionViewModel @Inject constructor(
     private val libraryRepository: LibraryRepository,
     private val suggestionService: ReplySuggestionService,
     private val webSearchSettingsStore: WebSearchSettingsStore,
-    private val userMaskStore: UserMaskStore
+    private val userMaskStore: UserMaskStore,
+    private val generationTracker: CompanionGenerationTracker,
+    @ApplicationScope private val applicationScope: CoroutineScope
 ) : ViewModel() {
 
     private val bookId = MutableStateFlow<Long?>(null)
@@ -111,8 +143,9 @@ class ReaderCompanionViewModel @Inject constructor(
     private var messagesJob: Job? = null
     private var conversationsJob: Job? = null
     private var suggestionJob: Job? = null
-    /** 现有记忆表尚无 maskId；面具回合先不固化，避免把扮演经历污染为用户真实偏好。 */
-    private var latestTurnWasMasked: Boolean = false
+    private var generationJob: Job? = null
+    private val eventChannel = Channel<CompanionChatEvent>(Channel.BUFFERED)
+    val events = eventChannel.receiveAsFlow()
 
     /**
      * 流式正文的真源。SSE 增量只追加到这里（主线程独占），UI 快照由节拍器按
@@ -170,8 +203,10 @@ class ReaderCompanionViewModel @Inject constructor(
         activePersona,
         session,
         embeddingProgress,
-        settingsRepository.companionSpoilerProtectionEnabled
-    ) { (personas, active), session, embedding, spoilerProtectionEnabled ->
+        settingsRepository.companionSpoilerProtectionEnabled,
+        settingsRepository.settings
+    ) { (personas, active), session, embedding, spoilerProtectionEnabled, readerSettings ->
+        val appearance = active?.chatAppearance() ?: PersonaChatAppearance.DEFAULT
         CompanionChatUiState(
             personas = personas,
             activePersona = active,
@@ -185,6 +220,11 @@ class ReaderCompanionViewModel @Inject constructor(
             embeddingProgress = embedding,
             spoilerProtectionEnabled = spoilerProtectionEnabled,
             suggestions = session.suggestions,
+            appearance = appearance,
+            backgroundImagePath = readerSettings.imageLibrary
+                .firstOrNull { it.id == appearance.backgroundImageId }
+                ?.filePath,
+            fontLibrary = readerSettings.fontLibrary,
             error = session.error
         )
     }.stateIn(
@@ -395,7 +435,9 @@ class ReaderCompanionViewModel @Inject constructor(
                 chatRepository.appendUserMessage(
                     conversationId = conversationId,
                     content = trimmed.ifEmpty { "（发来附件）" },
-                    attachmentsJson = MessageAttachment.encode(saved)
+                    attachmentsJson = MessageAttachment.encode(saved),
+                    // 发送时就把面具钉在消息上：固化是异步的，那时面具可能已经切换。
+                    maskId = userMaskStore.activeMask()?.id ?: 0L
                 )
                 stream(
                     book = book,
@@ -418,6 +460,8 @@ class ReaderCompanionViewModel @Inject constructor(
         val conversationId = session.value.conversationId
         streamJob?.cancel()
         streamJob = null
+        // 也可能是上一次进来时留下的后台生成：那时本 ViewModel 手里没有它的 Job。
+        conversationId?.let(generationTracker::cancel)
         streamBuffer.setLength(0)
         session.value = session.value.copy(
             isStreaming = false,
@@ -427,7 +471,7 @@ class ReaderCompanionViewModel @Inject constructor(
         if (partial.isNotBlank() && conversationId != null) {
             viewModelScope.launch {
                 chatRepository.appendAssistantMessage(conversationId, partial)
-                consolidateMemoryIfUnmasked(conversationId)
+                memoryScheduler.afterTurn(conversationId)
             }
         }
     }
@@ -502,13 +546,29 @@ class ReaderCompanionViewModel @Inject constructor(
             conversationId = conversationId,
             messages = emptyList(),
             streamingText = null,
-            isStreaming = false,
+            // 上一次离开时这轮生成可能还在后台跑；接着显示等待态，也别让用户再发一条。
+            isStreaming = generationTracker.isActive(conversationId),
             toolStatus = null,
             executionSteps = emptyList(),
             suggestions = emptyList(),
             error = null
         )
         observeMessages(conversationId)
+        observeGeneration(conversationId)
+    }
+
+    /** 后台那轮跑完时把等待态收掉；本地正在流式时以本地状态为准，不受它干扰。 */
+    private fun observeGeneration(conversationId: Long) {
+        generationJob?.cancel()
+        generationJob = viewModelScope.launch {
+            generationTracker.observe(conversationId).collect { active ->
+                if (!active && streamJob?.isActive != true) {
+                    session.value = session.value.copy(isStreaming = false, toolStatus = null)
+                } else if (active && streamJob?.isActive != true) {
+                    session.value = session.value.copy(isStreaming = true)
+                }
+            }
+        }
     }
 
     private fun observeConversations(book: Long, personaId: Long) {
@@ -543,7 +603,9 @@ class ReaderCompanionViewModel @Inject constructor(
     ) {
         streamJob?.cancel()
         suggestionJob?.cancel()
-        streamJob = viewModelScope.launch {
+        // 生成挂在应用作用域而不是 viewModelScope：退出聊天页不该把已经流了一半的回复
+        // 连同它一起取消。AgentLoop 完成时会把回复落库，用户回来就能在列表里看到它。
+        streamJob = applicationScope.launch {
             session.value = session.value.copy(
                 isStreaming = true,
                 streamingText = "",
@@ -553,9 +615,8 @@ class ReaderCompanionViewModel @Inject constructor(
                 error = null
             )
             streamBuffer.setLength(0)
-            val ticker = launchStreamingTicker(::publishStreamingSnapshot)
+            val ticker = viewModelScope.launchStreamingTicker(::publishStreamingSnapshot)
             try {
-                latestTurnWasMasked = userMaskStore.activeMask() != null
                 val globallyEnabledTools = if (webSearchSettingsStore.current().enabled) {
                     setOf("web_search", "web_scrape")
                 } else {
@@ -564,12 +625,18 @@ class ReaderCompanionViewModel @Inject constructor(
                 val spoilerProtectionEnabled = settingsRepository
                     .companionSpoilerProtectionEnabled
                     .first()
+                val memorySettings = settingsRepository.companionMemorySettings.first()
                 val tools = readerToolset.forBook(
                     bookId = book,
                     personaId = persona.id,
                     conversationId = conversationId,
                     enabledTools = persona.enabledTools().toSet() + requiredTools + globallyEnabledTools,
-                    spoilerProtectionEnabled = spoilerProtectionEnabled
+                    spoilerProtectionEnabled = spoilerProtectionEnabled,
+                    memoryScope = MemoryScope(
+                        longTermEnabled = memorySettings.longTermEnabled && persona.memoryEnabled,
+                        crossBookChatSearch = memorySettings.crossBookChatSearchEnabled,
+                        maskId = userMaskStore.activeMask()?.id ?: 0L
+                    )
                 )
                 val systemPrompt = contextBuilder.build(
                     persona = persona,
@@ -635,7 +702,7 @@ class ReaderCompanionViewModel @Inject constructor(
                 ) {
                     throw IllegalStateException("模型没有调用保存工具，剧情梗概尚未入库；可重试或换用支持工具调用的模型")
                 }
-                consolidateMemoryIfUnmasked(conversationId)
+                memoryScheduler.afterTurn(conversationId)
                 streamBuffer.setLength(0)
                 session.value = session.value.copy(
                     isStreaming = false,
@@ -654,8 +721,65 @@ class ReaderCompanionViewModel @Inject constructor(
                 )
             } finally {
                 ticker.cancel()
+                generationTracker.end(conversationId)
             }
         }
+        // 登记在册，退出界面后回来仍能看到等待态、也仍能按「停止」把它停下来。
+        streamJob?.let { generationTracker.begin(conversationId, it) }
+    }
+
+    /**
+     * 「跳到原文」：把引文在书里定位成 (章, 字符偏移)。
+     *
+     * 先只翻模型点名的那一章——命中率最高、代价最小；不中再退回扫描已读范围内的章节，
+     * 并对总字符数设上限：一本 200MB 的 TXT 全量载入内存只为找一句话是不划算的。
+     */
+    fun locate(citation: CompanionCitation) {
+        val book = bookId.value ?: return
+        viewModelScope.launch {
+            val located = runCatching { resolveCitation(book, citation) }.getOrNull()
+            if (located == null) {
+                eventChannel.send(CompanionChatEvent.Message("这段原文没能在书中定位到"))
+            } else {
+                eventChannel.send(
+                    CompanionChatEvent.LocateInBook(
+                        chapterIndex = located.chapterIndex,
+                        startCharOffset = located.startCharOffset,
+                        endCharOffset = located.endCharOffset
+                    )
+                )
+            }
+        }
+    }
+
+    private suspend fun resolveCitation(
+        book: Long,
+        citation: CompanionCitation
+    ): QuoteLocation? {
+        val chapters = libraryRepository.getChapters(book)
+        val hintedIndex = citation.chapterNumber?.minus(1)
+        hintedIndex
+            ?.let { index -> chapters.firstOrNull { it.chapterIndex == index } }
+            ?.let { chapter ->
+                val body = libraryRepository.readChapterText(book, chapter)
+                BookQuoteLocator
+                    .locateBest(listOf(QuoteChapter(chapter.chapterIndex, body)), citation.quote)
+                    ?.let { return it }
+            }
+
+        val readableThrough = libraryRepository.getBook(book)?.lastReadChapterIndex ?: 0
+        var scanned = 0
+        val candidates = buildList {
+            chapters
+                .filter { it.chapterIndex <= readableThrough && it.chapterIndex != hintedIndex }
+                .forEach { chapter ->
+                    if (scanned >= MAX_LOCATE_CHARS) return@forEach
+                    val body = libraryRepository.readChapterText(book, chapter)
+                    scanned += body.length
+                    add(QuoteChapter(chapter.chapterIndex, body))
+                }
+        }
+        return BookQuoteLocator.locateBest(candidates, citation.quote, hintedIndex)
     }
 
     /** 节拍器回调：把缓冲区快照发布给 UI，仅在流式进行且内容变化时触发重组。 */
@@ -668,16 +792,11 @@ class ReaderCompanionViewModel @Inject constructor(
         }
     }
 
-    private fun consolidateMemoryIfUnmasked(conversationId: Long) {
-        if (!latestTurnWasMasked) memoryScheduler.afterTurn(conversationId)
-    }
-
     override fun onCleared() {
-        if (!latestTurnWasMasked) {
-            session.value.conversationId?.let(memoryScheduler::onConversationClosed)
-        }
-        streamJob?.cancel()
+        session.value.conversationId?.let(memoryScheduler::onConversationClosed)
+        // streamJob 故意不取消：它在应用作用域里，要把这轮回复写完再退场。
         messagesJob?.cancel()
+        generationJob?.cancel()
         conversationsJob?.cancel()
         suggestionJob?.cancel()
     }
@@ -689,5 +808,7 @@ class ReaderCompanionViewModel @Inject constructor(
 
     private companion object {
         const val CONVERSATION_TYPE = "COMPANION"
+        /** 定位兜底扫描的字符上限：约 60 万字，足够覆盖绝大多数书的已读部分。 */
+        const val MAX_LOCATE_CHARS = 600_000
     }
 }

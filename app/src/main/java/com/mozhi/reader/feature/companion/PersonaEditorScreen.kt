@@ -83,6 +83,7 @@ import com.mozhi.reader.ui.theme.MoReadTokens
 @Composable
 fun PersonaEditorScreen(
     onBack: () -> Unit,
+    onOpenMemory: (personaId: Long) -> Unit = {},
     viewModel: PersonaEditorViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -91,6 +92,7 @@ fun PersonaEditorScreen(
     var personalityExpanded by rememberSaveable(state.isNew) { mutableStateOf(state.isNew) }
     var dialogsExpanded by rememberSaveable { mutableStateOf(false) }
     var worldBookExpanded by rememberSaveable { mutableStateOf(false) }
+    var appearanceExpanded by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(viewModel) {
         viewModel.events.collect { event ->
@@ -228,6 +230,43 @@ fun PersonaEditorScreen(
                         Box(Modifier.padding(horizontal = 20.dp)) {
                             DashedAddRow(label = "添加设定条目", onClick = viewModel::addLoreEntry)
                         }
+                    }
+                }
+                item {
+                    MemoryCard(
+                        enabled = state.memoryEnabled,
+                        memoryCount = state.memoryCount,
+                        canManage = !state.isNew,
+                        onEnabledChange = viewModel::setMemoryEnabled,
+                        onManage = { onOpenMemory(state.personaId) }
+                    )
+                }
+                item {
+                    ExpandableEditorSection(
+                        title = "聊天外观",
+                        summary = if (state.appearance.isDefault) {
+                            "跟随阅读主题"
+                        } else {
+                            listOfNotNull(
+                                state.appearance.shape.label,
+                                state.appearance.backgroundImageId?.let { "有背景图" },
+                                state.appearance.fontId?.let { "自定义字体" }
+                            ).joinToString(" · ")
+                        },
+                        expanded = appearanceExpanded,
+                        onToggle = { appearanceExpanded = !appearanceExpanded }
+                    )
+                }
+                if (appearanceExpanded) {
+                    item {
+                        AppearanceCard(
+                            appearance = state.appearance,
+                            personaName = state.name,
+                            images = state.imageLibrary,
+                            fonts = state.fontLibrary,
+                            onChange = viewModel::updateAppearance,
+                            onReset = viewModel::resetAppearance
+                        )
                     }
                 }
                 item { SectionLabel(title = "工具权限") }

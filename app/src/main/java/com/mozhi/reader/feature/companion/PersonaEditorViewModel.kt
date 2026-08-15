@@ -8,6 +8,8 @@ import androidx.lifecycle.viewModelScope
 import com.mozhi.reader.ai.persona.PersonaAvatarStore
 import com.mozhi.reader.ai.persona.PersonaRepository
 import com.mozhi.reader.ai.persona.SillyTavernCardParser
+import com.mozhi.reader.core.database.entity.PersonaChatAppearance
+import com.mozhi.reader.core.database.entity.PersonaChatAppearanceCodec
 import com.mozhi.reader.core.database.entity.PersonaEntity
 import com.mozhi.reader.core.database.entity.PersonaExampleDialog
 import com.mozhi.reader.core.database.entity.PersonaLoreEntry
@@ -16,7 +18,12 @@ import com.mozhi.reader.core.database.entity.encodeEnabledTools
 import com.mozhi.reader.core.database.entity.encodeExampleDialogs
 import com.mozhi.reader.core.database.entity.encodeWorldBook
 import com.mozhi.reader.core.database.entity.exampleDialogs
+import com.mozhi.reader.core.database.entity.chatAppearance
 import com.mozhi.reader.core.database.entity.worldBook
+import com.mozhi.reader.core.datastore.ReaderFontAsset
+import com.mozhi.reader.core.datastore.ReaderImageAsset
+import com.mozhi.reader.core.datastore.ReaderSettingsRepository
+import com.mozhi.reader.ai.memory.PersonaMemoryRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -56,6 +63,13 @@ data class PersonaEditorState(
     val isRoleplay: Boolean = true,
     val enabledTools: Set<String> = PersonaToolOptions.map { it.first }.toSet(),
     val avatarPath: String? = null,
+    val memoryEnabled: Boolean = true,
+    /** 已沉淀的记忆条数；只作展示，管理入口在二级页。 */
+    val memoryCount: Long = 0,
+    val appearance: PersonaChatAppearance = PersonaChatAppearance.DEFAULT,
+    /** 共享图片库与字体库，聊天外观直接复用，不再单开一套资产管理。 */
+    val imageLibrary: List<ReaderImageAsset> = emptyList(),
+    val fontLibrary: List<ReaderFontAsset> = emptyList(),
     val isBuiltIn: Boolean = false,
     /** 编辑不落 UI 的透传字段。 */
     val chatModelId: Long? = null,
@@ -75,7 +89,9 @@ class PersonaEditorViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     @ApplicationContext private val context: Context,
     private val personaRepository: PersonaRepository,
-    private val avatarStore: PersonaAvatarStore
+    private val avatarStore: PersonaAvatarStore,
+    private val memoryRepository: PersonaMemoryRepository,
+    private val settingsRepository: ReaderSettingsRepository
 ) : ViewModel() {
 
     private val personaId: Long = savedStateHandle.get<String>("personaId")?.toLongOrNull() ?: 0L
@@ -107,14 +123,38 @@ class PersonaEditorViewModel @Inject constructor(
                         isRoleplay = persona.isRoleplay,
                         enabledTools = persona.enabledTools().toSet(),
                         avatarPath = persona.avatarPath,
+                        memoryEnabled = persona.memoryEnabled,
+                        appearance = persona.chatAppearance(),
                         isBuiltIn = persona.isBuiltIn,
                         chatModelId = persona.chatModelId,
                         loading = false
                     )
                 } ?: state.copy(loading = false)
             }
+            if (personaId != 0L) {
+                mutableState.update { it.copy(memoryCount = memoryRepository.count(personaId)) }
+            }
+        }
+        // 外观直接引用共享的图片库与字体库；它们是全局资产，不该按角色各存一份。
+        viewModelScope.launch {
+            settingsRepository.settings.collect { settings ->
+                mutableState.update {
+                    it.copy(
+                        imageLibrary = settings.imageLibrary,
+                        fontLibrary = settings.fontLibrary
+                    )
+                }
+            }
         }
     }
+
+    fun setMemoryEnabled(value: Boolean) = mutableState.update { it.copy(memoryEnabled = value) }
+
+    fun updateAppearance(transform: (PersonaChatAppearance) -> PersonaChatAppearance) =
+        mutableState.update { it.copy(appearance = transform(it.appearance).sanitized()) }
+
+    fun resetAppearance() =
+        mutableState.update { it.copy(appearance = PersonaChatAppearance.DEFAULT) }
 
     fun setName(value: String) = mutableState.update { it.copy(name = value) }
     fun setSubtitle(value: String) = mutableState.update { it.copy(subtitle = value) }
@@ -291,6 +331,8 @@ class PersonaEditorViewModel @Inject constructor(
                                 .filter { it in state.enabledTools }
                         ),
                         chatModelId = state.chatModelId,
+                        memoryEnabled = state.memoryEnabled,
+                        chatAppearanceJson = PersonaChatAppearanceCodec.encode(state.appearance),
                         isBuiltIn = state.isBuiltIn,
                         createdAt = 0 // repository 负责保留/生成
                     )

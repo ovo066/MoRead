@@ -39,6 +39,10 @@ import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.MenuBook
+import androidx.compose.material.icons.outlined.Bookmarks
+import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.PersonOutline
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.RecordVoiceOver
@@ -175,6 +179,36 @@ fun SettingsScreen(
                         subtitle = "关闭后阅读页只显示你自己的划线，角色批注仍可在详情回顾",
                         checked = state.showAiAnnotations,
                         onCheckedChange = viewModel::setShowAiAnnotations
+                    )
+                }
+            }
+
+            item {
+                SettingsGroup(title = "伴读记忆", icon = Icons.Outlined.Psychology) {
+                    SettingsSwitchRow(
+                        icon = Icons.Outlined.Bookmarks,
+                        title = "长期记忆",
+                        subtitle = "让角色记住你的偏好与约定；关闭后只做当次问答，已有记忆保留不删",
+                        checked = state.memory.longTermEnabled,
+                        onCheckedChange = viewModel::setLongTermMemory
+                    )
+                    SettingsRowDivider()
+                    SettingsSwitchRow(
+                        icon = Icons.Outlined.MenuBook,
+                        title = "跨书记忆",
+                        subtitle = "关闭后只回忆当前这本书聊过的内容，角色画像也不再记「一起读过的书」",
+                        checked = state.memory.crossBookEnabled,
+                        enabled = state.memory.longTermEnabled,
+                        onCheckedChange = viewModel::setCrossBookMemory
+                    )
+                    SettingsRowDivider()
+                    SettingsSwitchRow(
+                        icon = Icons.Outlined.Search,
+                        title = "跨书对话检索",
+                        subtitle = "允许角色主动翻出在别的书里聊过的相关记忆",
+                        checked = state.memory.crossBookChatSearchEnabled,
+                        enabled = state.memory.longTermEnabled,
+                        onCheckedChange = viewModel::setCrossBookChatSearch
                     )
                 }
             }

@@ -11,7 +11,7 @@ import android.graphics.Typeface
 import android.util.LruCache
 import android.text.TextPaint
 import com.mozhi.reader.core.datastore.ReaderSyntaxFont
-import com.mozhi.reader.feature.reader.engine.ListenHighlightSpan
+import com.mozhi.reader.feature.reader.engine.TransientHighlightSpan
 import com.mozhi.reader.feature.reader.engine.ReaderAnnotationMark
 import com.mozhi.reader.feature.reader.engine.ReaderIllustrationMark
 import com.mozhi.reader.feature.reader.engine.RenderPage
@@ -56,7 +56,7 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
     private val syntaxBackgroundPaints = HashMap<Int, Paint>()
     /** (style|colorTag) → Paint；样式实例随 pageStyle 重建，缓存不会跨主题存活。 */
     private val annotationInkPaints = HashMap<String, Paint>()
-    private val listenHighlightPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val transientHighlightPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = pageStyle.accentColor
         alpha = if (pageStyle.isDark) 30 else 38
     }
@@ -110,7 +110,7 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         batteryPercent: Int,
         annotations: List<ReaderAnnotationMark> = emptyList(),
         illustrations: List<ReaderIllustrationMark> = emptyList(),
-        listenHighlight: ListenHighlightSpan? = null,
+        transientHighlight: TransientHighlightSpan? = null,
         includeBackground: Boolean = true
     ): Bitmap {
         val bitmap = obtainBitmap(into)
@@ -122,7 +122,7 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         }
         drawHeader(canvas, page)
         when (page) {
-            is RenderPage.Laid -> drawBody(canvas, page, annotations, illustrations, listenHighlight)
+            is RenderPage.Laid -> drawBody(canvas, page, annotations, illustrations, transientHighlight)
             is RenderPage.Placeholder -> drawPlaceholder(canvas, page)
         }
         drawFooter(canvas, page, bookProgress, timeText, batteryPercent)
@@ -147,11 +147,11 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         page: RenderPage.Laid,
         annotations: List<ReaderAnnotationMark>,
         illustrations: List<ReaderIllustrationMark>,
-        listenHighlight: ListenHighlightSpan?
+        transientHighlight: TransientHighlightSpan?
     ) {
         canvas.save()
         canvas.translate(pageStyle.paddingLeft, pageStyle.contentTop)
-        drawContent(canvas, page, annotations, illustrations, listenHighlight)
+        drawContent(canvas, page, annotations, illustrations, transientHighlight)
         canvas.restore()
     }
 
@@ -165,20 +165,20 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         page: RenderPage.Laid,
         annotations: List<ReaderAnnotationMark>,
         illustrations: List<ReaderIllustrationMark> = emptyList(),
-        listenHighlight: ListenHighlightSpan? = null,
+        transientHighlight: TransientHighlightSpan? = null,
         clipTop: Float = Float.NEGATIVE_INFINITY,
         clipBottom: Float = Float.POSITIVE_INFINITY
     ) {
         val markerRadius = (pageStyle.tipSizePx * 0.72f).coerceAtLeast(8f)
         // 听书当前句底色画在批注高亮之下，两者重叠时批注色仍占主导。
-        if (listenHighlight != null && listenHighlight.chapterIndex == page.chapterIndex) {
+        if (transientHighlight != null && transientHighlight.chapterIndex == page.chapterIndex) {
             val listenGeometry = page.page.annotationGeometry(
                 annotations = listOf(
                     ReaderAnnotationMark(
                         id = LISTEN_HIGHLIGHT_ID,
-                        chapterIndex = listenHighlight.chapterIndex,
-                        startCharOffset = listenHighlight.startCharOffset,
-                        endCharOffset = listenHighlight.endCharOffset,
+                        chapterIndex = transientHighlight.chapterIndex,
+                        startCharOffset = transientHighlight.startCharOffset,
+                        endCharOffset = transientHighlight.endCharOffset,
                         hasComment = false
                     )
                 ),
@@ -192,7 +192,7 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
                     RectF(rect.left, rect.top, rect.right, rect.bottom),
                     ANNOTATION_HIGHLIGHT_RADIUS,
                     ANNOTATION_HIGHLIGHT_RADIUS,
-                    listenHighlightPaint
+                    transientHighlightPaint
                 )
             }
         }

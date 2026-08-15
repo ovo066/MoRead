@@ -29,6 +29,7 @@ androidxJunit = "1.3.0"
 espresso = "3.7.0"
 objectbox = "4.3.0"
 androidSvg = "1.4"
+zxing = "3.5.3"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
@@ -79,6 +80,8 @@ objectbox-processor = { module = "io.objectbox:objectbox-processor", version.ref
 objectbox-windows = { module = "io.objectbox:objectbox-windows", version.ref = "objectbox" }
 objectbox-linux = { module = "io.objectbox:objectbox-linux", version.ref = "objectbox" }
 android-svg = { module = "com.caverock:androidsvg-aar", version.ref = "androidSvg" }
+# 只用 core：纯 Java 编码器，把矩阵交给 Compose Canvas 自己画，不引 zxing-android-embedded
+zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

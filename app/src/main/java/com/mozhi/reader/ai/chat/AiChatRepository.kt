@@ -101,10 +101,15 @@ class AiChatRepository @Inject constructor(
         type: String
     ): ConversationEntity? = chatDao.getLatestConversation(bookId, personaId, type)
 
+    /**
+     * @param maskId 发送这条消息时生效的用户面具（0 = 本人）。记忆固化据此区分
+     *   「用户真实偏好」与「面具内的扮演经历」，两者不能混为一谈。
+     */
     suspend fun appendUserMessage(
         conversationId: Long,
         content: String,
-        attachmentsJson: String? = null
+        attachmentsJson: String? = null,
+        maskId: Long = 0L
     ) {
         val clean = content.trim()
         require(clean.isNotEmpty() || attachmentsJson != null) { "消息不能为空" }
@@ -116,7 +121,8 @@ class AiChatRepository @Inject constructor(
                     role = ChatRole.USER.wire,
                     content = clean,
                     createdAt = now,
-                    attachmentsJson = attachmentsJson
+                    attachmentsJson = attachmentsJson,
+                    maskId = maskId
                 )
             )
             val conversation = chatDao.getConversation(conversationId)

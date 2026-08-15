@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -46,6 +47,9 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.outlined.LibraryAdd
+import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.FilterAltOff
@@ -58,16 +62,19 @@ import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -93,6 +100,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -134,6 +142,8 @@ fun BookshelfScreen(
     onOpenBook: (Long) -> Unit,
     onOpenBookDetail: (bookId: Long, action: String?) -> Unit,
     onOpenImportPreview: (String) -> Unit,
+    onOpenFolderPicker: (Uri) -> Unit = {},
+    onOpenLanTransfer: () -> Unit = {},
     viewModel: BookshelfViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -146,10 +156,21 @@ fun BookshelfScreen(
     // ACTION_GET_CONTENT 而不是 OPEN_DOCUMENT：后者只能用系统 DocumentsUI（简陋），
     // 前者允许 OEM 文件管理（vivo 等，带搜索）接管。授权是一次性的，导入在选择后
     // 立即把内容读进会话/私有目录，够用；类型校验在 prepare() 里做。
+    var importMenuVisible by remember { mutableStateOf(false) }
     val documentLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri ->
-        uri?.let(viewModel::importDocument)
+        contract = ActivityResultContracts.GetMultipleContents()
+    ) { uris ->
+        // 单本仍走预览确认（能挑分章规则）；多本自动取最佳规则批量入库。
+        when {
+            uris.isEmpty() -> Unit
+            uris.size == 1 -> viewModel.importDocument(uris.first())
+            else -> viewModel.importBatch(uris)
+        }
+    }
+    val folderLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { treeUri ->
+        treeUri?.let(onOpenFolderPicker)
     }
     LaunchedEffect(externalImportUri) {
         externalImportUri?.let { uri ->
@@ -158,10 +179,11 @@ fun BookshelfScreen(
         }
     }
 
+    // 通知权限只为导入进度条服务，批准与否都要继续；先问一次再拉起选择器。
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) {
-        documentLauncher.launch("*/*")
+        importMenuVisible = true
     }
     val requestImport: () -> Unit = {
         val needsNotificationPermission = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
@@ -172,7 +194,7 @@ fun BookshelfScreen(
         if (needsNotificationPermission) {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         } else {
-            documentLauncher.launch("*/*")
+            importMenuVisible = true
         }
     }
 
@@ -307,6 +329,106 @@ fun BookshelfScreen(
                 TextButton(onClick = { deleteTarget = null }) { Text("取消") }
             }
         )
+    }
+
+    if (importMenuVisible) {
+        ImportMethodSheet(
+            onDismiss = { importMenuVisible = false },
+            onPickFiles = {
+                importMenuVisible = false
+                documentLauncher.launch("*/*")
+            },
+            onPickFolder = {
+                importMenuVisible = false
+                folderLauncher.launch(null)
+            },
+            onLanTransfer = {
+                importMenuVisible = false
+                onOpenLanTransfer()
+            }
+        )
+    }
+}
+
+/**
+ * 三条导入路径的选择弹层。以前「＋」直接拉起系统选择器，多了文件夹与局域网两条路后
+ * 必须先问一句——否则只能把三个入口塞进工具栏，把书架顶部挤成按钮墙。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ImportMethodSheet(
+    onDismiss: () -> Unit,
+    onPickFiles: () -> Unit,
+    onPickFolder: () -> Unit,
+    onLanTransfer: () -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                "导入书籍",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
+            ImportMethodRow(
+                icon = Icons.Outlined.LibraryAdd,
+                title = "选择文件",
+                summary = "支持一次多选 TXT / EPUB",
+                onClick = onPickFiles
+            )
+            ImportMethodRow(
+                icon = Icons.Outlined.FolderOpen,
+                title = "扫描文件夹",
+                summary = "递归找出整个目录里的书，勾选后批量导入",
+                onClick = onPickFolder
+            )
+            ImportMethodRow(
+                icon = Icons.Outlined.Wifi,
+                title = "局域网传书",
+                summary = "电脑浏览器打开手机地址，拖拽上传",
+                onClick = onLanTransfer
+            )
+        }
+    }
+}
+
+@Composable
+private fun ImportMethodRow(
+    icon: ImageVector,
+    title: String,
+    summary: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(22.dp))
+            Column(Modifier.weight(1f).padding(start = 14.dp)) {
+                Text(title, style = MaterialTheme.typography.titleSmall)
+                Text(
+                    summary,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
     }
 }
 

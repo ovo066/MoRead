@@ -667,6 +667,68 @@ class MigrationTest {
         }
     }
 
+    /** v17：记忆 2.0 与伴读外观一次建齐；老会话/老角色/老消息全部拿到默认值。 */
+    @Test
+    fun migrate16To17AddsMemoryAndAppearanceColumns() {
+        helper.createDatabase(DB_NAME, 16).use { db ->
+            db.execSQL(
+                """
+                INSERT INTO conversations (
+                    id, bookId, personaId, title, type, parentConversationId,
+                    branchedFromMessageId, memoryConsolidatedThroughMessageId, createdAt, updatedAt
+                ) VALUES (1, NULL, 7, '旧会话', 'COMPANION', NULL, NULL, 42, 1000, 1000)
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                INSERT INTO messages (id, conversationId, role, content, createdAt)
+                VALUES (1, 1, 'user', '旧消息', 1000)
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                INSERT INTO personas (
+                    id, name, avatarPath, subtitle, personality, speakingStyle, greeting,
+                    exampleDialogsJson, isRoleplay, enabledToolsJson, worldBookJson,
+                    worldBookEnabled, chatModelId, isBuiltIn, createdAt
+                ) VALUES (1, '老角色', NULL, '', '人设', '', '', '[]', 1, '[]', '[]', 1, NULL, 0, 1)
+                """.trimIndent()
+            )
+        }
+
+        val db = helper.runMigrationsAndValidate(
+            DB_NAME,
+            17,
+            true,
+            DatabaseMigrations.Migration16To17
+        )
+
+        db.query(
+            "SELECT rollingSummary, summarizedThroughMessageId, " +
+                "memoryConsolidatedThroughMessageId FROM conversations WHERE id = 1"
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("", cursor.getString(0))
+            assertEquals(0L, cursor.getLong(1))
+            // 固化水位与摘要水位互不干扰，老水位必须原样保留。
+            assertEquals(42L, cursor.getLong(2))
+        }
+        db.query("SELECT maskId, content FROM messages WHERE id = 1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(0L, cursor.getLong(0))
+            assertEquals("旧消息", cursor.getString(1))
+        }
+        db.query(
+            "SELECT userProfile, memoryEnabled, chatAppearanceJson FROM personas WHERE id = 1"
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("", cursor.getString(0))
+            // 记忆是既有能力，迁移后必须保持开启，否则等于静默关掉老用户的长期记忆。
+            assertEquals(1, cursor.getInt(1))
+            assertEquals("{}", cursor.getString(2))
+        }
+    }
+
     private companion object {
         const val DB_NAME = "migration-test.db"
     }

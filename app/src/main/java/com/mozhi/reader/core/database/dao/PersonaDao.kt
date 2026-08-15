@@ -26,4 +26,14 @@ interface PersonaDao {
 
     @Query("SELECT * FROM personas ORDER BY createdAt ASC")
     suspend fun getPersonas(): List<PersonaEntity>
+
+    /** 画像由固化任务整段覆盖式改写，不走 @Update 以免和用户正在编辑的角色卡互相盖写。 */
+    @Query("UPDATE personas SET userProfile = :profile WHERE id = :personaId")
+    suspend fun updateUserProfile(personaId: Long, profile: String)
+
+    @Query("UPDATE personas SET memoryEnabled = :enabled WHERE id = :personaId")
+    suspend fun updateMemoryEnabled(personaId: Long, enabled: Boolean)
+
+    @Query("UPDATE personas SET chatAppearanceJson = :json WHERE id = :personaId")
+    suspend fun updateChatAppearance(personaId: Long, json: String)
 }

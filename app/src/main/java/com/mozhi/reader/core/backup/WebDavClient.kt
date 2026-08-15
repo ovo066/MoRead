@@ -36,14 +36,21 @@ class WebDavClient @Inject constructor(private val httpClient: OkHttpClient) {
         ensureDirectory(credentials)
     }
 
-    suspend fun list(credentials: WebDavCredentials): List<RemoteBackup> = withContext(Dispatchers.IO) {
+    /**
+     * 列目录。[suffixes] 用来滤掉目录项与无关文件——PROPFIND 会把集合自身也列进来，
+     * 不按扩展名筛就会把目录当成一个「备份」。
+     */
+    suspend fun list(
+        credentials: WebDavCredentials,
+        suffixes: Set<String> = setOf(BACKUP_EXTENSION)
+    ): List<RemoteBackup> = withContext(Dispatchers.IO) {
         val directory = ensureDirectory(credentials)
         execute(credentials, propFind(directory, depth = 1)).use { response ->
             val document = Jsoup.parse(response.body.string(), Parser.xmlParser())
             document.allElements
                 .filter { it.localTag() == "response" }
                 .mapNotNull { element -> element.toRemoteBackup() }
-                .filter { it.name.endsWith(BACKUP_EXTENSION) }
+                .filter { file -> suffixes.any { file.name.endsWith(it, ignoreCase = true) } }
                 .sortedByDescending(RemoteBackup::modifiedAt)
         }
     }
@@ -54,7 +61,7 @@ class WebDavClient @Inject constructor(private val httpClient: OkHttpClient) {
             val target = ensureDirectory(credentials).newBuilder().addPathSegment(remoteName).build()
             val request = Request.Builder()
                 .url(target)
-                .put(file.asRequestBody("application/zip".toMediaType()))
+                .put(file.asRequestBody("application/octet-stream".toMediaType()))
                 .build()
             execute(credentials, request).close()
         }

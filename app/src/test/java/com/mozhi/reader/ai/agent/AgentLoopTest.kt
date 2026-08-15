@@ -12,6 +12,7 @@ import com.mozhi.reader.core.database.entity.MessageEntity
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
+import com.mozhi.reader.ai.memory.RollingSummarizer
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -47,6 +48,12 @@ class AgentLoopTest {
             updatedAt: Long
         ) = Unit
         override suspend fun touchConversation(conversationId: Long, updatedAt: Long) = Unit
+        override suspend fun updateRollingSummary(
+            conversationId: Long,
+            summary: String,
+            messageId: Long
+        ) = Unit
+        override suspend fun clearRollingSummary(conversationId: Long) = Unit
 
         override suspend fun deleteConversation(conversationId: Long) = Unit
         override suspend fun insertMessage(message: MessageEntity): Long {
@@ -120,7 +127,11 @@ class AgentLoopTest {
         AgentLoop(
             dao,
             clientFactory = dagger.Lazy { error("runWith never resolves the factory") },
-            attachmentStore = dagger.Lazy { error("no attachments in these tests") }
+            attachmentStore = dagger.Lazy { error("no attachments in these tests") },
+            // 这些用例的会话都没有前情提要，摘要器只会被问一次 block("")。
+            rollingSummarizer = dagger.Lazy {
+                RollingSummarizer(dao, dagger.Lazy { error("summariser never calls the factory here") })
+            }
         )
 
     @Test

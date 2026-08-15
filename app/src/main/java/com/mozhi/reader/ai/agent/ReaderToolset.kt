@@ -11,6 +11,9 @@ import com.mozhi.reader.core.database.entity.AnnotationStyle
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.ModelRole
 import com.mozhi.reader.core.library.AnnotationRepository
+import com.mozhi.reader.core.library.BookQuoteLocator
+import com.mozhi.reader.core.library.QuoteChapter
+import com.mozhi.reader.core.library.QuoteLocation
 import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.library.NoteRepository
 import com.mozhi.reader.core.vector.ChapterChunker
@@ -31,6 +34,17 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
+
+/**
+ * 本轮工具可见的记忆范围。默认值等于「全开」，即改动前的行为；
+ * 调用方从设置与当前面具算出实际值再传进来。
+ */
+data class MemoryScope(
+    /** 长期记忆总开关。关闭时连 recall_memory 都不注册——留着一个永远回空的工具只会误导模型。 */
+    val longTermEnabled: Boolean = true,
+    val crossBookChatSearch: Boolean = true,
+    val maskId: Long = 0L
+)
 
 /**
  * Builds the tool set available to reading-side agents for one book.
@@ -54,7 +68,8 @@ class ReaderToolset @Inject constructor(
         personaId: Long? = null,
         conversationId: Long? = null,
         enabledTools: Collection<String>? = null,
-        spoilerProtectionEnabled: Boolean = true
+        spoilerProtectionEnabled: Boolean = true,
+        memoryScope: MemoryScope = MemoryScope()
     ): List<AgentTool> {
         val embedQuery: suspend (String) -> FloatArray = { query ->
             val resolved = clientFactory.get().forRole(ModelRole.EMBEDDING)
@@ -99,13 +114,18 @@ class ReaderToolset @Inject constructor(
             add(WebSearchTool(webSearchService))
             add(WebScrapeTool(webSearchService))
             if (personaId != null) {
-                add(
-                    RecallMemoryTool(
-                        personaId = personaId,
-                        embedQuery = embedQuery,
-                        store = { vectorStore.get() }
+                if (memoryScope.longTermEnabled) {
+                    add(
+                        RecallMemoryTool(
+                            personaId = personaId,
+                            embedQuery = embedQuery,
+                            store = { vectorStore.get() },
+                            // 关掉「跨书对话检索」＝ recall_memory 只在本书范围内回忆。
+                            bookId = bookId.takeUnless { memoryScope.crossBookChatSearch },
+                            maskId = memoryScope.maskId
+                        )
                     )
-                )
+                }
                 add(
                     AddAnnotationTool(
                         bookId = bookId,
@@ -537,26 +557,12 @@ private class AddAnnotationTool(
     }
 }
 
-internal data class QuoteLocation(
-    val chapterIndex: Int,
-    val startCharOffset: Int,
-    val endCharOffset: Int
-)
-
-internal fun locateExactQuote(chapters: List<ChapterDocument>, quote: String): List<QuoteLocation> {
-    if (quote.isEmpty()) return emptyList()
-    return buildList {
-        chapters.forEach { chapter ->
-            var from = 0
-            while (from <= chapter.body.length - quote.length) {
-                val index = chapter.body.indexOf(quote, from)
-                if (index < 0) break
-                add(QuoteLocation(chapter.chapterIndex, index, index + quote.length))
-                from = index + quote.length.coerceAtLeast(1)
-            }
-        }
-    }
-}
+/** 逐字定位交给共享实现；批注要求唯一命中，聊天页的跳转允许多处，规则只有一份。 */
+internal fun locateExactQuote(chapters: List<ChapterDocument>, quote: String): List<QuoteLocation> =
+    BookQuoteLocator.locateAll(
+        chapters.map { QuoteChapter(it.chapterIndex, it.body) },
+        quote
+    )
 
 private class GenerateImageTool(
     private val bookId: Long,
@@ -1060,11 +1066,16 @@ private val LEXICAL_STOP_TERMS = setOf(
     "什么", "为什么", "怎么", "如何", "请问", "一下", "关于", "内容", "情节", "概括", "总结"
 )
 
-/** 角色长期记忆检索；记忆按 personaId 隔离。记忆固化（写入侧）在 M2 后续任务落地。 */
+/**
+ * 角色长期记忆检索。记忆按 personaId 隔离，再按两条边界收窄：
+ * [bookId] 非 null 时只回忆这本书（跨书对话检索关闭），[maskId] 保证面具间互不穿帮。
+ */
 internal class RecallMemoryTool(
     private val personaId: Long,
     private val embedQuery: suspend (String) -> FloatArray,
-    private val store: () -> BoxStore
+    private val store: () -> BoxStore,
+    private val bookId: Long? = null,
+    private val maskId: Long = 0L
 ) : AgentTool {
 
     override val displayName: String = "回忆过往交流"
@@ -1094,7 +1105,7 @@ internal class RecallMemoryTool(
         } catch (error: Exception) {
             return "记忆检索不可用：${error.message ?: "embedding 失败"}"
         }
-        val hits = VectorQueries.searchMemories(store(), personaId, vector, TOP_K)
+        val hits = VectorQueries.searchMemories(store(), personaId, vector, TOP_K, bookId, maskId)
         if (hits.isEmpty()) return "还没有与此相关的长期记忆。"
         return "相关记忆（按相关度排序）：\n" +
             hits.joinToString("\n") { "- ${it.get().summary}" }

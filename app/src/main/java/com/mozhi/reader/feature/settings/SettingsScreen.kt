@@ -27,6 +27,7 @@ import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.BorderColor
 import androidx.compose.material.icons.outlined.Brush
+import androidx.compose.material.icons.outlined.LibraryMusic
 import androidx.compose.material.icons.outlined.BugReport
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ChevronRight
@@ -101,6 +102,7 @@ fun SettingsScreen(
     onOpenAiServices: () -> Unit = {},
     onOpenWebSearch: () -> Unit = {},
     onOpenTtsSettings: () -> Unit = {},
+    onOpenVoiceLibrary: () -> Unit = {},
     onOpenImageGenSettings: () -> Unit = {},
     onOpenFontLibrary: () -> Unit = {},
     onOpenImageLibrary: () -> Unit = {},
@@ -220,6 +222,13 @@ fun SettingsScreen(
                         title = "朗读引擎与音色",
                         subtitle = "系统 TTS（如 Multi TTS）或云端 AI 语音，语速音调在此配置",
                         onClick = onOpenTtsSettings
+                    )
+                    SettingsRowDivider()
+                    SettingsRow(
+                        icon = Icons.Outlined.LibraryMusic,
+                        title = "音色库",
+                        subtitle = "收藏常用 AI 音色，听书与有声书角色都从这里选",
+                        onClick = onOpenVoiceLibrary
                     )
                     SettingsRowDivider()
                     SettingsRow(

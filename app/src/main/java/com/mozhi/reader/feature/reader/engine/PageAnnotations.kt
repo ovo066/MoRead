@@ -1,6 +1,6 @@
 package com.mozhi.reader.feature.reader.engine
 
-/** 「评」marker 与末字符右边界的间距系数（× markerRadius）；渲染与点击热区必须共用。0.35 会压到句号。 */
+/** 「评」marker 与锚点右边界的间距系数（× markerRadius）；渲染与点击热区必须共用。 */
 const val ANNOTATION_MARKER_GAP_RATIO = 0.72f
 
 /** Render-layer copy of a Room annotation, kept free of database dependencies for geometry tests. */
@@ -61,7 +61,7 @@ data class PageAnnotationGeometry(
 
 /**
  * Maps chapter UTF-16 ranges to laid-out cluster rectangles and one comment marker per line.
- * Marker 紧跟该行批注末字符的右边界（常见小说 App 手感），超出右界时 clamp 回页内。
+ * 批注落在段尾时 marker 紧跟末字符；落在段中时移到该排文字的换行边缘，避免遮挡后文。
  */
 fun TextPage.annotationGeometry(
     annotations: List<ReaderAnnotationMark>,
@@ -72,11 +72,12 @@ fun TextPage.annotationGeometry(
     if (annotations.isEmpty()) return PageAnnotationGeometry(emptyList(), emptyList())
     val highlights = mutableListOf<AnnotationHighlightRect>()
     val markerIdsByLine = linkedMapOf<Int, MutableList<Long>>()
-    val markerEndXByLine = mutableMapOf<Int, Float>()
+    val markerAnchorXByLine = mutableMapOf<Int, Float>()
     annotations.forEach { annotation ->
         if (annotation.endCharOffset <= annotation.startCharOffset) return@forEach
         var lastVisibleLine = -1
         var lastVisibleRight = 0f
+        var endsAtParagraphEnd = false
         lines.forEachIndexed { lineIndex, line ->
             if (line.charLength <= 0 || line.columns.isEmpty()) return@forEachIndexed
             val lineStart = line.chapterPosition
@@ -96,19 +97,22 @@ fun TextPage.annotationGeometry(
                 )
                 lastVisibleLine = lineIndex
                 lastVisibleRight = right
+                endsAtParagraphEnd = line.isParagraphEnd && annotation.endCharOffset == lineEnd
             }
         }
         if (annotation.hasComment && lastVisibleLine >= 0) {
             markerIdsByLine.getOrPut(lastVisibleLine) { mutableListOf() }.add(annotation.id)
-            // 同行多批注共用一个带数字的 marker，取最靠右的末字符边界
-            markerEndXByLine[lastVisibleLine] =
-                maxOf(markerEndXByLine[lastVisibleLine] ?: 0f, lastVisibleRight)
+            val line = lines[lastVisibleLine]
+            val anchorX = if (endsAtParagraphEnd) lastVisibleRight else line.columns.last().end
+            // 同行多批注共用一个带数字的 marker；只要有一条落在段中，就统一靠行尾。
+            markerAnchorXByLine[lastVisibleLine] =
+                maxOf(markerAnchorXByLine[lastVisibleLine] ?: 0f, anchorX)
         }
     }
     val markers = markerIdsByLine.mapNotNull { (lineIndex, ids) ->
         val line = lines.getOrNull(lineIndex) ?: return@mapNotNull null
-        val endX = markerEndXByLine[lineIndex] ?: line.columns.last().end
-        val centerX = (endX + markerGap + markerRadius)
+        val anchorX = markerAnchorXByLine[lineIndex] ?: line.columns.last().end
+        val centerX = (anchorX + markerGap + markerRadius)
             .coerceAtMost(maxRight - markerRadius)
         AnnotationMarker(ids.distinct(), centerX, (line.lineTop + line.lineBottom) / 2f)
     }

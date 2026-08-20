@@ -10,11 +10,14 @@ import com.mozhi.reader.core.database.DatabaseMigrations
 import com.mozhi.reader.core.database.PersonaSeeds
 import com.mozhi.reader.core.database.dao.AiProviderDao
 import com.mozhi.reader.core.database.dao.AnnotationDao
+import com.mozhi.reader.core.database.dao.AudiobookDao
 import com.mozhi.reader.core.database.dao.BookDao
 import com.mozhi.reader.core.database.dao.ChatDao
 import com.mozhi.reader.core.database.dao.IllustrationDao
 import com.mozhi.reader.core.database.dao.NoteDao
 import com.mozhi.reader.core.database.dao.PersonaDao
+import com.mozhi.reader.core.database.dao.ShelfOrganizationDao
+import com.mozhi.reader.core.database.dao.TtsVoiceDao
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -51,7 +54,9 @@ object StorageModule {
                 DatabaseMigrations.Migration13To14,
                 DatabaseMigrations.Migration14To15,
                 DatabaseMigrations.Migration15To16,
-                DatabaseMigrations.Migration16To17
+                DatabaseMigrations.Migration16To17,
+                DatabaseMigrations.Migration17To18,
+                DatabaseMigrations.Migration18To19
             )
             .addCallback(PersonaSeeds.onCreate)
             .build()
@@ -76,6 +81,16 @@ object StorageModule {
 
     @Provides
     fun provideIllustrationDao(database: MoReadDatabase): IllustrationDao = database.illustrationDao()
+
+    @Provides
+    fun provideShelfOrganizationDao(database: MoReadDatabase): ShelfOrganizationDao =
+        database.shelfOrganizationDao()
+
+    @Provides
+    fun provideTtsVoiceDao(database: MoReadDatabase): TtsVoiceDao = database.ttsVoiceDao()
+
+    @Provides
+    fun provideAudiobookDao(database: MoReadDatabase): AudiobookDao = database.audiobookDao()
 
     @Provides
     @Singleton

@@ -729,6 +729,76 @@ class MigrationTest {
         }
     }
 
+    @Test
+    fun migrate17To18BackfillsNormalizedTagsAndGroupColumn() {
+        helper.createDatabase(DB_NAME, 17).use { db ->
+            db.execSQL(
+                """
+                INSERT INTO books (
+                    id, title, author, coverPath, epubPath, sourceType, importedAt,
+                    totalChapters, lastReadLocator, lastReadChapterIndex, lastReadCharOffset,
+                    lastReadAt, textVersion, tags, metadataEdited, manualReadState, pinnedAt
+                ) VALUES (
+                    1, '旧书', '作者', NULL, '/data/books/old.epub', 'EPUB', 1000,
+                    1, NULL, 0, 0, 0, 1, '玄幻, 修仙,,玄幻 ', 0, NULL, 0
+                )
+                """.trimIndent()
+            )
+        }
+
+        val db = helper.runMigrationsAndValidate(
+            DB_NAME,
+            18,
+            true,
+            DatabaseMigrations.Migration17To18
+        )
+
+        db.query("SELECT groupId, tags FROM books WHERE id = 1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue(cursor.isNull(0))
+            assertEquals("玄幻, 修仙,,玄幻 ", cursor.getString(1))
+        }
+        db.query("SELECT name, colorTag FROM book_tags ORDER BY name").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("修仙", cursor.getString(0))
+            assertTrue(cursor.getString(1).isNotBlank())
+            assertTrue(cursor.moveToNext())
+            assertEquals("玄幻", cursor.getString(0))
+        }
+        db.query("SELECT COUNT(*) FROM book_tag_refs WHERE bookId = 1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(2, cursor.getInt(0))
+        }
+    }
+
+    @Test
+    fun migrate18To19CreatesVoiceAndAudiobookTables() {
+        helper.createDatabase(DB_NAME, 18).close()
+
+        val db = helper.runMigrationsAndValidate(
+            DB_NAME,
+            19,
+            true,
+            DatabaseMigrations.Migration18To19
+        )
+
+        val expectedTables = listOf(
+            "tts_voices",
+            "audiobook_roles",
+            "audiobook_segments",
+            "audiobook_chapters"
+        )
+        expectedTables.forEach { table ->
+            db.query(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?",
+                arrayOf(table)
+            ).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("missing table $table", 1, cursor.getInt(0))
+            }
+        }
+    }
+
     private companion object {
         const val DB_NAME = "migration-test.db"
     }

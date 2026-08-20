@@ -27,6 +27,12 @@ data class SpeechCacheStats(
         get() = if (budgetBytes <= 0) 0f else (totalBytes.toFloat() / budgetBytes).coerceIn(0f, 1f)
 }
 
+data class SpeechCacheBookStats(
+    val bookId: Long,
+    val fileCount: Int,
+    val totalBytes: Long
+)
+
 /**
  * AI 合成语音的本地缓存。
  *
@@ -76,6 +82,18 @@ class SpeechCacheStore @Inject constructor(
         directory().deleteRecursively()
         directory()
         Unit
+    }
+
+    suspend fun statsByBook(): List<SpeechCacheBookStats> = withContext(Dispatchers.IO) {
+        summarizeSpeechCache(directory())
+    }
+
+    suspend fun clearBook(bookId: Long): Long = withContext(Dispatchers.IO) {
+        val target = File(directory(), bookId.toString())
+        if (!target.isDirectory) return@withContext 0L
+        val bytes = target.walkTopDown().filter(File::isFile).sumOf(File::length)
+        target.deleteRecursively()
+        bytes
     }
 
     fun audioFiles(): List<File> = directory()
@@ -134,3 +152,17 @@ class SpeechCacheStore @Inject constructor(
         private val LAST_SYNC = longPreferencesKey("speech_cache_last_sync_at")
     }
 }
+
+internal fun summarizeSpeechCache(root: File): List<SpeechCacheBookStats> = root.listFiles()
+    .orEmpty()
+    .asSequence()
+    .filter(File::isDirectory)
+    .mapNotNull { bookDirectory ->
+        val bookId = bookDirectory.name.toLongOrNull() ?: return@mapNotNull null
+        val files = bookDirectory.walkTopDown()
+            .filter { it.isFile && it.extension.lowercase() in SpeechCacheStore.AUDIO_EXTENSIONS }
+            .toList()
+        SpeechCacheBookStats(bookId, files.size, files.sumOf(File::length))
+    }
+    .sortedByDescending(SpeechCacheBookStats::totalBytes)
+    .toList()

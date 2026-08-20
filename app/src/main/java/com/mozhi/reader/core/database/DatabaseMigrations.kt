@@ -496,4 +496,169 @@ object DatabaseMigrations {
             db.execSQL("ALTER TABLE `messages` ADD COLUMN `maskId` INTEGER NOT NULL DEFAULT 0")
         }
     }
+
+    /** 书架分组与规范化标签；旧 books.tags 保留，供旧版回退。 */
+    val Migration17To18 = object : Migration(17, 18) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `shelf_groups` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `name` TEXT NOT NULL,
+                    `parentId` INTEGER,
+                    `sortOrder` INTEGER NOT NULL,
+                    `createdAt` INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_shelf_groups_parentId_name` " +
+                    "ON `shelf_groups` (`parentId`, `name`)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_shelf_groups_parentId` " +
+                    "ON `shelf_groups` (`parentId`)"
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `book_tags` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `name` TEXT NOT NULL,
+                    `colorTag` TEXT NOT NULL,
+                    `groupName` TEXT NOT NULL,
+                    `sortOrder` INTEGER NOT NULL,
+                    `createdAt` INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_book_tags_name` ON `book_tags` (`name`)"
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `book_tag_refs` (
+                    `bookId` INTEGER NOT NULL,
+                    `tagId` INTEGER NOT NULL,
+                    PRIMARY KEY(`bookId`, `tagId`),
+                    FOREIGN KEY(`bookId`) REFERENCES `books`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE,
+                    FOREIGN KEY(`tagId`) REFERENCES `book_tags`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_book_tag_refs_tagId` ON `book_tag_refs` (`tagId`)"
+            )
+            db.execSQL("ALTER TABLE `books` ADD COLUMN `groupId` INTEGER DEFAULT NULL")
+
+            val createdAt = System.currentTimeMillis()
+            db.query("SELECT `id`, `tags` FROM `books` WHERE `tags` <> ''").use { cursor ->
+                while (cursor.moveToNext()) {
+                    val bookId = cursor.getLong(0)
+                    ShelfTagBackfill.parse(cursor.getString(1)).forEach { name ->
+                        db.execSQL(
+                            "INSERT OR IGNORE INTO `book_tags` " +
+                                "(`name`, `colorTag`, `groupName`, `sortOrder`, `createdAt`) " +
+                                "VALUES (?, ?, '', 0, ?)",
+                            arrayOf<Any>(name, ShelfTagBackfill.colorFor(name), createdAt)
+                        )
+                        db.query(
+                            "SELECT `id` FROM `book_tags` WHERE `name` = ? LIMIT 1",
+                            arrayOf(name)
+                        ).use { tagCursor ->
+                            if (tagCursor.moveToFirst()) {
+                                db.execSQL(
+                                    "INSERT OR IGNORE INTO `book_tag_refs` (`bookId`, `tagId`) VALUES (?, ?)",
+                                    arrayOf(bookId, tagCursor.getLong(0))
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /** 听书音色库与 AI 有声书三表一次建齐，S3 不再新增迁移。 */
+    val Migration18To19 = object : Migration(18, 19) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `tts_voices` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `voiceId` TEXT NOT NULL,
+                    `displayName` TEXT NOT NULL,
+                    `tags` TEXT NOT NULL,
+                    `gender` TEXT NOT NULL,
+                    `providerHint` TEXT NOT NULL,
+                    `extraJson` TEXT NOT NULL,
+                    `pinned` INTEGER NOT NULL,
+                    `sortOrder` INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_tts_voices_providerHint_voiceId` " +
+                    "ON `tts_voices` (`providerHint`, `voiceId`)"
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `audiobook_roles` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `bookId` INTEGER NOT NULL,
+                    `name` TEXT NOT NULL,
+                    `aliases` TEXT NOT NULL,
+                    `kind` TEXT NOT NULL,
+                    `gender` TEXT NOT NULL,
+                    `engine` TEXT NOT NULL,
+                    `voiceId` TEXT NOT NULL,
+                    `extraJson` TEXT NOT NULL,
+                    `color` TEXT NOT NULL,
+                    `sortOrder` INTEGER NOT NULL,
+                    `source` TEXT NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_audiobook_roles_bookId` " +
+                    "ON `audiobook_roles` (`bookId`)"
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `audiobook_segments` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `bookId` INTEGER NOT NULL,
+                    `chapterIndex` INTEGER NOT NULL,
+                    `startCharOffset` INTEGER NOT NULL,
+                    `endCharOffset` INTEGER NOT NULL,
+                    `roleId` INTEGER,
+                    `emotion` TEXT,
+                    `instruction` TEXT,
+                    `audioPath` TEXT,
+                    `audioMillis` INTEGER NOT NULL,
+                    `revision` INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_audiobook_segments_bookId_chapterIndex_startCharOffset` " +
+                    "ON `audiobook_segments` (`bookId`, `chapterIndex`, `startCharOffset`)"
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `audiobook_chapters` (
+                    `bookId` INTEGER NOT NULL,
+                    `chapterIndex` INTEGER NOT NULL,
+                    `state` TEXT NOT NULL,
+                    `scriptedAt` INTEGER NOT NULL,
+                    `confirmedAt` INTEGER NOT NULL,
+                    `synthesizedAt` INTEGER NOT NULL,
+                    `segmentCount` INTEGER NOT NULL,
+                    `readySegmentCount` INTEGER NOT NULL,
+                    `totalMillis` INTEGER NOT NULL,
+                    PRIMARY KEY(`bookId`, `chapterIndex`)
+                )
+                """.trimIndent()
+            )
+        }
+    }
 }

@@ -229,7 +229,9 @@ fun MoReadMenuItem(
     destructive: Boolean = false,
     indent: Dp = 0.dp,
     tint: Color? = null,
-    accentColor: Color? = null
+    accentColor: Color? = null,
+    /** 右侧的当前取值摘要（如「未分组」「3 个」）；与 [selected] 勾互斥，勾优先。 */
+    trailingText: String? = null
 ) {
     val inherited = LocalContentColor.current
     val resolved = when {
@@ -266,6 +268,17 @@ fun MoReadMenuItem(
                     contentDescription = null,
                     tint = resolved,
                     modifier = Modifier.size(16.dp)
+                )
+            }
+        } else if (!trailingText.isNullOrBlank()) {
+            {
+                Text(
+                    text = trailingText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = resolved.copy(alpha = 0.62f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 90.dp)
                 )
             }
         } else {

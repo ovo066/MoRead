@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.PushPin
@@ -76,6 +77,7 @@ internal fun BookLongPressOverlay(
     onEditDetails: () -> Unit,
     onChangeCover: () -> Unit,
     onTogglePinned: () -> Unit,
+    onStartSelection: () -> Unit,
     onDelete: () -> Unit
 ) {
     val density = LocalDensity.current
@@ -220,6 +222,11 @@ internal fun BookLongPressOverlay(
                         onDismiss()
                         onTogglePinned()
                     }
+                )
+                BookActionRow(
+                    text = "多选…",
+                    icon = Icons.Outlined.Checklist,
+                    onClick = onStartSelection
                 )
                 MoReadMenuDivider()
                 BookActionRow(

@@ -31,14 +31,14 @@ class PageAnnotationsTest {
         assertEquals(3, geometry.highlights.size)
         assertEquals(1, geometry.markers.size)
         assertEquals(listOf(1L, 2L), geometry.markers.single().annotationIds)
-        // 两条批注都终于第二行第 2 个字（offset 16 → 右边界 x=20），marker 紧跟其后
-        assertEquals(20f + 4f + 8f, geometry.markers.single().centerX)
+        // 两条批注都在段中结束，marker 放到该排文字的换行边缘（x=40）之后。
+        assertEquals(40f + 4f + 8f, geometry.markers.single().centerX)
         assertEquals((24f + 46f) / 2f, geometry.markers.single().centerY)
         assertTrue(geometry.highlights.all { it.right > it.left })
     }
 
     @Test
-    fun markerFollowsLastCharacterOfEachAnnotationLine() {
+    fun markerMovesToLineEndWhenAnnotationStopsMidParagraph() {
         val first = line("天地玄黄", chapterPosition = 0, top = 0f)
         val page = TextPage(
             index = 0,
@@ -57,7 +57,33 @@ class PageAnnotationsTest {
             maxRight = 200f
         )
 
-        assertEquals(20f + 4f + 8f, geometry.markers.single().centerX)
+        assertEquals(40f + 4f + 8f, geometry.markers.single().centerX)
+    }
+
+    @Test
+    fun markerFollowsTextWhenAnnotationEndsWithParagraph() {
+        val first = line(
+            text = "天地玄黄",
+            chapterPosition = 0,
+            top = 0f,
+            isParagraphEnd = true
+        )
+        val page = TextPage(
+            index = 0,
+            lines = listOf(first),
+            chapterPosition = 0,
+            charLength = 4,
+            height = 30f
+        )
+
+        val geometry = page.annotationGeometry(
+            listOf(ReaderAnnotationMark(1, 0, 0, 4, hasComment = true)),
+            markerRadius = 8f,
+            markerGap = 4f,
+            maxRight = 200f
+        )
+
+        assertEquals(40f + 4f + 8f, geometry.markers.single().centerX)
     }
 
     @Test
@@ -108,7 +134,12 @@ class PageAnnotationsTest {
         assertEquals(20f + 4f + 8f, markers.single().centerX)
     }
 
-    private fun line(text: String, chapterPosition: Int, top: Float): TextLine {
+    private fun line(
+        text: String,
+        chapterPosition: Int,
+        top: Float,
+        isParagraphEnd: Boolean = false
+    ): TextLine {
         val columns = text.mapIndexed { index, char ->
             TextColumn(index * 10f, (index + 1) * 10f, char.toString())
         }
@@ -120,7 +151,7 @@ class PageAnnotationsTest {
             lineBottom = top + 22f,
             startX = 0f,
             isTitle = false,
-            isParagraphEnd = false,
+            isParagraphEnd = isParagraphEnd,
             chapterPosition = chapterPosition,
             charLength = text.length
         )

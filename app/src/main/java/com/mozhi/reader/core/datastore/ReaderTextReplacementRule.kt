@@ -12,7 +12,8 @@ data class ReaderTextReplacementRule(
     val pattern: String,
     val replacement: String = "",
     val enabled: Boolean = true,
-    val ignoreCase: Boolean = false
+    val ignoreCase: Boolean = false,
+    val forListenOnly: Boolean = false
 )
 
 object ReaderTextReplacementRuleCodec {
@@ -43,3 +44,38 @@ fun ReaderTextReplacementRule.validationError(): String? = when {
 }
 
 private const val MAX_TEXT_REPLACEMENT_PATTERN_LENGTH = 1_000
+
+data class ListenTextSlice(
+    val startCharOffset: Int,
+    val endCharOffset: Int,
+    val text: String
+)
+
+/** 仅改变送进 TTS 的文本；原文 UTF-16 坐标始终保持不变。 */
+fun purifyForListening(
+    body: String,
+    startCharOffset: Int,
+    endCharOffset: Int,
+    rules: List<ReaderTextReplacementRule>
+): ListenTextSlice {
+    val safeStart = startCharOffset.coerceIn(0, body.length)
+    val safeEnd = endCharOffset.coerceIn(safeStart, body.length)
+    val purified = rules
+        .asSequence()
+        .filter { it.enabled && it.forListenOnly }
+        .fold(body.substring(safeStart, safeEnd)) { text, rule ->
+            runCatching { rule.compileRegex().replace(text, rule.replacement) }.getOrDefault(text)
+        }
+        .trim()
+    return ListenTextSlice(safeStart, safeEnd, purified)
+}
+
+/** 有声书剧本版本：正文或任一听书专用净化规则变化都会失效。 */
+fun audiobookRevision(body: String, rules: List<ReaderTextReplacementRule>): Int {
+    val ruleFingerprint = rules.asSequence()
+        .filter { it.enabled && it.forListenOnly }
+        .joinToString("\u0000") { rule ->
+            listOf(rule.id, rule.pattern, rule.replacement, rule.ignoreCase).joinToString("\u0001")
+        }
+    return 31 * body.hashCode() + ruleFingerprint.hashCode()
+}

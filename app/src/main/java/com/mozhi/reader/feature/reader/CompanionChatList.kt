@@ -88,6 +88,7 @@ internal fun buildCompanionChatEntries(
 
 /** 正向列表的贴底判定容差；「回到底部」浮钮与建议条都以它为界。 */
 internal const val CHAT_BOTTOM_SLACK_PX = 32
+private const val CHAT_ANIMATED_TAIL_ITEMS = 2
 
 /** 最后一项完全露出（含容差）才算在底部；空列表视为在底部。 */
 internal fun isChatListAtBottom(
@@ -125,6 +126,10 @@ internal suspend fun LazyListState.snapToLatest() {
 internal suspend fun LazyListState.animateToLatest() {
     val lastIndex = layoutInfo.totalItemsCount - 1
     if (lastIndex < 0) return
+    val lastVisibleIndex = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+    if (lastVisibleIndex < lastIndex - CHAT_ANIMATED_TAIL_ITEMS) {
+        scrollToItem((lastIndex - CHAT_ANIMATED_TAIL_ITEMS).coerceAtLeast(0))
+    }
     animateScrollToItem(lastIndex)
     remainingToBottom()?.let { animateScrollBy(it) }
 }

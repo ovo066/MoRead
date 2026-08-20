@@ -18,6 +18,7 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.mozhi.reader.MainActivity
 import com.mozhi.reader.core.importer.BookImportGateway
+import com.mozhi.reader.core.library.ShelfOrganizationRepository
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
@@ -29,6 +30,7 @@ import kotlinx.coroutines.CancellationException
 @InstallIn(SingletonComponent::class)
 interface BatchImportWorkerEntryPoint {
     fun bookImportGateway(): BookImportGateway
+    fun shelfOrganizationRepository(): ShelfOrganizationRepository
 }
 
 /**
@@ -47,9 +49,16 @@ class BatchImportWorker(
             BatchImportWorkerEntryPoint::class.java
         ).bookImportGateway()
     }
+    private val shelfRepository: ShelfOrganizationRepository by lazy {
+        EntryPointAccessors.fromApplication(
+            applicationContext,
+            BatchImportWorkerEntryPoint::class.java
+        ).shelfOrganizationRepository()
+    }
 
     override suspend fun doWork(): Result {
         val uris = inputData.getStringArray(KEY_URIS).orEmpty()
+        val groupPaths = inputData.getStringArray(KEY_GROUP_PATHS).orEmpty()
         // 局域网收件箱里的临时文件导完就删；SAF 选来的用户文件当然不能碰。
         val deleteAfterImport = inputData.getBoolean(KEY_DELETE_SOURCE, false)
         if (uris.isEmpty()) return Result.success(summaryData(0, 0, ""))
@@ -64,7 +73,12 @@ class BatchImportWorker(
             setProgress(progressData(index, uris.size, label))
             setForegroundAsync(foregroundInfo(index, uris.size, label))
             try {
-                gateway.importDirectly(uri)
+                val bookId = gateway.importDirectly(uri)
+                groupPaths.getOrNull(index)?.takeIf(String::isNotBlank)?.let { path ->
+                    shelfRepository.createOrGetGroupPath(path)?.let { groupId ->
+                        shelfRepository.setBookGroup(listOf(bookId), groupId)
+                    }
+                }
                 succeeded++
                 if (deleteAfterImport) {
                     runCatching { uri.path?.let { File(it).delete() } }
@@ -151,6 +165,7 @@ class BatchImportWorker(
     companion object {
         const val KEY_URIS = "uris"
         const val KEY_DELETE_SOURCE = "delete_source"
+        const val KEY_GROUP_PATHS = "group_paths"
         const val KEY_SUCCEEDED = "succeeded"
         const val KEY_FAILED = "failed"
         const val KEY_FAILURE_DETAIL = "failure_detail"
@@ -164,11 +179,16 @@ class BatchImportWorker(
         private const val MAX_REPORTED_FAILURES = 8
         private const val MAX_DETAIL_CHARS = 1_200
 
-        fun request(uris: List<Uri>, deleteSourceAfterImport: Boolean = false) =
+        fun request(
+            uris: List<Uri>,
+            deleteSourceAfterImport: Boolean = false,
+            groupPathsByUri: Map<Uri, String> = emptyMap()
+        ) =
             OneTimeWorkRequestBuilder<BatchImportWorker>()
                 .setInputData(
                     workDataOf(
                         KEY_URIS to uris.map(Uri::toString).toTypedArray(),
+                        KEY_GROUP_PATHS to uris.map { groupPathsByUri[it].orEmpty() }.toTypedArray(),
                         KEY_DELETE_SOURCE to deleteSourceAfterImport
                     )
                 )

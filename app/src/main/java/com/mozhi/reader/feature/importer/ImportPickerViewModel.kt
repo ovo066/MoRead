@@ -22,6 +22,7 @@ data class ImportPickerState(
     /** 文件名（去扩展名）已经出现在书架里的条目，界面上标灰但仍可勾选。 */
     val alreadyImported: Set<Uri> = emptySet(),
     val selected: Set<Uri> = emptySet(),
+    val createGroupsFromFolders: Boolean = true,
     val error: String? = null
 ) {
     val groups: List<Pair<String, List<ScannedBookFile>>>
@@ -102,12 +103,23 @@ class ImportPickerViewModel @Inject constructor(
         )
     }
 
+    fun setCreateGroupsFromFolders(enabled: Boolean) {
+        _uiState.value = _uiState.value.copy(createGroupsFromFolders = enabled)
+    }
+
     /** 勾选的书排进批量导入；SAF 的原文件当然不删。 */
     fun importSelected(): Int {
         val selected = _uiState.value.files
             .filter { it.uri in _uiState.value.selected }
             .map(ScannedBookFile::uri)
-        batchImportScheduler.enqueue(selected)
+        val groupPaths = if (_uiState.value.createGroupsFromFolders) {
+            _uiState.value.files
+                .filter { it.uri in _uiState.value.selected && it.relativeDirectory.isNotBlank() }
+                .associate { it.uri to it.relativeDirectory }
+        } else {
+            emptyMap()
+        }
+        batchImportScheduler.enqueue(selected, groupPathsByUri = groupPaths)
         return selected.size
     }
 

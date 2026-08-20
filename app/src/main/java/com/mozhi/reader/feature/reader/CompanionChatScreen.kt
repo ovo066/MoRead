@@ -78,6 +78,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -180,6 +181,20 @@ fun CompanionChatScreen(
     }
 
     val messageListState = rememberLazyListState()
+    var renderedStreamingText by remember(state.conversationId) {
+        mutableStateOf(state.streamingText)
+    }
+    val latestStreamingText by rememberUpdatedState(state.streamingText)
+    LaunchedEffect(state.streamingText) {
+        if (!messageListState.isScrollInProgress) {
+            renderedStreamingText = state.streamingText
+        }
+    }
+    LaunchedEffect(messageListState) {
+        snapshotFlow { messageListState.isScrollInProgress }.collect { scrolling ->
+            if (!scrolling) renderedStreamingText = latestStreamingText
+        }
+    }
     val timeline = remember(state.messages) { buildCompanionTimeline(state.messages) }
     val lastAssistantMessageId = remember(timeline) {
         timeline.filterIsInstance<CompanionTimelineItem.Bubble>()
@@ -192,11 +207,23 @@ fun CompanionChatScreen(
             .mapTo(hashSetOf()) { it.callId }
         state.executionSteps.filterNot { it.callId in historicalCallIds }
     }
-    val entries = remember(state, timeline, liveExecutionSteps, sceneQuote) {
+    val entries = remember(
+        timeline,
+        liveExecutionSteps,
+        renderedStreamingText,
+        state.isStreaming,
+        state.toolStatus,
+        state.error,
+        state.embeddingProgress,
+        state.conversationId,
+        persona?.name,
+        persona?.greeting,
+        sceneQuote
+    ) {
         buildCompanionChatEntries(
             timeline = timeline,
             liveSteps = liveExecutionSteps,
-            streamingText = state.streamingText,
+            streamingText = renderedStreamingText,
             isStreaming = state.isStreaming,
             toolStatus = state.toolStatus,
             thinkingLabel = "${persona?.name.orEmpty()}正在思考…",
@@ -208,6 +235,21 @@ fun CompanionChatScreen(
     }
     val isAtBottom by remember(messageListState) {
         derivedStateOf { messageListState.isAtLatest() }
+    }
+
+    var wasStreaming by remember(state.conversationId) { mutableStateOf(state.isStreaming) }
+    var keepBottomOnCompletion by remember(state.conversationId) { mutableStateOf(false) }
+    LaunchedEffect(state.isStreaming, isAtBottom) {
+        if (state.isStreaming) {
+            keepBottomOnCompletion = isAtBottom
+        } else if (wasStreaming) {
+            wasStreaming = false
+            if (keepBottomOnCompletion) {
+                withFrameNanos { }
+                messageListState.snapToLatest()
+            }
+        }
+        wasStreaming = state.isStreaming
     }
 
     // 打开/切换会话，以及该会话的消息首次落地时，直接定位到最新消息。
@@ -473,6 +515,7 @@ fun CompanionChatScreen(
                 }
 
                 val followScope = rememberCoroutineScope()
+                var isReturningToBottom by remember { mutableStateOf(false) }
                 androidx.compose.animation.AnimatedVisibility(
                     visible = !isAtBottom && entries.isNotEmpty(),
                     enter = fadeIn(),
@@ -485,8 +528,15 @@ fun CompanionChatScreen(
                         color = palette.glassStrong,
                         shape = RoundedCornerShape(18.dp),
                         border = BorderStroke(1.dp, palette.glassBorder),
-                        modifier = Modifier.clickable {
-                            followScope.launch { messageListState.animateToLatest() }
+                        modifier = Modifier.clickable(enabled = !isReturningToBottom) {
+                            followScope.launch {
+                                isReturningToBottom = true
+                                try {
+                                    messageListState.animateToLatest()
+                                } finally {
+                                    isReturningToBottom = false
+                                }
+                            }
                         }
                     ) {
                         Row(

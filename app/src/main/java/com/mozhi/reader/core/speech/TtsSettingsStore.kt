@@ -2,6 +2,7 @@ package com.mozhi.reader.core.speech
 
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
@@ -13,6 +14,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 enum class TtsEngineMode { SYSTEM, AI }
+enum class TtsSynthesisGranularity { SENTENCE, PARAGRAPH, CHAPTER }
 
 /** 独立 TTS API 的服务商预设：MiniMax 国内/海外域名不同，OpenAI 兼容走 /audio/speech。 */
 enum class TtsApiProvider { MINIMAX_CN, MINIMAX_INTL, OPENAI_COMPAT }
@@ -46,7 +48,16 @@ data class TtsSettings(
     val aiBaseUrl: String = "",
     /** MiniMax GroupId，可选；OpenAI 兼容服务忽略。 */
     val aiGroupId: String = "",
-    val aiModel: String = ""
+    val aiModel: String = "",
+    val allowAudioMixing: Boolean = false,
+    val trimSilence: Boolean = true,
+    val synthesisGranularity: TtsSynthesisGranularity = TtsSynthesisGranularity.PARAGRAPH,
+    val maxSynthesisChars: Int = 400,
+    val synthesisConcurrency: Int = 2,
+    val retryCount: Int = 2,
+    val prefetchCount: Int = 3,
+    val systemVolumeCompensation: Float = 1f,
+    val audiobookEnginePolicy: String = "NARRATOR_SYSTEM_CHARACTERS_AI"
 ) {
     /** Key 单独存 EncryptedSharedPreferences，可用性另行校验。 */
     val aiApiConfigured: Boolean get() = aiBaseUrl.isNotBlank() && aiModel.isNotBlank()
@@ -81,6 +92,16 @@ class TtsSettingsStore @Inject constructor(
             prefs[KEY_AI_BASE_URL] = next.aiBaseUrl
             prefs[KEY_AI_GROUP_ID] = next.aiGroupId
             prefs[KEY_AI_MODEL] = next.aiModel
+            prefs[KEY_ALLOW_AUDIO_MIXING] = next.allowAudioMixing
+            prefs[KEY_TRIM_SILENCE] = next.trimSilence
+            prefs[KEY_SYNTHESIS_GRANULARITY] = next.synthesisGranularity.name
+            prefs[KEY_MAX_SYNTHESIS_CHARS] = next.maxSynthesisChars.coerceIn(80, 2_000)
+            prefs[KEY_SYNTHESIS_CONCURRENCY] = next.synthesisConcurrency.coerceIn(1, 4)
+            prefs[KEY_RETRY_COUNT] = next.retryCount.coerceIn(0, 5)
+            prefs[KEY_PREFETCH_COUNT] = next.prefetchCount.coerceIn(0, 10)
+            prefs[KEY_SYSTEM_VOLUME_COMPENSATION] =
+                next.systemVolumeCompensation.coerceIn(0.25f, 2f)
+            prefs[KEY_AUDIOBOOK_ENGINE_POLICY] = next.audiobookEnginePolicy
         }
     }
 
@@ -101,7 +122,20 @@ class TtsSettingsStore @Inject constructor(
             ?: TtsApiProvider.MINIMAX_CN,
         aiBaseUrl = prefs[KEY_AI_BASE_URL].orEmpty(),
         aiGroupId = prefs[KEY_AI_GROUP_ID].orEmpty(),
-        aiModel = prefs[KEY_AI_MODEL].orEmpty()
+        aiModel = prefs[KEY_AI_MODEL].orEmpty(),
+        allowAudioMixing = prefs[KEY_ALLOW_AUDIO_MIXING] ?: false,
+        trimSilence = prefs[KEY_TRIM_SILENCE] ?: true,
+        synthesisGranularity = prefs[KEY_SYNTHESIS_GRANULARITY]
+            ?.let { raw -> TtsSynthesisGranularity.entries.firstOrNull { it.name == raw } }
+            ?: TtsSynthesisGranularity.PARAGRAPH,
+        maxSynthesisChars = (prefs[KEY_MAX_SYNTHESIS_CHARS] ?: 400).coerceIn(80, 2_000),
+        synthesisConcurrency = (prefs[KEY_SYNTHESIS_CONCURRENCY] ?: 2).coerceIn(1, 4),
+        retryCount = (prefs[KEY_RETRY_COUNT] ?: 2).coerceIn(0, 5),
+        prefetchCount = (prefs[KEY_PREFETCH_COUNT] ?: 3).coerceIn(0, 10),
+        systemVolumeCompensation =
+            (prefs[KEY_SYSTEM_VOLUME_COMPENSATION] ?: 1f).coerceIn(0.25f, 2f),
+        audiobookEnginePolicy = prefs[KEY_AUDIOBOOK_ENGINE_POLICY]
+            ?: "NARRATOR_SYSTEM_CHARACTERS_AI"
     )
 
     companion object {
@@ -121,5 +155,15 @@ class TtsSettingsStore @Inject constructor(
         private val KEY_AI_BASE_URL = stringPreferencesKey("tts_ai_base_url")
         private val KEY_AI_GROUP_ID = stringPreferencesKey("tts_ai_group_id")
         private val KEY_AI_MODEL = stringPreferencesKey("tts_ai_model")
+        private val KEY_ALLOW_AUDIO_MIXING = booleanPreferencesKey("tts_allow_audio_mixing")
+        private val KEY_TRIM_SILENCE = booleanPreferencesKey("tts_trim_silence")
+        private val KEY_SYNTHESIS_GRANULARITY = stringPreferencesKey("tts_synthesis_granularity")
+        private val KEY_MAX_SYNTHESIS_CHARS = intPreferencesKey("tts_max_synthesis_chars")
+        private val KEY_SYNTHESIS_CONCURRENCY = intPreferencesKey("tts_synthesis_concurrency")
+        private val KEY_RETRY_COUNT = intPreferencesKey("tts_retry_count")
+        private val KEY_PREFETCH_COUNT = intPreferencesKey("tts_prefetch_count")
+        private val KEY_SYSTEM_VOLUME_COMPENSATION =
+            floatPreferencesKey("tts_system_volume_compensation")
+        private val KEY_AUDIOBOOK_ENGINE_POLICY = stringPreferencesKey("tts_audiobook_engine_policy")
     }
 }

@@ -151,6 +151,29 @@ fun ImportPickerScreen(
                                 .padding(horizontal = 20.dp, vertical = 12.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        viewModel.setCreateGroupsFromFolders(
+                                            !state.createGroupsFromFolders
+                                        )
+                                    },
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = state.createGroupsFromFolders,
+                                    onCheckedChange = viewModel::setCreateGroupsFromFolders
+                                )
+                                Column(Modifier.padding(start = 6.dp)) {
+                                    Text("按文件夹建立分组")
+                                    Text(
+                                        "最多保留两级目录，根目录文件保持未分组。",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
                             Text(
                                 "TXT 会自动套用识别度最高的分章规则；导入后可在阅读页的「重新分章」里调整。",
                                 style = MaterialTheme.typography.bodySmall,

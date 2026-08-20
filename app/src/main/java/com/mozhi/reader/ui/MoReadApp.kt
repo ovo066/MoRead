@@ -40,7 +40,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -60,12 +62,18 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.mozhi.reader.feature.bookdetail.BookDetailScreen
 import com.mozhi.reader.feature.bookshelf.BookshelfScreen
+import com.mozhi.reader.feature.bookshelf.manage.ShelfGroupScreen
+import com.mozhi.reader.feature.bookshelf.manage.TagManageScreen
 import com.mozhi.reader.feature.companion.CompanionScreen
 import com.mozhi.reader.feature.companion.PersonaEditorScreen
 import com.mozhi.reader.feature.companion.PersonaMemoryScreen
 import com.mozhi.reader.feature.importer.ImportPickerScreen
 import com.mozhi.reader.feature.importer.ImportPreviewScreen
 import com.mozhi.reader.feature.importer.LanTransferScreen
+import com.mozhi.reader.feature.listen.AudiobookProductionScreen
+import com.mozhi.reader.feature.listen.AudiobookRoleScreen
+import com.mozhi.reader.feature.listen.AudiobookScriptScreen
+import com.mozhi.reader.feature.listen.ListenPlayerScreen
 import com.mozhi.reader.feature.reader.CompanionChatScreen
 import com.mozhi.reader.feature.reader.ReaderLocateRequest
 import com.mozhi.reader.feature.reader.ReaderScreen
@@ -82,6 +90,7 @@ import com.mozhi.reader.feature.settings.SettingsScreen
 import com.mozhi.reader.feature.settings.SettingsViewModel
 import com.mozhi.reader.feature.settings.SpeechCacheScreen
 import com.mozhi.reader.feature.settings.TtsSettingsScreen
+import com.mozhi.reader.feature.settings.TtsVoiceLibraryScreen
 import com.mozhi.reader.feature.settings.UserMaskSettingsScreen
 import com.mozhi.reader.feature.settings.WebSearchSettingsScreen
 import com.mozhi.reader.feature.stats.StatsScreen
@@ -186,7 +195,9 @@ fun MoReadApp(
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
-    val showBottomBar = RootDestination.entries.any { it.route == currentRoute }
+    var bookshelfSelectionActive by remember { mutableStateOf(false) }
+    val showBottomBar = RootDestination.entries.any { it.route == currentRoute } &&
+        !(currentRoute == RootDestination.Bookshelf.route && bookshelfSelectionActive)
     val hazeState = rememberHazeState()
 
     LaunchedEffect(incomingBookUri) {
@@ -238,7 +249,10 @@ fun MoReadApp(
                         onOpenFolderPicker = { treeUri ->
                             navController.navigate("import-picker?treeUri=${Uri.encode(treeUri.toString())}")
                         },
-                        onOpenLanTransfer = { navController.navigate("import-lan") }
+                        onOpenLanTransfer = { navController.navigate("import-lan") },
+                        onOpenShelfGroups = { navController.navigate("shelf-groups") },
+                        onOpenShelfTags = { navController.navigate("shelf-tags") },
+                        onSelectionModeChanged = { bookshelfSelectionActive = it }
                     )
                 }
                 composable(RootDestination.Stats.route) {
@@ -260,6 +274,7 @@ fun MoReadApp(
                         onOpenAiServices = { navController.navigate("ai-services") },
                         onOpenWebSearch = { navController.navigate("web-search-settings") },
                         onOpenTtsSettings = { navController.navigate("tts-settings") },
+                        onOpenVoiceLibrary = { navController.navigate("tts-voices") },
                         onOpenImageGenSettings = { navController.navigate("image-gen-settings") },
                         onOpenFontLibrary = { navController.navigate("font-library") },
                         onOpenImageLibrary = { navController.navigate("image-library") },
@@ -286,8 +301,12 @@ fun MoReadApp(
                 pushComposable("tts-settings") {
                     TtsSettingsScreen(
                         onBack = navController::popBackStack,
-                        onOpenSpeechCache = { navController.navigate("speech-cache") }
+                        onOpenSpeechCache = { navController.navigate("speech-cache") },
+                        onOpenVoiceLibrary = { navController.navigate("tts-voices") }
                     )
+                }
+                pushComposable("tts-voices") {
+                    TtsVoiceLibraryScreen(onBack = navController::popBackStack)
                 }
                 pushComposable("speech-cache") {
                     SpeechCacheScreen(
@@ -319,6 +338,12 @@ fun MoReadApp(
                 pushComposable("api-log") {
                     ApiLogScreen(onBack = navController::popBackStack)
                 }
+                pushComposable("shelf-groups") {
+                    ShelfGroupScreen(onBack = navController::popBackStack)
+                }
+                pushComposable("shelf-tags") {
+                    TagManageScreen(onBack = navController::popBackStack)
+                }
                 pushComposable(
                     route = "book/{bookId}?action={action}",
                     arguments = listOf(
@@ -336,7 +361,13 @@ fun MoReadApp(
                         onBack = navController::popBackStack,
                         onContinueReading = { bookId ->
                             navController.navigate("reader/$bookId")
-                        }
+                        },
+                        onListen = { bookId -> navController.navigate("listen/$bookId") },
+                        onPlayAudiobook = { bookId ->
+                            navController.navigate("listen/$bookId?source=produced")
+                        },
+                        onOpenAudiobookRoles = { bookId -> navController.navigate("audiobook-roles/$bookId") },
+                        onOpenAudiobookProduction = { bookId -> navController.navigate("audiobook-production/$bookId") }
                     )
                 }
                 pushComposable(
@@ -389,6 +420,7 @@ fun MoReadApp(
                         onOpenCompanionChat = { bookId ->
                             navController.navigate("companion-chat/$bookId")
                         },
+                        onOpenListenPlayer = { bookId -> navController.navigate("listen/$bookId") },
                         pendingLocate = locateChapter.value?.let { chapter ->
                             ReaderLocateRequest(
                                 chapterIndex = chapter,
@@ -400,6 +432,51 @@ fun MoReadApp(
                             entry.savedStateHandle[LOCATE_CHAPTER_KEY] = null
                             entry.savedStateHandle[LOCATE_START_KEY] = null
                             entry.savedStateHandle[LOCATE_END_KEY] = null
+                        }
+                    )
+                }
+                pushComposable(
+                    route = "listen/{bookId}?source={source}",
+                    arguments = listOf(
+                        navArgument("source") {
+                            type = NavType.StringType
+                            defaultValue = "standard"
+                        }
+                    )
+                ) { entry ->
+                    val bookId = entry.arguments?.getString("bookId")?.toLongOrNull()
+                        ?: return@pushComposable
+                    ListenPlayerScreen(
+                        bookId = bookId,
+                        onBack = navController::popBackStack,
+                        onOpenReader = { navController.navigate("reader/$it") },
+                        onOpenVoiceLibrary = { navController.navigate("tts-voices") }
+                    )
+                }
+                pushComposable("audiobook-roles/{bookId}") {
+                    AudiobookRoleScreen(
+                        onBack = navController::popBackStack,
+                        onContinue = { bookId, chapterIndex ->
+                            navController.navigate("audiobook-script/$bookId/$chapterIndex")
+                        }
+                    )
+                }
+                pushComposable("audiobook-script/{bookId}/{chapter}") {
+                    AudiobookScriptScreen(
+                        onBack = navController::popBackStack,
+                        onConfirmed = { bookId ->
+                            navController.navigate("audiobook-production/$bookId")
+                        }
+                    )
+                }
+                pushComposable("audiobook-production/{bookId}") {
+                    AudiobookProductionScreen(
+                        onBack = navController::popBackStack,
+                        onOpenScript = { bookId, chapterIndex ->
+                            navController.navigate("audiobook-script/$bookId/$chapterIndex")
+                        },
+                        onPlay = { bookId ->
+                            navController.navigate("listen/$bookId?source=produced")
                         }
                     )
                 }

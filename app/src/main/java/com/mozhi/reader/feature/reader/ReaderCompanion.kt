@@ -567,7 +567,7 @@ internal fun CompanionBubble(
         horizontalArrangement = if (fromUser) Arrangement.End else Arrangement.Start
     ) {
         Surface(
-            modifier = Modifier.fillMaxWidth(0.82f),
+            modifier = Modifier.fillMaxWidth(0.86f),
             color = style.container,
             contentColor = style.content,
             border = style.border,

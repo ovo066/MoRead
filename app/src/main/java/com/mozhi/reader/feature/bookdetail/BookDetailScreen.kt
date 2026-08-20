@@ -34,14 +34,20 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Bookmarks
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.CheckBox
+import androidx.compose.material.icons.outlined.CheckBoxOutlineBlank
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.FileDownload
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Headphones
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Sell
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -92,12 +98,14 @@ import androidx.compose.foundation.text.KeyboardOptions
 import com.mozhi.reader.ui.components.blockSheetDrag
 import com.mozhi.reader.core.database.entity.AnnotationEntity
 import com.mozhi.reader.core.database.entity.BookReadState
+import com.mozhi.reader.core.database.entity.BookTagEntity
+import com.mozhi.reader.core.database.entity.BookTagRefEntity
 import com.mozhi.reader.core.database.entity.BookmarkEntity
 import com.mozhi.reader.core.database.entity.IllustrationEntity
 import com.mozhi.reader.core.database.entity.NoteEntity
 import com.mozhi.reader.core.database.entity.label
 import com.mozhi.reader.core.database.entity.readState
-import com.mozhi.reader.core.database.entity.tagList
+import com.mozhi.reader.core.database.entity.ShelfGroupEntity
 import com.mozhi.reader.core.datastore.ReaderImageAsset
 import com.mozhi.reader.core.library.NoteRepository
 import com.mozhi.reader.ui.components.FrostedSurface
@@ -107,7 +115,9 @@ import com.mozhi.reader.ui.components.SectionLabel
 import com.mozhi.reader.ui.components.StatCell
 import com.mozhi.reader.ui.components.MoReadBackdrop
 import com.mozhi.reader.ui.components.MoReadDropdownMenu
+import com.mozhi.reader.ui.components.MoReadMenuDivider
 import com.mozhi.reader.ui.components.MoReadMenuItem
+import com.mozhi.reader.ui.components.MoReadStableDropdownMenu
 import com.mozhi.reader.ui.theme.MoReadTokens
 import com.mozhi.reader.ui.theme.sealColor
 import java.io.File
@@ -123,6 +133,10 @@ fun BookDetailScreen(
     bookId: Long,
     onBack: () -> Unit,
     onContinueReading: (Long) -> Unit,
+    onListen: (Long) -> Unit = {},
+    onPlayAudiobook: (Long) -> Unit = {},
+    onOpenAudiobookRoles: (Long) -> Unit = {},
+    onOpenAudiobookProduction: (Long) -> Unit = {},
     /** 书架长按菜单的深链动作：edit = 直接开信息编辑，cover = 直接开封面选择。 */
     initialAction: String? = null,
     viewModel: BookDetailViewModel = hiltViewModel()
@@ -132,6 +146,8 @@ fun BookDetailScreen(
     var showBookmarks by remember { mutableStateOf(false) }
     var showEditor by remember { mutableStateOf(false) }
     var showCoverPicker by remember { mutableStateOf(false) }
+    var showTagPicker by remember { mutableStateOf(false) }
+    var showGroupPicker by remember { mutableStateOf(false) }
     var selectedNote by remember { mutableStateOf<NoteEntity?>(null) }
     var showAllNotes by remember { mutableStateOf(false) }
     var showAnnotations by remember { mutableStateOf(false) }
@@ -188,12 +204,21 @@ fun BookDetailScreen(
             item {
                 DetailTopBar(
                     onBack = onBack,
-                    onEdit = { showEditor = true },
+                    onEditInfo = { showEditor = true },
+                    onChangeCover = { showCoverPicker = true },
+                    onPickGroup = { showGroupPicker = true },
+                    onPickTags = { showTagPicker = true },
+                    groupName = state.selectedGroupName,
+                    tagCount = state.selectedTags.size,
                     onBookmarks = { showBookmarks = true }
                 )
             }
             item {
-                DetailHero(book = book, onEditReadState = viewModel::setReadState)
+                DetailHero(
+                    book = book,
+                    tags = state.selectedTags.map(BookTagEntity::name),
+                    onEditReadState = viewModel::setReadState
+                )
             }
             item {
                 RingRow(
@@ -223,6 +248,21 @@ fun BookDetailScreen(
                     onNotes = { showAllNotes = true },
                     onAnnotations = { showAnnotations = true },
                     onGallery = { showGallery = true },
+                    modifier = Modifier.padding(horizontal = 20.dp)
+                )
+            }
+            item {
+                AudiobookEntryCard(
+                    readyChapters = state.audiobookReadyChapters,
+                    totalChapters = state.chapters.size,
+                    totalMillis = state.audiobookTotalMillis,
+                    roleNames = state.audiobookRoleNames,
+                    onManage = { onOpenAudiobookRoles(book.id) },
+                    onContinue = {
+                        if (state.audiobookRoleNames.isEmpty()) onOpenAudiobookRoles(book.id)
+                        else onOpenAudiobookProduction(book.id)
+                    },
+                    onPlay = { onPlayAudiobook(book.id) },
                     modifier = Modifier.padding(horizontal = 20.dp)
                 )
             }
@@ -270,30 +310,40 @@ fun BookDetailScreen(
                 )
             }
             item {
-                Button(
-                    onClick = { onContinueReading(book.id) },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary
-                    ),
-                    shape = MoReadTokens.CapsuleShape,
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 20.dp)
                         .navigationBarsPadding()
-                        .height(54.dp)
+                        .height(54.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Icon(Icons.Outlined.PlayArrow, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = if (book.lastReadAt == 0L) {
-                            "开始阅读"
-                        } else {
-                            "继续阅读 · ${chapterTitle.ifBlank { "第 ${book.lastReadChapterIndex + 1} 章" }}"
-                        },
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    OutlinedButton(
+                        onClick = { onListen(book.id) },
+                        shape = MoReadTokens.CapsuleShape,
+                        modifier = Modifier.weight(0.36f).fillMaxHeight()
+                    ) {
+                        Icon(Icons.Outlined.Headphones, contentDescription = null)
+                        Spacer(Modifier.width(6.dp))
+                        Text("听书")
+                    }
+                    Button(
+                        onClick = { onContinueReading(book.id) },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary
+                        ),
+                        shape = MoReadTokens.CapsuleShape,
+                        modifier = Modifier.weight(0.64f).fillMaxHeight()
+                    ) {
+                        Icon(Icons.Outlined.PlayArrow, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = if (book.lastReadAt == 0L) "开始阅读" else "继续阅读",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
             }
         }
@@ -317,10 +367,30 @@ fun BookDetailScreen(
                 },
                 onOpenCoverLibrary = { showCoverPicker = true },
                 onDismiss = { showEditor = false },
-                onSave = { title, author, tags ->
-                    viewModel.saveMetadata(title, author, tags)
+                onSave = { title, author ->
+                    viewModel.saveMetadata(title, author)
                     showEditor = false
                 }
+            )
+        }
+
+        if (showTagPicker) {
+            BookTagPickerSheet(
+                bookId = book.id,
+                tags = state.shelfTags,
+                refs = state.shelfTagRefs,
+                onDismiss = { showTagPicker = false },
+                onToggleTag = viewModel::setTag,
+                onCreateTag = viewModel::createAndApplyTag
+            )
+        }
+
+        if (showGroupPicker) {
+            BookGroupPickerSheet(
+                selectedGroupId = book.groupId,
+                groups = state.shelfGroups,
+                onDismiss = { showGroupPicker = false },
+                onSelect = viewModel::setShelfGroup
             )
         }
 
@@ -816,8 +886,228 @@ private fun IllustrationGalleryCard(
     }
 }
 
+@Composable
+private fun AudiobookEntryCard(
+    readyChapters: Int,
+    totalChapters: Int,
+    totalMillis: Long,
+    roleNames: List<String>,
+    onManage: () -> Unit,
+    onContinue: () -> Unit,
+    onPlay: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    FrostedSurface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        shadowElevation = 6.dp
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.size(38.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            Icons.Outlined.Headphones,
+                            contentDescription = null,
+                            modifier = Modifier.size(19.dp)
+                        )
+                    }
+                }
+                Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                    Text(
+                        "AI 有声书",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = if (readyChapters > 0) {
+                            "已制作 $readyChapters/$totalChapters 章 · ${formatDuration(totalMillis)}"
+                        } else {
+                            "分配角色音色，逐章合成多角色朗读"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            if (roleNames.isNotEmpty()) {
+                Text(
+                    text = roleNames.take(5).joinToString(" · ") +
+                        if (roleNames.size > 5) " …" else "",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 10.dp),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onManage,
+                    shape = MoReadTokens.CapsuleShape,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("角色与音色", style = MaterialTheme.typography.labelMedium, maxLines = 1)
+                }
+                if (readyChapters > 0) {
+                    OutlinedButton(
+                        onClick = onPlay,
+                        shape = MoReadTokens.CapsuleShape,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("播放成品", style = MaterialTheme.typography.labelMedium, maxLines = 1)
+                    }
+                }
+                Button(
+                    onClick = onContinue,
+                    shape = MoReadTokens.CapsuleShape,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(
+                        text = if (roleNames.isEmpty()) "开始制作" else "继续制作",
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 1
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BookTagPickerSheet(
+    bookId: Long,
+    tags: List<BookTagEntity>,
+    refs: List<BookTagRefEntity>,
+    onDismiss: () -> Unit,
+    onToggleTag: (Long, Boolean) -> Unit,
+    onCreateTag: (String) -> Unit
+) {
+    var query by remember { mutableStateOf("") }
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    val selectedIds = remember(bookId, refs) {
+        refs.filter { it.bookId == bookId }.map(BookTagRefEntity::tagId).toSet()
+    }
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).navigationBarsPadding()) {
+            Text("设置标签", style = MaterialTheme.typography.titleLarge)
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
+                singleLine = true,
+                leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+                placeholder = { Text("搜索或新建标签…") }
+            )
+            val normalized = query.trim()
+            val visible = tags.filter { it.name.contains(normalized, ignoreCase = true) }
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxWidth().height(360.dp).blockSheetDrag(listState),
+                contentPadding = PaddingValues(vertical = 12.dp)
+            ) {
+                if (normalized.isNotEmpty() && tags.none { it.name.equals(normalized, true) }) {
+                    item {
+                        ListItem(
+                            headlineContent = { Text("新建“$normalized”") },
+                            leadingContent = { Icon(Icons.Outlined.Add, contentDescription = null) },
+                            modifier = Modifier.clickable {
+                                onCreateTag(normalized)
+                                query = ""
+                            }
+                        )
+                    }
+                }
+                visible.groupBy { it.groupName.ifBlank { "未分组" } }.forEach { (group, groupTags) ->
+                    item {
+                        Text(
+                            group,
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                        )
+                    }
+                    items(groupTags, key = BookTagEntity::id) { tag ->
+                        val selected = tag.id in selectedIds
+                        ListItem(
+                            headlineContent = { Text(tag.name) },
+                            leadingContent = {
+                                Icon(
+                                    if (selected) Icons.Outlined.CheckBox else Icons.Outlined.CheckBoxOutlineBlank,
+                                    contentDescription = null
+                                )
+                            },
+                            modifier = Modifier.clickable { onToggleTag(tag.id, !selected) }
+                        )
+                    }
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = onDismiss) { Text("完成") }
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BookGroupPickerSheet(
+    selectedGroupId: Long?,
+    groups: List<ShelfGroupEntity>,
+    onDismiss: () -> Unit,
+    onSelect: (Long?) -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).navigationBarsPadding()) {
+            Text("所属分组", style = MaterialTheme.typography.titleLarge)
+            Spacer(Modifier.height(12.dp))
+            ListItem(
+                headlineContent = { Text("未分组") },
+                trailingContent = {
+                    if (selectedGroupId == null) Icon(Icons.Outlined.Check, contentDescription = null)
+                },
+                modifier = Modifier.clickable { onSelect(null); onDismiss() }
+            )
+            groups.filter { it.parentId == null }.forEach { parent ->
+                ListItem(
+                    headlineContent = { Text(parent.name) },
+                    trailingContent = {
+                        if (selectedGroupId == parent.id) Icon(Icons.Outlined.Check, contentDescription = null)
+                    },
+                    modifier = Modifier.clickable { onSelect(parent.id); onDismiss() }
+                )
+                groups.filter { it.parentId == parent.id }.forEach { child ->
+                    ListItem(
+                        headlineContent = { Text(child.name, modifier = Modifier.padding(start = 22.dp)) },
+                        trailingContent = {
+                            if (selectedGroupId == child.id) Icon(Icons.Outlined.Check, contentDescription = null)
+                        },
+                        modifier = Modifier.clickable { onSelect(child.id); onDismiss() }
+                    )
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+        }
+    }
+}
+
 /**
- * 书籍信息编辑：书名/作者/标签/封面。
+ * 书籍信息编辑：书名、作者与封面。分组和标签在详情页卡片中单独维护。
  *
  * EPUB 的元数据经常是垃圾（WPS 导出会写 Unknown / WPS_1532705572），自动清洗只能猜到
  * 文件名一层，所以最终一定要留一个手改的口子。
@@ -829,23 +1119,10 @@ private fun BookMetadataEditorDialog(
     onPickCover: () -> Unit,
     onOpenCoverLibrary: () -> Unit,
     onDismiss: () -> Unit,
-    onSave: (String, String, List<String>) -> Unit
+    onSave: (String, String) -> Unit
 ) {
     var title by remember(book.id) { mutableStateOf(book.title) }
     var author by remember(book.id) { mutableStateOf(book.author) }
-    var tags by remember(book.id, book.tags) { mutableStateOf(book.tagList()) }
-    var tagDraft by remember(book.id) { mutableStateOf("") }
-
-    fun commitTag() {
-        // 逗号是标签的存储分隔符，输入里出现就当多个标签处理。
-        val added = tagDraft.split(',', '，')
-            .map(String::trim)
-            .filter(String::isNotEmpty)
-        if (added.isNotEmpty()) {
-            tags = (tags + added).distinct().take(MAX_TAGS)
-        }
-        tagDraft = ""
-    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -871,49 +1148,6 @@ private fun BookMetadataEditorDialog(
                     label = { Text("作者") },
                     placeholder = { Text("留空则显示「未知作者」") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Text("标签", style = MaterialTheme.typography.titleSmall)
-                if (tags.isNotEmpty()) {
-                    FlowRow(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        tags.forEach { tag ->
-                            InputChip(
-                                selected = false,
-                                onClick = { tags = tags - tag },
-                                shape = MoReadTokens.CapsuleShape,
-                                label = { Text(tag) },
-                                trailingIcon = {
-                                    Icon(
-                                        imageVector = Icons.Outlined.Close,
-                                        contentDescription = "删除标签 $tag",
-                                        modifier = Modifier.size(15.dp)
-                                    )
-                                }
-                            )
-                        }
-                    }
-                }
-                OutlinedTextField(
-                    value = tagDraft,
-                    onValueChange = { tagDraft = it },
-                    label = { Text("添加标签") },
-                    singleLine = true,
-                    enabled = tags.size < MAX_TAGS,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                    keyboardActions = KeyboardActions(onDone = { commitTag() }),
-                    trailingIcon = {
-                        IconButton(
-                            onClick = { commitTag() },
-                            enabled = tagDraft.isNotBlank() && tags.size < MAX_TAGS
-                        ) {
-                            Icon(Icons.Outlined.Add, contentDescription = "添加标签")
-                        }
-                    },
                     modifier = Modifier.fillMaxWidth()
                 )
 
@@ -952,11 +1186,7 @@ private fun BookMetadataEditorDialog(
         confirmButton = {
             TextButton(
                 onClick = {
-                    // 用户可能在输入框里留了没提交的标签，别静默丢掉。
-                    val pending = tagDraft.split(',', '，')
-                        .map(String::trim)
-                        .filter(String::isNotEmpty)
-                    onSave(title, author, (tags + pending).distinct().take(MAX_TAGS))
+                    onSave(title, author)
                 },
                 enabled = title.isNotBlank()
             ) {
@@ -1031,7 +1261,17 @@ private fun ImageLibraryPickerDialog(
 private const val MAX_TAGS = 12
 
 @Composable
-private fun DetailTopBar(onBack: () -> Unit, onEdit: () -> Unit, onBookmarks: () -> Unit) {
+private fun DetailTopBar(
+    onBack: () -> Unit,
+    onEditInfo: () -> Unit,
+    onChangeCover: () -> Unit,
+    onPickGroup: () -> Unit,
+    onPickTags: () -> Unit,
+    groupName: String,
+    tagCount: Int,
+    onBookmarks: () -> Unit
+) {
+    var editMenu by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1052,9 +1292,41 @@ private fun DetailTopBar(onBack: () -> Unit, onEdit: () -> Unit, onBookmarks: ()
             modifier = Modifier.weight(1f)
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FrostedSurface(shape = CircleShape, shadowElevation = 6.dp) {
-                IconButton(onClick = onEdit) {
-                    Icon(Icons.Outlined.Edit, contentDescription = "编辑书籍信息")
+            // 编辑收纳了信息/封面与书架整理（分组、标签），正文区不再为它留一整张卡。
+            Box {
+                FrostedSurface(shape = CircleShape, shadowElevation = 6.dp) {
+                    IconButton(onClick = { editMenu = true }) {
+                        Icon(Icons.Outlined.Edit, contentDescription = "编辑")
+                    }
+                }
+                MoReadStableDropdownMenu(
+                    expanded = editMenu,
+                    onDismissRequest = { editMenu = false },
+                    width = 224.dp
+                ) {
+                    MoReadMenuItem(
+                        text = "书名与作者",
+                        icon = Icons.Outlined.Edit,
+                        onClick = { editMenu = false; onEditInfo() }
+                    )
+                    MoReadMenuItem(
+                        text = "更换封面",
+                        icon = Icons.Outlined.Image,
+                        onClick = { editMenu = false; onChangeCover() }
+                    )
+                    MoReadMenuDivider()
+                    MoReadMenuItem(
+                        text = "所属分组",
+                        icon = Icons.Outlined.Folder,
+                        trailingText = groupName,
+                        onClick = { editMenu = false; onPickGroup() }
+                    )
+                    MoReadMenuItem(
+                        text = "标签",
+                        icon = Icons.Outlined.Sell,
+                        trailingText = if (tagCount == 0) "未设置" else "$tagCount 个",
+                        onClick = { editMenu = false; onPickTags() }
+                    )
                 }
             }
             FrostedSurface(shape = CircleShape, shadowElevation = 6.dp) {
@@ -1067,7 +1339,11 @@ private fun DetailTopBar(onBack: () -> Unit, onEdit: () -> Unit, onBookmarks: ()
 }
 
 @Composable
-private fun DetailHero(book: BookEntity, onEditReadState: (BookReadState?) -> Unit) {
+private fun DetailHero(
+    book: BookEntity,
+    tags: List<String>,
+    onEditReadState: (BookReadState?) -> Unit
+) {
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -1090,7 +1366,6 @@ private fun DetailHero(book: BookEntity, onEditReadState: (BookReadState?) -> Un
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 6.dp)
         )
-        val tags = remember(book.tags) { book.tagList() }
         FlowRow(
             modifier = Modifier
                 .fillMaxWidth()

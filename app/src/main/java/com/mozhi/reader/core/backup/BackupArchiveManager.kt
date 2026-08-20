@@ -3,6 +3,7 @@ package com.mozhi.reader.core.backup
 import android.content.Context
 import com.mozhi.reader.BuildConfig
 import com.mozhi.reader.core.database.MoReadDatabase
+import com.mozhi.reader.core.datastore.ReaderImageImporter
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.io.InputStream
@@ -143,7 +144,7 @@ class BackupArchiveManager @Inject constructor(
         const val CURRENT_FORMAT_VERSION = 1
         // 必须与 MoReadDatabase 的 version 同步升：低于实际库版本会让本机刚导出的备份
         // 在 validate() 里被判成「来自更新版本」而无法恢复。
-        const val CURRENT_DATABASE_VERSION = 17
+        const val CURRENT_DATABASE_VERSION = 19
         const val PENDING_RESTORE_NAME = "pending-restore.moread.zip"
         val MANAGED_FILE_DIRECTORIES = listOf(
             "books",
@@ -153,7 +154,8 @@ class BackupArchiveManager @Inject constructor(
             "illustrations",
             "attachments",
             "avatars",
-            "reader-custom"
+            "reader-custom",
+            ReaderImageImporter.IMAGE_LIBRARY_DIRECTORY
             // 故意不含 speech-cache：它可再生、体量大，而且已有自己的 WebDAV 同步通道，
             // 塞进备份包只会让整包膨胀到难以上传。
         )

@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory
 import com.mozhi.reader.ai.client.AiClientFactory
 import com.mozhi.reader.core.database.entity.IllustrationEntity
 import com.mozhi.reader.core.database.entity.ModelRole
+import com.mozhi.reader.core.di.ApplicationScope
 import com.mozhi.reader.core.library.IllustrationRepository
 import com.mozhi.reader.core.speech.SpeechCacheStore
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -12,9 +13,8 @@ import java.io.File
 import java.security.MessageDigest
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -48,9 +48,11 @@ class AiMediaGenerationService @Inject constructor(
     private val clientFactory: AiClientFactory,
     private val imagePromptComposer: ImagePromptComposer,
     private val illustrations: IllustrationRepository,
-    private val speechCache: SpeechCacheStore
+    private val speechCache: SpeechCacheStore,
+    @ApplicationScope applicationScope: CoroutineScope
 ) {
-    private val speechMutex = Mutex()
+    private val sharedSpeechGenerations =
+        SharedGenerationRegistry<String, CachedSpeech>(applicationScope)
 
     suspend fun generateIllustration(
         bookId: Long,
@@ -107,7 +109,9 @@ class AiMediaGenerationService @Inject constructor(
         speed: Float? = null,
         volume: Float? = null,
         pitch: Int? = null,
-        format: String? = null
+        format: String? = null,
+        emotion: String? = null,
+        instruction: String? = null
     ): CachedSpeech {
         val cleanText = text.trim().take(MAX_SPEECH_CHARS)
         require(cleanText.isNotEmpty()) { "朗读文本不能为空" }
@@ -125,16 +129,23 @@ class AiMediaGenerationService @Inject constructor(
                 speed,
                 volume,
                 pitch,
-                format.orEmpty()
+                format.orEmpty(),
+                emotion.orEmpty(),
+                instruction.orEmpty()
             ).joinToString("\u0000")
         )
-        return speechMutex.withLock {
+        // 注册表 key 包含书籍：缓存目录按书隔离，不能把另一本文本相同的音频路径直接返回。
+        return sharedSpeechGenerations.await("$bookId:$key") {
             withContext(Dispatchers.IO) {
                 val directory = speechCache.directoryFor(bookId)
                 directory.listFiles()?.firstOrNull { it.nameWithoutExtension == key }?.let {
                     // 命中即续命：容量淘汰按最后使用时间来，常听的段落不该被先删。
                     it.setLastModified(System.currentTimeMillis())
-                    return@withContext CachedSpeech(it.absolutePath, mediaTypeForExtension(it.extension), true)
+                    return@withContext CachedSpeech(
+                        it.absolutePath,
+                        mediaTypeForExtension(it.extension),
+                        true
+                    )
                 }
                 null
             } ?: run {
@@ -144,7 +155,9 @@ class AiMediaGenerationService @Inject constructor(
                     responseFormat = format,
                     speed = speed,
                     volume = volume,
-                    pitch = pitch
+                    pitch = pitch,
+                    emotion = emotion,
+                    instruction = instruction
                 )
                 require(generated.bytes.size <= MAX_MEDIA_BYTES) { "生成语音超过 30 MB，已取消缓存" }
                 withContext(Dispatchers.IO) {

@@ -41,6 +41,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mozhi.reader.core.speech.TtsApiProvider
 import com.mozhi.reader.core.speech.TtsEngineMode
 import com.mozhi.reader.ui.components.MoReadBackdrop
+import com.mozhi.reader.ui.components.TtsTuningActions
+import com.mozhi.reader.ui.components.TtsTuningSections
 import java.util.Locale
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 
@@ -53,6 +55,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 fun TtsSettingsScreen(
     onBack: () -> Unit,
     onOpenSpeechCache: () -> Unit = {},
+    onOpenVoiceLibrary: () -> Unit = {},
     viewModel: TtsSettingsViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -79,7 +82,8 @@ fun TtsSettingsScreen(
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier.weight(1f)
                 )
-                TextButton(onClick = onOpenSpeechCache) { Text("语音缓存") }
+                TextButton(onClick = onOpenVoiceLibrary) { Text("音色库") }
+                TextButton(onClick = onOpenSpeechCache) { Text("缓存") }
             }
 
             Column(
@@ -314,6 +318,29 @@ fun TtsSettingsScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+
+                TtsTuningSections(
+                    settings = settings,
+                    includeEngineSection = false,
+                    includeRateControls = false,
+                    actions = TtsTuningActions(
+                        onEngineModeChange = viewModel::setEngineMode,
+                        onAiVoiceChange = viewModel::setAiVoice,
+                        onSystemRateChange = viewModel::setSystemRate,
+                        onSystemPitchChange = viewModel::setSystemPitch,
+                        onAiSpeedChange = viewModel::setAiSpeed,
+                        onAiVolumeChange = viewModel::setAiVolume,
+                        onAiPitchChange = viewModel::setAiPitch,
+                        onAllowAudioMixingChange = viewModel::setAllowAudioMixing,
+                        onTrimSilenceChange = viewModel::setTrimSilence,
+                        onGranularityChange = viewModel::setSynthesisGranularity,
+                        onMaxCharsChange = viewModel::setMaxSynthesisChars,
+                        onConcurrencyChange = viewModel::setSynthesisConcurrency,
+                        onRetryCountChange = viewModel::setRetryCount,
+                        onPrefetchCountChange = viewModel::setPrefetchCount,
+                        onOpenVoiceLibrary = onOpenVoiceLibrary
+                    )
+                )
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     TextButton(onClick = viewModel::preview, enabled = !state.isPreviewing) {

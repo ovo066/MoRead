@@ -174,11 +174,13 @@ class OpenAiMediaClient(
         responseFormat: String? = null,
         speed: Float? = null,
         volume: Float? = null,
-        pitch: Int? = null
+        pitch: Int? = null,
+        emotion: String? = null,
+        instruction: String? = null
     ): SynthesizedSpeech {
         require(text.isNotBlank()) { "朗读文本不能为空" }
         return if (isMiniMax) {
-            synthesizeMiniMax(text, voice, responseFormat, speed, volume, pitch)
+            synthesizeMiniMax(text, voice, responseFormat, speed, volume, pitch, emotion, instruction)
         } else {
             val fields = overrides.body.toMutableMap()
             fields["model"] = JsonPrimitive(model.modelName)
@@ -192,6 +194,8 @@ class OpenAiMediaClient(
             if (speed != null || "speed" !in fields) {
                 fields["speed"] = JsonPrimitive((speed ?: 1f).coerceIn(0.25f, 4f))
             }
+            EmotionDialectMapper.map(emotion, instruction, TtsEmotionDialect.OPENAI)
+                ?.let { mapped -> fields[mapped.field] = JsonPrimitive(mapped.value) }
             val path = model.endpointPath.ifBlank { "/audio/speech" }
             executeBytes(httpClient, request(path, JsonObject(fields), accept = "*/*"))
         }
@@ -203,7 +207,9 @@ class OpenAiMediaClient(
         responseFormat: String?,
         speed: Float?,
         volume: Float?,
-        pitch: Int?
+        pitch: Int?,
+        emotion: String?,
+        instruction: String?
     ): SynthesizedSpeech {
         val defaults = overrides.body
         val defaultVoice = defaults["voice_setting"] as? JsonObject ?: JsonObject(emptyMap())
@@ -221,6 +227,10 @@ class OpenAiMediaClient(
             put("speed", JsonPrimitive((speed ?: get("speed")?.jsonPrimitive?.floatOrNull ?: 1f).coerceIn(0.5f, 2f)))
             put("vol", JsonPrimitive((volume ?: get("vol")?.jsonPrimitive?.floatOrNull ?: 1f).coerceIn(0f, 10f)))
             put("pitch", JsonPrimitive((pitch ?: get("pitch")?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0).coerceIn(-12, 12)))
+            if (!emotion.isNullOrBlank() || !instruction.isNullOrBlank()) {
+                EmotionDialectMapper.map(emotion, instruction, TtsEmotionDialect.MINIMAX)
+                    ?.let { mapped -> put(mapped.field, JsonPrimitive(mapped.value)) }
+            }
         }
         val format = responseFormat
             ?: defaultAudio["format"]?.jsonPrimitive?.contentOrNull

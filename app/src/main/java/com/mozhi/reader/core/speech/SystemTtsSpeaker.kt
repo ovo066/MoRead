@@ -1,6 +1,7 @@
 package com.mozhi.reader.core.speech
 
 import android.content.Context
+import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -65,12 +66,15 @@ class SystemTtsSpeaker @Inject constructor(
         })
         val maxLength = TextToSpeech.getMaxSpeechInputLength().coerceAtMost(3_500)
         val segments = clean.chunked(maxLength)
+        val speechParams = Bundle().apply {
+            putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, settings.systemVolumeCompensation.coerceIn(0.25f, 2f))
+        }
         segments.forEachIndexed { index, segment ->
             val isLast = index == segments.lastIndex
             instance.speak(
                 segment,
                 if (index == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD,
-                null,
+                speechParams,
                 if (isLast) FINAL_UTTERANCE_ID else "moread-tts-$index"
             )
         }
@@ -126,11 +130,14 @@ class SystemTtsSpeaker @Inject constructor(
                     if (continuation.isActive) continuation.resume(false)
                 }
             })
+            val speechParams = Bundle().apply {
+                putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, settings.systemVolumeCompensation.coerceIn(0.25f, 2f))
+            }
             utterances.forEachIndexed { index, text ->
                 instance.speak(
                     text,
                     if (index == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD,
-                    null,
+                    speechParams,
                     batchUtteranceId(index)
                 )
             }

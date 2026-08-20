@@ -87,6 +87,7 @@ import com.mozhi.reader.core.datastore.ReaderTextReplacementRule
 import com.mozhi.reader.core.datastore.ReaderTheme
 import com.mozhi.reader.feature.reader.engine.ReaderAnnotationMark
 import com.mozhi.reader.feature.reader.engine.ReaderIllustrationMark
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 
 /** 即划即改浮条：刚落的划线 id + 浮条位置（沿用选区工具栏的锚点位）。 */
@@ -122,6 +123,7 @@ fun ReaderScreen(
     bookId: Long,
     onBack: () -> Unit,
     onOpenCompanionChat: (Long) -> Unit = {},
+    onOpenListenPlayer: (Long) -> Unit = {},
     /** 从聊天页「跳到原文」带回来的位置；消费一次后由调用方清空。 */
     pendingLocate: ReaderLocateRequest? = null,
     onPendingLocateConsumed: () -> Unit = {},
@@ -136,6 +138,7 @@ fun ReaderScreen(
     val companionState by companionViewModel.uiState.collectAsStateWithLifecycle()
     val selectionMediaState by selectionMediaViewModel.uiState.collectAsStateWithLifecycle()
     val listenState by listenViewModel.state.collectAsStateWithLifecycle()
+    val sleepTimer by listenViewModel.sleepTimer.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var activeSheet by remember { mutableStateOf<ReaderSheet?>(null) }
     var aiRequest by remember { mutableStateOf<ReaderAiRequest?>(null) }
@@ -153,6 +156,7 @@ fun ReaderScreen(
     var pendingFontName by remember { mutableStateOf("") }
     var chromeVisible by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(true) }
     var detailsVisible by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+    var listenTimerVisible by remember { mutableStateOf(false) }
     val systemDark = com.mozhi.reader.ui.theme.isDarkTheme()
     val activity = LocalContext.current.findComponentActivity()
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -192,6 +196,8 @@ fun ReaderScreen(
     LaunchedEffect(listeningThisBook, scrollMode) {
         if (!listeningThisBook || scrollMode) return@LaunchedEffect
         snapshotFlow { state.currentChapterIndex to state.currentCharOffset }
+            // 页面从沉浸播放页返回时会先发一次旧阅读位置；这不是用户 seek。
+            .drop(1)
             .collect { (chapterIndex, charOffset) ->
                 val listen = listenViewModel.state.value ?: return@collect
                 if (listen.bookId != bookId) return@collect
@@ -567,8 +573,7 @@ fun ReaderScreen(
                 onSettings = { activeSheet = ReaderSheet.SETTINGS },
                 onTts = {
                     if (listeningThisBook) {
-                        // 已在听书：收起菜单露出悬浮控制舱。
-                        chromeVisible = false
+                        onOpenListenPlayer(bookId)
                     } else {
                         if (android.os.Build.VERSION.SDK_INT >= 33) {
                             notificationPermissionLauncher.launch(
@@ -580,7 +585,6 @@ fun ReaderScreen(
                             state.currentChapterIndex,
                             state.currentCharOffset
                         )
-                        chromeVisible = false
                     }
                 },
                 onCompanion = { onOpenCompanionChat(bookId) },
@@ -590,18 +594,29 @@ fun ReaderScreen(
             )
         }
 
-        listenState?.takeIf { it.bookId == bookId }?.let { listen ->
-            ReaderListenBar(
-                state = listen,
-                palette = palette,
-                visible = !chromeVisible && !detailsVisible,
-                onToggle = listenViewModel::toggle,
-                onPrevSentence = listenViewModel::prevSentence,
-                onNextSentence = listenViewModel::nextSentence,
-                onPrevChapter = listenViewModel::prevChapter,
-                onNextChapter = listenViewModel::nextChapter,
-                onExit = listenViewModel::stop,
-                modifier = Modifier.align(Alignment.BottomCenter)
+        // 听书悬浮球独立于 chrome：沉浸阅读时正在播的东西也必须一直够得着。
+        listenState?.takeIf { it.bookId == bookId && contentVisible && !detailsVisible }
+            ?.let { current ->
+                ReaderListenOrb(
+                    state = current,
+                    sleepTimer = sleepTimer,
+                    palette = palette,
+                    onOpenPlayer = { onOpenListenPlayer(bookId) },
+                    onToggle = listenViewModel::toggle,
+                    onPrevSentence = listenViewModel::prevSentence,
+                    onNextSentence = listenViewModel::nextSentence,
+                    onPrevChapter = listenViewModel::prevChapter,
+                    onNextChapter = listenViewModel::nextChapter,
+                    onSleepTimer = { listenTimerVisible = true },
+                    onExit = listenViewModel::stop
+                )
+            }
+
+        if (listenTimerVisible) {
+            com.mozhi.reader.ui.components.SleepTimerSheet(
+                current = sleepTimer,
+                onDismiss = { listenTimerVisible = false },
+                onSelect = listenViewModel::setSleepTimer
             )
         }
 

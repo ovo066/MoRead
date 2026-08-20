@@ -10,6 +10,7 @@ import com.mozhi.reader.core.speech.TtsApiProvider
 import com.mozhi.reader.core.speech.TtsEngineMode
 import com.mozhi.reader.core.speech.TtsSettings
 import com.mozhi.reader.core.speech.TtsSettingsStore
+import com.mozhi.reader.core.speech.TtsSynthesisGranularity
 import com.mozhi.reader.core.speech.defaultBaseUrl
 import com.mozhi.reader.core.speech.defaultModel
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -73,6 +74,14 @@ class TtsSettingsViewModel @Inject constructor(
     fun setAiSpeed(speed: Float) = update { it.copy(aiSpeed = speed) }
     fun setAiVolume(volume: Float) = update { it.copy(aiVolume = volume) }
     fun setAiPitch(pitch: Int) = update { it.copy(aiPitch = pitch) }
+    fun setAllowAudioMixing(value: Boolean) = update { it.copy(allowAudioMixing = value) }
+    fun setTrimSilence(value: Boolean) = update { it.copy(trimSilence = value) }
+    fun setSynthesisGranularity(value: TtsSynthesisGranularity) =
+        update { it.copy(synthesisGranularity = value) }
+    fun setMaxSynthesisChars(value: Int) = update { it.copy(maxSynthesisChars = value) }
+    fun setSynthesisConcurrency(value: Int) = update { it.copy(synthesisConcurrency = value) }
+    fun setRetryCount(value: Int) = update { it.copy(retryCount = value) }
+    fun setPrefetchCount(value: Int) = update { it.copy(prefetchCount = value) }
 
     /** 切服务商预设时把 Base URL / 模型重置为该预设默认值（可再手改）。 */
     fun setAiProvider(provider: TtsApiProvider) = update {

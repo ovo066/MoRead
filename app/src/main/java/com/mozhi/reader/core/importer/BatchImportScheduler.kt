@@ -11,5 +11,9 @@ interface BatchImportScheduler {
      * @param deleteSourceAfterImport 导入成功后删掉源文件；只对应用自己产生的临时文件
      *   （局域网收件箱）为 true，用户通过 SAF 选中的文件永远不删。
      */
-    fun enqueue(uris: List<Uri>, deleteSourceAfterImport: Boolean = false)
+    fun enqueue(
+        uris: List<Uri>,
+        deleteSourceAfterImport: Boolean = false,
+        groupPathsByUri: Map<Uri, String> = emptyMap()
+    )
 }

@@ -7,19 +7,24 @@ import androidx.lifecycle.viewModelScope
 import com.mozhi.reader.core.database.entity.AnnotationEntity
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.BookReadState
+import com.mozhi.reader.core.database.entity.BookTagEntity
+import com.mozhi.reader.core.database.entity.BookTagRefEntity
 import com.mozhi.reader.core.database.entity.BookmarkEntity
 import com.mozhi.reader.core.database.entity.ChapterEntity
 import com.mozhi.reader.core.database.entity.IllustrationEntity
 import com.mozhi.reader.core.database.entity.NoteEntity
 import com.mozhi.reader.core.database.entity.ReadingDailyEntity
+import com.mozhi.reader.core.database.entity.ShelfGroupEntity
 import com.mozhi.reader.core.datastore.ReaderImageAsset
 import com.mozhi.reader.core.datastore.ReaderImageImporter
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
 import com.mozhi.reader.core.library.AnnotationRepository
+import com.mozhi.reader.core.library.AudiobookRepository
 import com.mozhi.reader.core.library.IllustrationRepository
 import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.library.NoteExporter
 import com.mozhi.reader.core.library.NoteRepository
+import com.mozhi.reader.core.library.ShelfOrganizationRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.LocalDate
 import javax.inject.Inject
@@ -47,9 +52,23 @@ data class BookDetailUiState(
     val streakDays: Int = 0,
     val durationsByEpochDay: Map<Long, Long> = emptyMap(),
     val imageLibrary: List<ReaderImageAsset> = emptyList(),
+    val shelfGroups: List<ShelfGroupEntity> = emptyList(),
+    val shelfTags: List<BookTagEntity> = emptyList(),
+    val shelfTagRefs: List<BookTagRefEntity> = emptyList(),
+    val audiobookReadyChapters: Int = 0,
+    val audiobookTotalMillis: Long = 0,
+    val audiobookRoleNames: List<String> = emptyList(),
     val isLoading: Boolean = true,
     val isWorking: Boolean = false
-)
+) {
+    val selectedTags: List<BookTagEntity>
+        get() = shelfTags.filter { tag ->
+            shelfTagRefs.any { ref -> ref.bookId == book?.id && ref.tagId == tag.id }
+        }
+
+    val selectedGroupName: String
+        get() = shelfGroups.firstOrNull { it.id == book?.groupId }?.name ?: "未分组"
+}
 
 sealed interface BookDetailEvent {
     data class ShowMessage(val message: String) : BookDetailEvent
@@ -68,6 +87,8 @@ class BookDetailViewModel @Inject constructor(
     private val settingsRepository: ReaderSettingsRepository,
     private val imageImporter: ReaderImageImporter,
     private val noteExporter: NoteExporter,
+    private val shelfRepository: ShelfOrganizationRepository,
+    private val audiobookRepository: AudiobookRepository,
     personaDao: com.mozhi.reader.core.database.dao.PersonaDao
 ) : ViewModel() {
     private val bookId: Long = when (val value: Any? = savedStateHandle["bookId"]) {
@@ -118,6 +139,22 @@ class BookDetailViewModel @Inject constructor(
         )
     }
 
+    private data class DetailExtras(
+        val settings: com.mozhi.reader.core.datastore.ReaderSettings,
+        val shelf: com.mozhi.reader.core.library.ShelfOrganizationSnapshot,
+        val audiobookChapters: List<com.mozhi.reader.core.database.entity.AudiobookChapterEntity>,
+        val audiobookRoles: List<com.mozhi.reader.core.database.entity.AudiobookRoleEntity>
+    )
+
+    private val detailExtras = combine(
+        settingsRepository.settings,
+        shelfRepository.snapshot,
+        audiobookRepository.observeChapters(bookId),
+        audiobookRepository.observeRoles(bookId)
+    ) { settings, shelf, audiobookChapters, audiobookRoles ->
+        DetailExtras(settings, shelf, audiobookChapters, audiobookRoles)
+    }
+
     init {
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { illustrationRepository.backfillLegacyFiles(bookId) }
@@ -128,8 +165,8 @@ class BookDetailViewModel @Inject constructor(
         content,
         libraryRepository.observeReadingDays(bookId),
         working,
-        settingsRepository.settings
-    ) { content, days, isWorking, settings ->
+        detailExtras
+    ) { content, days, isWorking, extras ->
         BookDetailUiState(
             book = content.book,
             chapters = content.chapters,
@@ -144,7 +181,15 @@ class BookDetailViewModel @Inject constructor(
             durationsByEpochDay = days
                 .groupBy(ReadingDailyEntity::epochDay)
                 .mapValues { (_, list) -> list.sumOf(ReadingDailyEntity::durationMs) },
-            imageLibrary = settings.imageLibrary,
+            imageLibrary = extras.settings.imageLibrary,
+            shelfGroups = extras.shelf.groups,
+            shelfTags = extras.shelf.tags,
+            shelfTagRefs = extras.shelf.tagRefs,
+            audiobookReadyChapters = extras.audiobookChapters.count { it.state == "READY" },
+            audiobookTotalMillis = extras.audiobookChapters
+                .filter { it.state == "READY" }
+                .sumOf { it.totalMillis },
+            audiobookRoleNames = extras.audiobookRoles.map { it.name },
             isLoading = false,
             isWorking = isWorking
         )
@@ -241,7 +286,8 @@ class BookDetailViewModel @Inject constructor(
         }
     }
 
-    /** 保存用户手改的书名/作者/标签。校验规则与 TXT 导入路径一致。 */    fun saveMetadata(title: String, author: String, tags: List<String>) {
+    /** 保存用户手改的书名/作者。标签由规范化标签选择器单独维护。 */
+    fun saveMetadata(title: String, author: String) {
         val cleanTitle = title.trim()
         viewModelScope.launch {
             val message = when {
@@ -260,11 +306,38 @@ class BookDetailViewModel @Inject constructor(
                     bookId = bookId,
                     title = cleanTitle,
                     author = author,
-                    tags = tags
+                    tags = uiState.value.selectedTags.map(BookTagEntity::name)
                 )
             }
                 .onSuccess { eventChannel.send(BookDetailEvent.ShowMessage("已保存")) }
                 .onFailure { eventChannel.send(BookDetailEvent.ShowMessage("保存失败")) }
+        }
+    }
+
+    fun setShelfGroup(groupId: Long?) {
+        viewModelScope.launch {
+            runCatching { shelfRepository.setBookGroup(listOf(bookId), groupId) }
+                .onFailure { eventChannel.send(BookDetailEvent.ShowMessage("更新分组失败")) }
+        }
+    }
+
+    fun setTag(tagId: Long, selected: Boolean) {
+        viewModelScope.launch {
+            runCatching {
+                if (selected) shelfRepository.addTagToBooks(tagId, listOf(bookId))
+                else shelfRepository.removeTagFromBooks(tagId, listOf(bookId))
+            }.onFailure { eventChannel.send(BookDetailEvent.ShowMessage("更新标签失败")) }
+        }
+    }
+
+    fun createAndApplyTag(name: String) {
+        viewModelScope.launch {
+            runCatching {
+                val tagId = shelfRepository.createOrGetTag(name)
+                shelfRepository.addTagToBooks(tagId, listOf(bookId))
+            }.onFailure { error ->
+                eventChannel.send(BookDetailEvent.ShowMessage(error.message ?: "新建标签失败"))
+            }
         }
     }
 

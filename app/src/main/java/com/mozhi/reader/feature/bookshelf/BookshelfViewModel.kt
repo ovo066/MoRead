@@ -5,19 +5,22 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.BookReadState
+import com.mozhi.reader.core.database.entity.BookTagEntity
+import com.mozhi.reader.core.database.entity.BookTagRefEntity
+import com.mozhi.reader.core.database.entity.ShelfGroupEntity
 import com.mozhi.reader.core.database.entity.isPinned
-import com.mozhi.reader.core.database.entity.readState
-import com.mozhi.reader.core.database.entity.tagList
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
 import com.mozhi.reader.core.datastore.ShelfLayout
 import com.mozhi.reader.core.importer.BookImportGateway
 import com.mozhi.reader.core.importer.PreparedImport
 import com.mozhi.reader.core.importer.BatchImportScheduler
 import com.mozhi.reader.core.library.LibraryRepository
+import com.mozhi.reader.core.library.ShelfOrganizationRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -30,23 +33,34 @@ data class BookshelfUiState(
     val books: List<BookEntity> = emptyList(),
     val layout: ShelfLayout = ShelfLayout.GRID,
     val filter: ShelfFilter = ShelfFilter(),
-    /** 全部书上出现过的标签，供筛选菜单列出。 */
-    val tags: List<String> = emptyList(),
+    val tags: List<BookTagEntity> = emptyList(),
+    val groups: List<ShelfGroupEntity> = emptyList(),
+    val groupCounts: Map<Long?, Int> = emptyMap(),
+    val tagCounts: Map<Long, Int> = emptyMap(),
+    val tagRefs: List<BookTagRefEntity> = emptyList(),
     /** 未经筛选的书籍总数，用于工具栏「N 本中的 M 本」这类文案。 */
     val totalBooks: Int = 0,
     /** 「正在阅读」卡的书；取全量最近阅读，不受筛选影响——筛选是给下面的书格用的。 */
     val recentBook: BookEntity? = null,
     /** 最近在读那本书当前章的章名，给「正在阅读」播放卡用。 */
     val recentChapterTitle: String = "",
-    val isImporting: Boolean = false
-)
-
-/** 书架筛选条件；会话级状态，不落 DataStore——下次进来还是看全部书更符合直觉。 */
-data class ShelfFilter(
-    val readState: BookReadState? = null,
-    val tag: String? = null
+    val isImporting: Boolean = false,
+    val selectionActive: Boolean = false,
+    val selectedBookIds: Set<Long> = emptySet()
 ) {
-    val isActive: Boolean get() = readState != null || tag != null
+    val isSelectionMode: Boolean get() = selectionActive
+    val selectedCount: Int get() = selectedBookIds.size
+    val selectedGroupName: String
+        get() = when {
+            filter.ungroupedOnly -> "未分组"
+            filter.groupId != null -> groups.firstOrNull { it.id == filter.groupId }?.name ?: "全部"
+            else -> "全部"
+        }
+
+    fun tagIdsFor(bookId: Long): Set<Long> = tagRefs.asSequence()
+        .filter { it.bookId == bookId }
+        .map(BookTagRefEntity::tagId)
+        .toSet()
 }
 
 sealed interface BookshelfEvent {
@@ -57,13 +71,16 @@ sealed interface BookshelfEvent {
 
 @HiltViewModel
 class BookshelfViewModel @Inject constructor(
-    libraryRepository: LibraryRepository,
+    private val libraryRepository: LibraryRepository,
+    private val shelfRepository: ShelfOrganizationRepository,
     private val settingsRepository: ReaderSettingsRepository,
     private val importGateway: BookImportGateway,
     private val batchImportScheduler: BatchImportScheduler
 ) : ViewModel() {
-    private val importing = kotlinx.coroutines.flow.MutableStateFlow(false)
-    private val filter = kotlinx.coroutines.flow.MutableStateFlow(ShelfFilter())
+    private val importing = MutableStateFlow(false)
+    private val filter = MutableStateFlow(ShelfFilter())
+    private val selectionActive = MutableStateFlow(false)
+    private val selectedBookIds = MutableStateFlow<Set<Long>>(emptySet())
     private val eventChannel = Channel<BookshelfEvent>(Channel.BUFFERED)
     val events = eventChannel.receiveAsFlow()
 
@@ -89,30 +106,46 @@ class BookshelfViewModel @Inject constructor(
             }.orEmpty()
         }
 
-    val uiState = combine(
+    private val baseState = combine(
         books,
         settingsRepository.settings,
         recentChapterTitle,
         importing,
         filter
     ) { books, settings, chapterTitle, isImporting, filter ->
-        BookshelfUiState(
-            books = books.applyFilter(filter).sortedForShelf(),
+        BookshelfBaseState(
+            books = books,
             layout = settings.shelfLayout,
             filter = filter,
-            tags = books.flatMap(BookEntity::tagList).distinct().sorted(),
-            totalBooks = books.size,
             recentBook = books.filter { it.lastReadAt > 0L }.maxByOrNull(BookEntity::lastReadAt),
             recentChapterTitle = chapterTitle,
             isImporting = isImporting
+        )
+    }
+
+    val uiState = combine(baseState, shelfRepository.snapshot, selectedBookIds, selectionActive) {
+            base, organization, selected, isSelectionActive ->
+        BookshelfUiState(
+            books = filterShelfBooks(base.books, organization.tagRefs, base.filter).sortedForShelf(),
+            layout = base.layout,
+            filter = base.filter,
+            tags = organization.tags,
+            groups = organization.groups,
+            groupCounts = organization.groupCounts,
+            tagCounts = organization.tagCounts,
+            tagRefs = organization.tagRefs,
+            totalBooks = base.books.size,
+            recentBook = base.recentBook,
+            recentChapterTitle = base.recentChapterTitle,
+            isImporting = base.isImporting,
+            selectionActive = isSelectionActive,
+            selectedBookIds = selected.intersect(base.books.map(BookEntity::id).toSet())
         )
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.Lazily,
         initialValue = BookshelfUiState()
     )
-
-    private val repository = libraryRepository
 
     init {
         viewModelScope.launch {
@@ -157,7 +190,7 @@ class BookshelfViewModel @Inject constructor(
 
     fun deleteBook(book: BookEntity) {
         viewModelScope.launch {
-            runCatching { repository.deleteBook(book) }
+            runCatching { libraryRepository.deleteBook(book) }
                 .onFailure {
                     eventChannel.send(BookshelfEvent.ShowMessage("删除失败，请稍后重试"))
                 }
@@ -183,8 +216,21 @@ class BookshelfViewModel @Inject constructor(
         filter.value = filter.value.copy(readState = state)
     }
 
-    fun setTagFilter(tag: String?) {
-        filter.value = filter.value.copy(tag = tag)
+    fun selectGroup(groupId: Long?, ungroupedOnly: Boolean = false) {
+        filter.value = filter.value.copy(groupId = groupId, ungroupedOnly = ungroupedOnly)
+    }
+
+    fun toggleTagFilter(tagId: Long) {
+        val current = filter.value
+        filter.value = current.copy(
+            tagIds = current.tagIds.toMutableSet().apply {
+                if (!add(tagId)) remove(tagId)
+            }
+        )
+    }
+
+    fun setTagMatchMode(mode: TagMatchMode) {
+        filter.value = filter.value.copy(matchMode = mode)
     }
 
     fun clearFilter() {
@@ -194,7 +240,7 @@ class BookshelfViewModel @Inject constructor(
     /** 手动标记阅读状态；传 null 交还给按进度自动推导。 */
     fun setReadState(book: BookEntity, state: BookReadState?) {
         viewModelScope.launch {
-            runCatching { repository.setReadState(book.id, state) }
+            runCatching { libraryRepository.setReadState(book.id, state) }
                 .onSuccess {
                     eventChannel.send(
                         BookshelfEvent.ShowMessage(
@@ -209,7 +255,7 @@ class BookshelfViewModel @Inject constructor(
     fun togglePinned(book: BookEntity) {
         viewModelScope.launch {
             val pinned = !book.isPinned
-            runCatching { repository.setPinned(book.id, pinned) }
+            runCatching { libraryRepository.setPinned(book.id, pinned) }
                 .onSuccess {
                     eventChannel.send(
                         BookshelfEvent.ShowMessage(if (pinned) "已置顶" else "已取消置顶")
@@ -218,18 +264,111 @@ class BookshelfViewModel @Inject constructor(
                 .onFailure { eventChannel.send(BookshelfEvent.ShowMessage("操作失败，请稍后重试")) }
         }
     }
+
+    fun enterSelection(bookId: Long? = null) {
+        selectionActive.value = true
+        selectedBookIds.value = bookId?.let(::setOf).orEmpty()
+    }
+
+    fun toggleSelection(bookId: Long) {
+        selectedBookIds.value = selectedBookIds.value.toMutableSet().apply {
+            if (!add(bookId)) remove(bookId)
+        }
+    }
+
+    fun exitSelection() {
+        selectionActive.value = false
+        selectedBookIds.value = emptySet()
+    }
+
+    fun selectAllVisible() {
+        val visible = uiState.value.books.map(BookEntity::id).toSet()
+        selectedBookIds.value = if (selectedBookIds.value.containsAll(visible)) emptySet() else visible
+    }
+
+    fun moveSelectedToGroup(groupId: Long?) {
+        val ids = selectedBookIds.value
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            shelfRepository.setBookGroup(ids, groupId)
+            eventChannel.send(BookshelfEvent.ShowMessage("已移动 ${ids.size} 本书"))
+            exitSelection()
+        }
+    }
+
+    fun applyTagToSelection(tagId: Long, selected: Boolean) {
+        val ids = selectedBookIds.value
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            if (selected) shelfRepository.addTagToBooks(tagId, ids)
+            else shelfRepository.removeTagFromBooks(tagId, ids)
+        }
+    }
+
+    fun createTagForSelection(name: String) {
+        val ids = selectedBookIds.value
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            runCatching {
+                val tagId = shelfRepository.createOrGetTag(name)
+                shelfRepository.addTagToBooks(tagId, ids)
+            }.onFailure {
+                eventChannel.send(BookshelfEvent.ShowMessage(it.message ?: "新建标签失败"))
+            }
+        }
+    }
+
+    fun deleteSelected() {
+        val ids = selectedBookIds.value
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            ids.mapNotNull { libraryRepository.getBook(it) }
+                .forEach { libraryRepository.deleteBook(it) }
+            eventChannel.send(BookshelfEvent.ShowMessage("已移除 ${ids.size} 本书"))
+            exitSelection()
+        }
+    }
+
+    fun setSelectedReadState(state: BookReadState?) {
+        val ids = selectedBookIds.value
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            ids.forEach { libraryRepository.setReadState(it, state) }
+            eventChannel.send(BookshelfEvent.ShowMessage("已更新 ${ids.size} 本书"))
+            exitSelection()
+        }
+    }
+
+    /** 批量置顶/取消置顶：全部已置顶时取消，否则统一置顶。 */
+    fun setSelectedPinned(pinned: Boolean) {
+        val ids = selectedBookIds.value
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            ids.forEach { libraryRepository.setPinned(it, pinned) }
+            eventChannel.send(
+                BookshelfEvent.ShowMessage(
+                    if (pinned) "已置顶 ${ids.size} 本书" else "已取消置顶 ${ids.size} 本书"
+                )
+            )
+            exitSelection()
+        }
+    }
 }
+
+private data class BookshelfBaseState(
+    val books: List<BookEntity>,
+    val layout: ShelfLayout,
+    val filter: ShelfFilter,
+    val recentBook: BookEntity?,
+    val recentChapterTitle: String,
+    val isImporting: Boolean
+)
 
 private fun BookReadState.actionLabel(): String = when (this) {
     BookReadState.UNREAD -> "标为未读"
     BookReadState.READING -> "标为在读"
     BookReadState.FINISHED -> "标为已读完"
     BookReadState.SHELVED -> "标为搁置"
-}
-
-private fun List<BookEntity>.applyFilter(filter: ShelfFilter): List<BookEntity> = filter {
-    (filter.readState == null || it.readState() == filter.readState) &&
-        (filter.tag == null || filter.tag in it.tagList())
 }
 
 /** 置顶优先（按置顶时间倒序），其余按最近阅读，从未读过的按导入时间倒序垫底。 */

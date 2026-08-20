@@ -97,9 +97,10 @@ class AgentLoop @Inject constructor(
     fun runDetached(
         history: List<ChatMessage>,
         tools: List<AgentTool>,
-        maxRounds: Int = DETACHED_MAX_ROUNDS
+        maxRounds: Int = DETACHED_MAX_ROUNDS,
+        modelRole: ModelRole = ModelRole.CHAT
     ): Flow<AgentEvent> = runDetachedWith(history, tools, maxRounds) {
-        val resolved = clientFactory.get().forRole(ModelRole.CHAT)
+        val resolved = clientFactory.get().forRole(modelRole)
         Streamer { messages, specs ->
             resolved.client.chatStream(messages, specs, resolved.options)
         }

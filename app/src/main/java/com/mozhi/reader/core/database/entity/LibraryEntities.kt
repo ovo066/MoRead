@@ -66,7 +66,8 @@ data class BookEntity(
     val lastReadAt: Long = 0,
     /** 0 = no `text.mz` on disk yet, 1 = current plain-text format. */
     val textVersion: Int = 0,
-    /** 用户自定义标签，逗号分隔。单书标签量极小，不值得独立表。 */
+    /** 旧版逗号分隔标签，仅为回退兼容保留。 */
+    @Deprecated("改用 book_tag_refs，保留仅用于旧版回退")
     val tags: String = "",
     /** 用户手改过书名/作者/封面后置位，此后任何自动回填都不再覆盖。 */
     val metadataEdited: Boolean = false,
@@ -78,7 +79,10 @@ data class BookEntity(
     val manualReadState: String? = null,
     /** 置顶时间戳；0 = 未置顶。置顶书在书架里按此倒序排最前。 */
     @ColumnInfo(defaultValue = "0")
-    val pinnedAt: Long = 0
+    val pinnedAt: Long = 0,
+    /** 所属书架分组；null = 未分组。 */
+    @ColumnInfo(defaultValue = "NULL")
+    val groupId: Long? = null
 )
 
 /** 书架阅读状态。搁置只能手动设，自动推导永远不会得到它。 */

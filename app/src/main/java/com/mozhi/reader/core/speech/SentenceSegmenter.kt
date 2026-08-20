@@ -37,6 +37,54 @@ object SentenceSegmenter {
         return spans
     }
 
+    /** 段落粒度：优先保留整段，超长时才退回句边界切分。 */
+    fun segmentParagraphs(body: String, maxChars: Int = 400): List<SentenceSpan> {
+        require(maxChars > 0) { "maxChars 必须大于 0" }
+        if (body.isEmpty()) return emptyList()
+        val result = mutableListOf<SentenceSpan>()
+        var lineStart = 0
+        while (lineStart <= body.length) {
+            val newline = body.indexOf('\n', lineStart)
+            val lineEnd = if (newline < 0) body.length else newline
+            var start = lineStart
+            var end = lineEnd
+            while (start < end && body[start].isIgnorable()) start++
+            while (end > start && body[end - 1].isIgnorable()) end--
+            if (start < end) {
+                if (end - start <= maxChars) {
+                    result += SentenceSpan(start, end)
+                } else {
+                    segment(body.substring(start, end), maxChars).forEach { span ->
+                        result += SentenceSpan(start + span.start, start + span.end)
+                    }
+                }
+            }
+            if (newline < 0) break
+            lineStart = newline + 1
+        }
+        return result
+    }
+
+    fun segmentChapter(body: String, maxChars: Int = 2_000): List<SentenceSpan> {
+        if (body.isBlank()) return emptyList()
+        val paragraphs = segmentParagraphs(body, maxChars)
+        if (paragraphs.isEmpty()) return emptyList()
+        val result = mutableListOf<SentenceSpan>()
+        var start = paragraphs.first().start
+        var end = paragraphs.first().end
+        paragraphs.drop(1).forEach { paragraph ->
+            if (paragraph.end - start <= maxChars) {
+                end = paragraph.end
+            } else {
+                result += SentenceSpan(start, end)
+                start = paragraph.start
+                end = paragraph.end
+            }
+        }
+        result += SentenceSpan(start, end)
+        return result
+    }
+
     /** [spans] 中第一个 end 落在 [offset] 之后的句子；越过全部句子返回 size。 */
     fun indexAt(spans: List<SentenceSpan>, offset: Int): Int {
         val index = spans.indexOfFirst { it.end > offset }

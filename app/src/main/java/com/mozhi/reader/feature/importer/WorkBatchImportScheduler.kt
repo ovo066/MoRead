@@ -17,12 +17,16 @@ import javax.inject.Singleton
 class WorkBatchImportScheduler @Inject constructor(
     @ApplicationContext private val context: Context
 ) : BatchImportScheduler {
-    override fun enqueue(uris: List<Uri>, deleteSourceAfterImport: Boolean) {
+    override fun enqueue(
+        uris: List<Uri>,
+        deleteSourceAfterImport: Boolean,
+        groupPathsByUri: Map<Uri, String>
+    ) {
         if (uris.isEmpty()) return
         WorkManager.getInstance(context).enqueueUniqueWork(
             BatchImportWorker.UNIQUE_WORK_NAME,
             ExistingWorkPolicy.APPEND_OR_REPLACE,
-            BatchImportWorker.request(uris, deleteSourceAfterImport)
+            BatchImportWorker.request(uris, deleteSourceAfterImport, groupPathsByUri)
         )
     }
 }

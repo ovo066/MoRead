@@ -33,10 +33,15 @@ object DialogueRuleSegmenter {
         val output = mutableListOf<DraftAudiobookSegment>()
         var cursor = 0
         var recentSpeaker: String? = null
+        var recentDialogueEnd = -1
         normalizedDialogueRanges.forEach { range ->
             addNarration(text, cursor, range.first, output)
             val inferred = inferSpeaker(text, range.first, range.last + 1)
-            val speaker = inferred ?: recentSpeaker ?: "对白"
+            val bridge = if (recentDialogueEnd >= 0) text.substring(recentDialogueEnd, range.first) else ""
+            val canInheritRecent = recentSpeaker != null &&
+                bridge.length <= MAX_SPEAKER_INHERIT_BRIDGE_CHARS &&
+                !bridge.contains("\n\n")
+            val speaker = inferred ?: recentSpeaker?.takeIf { canInheritRecent } ?: "对白"
             if (inferred != null) recentSpeaker = inferred
             addTrimmed(text, range.first, range.last + 1) { start, end ->
                 output += DraftAudiobookSegment(
@@ -46,11 +51,12 @@ object DialogueRuleSegmenter {
                     kind = AudiobookSegmentKind.DIALOGUE,
                     confidence = when {
                         inferred != null -> 0.92f
-                        recentSpeaker != null -> 0.62f
+                        canInheritRecent -> 0.48f
                         else -> 0.35f
                     }
                 )
             }
+            recentDialogueEnd = range.last + 1
             cursor = maxOf(cursor, range.last + 1)
         }
         addNarration(text, cursor, text.length, output)
@@ -131,6 +137,8 @@ object DialogueRuleSegmenter {
     ) = addTrimmed(text, rawStart, rawEnd) { start, end ->
         output += DraftAudiobookSegment(start, end, "旁白", AudiobookSegmentKind.NARRATION, 1f)
     }
+
+    private const val MAX_SPEAKER_INHERIT_BRIDGE_CHARS = 120
 
     private inline fun addTrimmed(
         text: String,

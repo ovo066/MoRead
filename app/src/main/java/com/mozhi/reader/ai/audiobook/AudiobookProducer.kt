@@ -78,6 +78,15 @@ class AudiobookProducer @Inject constructor(
             val aiSegments = segments.filter { segment ->
                 roles[segment.roleId]?.engine == AudiobookEngine.AI.name
             }
+            val hasAiCharacter = roles.values.any { role ->
+                role.kind == com.mozhi.reader.core.library.AudiobookRoleKind.CHARACTER.name &&
+                    role.engine == AudiobookEngine.AI.name
+            }
+            val hasDialogue = DialogueRuleSegmenter.segment(body)
+                .any { it.kind == AudiobookSegmentKind.DIALOGUE }
+            require(!hasAiCharacter || !hasDialogue || aiSegments.isNotEmpty()) {
+                "第 ${chapter.chapterIndex + 1} 章检测到对白，但剧本没有分配任何 AI 角色；请重新精排剧本或检查角色分配"
+            }
             val existingReady = aiSegments.count(AudiobookProducer::hasUsableAudio)
             completedOverall += existingReady
             audiobookRepository.updateChapter(

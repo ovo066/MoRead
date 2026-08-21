@@ -17,10 +17,12 @@ import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.mozhi.reader.MainActivity
 import com.mozhi.reader.R
+import com.mozhi.reader.core.library.LibraryRepository
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
@@ -32,8 +34,12 @@ class ListenService : Service() {
     @Inject
     lateinit var engine: ListenEngine
 
+    @Inject
+    lateinit var libraryRepository: LibraryRepository
+
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var mediaSession: MediaSession
+    private var restoreJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -61,13 +67,7 @@ class ListenService : Service() {
         )
         serviceScope.launch {
             engine.state.collect { state ->
-                if (state == null) {
-                    ServiceCompat.stopForeground(
-                        this@ListenService,
-                        ServiceCompat.STOP_FOREGROUND_REMOVE
-                    )
-                    stopSelf()
-                } else {
+                if (state != null) {
                     updateMediaSession(state)
                     getSystemService(NotificationManager::class.java)
                         ?.notify(NOTIFICATION_ID, buildNotification(state))
@@ -78,12 +78,42 @@ class ListenService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
+            ACTION_START -> restorePlaybackIfNeeded(intent, startId)
             ACTION_TOGGLE -> engine.toggle()
             ACTION_PREVIOUS_CHAPTER -> engine.prevChapter()
             ACTION_NEXT_CHAPTER -> engine.nextChapter()
             ACTION_STOP -> engine.stop()
         }
-        return START_NOT_STICKY
+        return START_REDELIVER_INTENT
+    }
+
+    private fun restorePlaybackIfNeeded(intent: Intent, startId: Int) {
+        if (engine.isActive || restoreJob?.isActive == true) return
+        val bookId = intent.getLongExtra(EXTRA_BOOK_ID, -1L)
+        if (bookId <= 0L) {
+            stopSelfResult(startId)
+            return
+        }
+        val fallbackChapter = intent.getIntExtra(EXTRA_CHAPTER_INDEX, 0).coerceAtLeast(0)
+        val fallbackOffset = intent.getIntExtra(EXTRA_CHAR_OFFSET, 0).coerceAtLeast(0)
+        val playbackMode = runCatching {
+            ListenPlaybackMode.valueOf(
+                intent.getStringExtra(EXTRA_PLAYBACK_MODE).orEmpty()
+            )
+        }.getOrDefault(ListenPlaybackMode.STANDARD)
+        restoreJob = serviceScope.launch {
+            val book = libraryRepository.getBook(bookId)
+            if (book == null) {
+                stopSelfResult(startId)
+                return@launch
+            }
+            engine.start(
+                bookId = bookId,
+                chapterIndex = book.lastReadChapterIndex.takeIf { it >= 0 } ?: fallbackChapter,
+                charOffset = book.lastReadCharOffset.takeIf { it >= 0 } ?: fallbackOffset,
+                playbackMode = playbackMode
+            )
+        }
     }
 
     override fun onDestroy() {
@@ -216,16 +246,32 @@ class ListenService : Service() {
     companion object {
         private const val CHANNEL_ID = "listen-playback"
         private const val NOTIFICATION_ID = 0x4C54
+        private const val ACTION_START = "com.mozhi.reader.listen.START"
         private const val ACTION_TOGGLE = "com.mozhi.reader.listen.TOGGLE"
         private const val ACTION_PREVIOUS_CHAPTER = "com.mozhi.reader.listen.PREVIOUS_CHAPTER"
         private const val ACTION_NEXT_CHAPTER = "com.mozhi.reader.listen.NEXT_CHAPTER"
         private const val ACTION_STOP = "com.mozhi.reader.listen.STOP"
         private const val MEDIA_POSITION_RANGE = 100_000L
+        private const val EXTRA_BOOK_ID = "book_id"
+        private const val EXTRA_CHAPTER_INDEX = "chapter_index"
+        private const val EXTRA_CHAR_OFFSET = "char_offset"
+        private const val EXTRA_PLAYBACK_MODE = "playback_mode"
 
-        fun start(context: Context) {
+        fun start(
+            context: Context,
+            bookId: Long,
+            chapterIndex: Int,
+            charOffset: Int,
+            playbackMode: ListenPlaybackMode
+        ) {
             ContextCompat.startForegroundService(
                 context,
                 Intent(context, ListenService::class.java)
+                    .setAction(ACTION_START)
+                    .putExtra(EXTRA_BOOK_ID, bookId)
+                    .putExtra(EXTRA_CHAPTER_INDEX, chapterIndex)
+                    .putExtra(EXTRA_CHAR_OFFSET, charOffset)
+                    .putExtra(EXTRA_PLAYBACK_MODE, playbackMode.name)
             )
         }
 

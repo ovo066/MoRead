@@ -13,7 +13,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.int
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -34,6 +34,15 @@ data class WebScrapeResult(
     val title: String,
     val url: String,
     val content: String
+)
+
+data class WebImageSearchResult(
+    val title: String,
+    val imageUrl: String,
+    val pageUrl: String,
+    val source: String,
+    val width: Int? = null,
+    val height: Int? = null
 )
 
 @Singleton
@@ -74,6 +83,41 @@ class WebSearchService @Inject constructor(
             throw cancelled
         } catch (error: Exception) {
             throw IllegalStateException("${provider.label} 返回内容无法解析：${error.message ?: "未知格式"}", error)
+        }
+    }
+
+    suspend fun searchImages(query: String, limit: Int): List<WebImageSearchResult> {
+        val settings = settingsStore.current()
+        check(settings.enabled) { "网络搜索尚未启用，请先在设置中开启" }
+        val provider = settings.provider
+        val key = apiKeyStore.get(WebSearchCredentialAliases.forProvider(provider))
+            ?.trim()
+            ?.takeIf(String::isNotEmpty)
+            ?: error("${provider.label} API Key 尚未配置")
+        val endpoint = settings.searchEndpoint(provider)
+        check(endpoint.toHttpUrlOrNull() != null) { "${provider.label} 接口地址无效" }
+        val safeLimit = limit.coerceIn(1, MAX_IMAGE_RESULTS)
+        val request = buildRequest(
+            provider = provider,
+            endpoint = endpoint,
+            key = key,
+            payload = buildImageSearchPayload(provider, query.trim(), safeLimit, settings)
+        )
+        val raw = withContext(Dispatchers.IO) {
+            httpClient.newCall(request).execute().use { response ->
+                val body = response.body.string()
+                if (!response.isSuccessful) {
+                    error("${provider.label} 图片搜索失败（HTTP ${response.code}）：${body.take(ERROR_PREVIEW_CHARS)}")
+                }
+                body
+            }
+        }
+        return try {
+            parseImageSearchResponse(provider, raw).take(safeLimit)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            throw IllegalStateException("${provider.label} 图片结果无法解析：${error.message ?: "未知格式"}", error)
         }
     }
 
@@ -136,6 +180,7 @@ class WebSearchService @Inject constructor(
     private companion object {
         val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
         const val MAX_RESULTS = 8
+        const val MAX_IMAGE_RESULTS = 30
         const val ERROR_PREVIEW_CHARS = 500
     }
 }
@@ -164,6 +209,40 @@ internal fun buildWebSearchPayload(
         put("search_depth", settings.tavilySearchDepth.wireValue)
         put("include_answer", false)
         put("include_raw_content", false)
+    }
+}
+
+internal fun buildImageSearchPayload(
+    provider: WebSearchProvider,
+    query: String,
+    limit: Int,
+    settings: WebSearchSettings = WebSearchSettings(provider = provider)
+): JsonObject = when (provider) {
+    WebSearchProvider.FIRECRAWL -> buildJsonObject {
+        put("query", query)
+        put("limit", limit)
+        put(
+            "sources",
+            JsonArray(listOf(buildJsonObject { put("type", "images") }))
+        )
+    }
+    WebSearchProvider.EXA -> buildJsonObject {
+        put("query", query)
+        put("numResults", limit)
+        put("type", "auto")
+        putJsonObject("contents") {
+            put("text", false)
+            putJsonObject("extras") { put("imageLinks", 5) }
+        }
+    }
+    WebSearchProvider.TAVILY -> buildJsonObject {
+        put("query", query)
+        put("max_results", limit)
+        put("search_depth", settings.tavilySearchDepth.wireValue)
+        put("include_answer", false)
+        put("include_raw_content", false)
+        put("include_images", true)
+        put("include_image_descriptions", true)
     }
 }
 
@@ -220,6 +299,129 @@ internal fun parseWebSearchResponse(
         }.orEmpty().normalizeSnippet()
         WebSearchResult(title = title.take(240), url = url, snippet = snippet)
     }.distinctBy(WebSearchResult::url)
+}
+
+internal fun parseImageSearchResponse(
+    provider: WebSearchProvider,
+    raw: String
+): List<WebImageSearchResult> {
+    val root = AiJson.parseToJsonElement(raw).jsonObject
+    val results = buildList<WebImageSearchResult> {
+        when (provider) {
+            WebSearchProvider.FIRECRAWL -> {
+                val images = (root["data"] as? JsonObject)?.get("images") as? JsonArray
+                    ?: root["images"] as? JsonArray
+                    ?: JsonArray(emptyList())
+                images.forEach { element ->
+                    val item = element as? JsonObject ?: return@forEach
+                    addImageResult(
+                        item = item,
+                        provider = provider,
+                        imageKeys = arrayOf("imageUrl", "url"),
+                        pageUrl = item.string("url"),
+                        width = item["imageWidth"]?.jsonPrimitive?.intOrNull,
+                        height = item["imageHeight"]?.jsonPrimitive?.intOrNull
+                    )
+                }
+            }
+            WebSearchProvider.EXA -> {
+                val entries = root["results"] as? JsonArray ?: JsonArray(emptyList())
+                entries.forEach { element ->
+                    val item = element as? JsonObject ?: return@forEach
+                    val pageUrl = item.string("url") ?: item.string("id")
+                    val fallbackTitle = item.string("title")
+                    addImageResult(
+                        item = item,
+                        provider = provider,
+                        imageKeys = arrayOf("image"),
+                        pageUrl = pageUrl,
+                        fallbackTitle = fallbackTitle
+                    )
+                    val extras = item["extras"] as? JsonObject
+                    listOfNotNull(
+                        extras?.get("imageLinks") as? JsonArray,
+                        item["imageLinks"] as? JsonArray
+                    ).forEach { images ->
+                        images.forEach { image ->
+                            addImageElement(image, provider, pageUrl, fallbackTitle)
+                        }
+                    }
+                }
+            }
+            WebSearchProvider.TAVILY -> {
+                (root["images"] as? JsonArray).orEmpty().forEach { image ->
+                    addImageElement(image, provider, null, null)
+                }
+                val entries = root["results"] as? JsonArray ?: JsonArray(emptyList())
+                entries.forEach { element ->
+                    val item = element as? JsonObject ?: return@forEach
+                    val pageUrl = item.string("url")
+                    val fallbackTitle = item.string("title")
+                    (item["images"] as? JsonArray).orEmpty().forEach { image ->
+                        addImageElement(image, provider, pageUrl, fallbackTitle)
+                    }
+                }
+            }
+        }
+    }
+    return results.distinctBy(WebImageSearchResult::imageUrl)
+}
+
+private fun MutableList<WebImageSearchResult>.addImageElement(
+    element: JsonElement,
+    provider: WebSearchProvider,
+    pageUrl: String?,
+    fallbackTitle: String?
+) {
+    when (element) {
+        is JsonPrimitive -> {
+            val imageUrl = element.contentOrNull?.trim().orEmpty()
+            if (imageUrl.toHttpUrlOrNull() != null) {
+                add(
+                    WebImageSearchResult(
+                        title = fallbackTitle.orEmpty().ifBlank { pageUrl ?: imageUrl }.take(240),
+                        imageUrl = imageUrl,
+                        pageUrl = pageUrl?.takeIf { it.toHttpUrlOrNull() != null } ?: imageUrl,
+                        source = provider.label
+                    )
+                )
+            }
+        }
+        is JsonObject -> addImageResult(
+            item = element,
+            provider = provider,
+            imageKeys = arrayOf("url", "imageUrl", "image"),
+            pageUrl = pageUrl,
+            fallbackTitle = fallbackTitle
+        )
+        else -> Unit
+    }
+}
+
+private fun MutableList<WebImageSearchResult>.addImageResult(
+    item: JsonObject,
+    provider: WebSearchProvider,
+    imageKeys: Array<String>,
+    pageUrl: String?,
+    fallbackTitle: String? = null,
+    width: Int? = null,
+    height: Int? = null
+) {
+    val imageUrl = item.firstString(*imageKeys)?.takeIf { it.toHttpUrlOrNull() != null } ?: return
+    val validPageUrl = pageUrl?.takeIf { it != imageUrl && it.toHttpUrlOrNull() != null } ?: imageUrl
+    val title = item.firstString("title", "description")
+        ?: fallbackTitle
+        ?: validPageUrl
+    add(
+        WebImageSearchResult(
+            title = title.take(240),
+            imageUrl = imageUrl,
+            pageUrl = validPageUrl,
+            source = provider.label,
+            width = width,
+            height = height
+        )
+    )
 }
 
 internal fun parseWebScrapeResponse(

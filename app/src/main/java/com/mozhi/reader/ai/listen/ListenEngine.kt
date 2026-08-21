@@ -146,6 +146,7 @@ class ListenEngine @Inject constructor(
     private var currentSpans: List<SentenceSpan> = emptyList()
 
     private var focusRequest: AudioFocusRequest? = null
+    private var resumeAfterTransientFocusLoss = false
     private var noisyReceiver: BroadcastReceiver? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var currentBodyLength: Int = 0
@@ -201,6 +202,11 @@ class ListenEngine @Inject constructor(
     }
 
     fun pause() {
+        resumeAfterTransientFocusLoss = false
+        pausePlayback()
+    }
+
+    private fun pausePlayback() {
         if (sessionJob == null) return
         paused.value = true
         utteranceJob?.cancel()
@@ -209,6 +215,7 @@ class ListenEngine @Inject constructor(
 
     fun resume() {
         if (sessionJob == null) return
+        resumeAfterTransientFocusLoss = false
         mutableState.value = mutableState.value?.copy(isPlaying = true, status = null)
         paused.value = false
     }
@@ -224,6 +231,7 @@ class ListenEngine @Inject constructor(
         activePlaybackMode = null
         sessionJob = null
         pendingSeek = null
+        resumeAfterTransientFocusLoss = false
         job?.cancel()
         cleanupPlayback()
         mutableState.value = null
@@ -327,7 +335,13 @@ class ListenEngine @Inject constructor(
             playbackMode = playbackMode,
             status = if (playbackMode == ListenPlaybackMode.PRODUCED) "正在载入多角色成品" else null
         )
-        ListenService.start(context)
+        ListenService.start(
+            context = context,
+            bookId = bookId,
+            chapterIndex = chapterIndex,
+            charOffset = offset,
+            playbackMode = playbackMode
+        )
         registerNoisyReceiver()
         var playedProducedChapter = false
         var producedSkipStatus: String? = null
@@ -340,11 +354,13 @@ class ListenEngine @Inject constructor(
             settings = ttsSettingsStore.current()
             configureAudioFocus(settings.allowAudioMixing)
             val rules = readerSettingsRepository.settings.first().textReplacementRules
-            val playbackPlan = if (playbackMode == ListenPlaybackMode.PRODUCED) {
-                buildChapterPlaybackPlan(bookId, chapter, body, rules)
-            } else {
-                ChapterPlaybackPlan(emptyList(), scripted = false)
-            }
+            val playbackPlan = buildChapterPlaybackPlan(
+                bookId = bookId,
+                chapter = chapter,
+                body = body,
+                rules = rules,
+                requireProducedAudio = playbackMode == ListenPlaybackMode.PRODUCED
+            )
             if (playbackMode == ListenPlaybackMode.PRODUCED && !playbackPlan.scripted) {
                 // “播放成品”只播 READY 的多角色章节，绝不静默退回普通 TTS。
                 producedSkipStatus = playbackPlan.status ?: producedSkipStatus
@@ -421,9 +437,7 @@ class ListenEngine @Inject constructor(
                             }
                         }
                         when {
-                            result == SpeakResult.DONE && engineOk -> {
-                                queue = emptyList()
-                            }
+                            result == SpeakResult.DONE && engineOk -> queue = queue.drop(batch.size)
                             result == SpeakResult.DONE -> {
                                 pauseWithStatus("系统 TTS 引擎不可用，请到设置 › 语音朗读检查")
                                 queue = queue.drop(reached)
@@ -495,10 +509,20 @@ class ListenEngine @Inject constructor(
         bookId: Long,
         chapter: ChapterEntity,
         body: String,
-        rules: List<ReaderTextReplacementRule>
+        rules: List<ReaderTextReplacementRule>,
+        requireProducedAudio: Boolean
     ): ChapterPlaybackPlan {
         val chapterState = audiobookRepository.getChapter(bookId, chapter.chapterIndex)
-        if (chapterState?.state != AudiobookChapterState.READY.name) {
+        val usableStates = if (requireProducedAudio) {
+            setOf(AudiobookChapterState.READY.name)
+        } else {
+            setOf(
+                AudiobookChapterState.CONFIRMED.name,
+                AudiobookChapterState.SYNTHESIZING.name,
+                AudiobookChapterState.READY.name
+            )
+        }
+        if (chapterState?.state !in usableStates) {
             return ChapterPlaybackPlan(emptyList(), scripted = false)
         }
         val segments = audiobookRepository.getSegments(bookId, chapter.chapterIndex)
@@ -515,7 +539,15 @@ class ListenEngine @Inject constructor(
         return if (utterances.isEmpty()) {
             ChapterPlaybackPlan(emptyList(), scripted = false)
         } else {
-            ChapterPlaybackPlan(utterances, scripted = true)
+            ChapterPlaybackPlan(
+                utterances = utterances,
+                scripted = true,
+                status = if (chapterState?.state == AudiobookChapterState.READY.name) {
+                    "正在播放多角色成品"
+                } else {
+                    "多角色实时朗读 · AI 对白按需生成"
+                }
+            )
         }
     }
 
@@ -660,6 +692,9 @@ class ListenEngine @Inject constructor(
         prefetchJob?.cancel()
         val candidates = upcoming
             .filter { (it.engineMode ?: TtsEngineMode.AI) == TtsEngineMode.AI }
+            .filterNot { utterance ->
+                utterance.audioPath?.let { path -> path.isNotBlank() && File(path).isFile } == true
+            }
             .take(settings.prefetchCount)
         if (candidates.isEmpty()) return
         prefetchJob = scope.launch(Dispatchers.IO) {
@@ -784,11 +819,20 @@ class ListenEngine @Inject constructor(
                     .build()
             )
             .setOnAudioFocusChangeListener { change ->
-                when (change) {
-                    AudioManager.AUDIOFOCUS_LOSS,
-                    AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
-                    AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> pause()
-                    else -> Unit
+                when (
+                    decideListenAudioFocusAction(
+                        change = change,
+                        isPlaying = mutableState.value?.isPlaying == true && !paused.value,
+                        resumePending = resumeAfterTransientFocusLoss
+                    )
+                ) {
+                    ListenAudioFocusAction.PAUSE -> pause()
+                    ListenAudioFocusAction.PAUSE_AND_RESUME -> {
+                        resumeAfterTransientFocusLoss = true
+                        pausePlayback()
+                    }
+                    ListenAudioFocusAction.RESUME -> resume()
+                    ListenAudioFocusAction.NONE -> Unit
                 }
             }
             .build()
@@ -835,6 +879,7 @@ class ListenEngine @Inject constructor(
     }
 
     private fun cleanupPlayback() {
+        resumeAfterTransientFocusLoss = false
         prefetchJob?.cancel()
         prefetchJob = null
         utteranceJob?.cancel()

@@ -5,6 +5,7 @@ import com.mozhi.reader.ai.agent.AgentLoop
 import com.mozhi.reader.ai.agent.ReaderToolset
 import com.mozhi.reader.ai.client.ChatMessage
 import com.mozhi.reader.ai.client.ChatRole
+import com.mozhi.reader.ai.client.AiJson
 import com.mozhi.reader.core.database.entity.AudiobookRoleEntity
 import com.mozhi.reader.core.database.entity.AudiobookSegmentEntity
 import com.mozhi.reader.core.database.entity.ModelRole
@@ -16,6 +17,9 @@ import com.mozhi.reader.core.library.LibraryRepository
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.first
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 data class AudiobookScriptResult(
     val segments: List<AudiobookSegmentEntity>,
@@ -44,35 +48,67 @@ class AudiobookScriptAgent @Inject constructor(
         val roles = audiobookRepository.getRoles(bookId)
         require(roles.isNotEmpty()) { "请先确认角色与音色" }
 
-        // 坐标与旁白/对白边界始终由本地确定；AI 只给带稳定 ID 的对白选角色。
-        // 这比让模型计算 UTF-16 start/end 稳定得多，也不会因一个偏移错误把整章变成旁白。
+        // 本地规则先锁定高置信显式说话人；AI 在保留整章顺序的原文中只处理剩余歧义对白。
+        // 坐标始终由本地确定，模型只返回稳定 ID、角色和表达信息。
         val ruleSegments = DialogueRuleSegmenter.segment(body)
         val dialogueIndices = ruleSegments.indices
             .filter { ruleSegments[it].kind == AudiobookSegmentKind.DIALOGUE }
             .toSet()
-        val aiAssignments = if (
-            useAi && dialogueIndices.isNotEmpty() && body.length <= MAX_AI_CHAPTER_CHARS
-        ) {
-            val raw = runAgent(bookId, chapter.title, body, roles, ruleSegments, dialogueIndices)
-            AudiobookScriptParser.parseAssignments(extractJsonPayload(raw), dialogueIndices)
+        val narrator = roles.firstOrNull { it.kind == AudiobookRoleKind.NARRATOR.name }
+            ?: roles.first()
+        val characters = roles.filter { it.kind == AudiobookRoleKind.CHARACTER.name }
+        val dialogueFallbacks = characters.filter { it.engine == com.mozhi.reader.core.library.AudiobookEngine.AI.name }
+            .ifEmpty { characters }
+        val lockedRoles = dialogueIndices.mapNotNull { index ->
+            val draft = ruleSegments[index]
+            resolveAudiobookRole(roles, draft.roleName)
+                ?.takeIf { draft.confidence >= LOCAL_LOCK_CONFIDENCE }
+                ?.let { index to it }
+        }.toMap()
+        // 所有对白都进入 AI：高置信说话人保持锁定，但仍需生成情绪、语气与停顿。
+        val targetIndices = dialogueIndices
+        val aiAssignments = if (useAi && targetIndices.isNotEmpty() && characters.isNotEmpty()) {
+            val previousChapterTail = previousChapterTail(bookId, chapterIndex)
+            buildAudiobookAttributionBatches(
+                body = body,
+                segments = ruleSegments,
+                targetIndices = targetIndices,
+                lockedRoleNames = lockedRoles.mapValues { it.value.name }
+            ).flatMap { batch ->
+                val raw = runAgentBatch(
+                    bookId = bookId,
+                    chapterTitle = chapter.title,
+                    previousChapterTail = previousChapterTail,
+                    roles = characters,
+                    batch = batch
+                )
+                AudiobookScriptParser.parseAssignments(extractJsonPayload(raw), batch.targetIndices)
+            }.distinctBy(ParsedAudiobookAssignment::segmentIndex)
         } else {
             emptyList()
         }
         val assignments = aiAssignments.associateBy(ParsedAudiobookAssignment::segmentIndex)
-        val narrator = roles.firstOrNull { it.kind == AudiobookRoleKind.NARRATOR.name }
-            ?: roles.first()
         val revision = audiobookRevision(
             body,
             readerSettingsRepository.settings.first().textReplacementRules
         )
+        val recentDialogueRoles = ArrayDeque<AudiobookRoleEntity>()
         val entities = ruleSegments.mapIndexed { index, draft ->
-            val assignment = assignments[index]
+            val performanceAssignment = assignments[index]
+            val roleAssignment = performanceAssignment?.takeIf {
+                it.confidence == null || it.confidence >= MIN_AI_ASSIGNMENT_CONFIDENCE
+            }
             val proposedRole = if (draft.kind == AudiobookSegmentKind.NARRATION) {
                 narrator
             } else {
-                resolveAudiobookRole(roles, assignment?.roleName)
-                    ?: resolveAudiobookRole(roles, draft.roleName)
+                lockedRoles[index]
+                    ?: resolveAudiobookRole(characters, roleAssignment?.roleName)
+                    ?: chooseDialogueFallback(draft, characters, dialogueFallbacks, recentDialogueRoles.toList())
                     ?: narrator
+            }
+            if (draft.kind == AudiobookSegmentKind.DIALOGUE && proposedRole.kind == AudiobookRoleKind.CHARACTER.name) {
+                recentDialogueRoles.addLast(proposedRole)
+                while (recentDialogueRoles.size > RECENT_DIALOGUE_ROLE_LIMIT) recentDialogueRoles.removeFirst()
             }
             AudiobookSegmentEntity(
                 bookId = bookId,
@@ -80,8 +116,8 @@ class AudiobookScriptAgent @Inject constructor(
                 startCharOffset = draft.startCharOffset,
                 endCharOffset = draft.endCharOffset,
                 roleId = proposedRole.id,
-                emotion = normalizeEmotion(assignment?.emotion),
-                instruction = assignment?.instruction?.trim()?.takeIf(String::isNotEmpty),
+                emotion = normalizeEmotion(performanceAssignment?.emotion),
+                instruction = performanceAssignment?.instruction?.trim()?.takeIf(String::isNotEmpty),
                 revision = revision
             )
         }
@@ -94,40 +130,55 @@ class AudiobookScriptAgent @Inject constructor(
         )
     }
 
-    private suspend fun runAgent(
+    private suspend fun runAgentBatch(
         bookId: Long,
         chapterTitle: String,
-        body: String,
+        previousChapterTail: String,
         roles: List<AudiobookRoleEntity>,
-        segments: List<DraftAudiobookSegment>,
-        dialogueIndices: Set<Int>
+        batch: AudiobookAttributionBatch
     ): String {
         val roleList = roles.joinToString("\n") { role ->
-            "- ${role.name}（别名：${role.aliases.ifBlank { "无" }}）"
+            val identity = roleIdentity(role)
+            buildString {
+                append("- 精确名称：").append(role.name)
+                append("；别名：").append(role.aliases.ifBlank { "无" })
+                append("；性别：").append(role.gender)
+                if (identity.isNotBlank()) append("；身份：").append(identity)
+            }
         }
-        val candidates = dialogueIndices.sorted().joinToString("\n") { index ->
-            val segment = segments[index]
-            val contextStart = (segment.startCharOffset - CONTEXT_CHARS).coerceAtLeast(0)
-            val contextEnd = (segment.endCharOffset + CONTEXT_CHARS).coerceAtMost(body.length)
-            val context = body.substring(contextStart, contextEnd)
-                .replace('\n', ' ')
-                .replace('\r', ' ')
-                .take(MAX_CANDIDATE_CHARS)
-            "[segment_id=$index][规则猜测=${segment.roleName}] $context"
-        }
+        val targetIds = batch.targetIndices.sorted().joinToString(",")
         val history = listOf(
             ChatMessage(
                 ChatRole.SYSTEM,
                 """
-                你是中文小说有声书对白归属标注专家。分段坐标已由程序锁定，你只判断每个对白是谁说的。
-                只输出 JSON，不要 Markdown，格式：{"assignments":[{"segment_id":1,"role":"角色表中的精确名称","emotion":"中性","instruction":""}]}。
-                segment_id 必须原样使用；每个候选都要输出且只能输出一次；role 必须逐字使用角色表中的名称，不能写“男主”“角色1”或自造名称。
-                情绪只能是开心、悲伤、愤怒、恐惧、厌恶、惊讶、中性之一。无法确定时优先参考规则猜测和上下文；仍无法判断才使用旁白。
+                你是中文小说有声书的对白归因与表演标注专家。程序已经锁定对白边界，并把对白嵌入连续原文：
+                - target="true" 的 dialogue 必须标注；存在 locked_speaker 时，role 必须原样复制该名称，禁止修改，但仍要判断情绪和表演方式。
+                - 按证据优先级判断说话人：对白前后明确“某人说/问/答” > 同段动作与称呼 > 代词与人物指代 > 连续对话的问答、轮替和话题承接 > 规则猜测。
+                - 连续对话不能机械地全部继承上一人；只有文本支持时才使用轮替。不要根据角色性别、声音或主角地位臆测。
+                - role 必须逐字使用角色表中的精确名称，禁止输出旁白、未知、男主、角色1或自造人物。
+                - confidence 为 0 到 1；evidence 用不超过 24 个中文字概括直接证据。
+                - 情绪只能是开心、悲伤、愤怒、恐惧、厌恶、惊讶、中性之一；“中性”只用于真正平静、无明显潜台词的对白。
+                - instruction 用 1 到 3 个可执行短语组合，优先使用：轻声、低声、高声、急促、缓慢、颤抖、哽咽、句末短停。文本有明确表演线索时不要留空。
+                只输出 JSON，不要 Markdown。格式：
+                {"assignments":[{"segment_id":1,"role":"角色表中的精确名称","confidence":0.92,"evidence":"后置‘苏晚说’","emotion":"中性","instruction":"轻声，句末稍停"}]}
+                每个指定 segment_id 必须输出且只能输出一次，不得输出其他 ID。
                 """.trimIndent()
             ),
             ChatMessage(
                 ChatRole.USER,
-                "章节：$chapterTitle\n角色表：\n$roleList\n\n待标注对白：\n$candidates"
+                """
+                章节：$chapterTitle
+                待标注 segment_id：$targetIds
+
+                角色档案：
+                $roleList
+
+                上一章末尾（仅用于章节开头的指代承接，不要标注）：
+                ${previousChapterTail.ifBlank { "无" }}
+
+                连续章节原文：
+                ${batch.markedContext}
+                """.trimIndent()
             )
         )
         val output = StringBuilder()
@@ -138,12 +189,31 @@ class AudiobookScriptAgent @Inject constructor(
                 enabledTools = SAFE_TOOL_NAMES,
                 spoilerProtectionEnabled = false
             ),
-            modelRole = ModelRole.CHEAP
+            maxRounds = 3,
+            modelRole = ModelRole.CHAT
         ).collect { event ->
             if (event is AgentEvent.Text) output.append(event.text)
         }
         return output.toString()
     }
+
+    private suspend fun previousChapterTail(bookId: Long, chapterIndex: Int): String {
+        val previous = libraryRepository.getChapters(bookId)
+            .filter { it.chapterIndex < chapterIndex }
+            .maxByOrNull { it.chapterIndex }
+            ?: return ""
+        return libraryRepository.readChapterText(bookId, previous)
+            .takeLast(PREVIOUS_CHAPTER_CONTEXT_CHARS)
+            .trim()
+    }
+
+    private fun roleIdentity(role: AudiobookRoleEntity): String = runCatching {
+        AiJson.parseToJsonElement(role.extraJson).jsonObject["identity"]
+            ?.jsonPrimitive
+            ?.contentOrNull
+            ?.trim()
+            .orEmpty()
+    }.getOrDefault("")
 
     private fun normalizeEmotion(value: String?): String = value?.trim()
         ?.takeIf { it in VALID_EMOTIONS } ?: "中性"
@@ -151,16 +221,26 @@ class AudiobookScriptAgent @Inject constructor(
     private companion object {
         val SAFE_TOOL_NAMES = setOf(
             "search_book",
-            "read_book_section",
-            "get_reading_progress",
-            "web_search",
-            "web_scrape"
+            "read_book_section"
         )
         val VALID_EMOTIONS = setOf("开心", "悲伤", "愤怒", "恐惧", "厌恶", "惊讶", "中性")
-        const val MAX_AI_CHAPTER_CHARS = 60_000
-        const val CONTEXT_CHARS = 72
-        const val MAX_CANDIDATE_CHARS = 320
+        const val LOCAL_LOCK_CONFIDENCE = 0.85f
+        const val MIN_AI_ASSIGNMENT_CONFIDENCE = 0.42f
+        const val PREVIOUS_CHAPTER_CONTEXT_CHARS = 1_200
+        const val RECENT_DIALOGUE_ROLE_LIMIT = 4
     }
+}
+
+private fun chooseDialogueFallback(
+    draft: DraftAudiobookSegment,
+    characters: List<AudiobookRoleEntity>,
+    preferredCharacters: List<AudiobookRoleEntity>,
+    recentRoles: List<AudiobookRoleEntity>
+): AudiobookRoleEntity? {
+    val recentDistinct = recentRoles.asReversed().distinctBy(AudiobookRoleEntity::id).take(2)
+    if (recentDistinct.size == 2) return recentDistinct[1]
+    resolveAudiobookRole(characters, draft.roleName)?.let { return it }
+    return preferredCharacters.firstOrNull()
 }
 
 /** 角色名允许别名、括号说明和轻微格式差异，但避免把“他/她/对白”误配成人物。 */

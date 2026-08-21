@@ -143,7 +143,20 @@ class OpenAiMediaClient(
             ?: throw IllegalArgumentException("生图服务返回了无效的图片地址")
         val isLocalHttp = url.scheme == "http" && url.host in LOCAL_IMAGE_HOSTS
         require(url.isHttps || isLocalHttp) { "生图服务返回了不安全的图片地址" }
-        val request = Request.Builder().url(url).header("Accept", "image/*").get().build()
+        val baseUrl = base.toHttpUrlOrNull()
+        val sameOrigin = baseUrl != null && baseUrl.scheme == url.scheme &&
+            baseUrl.host == url.host && baseUrl.port == url.port
+        val request = Request.Builder()
+            .url(url)
+            .header("Accept", "image/*")
+            .apply {
+                if (sameOrigin) {
+                    header("Authorization", "Bearer $apiKey")
+                    overrides.headers.forEach { (key, value) -> header(key, value) }
+                }
+            }
+            .get()
+            .build()
         return withContext(Dispatchers.IO) {
             val response = try {
                 httpClient.newCall(request).execute()
@@ -159,6 +172,9 @@ class OpenAiMediaClient(
                 }
                 val bytes = body.byteStream().use(::readImageBytesLimited)
                 if (bytes.isEmpty()) throw AiClientException.Empty()
+                require(looksLikeImage(bytes)) {
+                    "生图 API 返回了结果，但下载内容不是可识别的图片"
+                }
                 bytes
             }
         }
@@ -214,6 +230,7 @@ class OpenAiMediaClient(
         val defaults = overrides.body
         val defaultVoice = defaults["voice_setting"] as? JsonObject ?: JsonObject(emptyMap())
         val defaultAudio = defaults["audio_setting"] as? JsonObject ?: JsonObject(emptyMap())
+        val performance = MiniMaxSpeechPerformanceMapper.map(emotion, instruction)
         val voiceFields = defaultVoice.toMutableMap().apply {
             put(
                 "voice_id",
@@ -224,9 +241,12 @@ class OpenAiMediaClient(
                         ?: "male-qn-qingse"
                 )
             )
-            put("speed", JsonPrimitive((speed ?: get("speed")?.jsonPrimitive?.floatOrNull ?: 1f).coerceIn(0.5f, 2f)))
-            put("vol", JsonPrimitive((volume ?: get("vol")?.jsonPrimitive?.floatOrNull ?: 1f).coerceIn(0f, 10f)))
-            put("pitch", JsonPrimitive((pitch ?: get("pitch")?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0).coerceIn(-12, 12)))
+            val baseSpeed = speed ?: get("speed")?.jsonPrimitive?.floatOrNull ?: 1f
+            val baseVolume = volume ?: get("vol")?.jsonPrimitive?.floatOrNull ?: 1f
+            val basePitch = pitch ?: get("pitch")?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+            put("speed", JsonPrimitive((baseSpeed * performance.speedMultiplier).coerceIn(0.5f, 2f)))
+            put("vol", JsonPrimitive((baseVolume * performance.volumeMultiplier).coerceIn(0f, 10f)))
+            put("pitch", JsonPrimitive((basePitch + performance.pitchOffset).coerceIn(-12, 12)))
             if (!emotion.isNullOrBlank() || !instruction.isNullOrBlank()) {
                 EmotionDialectMapper.map(emotion, instruction, TtsEmotionDialect.MINIMAX)
                     ?.let { mapped -> put(mapped.field, JsonPrimitive(mapped.value)) }
@@ -243,7 +263,7 @@ class OpenAiMediaClient(
                 "response_format"
             ).forEach(::remove)
             put("model", JsonPrimitive(model.modelName))
-            put("text", JsonPrimitive(text))
+            put("text", JsonPrimitive(performance.applyToText(text)))
             put("stream", JsonPrimitive(false))
             put("voice_setting", JsonObject(voiceFields))
             put("audio_setting", JsonObject(audioFields))
@@ -331,6 +351,19 @@ class OpenAiMediaClient(
 
     private fun readImageBytesLimited(input: java.io.InputStream): ByteArray =
         readBytesLimited(input, MAX_IMAGE_BYTES, "生成图片超过 30 MB，已取消保存")
+
+    private fun looksLikeImage(bytes: ByteArray): Boolean {
+        val png = bytes.size >= 4 && bytes[0] == 0x89.toByte() &&
+            bytes[1] == 0x50.toByte() && bytes[2] == 0x4E.toByte() && bytes[3] == 0x47.toByte()
+        val jpeg = bytes.size >= 3 && bytes[0] == 0xFF.toByte() &&
+            bytes[1] == 0xD8.toByte() && bytes[2] == 0xFF.toByte()
+        val gif = bytes.size >= 6 && bytes.copyOfRange(0, 6).decodeToString() in setOf("GIF87a", "GIF89a")
+        val webp = bytes.size >= 12 && bytes.copyOfRange(0, 4).decodeToString() == "RIFF" &&
+            bytes.copyOfRange(8, 12).decodeToString() == "WEBP"
+        val bmp = bytes.size >= 2 && bytes[0] == 0x42.toByte() && bytes[1] == 0x4D.toByte()
+        val avif = bytes.size >= 12 && bytes.copyOfRange(4, 12).decodeToString().startsWith("ftyp")
+        return png || jpeg || gif || webp || bmp || avif
+    }
 
     private fun readBytesLimited(
         input: java.io.InputStream,

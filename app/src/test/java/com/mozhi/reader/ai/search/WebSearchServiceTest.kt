@@ -1,5 +1,9 @@
 package com.mozhi.reader.ai.search
 
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -65,6 +69,57 @@ class WebSearchServiceTest {
 
         assertEquals("advanced", search["search_depth"]?.jsonPrimitive?.content)
         assertEquals("advanced", scrape["extract_depth"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `firecrawl image payload requests image source`() {
+        val payload = buildImageSearchPayload(WebSearchProvider.FIRECRAWL, "book cover", 12)
+
+        assertEquals(12, payload["limit"]?.jsonPrimitive?.int)
+        assertEquals(
+            "images",
+            payload["sources"]?.jsonArray?.single()?.jsonObject?.get("type")?.jsonPrimitive?.content
+        )
+    }
+
+    @Test
+    fun `parses firecrawl image results with dimensions`() {
+        val results = parseImageSearchResponse(
+            WebSearchProvider.FIRECRAWL,
+            """{"data":{"images":[{"title":"Cover","imageUrl":"https://img.example/cover.jpg","imageWidth":1200,"imageHeight":1800,"url":"https://example.com/book"}]}}"""
+        )
+
+        assertEquals(1, results.size)
+        assertEquals("https://img.example/cover.jpg", results.single().imageUrl)
+        assertEquals("https://example.com/book", results.single().pageUrl)
+        assertEquals(1200, results.single().width)
+        assertEquals(1800, results.single().height)
+    }
+
+    @Test
+    fun `tavily image payload and response include descriptions`() {
+        val payload = buildImageSearchPayload(WebSearchProvider.TAVILY, "book cover", 10)
+        val results = parseImageSearchResponse(
+            WebSearchProvider.TAVILY,
+            """{"images":[{"url":"https://img.example/a.jpg","description":"Main cover"}],"results":[{"title":"Book page","url":"https://example.com/book","images":[{"url":"https://img.example/b.jpg","description":"Alternate cover"}]}]}"""
+        )
+
+        assertEquals(true, payload["include_images"]?.jsonPrimitive?.boolean)
+        assertEquals(true, payload["include_image_descriptions"]?.jsonPrimitive?.boolean)
+        assertEquals(2, results.size)
+        assertEquals("Main cover", results.first().title)
+        assertEquals("https://example.com/book", results.last().pageUrl)
+    }
+
+    @Test
+    fun `exa image response reads associated and extra image links`() {
+        val results = parseImageSearchResponse(
+            WebSearchProvider.EXA,
+            """{"results":[{"title":"Book","url":"https://example.com/book","image":"https://img.example/main.jpg","extras":{"imageLinks":["https://img.example/extra.jpg"]}}]}"""
+        )
+
+        assertEquals(2, results.size)
+        assertEquals(listOf("Exa", "Exa"), results.map { it.source })
     }
 
     @Test

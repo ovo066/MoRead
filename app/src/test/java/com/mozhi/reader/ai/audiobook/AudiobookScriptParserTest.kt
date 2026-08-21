@@ -33,7 +33,7 @@ class AudiobookScriptParserTest {
     fun `按稳定分段编号解析角色标注并忽略未知编号`() {
         val result = AudiobookScriptParser.parseAssignments(
             """{"assignments":[
-              {"segment_id":3,"role":"苏晚","emotion":"悲伤"},
+              {"segment_id":3,"role":"苏晚","confidence":0.87,"evidence":"后置苏晚说","emotion":"悲伤"},
               {"segment_id":99,"role":"无效"},
               {"segment_id":3,"role":"重复"}
             ]}""",
@@ -42,6 +42,8 @@ class AudiobookScriptParserTest {
         assertEquals(1, result.size)
         assertEquals(3, result.single().segmentIndex)
         assertEquals("苏晚", result.single().roleName)
+        assertEquals(0.87f, result.single().confidence!!, 0.001f)
+        assertEquals("后置苏晚说", result.single().evidence)
     }
 
 }

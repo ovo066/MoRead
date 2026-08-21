@@ -5,6 +5,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -21,6 +22,8 @@ data class ParsedAudiobookSegment(
 data class ParsedAudiobookAssignment(
     val segmentIndex: Int,
     val roleName: String?,
+    val confidence: Float?,
+    val evidence: String?,
     val emotion: String?,
     val instruction: String?
 )
@@ -51,6 +54,8 @@ object AudiobookScriptParser {
             ParsedAudiobookAssignment(
                 segmentIndex = index,
                 roleName = obj.string("role", "roleName", "speaker"),
+                confidence = obj.double("confidence", "score")?.toFloat()?.coerceIn(0f, 1f),
+                evidence = obj.string("evidence", "reason"),
                 emotion = obj.string("emotion"),
                 instruction = obj.string("instruction")
             )
@@ -87,6 +92,10 @@ object AudiobookScriptParser {
 
     private fun JsonObject.int(vararg keys: String): Int? = keys.firstNotNullOfOrNull { key ->
         get(key)?.jsonPrimitive?.intOrNull
+    }
+
+    private fun JsonObject.double(vararg keys: String): Double? = keys.firstNotNullOfOrNull { key ->
+        get(key)?.jsonPrimitive?.doubleOrNull
     }
 
     private fun JsonObject.string(vararg keys: String): String? = keys.firstNotNullOfOrNull { key ->

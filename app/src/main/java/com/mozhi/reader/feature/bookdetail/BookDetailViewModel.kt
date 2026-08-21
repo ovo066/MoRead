@@ -17,7 +17,11 @@ import com.mozhi.reader.core.database.entity.ReadingDailyEntity
 import com.mozhi.reader.core.database.entity.ShelfGroupEntity
 import com.mozhi.reader.core.datastore.ReaderImageAsset
 import com.mozhi.reader.core.datastore.ReaderImageImporter
+import com.mozhi.reader.core.datastore.PendingReaderImage
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
+import com.mozhi.reader.ai.media.BookCoverService
+import com.mozhi.reader.ai.media.BookCoverGenerationProgress
+import com.mozhi.reader.ai.media.OnlineBookCover
 import com.mozhi.reader.core.library.AnnotationRepository
 import com.mozhi.reader.core.library.AudiobookRepository
 import com.mozhi.reader.core.library.IllustrationRepository
@@ -28,9 +32,12 @@ import com.mozhi.reader.core.library.ShelfOrganizationRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.LocalDate
 import javax.inject.Inject
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
@@ -86,6 +93,7 @@ class BookDetailViewModel @Inject constructor(
     private val illustrationRepository: IllustrationRepository,
     private val settingsRepository: ReaderSettingsRepository,
     private val imageImporter: ReaderImageImporter,
+    private val bookCoverService: BookCoverService,
     private val noteExporter: NoteExporter,
     private val shelfRepository: ShelfOrganizationRepository,
     private val audiobookRepository: AudiobookRepository,
@@ -99,6 +107,17 @@ class BookDetailViewModel @Inject constructor(
     } ?: error("缺少 bookId")
 
     private val working = MutableStateFlow(false)
+    private val mutableCoverCandidates = MutableStateFlow<List<OnlineBookCover>>(emptyList())
+    val coverCandidates = mutableCoverCandidates.asStateFlow()
+    private val mutableCoverSearchQueries = MutableStateFlow<List<String>>(emptyList())
+    val coverSearchQueries = mutableCoverSearchQueries.asStateFlow()
+    private val mutableCoverSearchAgentEnhanced = MutableStateFlow(false)
+    val coverSearchAgentEnhanced = mutableCoverSearchAgentEnhanced.asStateFlow()
+    private val mutablePendingCover = MutableStateFlow<PendingReaderImage?>(null)
+    val pendingCover = mutablePendingCover.asStateFlow()
+    private val mutableCoverGenerationProgress = MutableStateFlow<BookCoverGenerationProgress?>(null)
+    val coverGenerationProgress = mutableCoverGenerationProgress.asStateFlow()
+    private var coverGenerationJob: Job? = null
     private val eventChannel = Channel<BookDetailEvent>(Channel.BUFFERED)
     val events = eventChannel.receiveAsFlow()
 
@@ -341,19 +360,129 @@ class BookDetailViewModel @Inject constructor(
         }
     }
 
-    /** 从系统选择器导入的新图同时进入图片库，之后可被其他书籍与背景复用。 */
-    fun replaceCover(source: Uri) {
+    /** 所有新封面先进入裁剪页，确认后再加入图片库。 */
+    fun prepareCover(source: Uri) {
         viewModelScope.launch {
             working.value = true
-            val saved = runCatching { imageImporter.importImage(source) }.getOrNull()
+            val pending = runCatching { imageImporter.prepare(source) }.getOrNull()
             working.value = false
-            if (saved == null) {
+            if (pending == null) {
                 eventChannel.send(BookDetailEvent.ShowMessage("无法读取所选图片"))
                 return@launch
             }
-            libraryRepository.replaceBookCover(bookId, saved.filePath)
-            eventChannel.send(BookDetailEvent.ShowMessage("已加入图片库并设为封面"))
+            mutablePendingCover.value?.let { imageImporter.discard(it) }
+            mutablePendingCover.value = pending
         }
+    }
+
+    fun searchOnlineCovers() {
+        if (uiState.value.book == null) return
+        viewModelScope.launch {
+            working.value = true
+            eventChannel.send(BookDetailEvent.ShowMessage("Agent 正在识别作品并生成封面搜索词…"))
+            runCatching { bookCoverService.search(bookId) }
+                .onSuccess { result ->
+                    mutableCoverCandidates.value = result.covers
+                    mutableCoverSearchQueries.value = result.queries
+                    mutableCoverSearchAgentEnhanced.value = result.agentEnhanced
+                    if (result.covers.isEmpty()) eventChannel.send(BookDetailEvent.ShowMessage("没有找到可用网络封面"))
+                }
+                .onFailure { eventChannel.send(BookDetailEvent.ShowMessage(it.message ?: "网络封面搜索失败")) }
+            working.value = false
+        }
+    }
+
+    fun prepareOnlineCover(candidate: OnlineBookCover) {
+        viewModelScope.launch {
+            working.value = true
+            runCatching {
+                val downloaded = bookCoverService.download(candidate)
+                try {
+                    imageImporter.prepareFile(downloaded, "${candidate.title}-封面.jpg")
+                } finally {
+                    downloaded.delete()
+                }
+            }.onSuccess { pending ->
+                mutablePendingCover.value?.let { imageImporter.discard(it) }
+                mutablePendingCover.value = pending
+            }.onFailure { eventChannel.send(BookDetailEvent.ShowMessage(it.message ?: "封面下载失败")) }
+            working.value = false
+        }
+    }
+
+    fun generateCover(prompt: String) {
+        if (coverGenerationJob?.isActive == true) return
+        coverGenerationJob = viewModelScope.launch {
+            working.value = true
+            mutableCoverGenerationProgress.value = BookCoverGenerationProgress(
+                fraction = 0.02f,
+                message = "正在启动 AI 封面任务"
+            )
+            try {
+                val generated = bookCoverService.generate(bookId, prompt) { progress ->
+                    mutableCoverGenerationProgress.value = progress
+                }
+                val pending = try {
+                    mutableCoverGenerationProgress.value = BookCoverGenerationProgress(
+                        fraction = 0.96f,
+                        message = "正在载入预览与裁剪工具"
+                    )
+                    imageImporter.prepareFile(
+                        generated,
+                        "${uiState.value.book?.title.orEmpty()}-AI封面.${generated.extension}"
+                    )
+                } finally {
+                    generated.delete()
+                }
+                mutablePendingCover.value?.let { imageImporter.discard(it) }
+                mutablePendingCover.value = pending
+                eventChannel.send(BookDetailEvent.ShowMessage("封面已生成，请确认裁剪范围"))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                eventChannel.send(
+                    BookDetailEvent.ShowMessage(error.message ?: "AI 封面生成失败")
+                )
+            } finally {
+                mutableCoverGenerationProgress.value = null
+                working.value = false
+                coverGenerationJob = null
+            }
+        }
+    }
+
+    fun cancelCoverGeneration() {
+        val job = coverGenerationJob ?: return
+        coverGenerationJob = null
+        job.cancel()
+        mutableCoverGenerationProgress.value = null
+        working.value = false
+        viewModelScope.launch {
+            eventChannel.send(BookDetailEvent.ShowMessage("已取消 AI 封面生成"))
+        }
+    }
+
+    fun confirmCoverCrop(focusY: Float) {
+        val pending = mutablePendingCover.value ?: return
+        viewModelScope.launch {
+            working.value = true
+            runCatching {
+                val cropped = imageImporter.cropCover(pending, focusY)
+                mutablePendingCover.value = cropped
+                imageImporter.confirm(cropped, "${uiState.value.book?.title.orEmpty()}封面")
+            }.onSuccess { saved ->
+                mutablePendingCover.value = null
+                libraryRepository.replaceBookCover(bookId, saved.filePath)
+                eventChannel.send(BookDetailEvent.ShowMessage("已裁剪并更新封面"))
+            }.onFailure { eventChannel.send(BookDetailEvent.ShowMessage(it.message ?: "封面裁剪失败")) }
+            working.value = false
+        }
+    }
+
+    fun discardPendingCover() {
+        val pending = mutablePendingCover.value ?: return
+        mutablePendingCover.value = null
+        viewModelScope.launch { imageImporter.discard(pending) }
     }
 
     fun selectCover(imageId: String) {

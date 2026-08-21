@@ -62,6 +62,7 @@ kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serializa
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 okhttp-sse = { module = "com.squareup.okhttp3:okhttp-sse", version.ref = "okhttp" }
 coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
+coil-network-okhttp = { module = "io.coil-kt.coil3:coil-network-okhttp", version.ref = "coil" }
 readium-shared = { module = "org.readium.kotlin-toolkit:readium-shared", version.ref = "readium" }
 readium-streamer = { module = "org.readium.kotlin-toolkit:readium-streamer", version.ref = "readium" }
 readium-navigator = { module = "org.readium.kotlin-toolkit:readium-navigator", version.ref = "readium" }

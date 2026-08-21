@@ -273,7 +273,11 @@ fun TtsSettingsScreen(
                                 if (settings.aiProvider == TtsApiProvider.OPENAI_COMPAT) {
                                     "如 gpt-4o-mini-tts / tts-1"
                                 } else {
-                                    "如 speech-02-turbo / speech-02-hd"
+                                    if ("turbo" in settings.aiModel.lowercase()) {
+                                        "Turbo 更偏速度；有声书表演推荐 speech-2.8-hd"
+                                    } else {
+                                        "有声书推荐 speech-2.8-hd；低延迟可用 speech-2.8-turbo"
+                                    }
                                 }
                             )
                         },

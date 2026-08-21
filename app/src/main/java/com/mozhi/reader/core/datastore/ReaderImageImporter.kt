@@ -1,6 +1,7 @@
 package com.mozhi.reader.core.datastore
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -71,6 +72,77 @@ class ReaderImageImporter @Inject constructor(
         }
     }
 
+    suspend fun prepareFile(source: File, originalName: String = source.name): PendingReaderImage =
+        withContext(Dispatchers.IO) {
+            require(source.isFile && source.length() in 1..MAX_IMAGE_BYTES) { "图片文件不可用或超过 40 MB" }
+            val extension = extensionFor(originalName, null)
+            val target = File(pendingDirectory(), "${UUID.randomUUID()}.$extension")
+            try {
+                source.copyTo(target, overwrite = false)
+                pendingFromFile(target, originalName, extension)
+            } catch (error: Throwable) {
+                target.delete()
+                throw error
+            }
+        }
+
+    suspend fun cropCover(pending: PendingReaderImage, focusY: Float): PendingReaderImage =
+        withContext(Dispatchers.IO) {
+            val source = checkedPendingFile(pending)
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(source.absolutePath, bounds)
+            val sample = calculateSampleSize(bounds.outWidth, bounds.outHeight, 2400)
+            val decoded = BitmapFactory.decodeFile(
+                source.absolutePath,
+                BitmapFactory.Options().apply { inSampleSize = sample }
+            ) ?: error("无法解码图片")
+            val targetAspect = 2f / 3f
+            val sourceAspect = decoded.width.toFloat() / decoded.height.coerceAtLeast(1)
+            val cropWidth: Int
+            val cropHeight: Int
+            val left: Int
+            val top: Int
+            if (sourceAspect > targetAspect) {
+                cropHeight = decoded.height
+                cropWidth = (cropHeight * targetAspect).toInt().coerceIn(1, decoded.width)
+                left = ((decoded.width - cropWidth) / 2).coerceAtLeast(0)
+                top = 0
+            } else {
+                cropWidth = decoded.width
+                cropHeight = (cropWidth / targetAspect).toInt().coerceIn(1, decoded.height)
+                left = 0
+                top = ((decoded.height - cropHeight) * focusY.coerceIn(0f, 1f)).toInt()
+                    .coerceIn(0, decoded.height - cropHeight)
+            }
+            val cropped = Bitmap.createBitmap(decoded, left, top, cropWidth, cropHeight)
+            if (cropped !== decoded) decoded.recycle()
+            val output = File(pendingDirectory(), "${UUID.randomUUID()}.jpg")
+            try {
+                val scaled = if (cropped.width > 1200 || cropped.height > 1800) {
+                    Bitmap.createScaledBitmap(cropped, 1200, 1800, true)
+                } else {
+                    cropped
+                }
+                output.outputStream().buffered().use { stream ->
+                    check(scaled.compress(Bitmap.CompressFormat.JPEG, 92, stream)) { "封面保存失败" }
+                }
+                if (scaled !== cropped) scaled.recycle()
+                cropped.recycle()
+                source.delete()
+                PendingReaderImage(
+                    cachePath = output.absolutePath,
+                    originalFileName = pending.originalFileName,
+                    detectedName = pending.detectedName,
+                    extension = "jpg",
+                    width = if (cropWidth > 1200) 1200 else cropWidth,
+                    height = if (cropHeight > 1800) 1800 else cropHeight
+                )
+            } catch (error: Throwable) {
+                output.delete()
+                throw error
+            }
+        }
+
     suspend fun confirm(
         pending: PendingReaderImage,
         customName: String,
@@ -138,6 +210,31 @@ class ReaderImageImporter @Inject constructor(
         val file = File(pending.cachePath).canonicalFile
         require(file.isFile && file.parentFile == root) { "待导入图片已失效" }
         return file
+    }
+
+    private fun pendingFromFile(file: File, originalName: String, extension: String): PendingReaderImage {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.absolutePath, bounds)
+        require(bounds.outWidth > 0 && bounds.outHeight > 0) { "不是可用的图片文件" }
+        require(
+            bounds.outWidth <= MAX_IMAGE_DIMENSION &&
+                bounds.outHeight <= MAX_IMAGE_DIMENSION &&
+                bounds.outWidth.toLong() * bounds.outHeight <= MAX_IMAGE_PIXELS
+        ) { "图片尺寸过大" }
+        return PendingReaderImage(
+            cachePath = file.absolutePath,
+            originalFileName = originalName,
+            detectedName = originalName.substringBeforeLast('.').trim().take(48).ifBlank { "图片" },
+            extension = extension,
+            width = bounds.outWidth,
+            height = bounds.outHeight
+        )
+    }
+
+    private fun calculateSampleSize(width: Int, height: Int, maxDimension: Int): Int {
+        var sample = 1
+        while (width / sample > maxDimension || height / sample > maxDimension) sample *= 2
+        return sample
     }
 
     private fun pendingDirectory(): File =

@@ -20,16 +20,13 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Bedtime
@@ -43,7 +40,6 @@ import androidx.compose.material.icons.outlined.RecordVoiceOver
 import androidx.compose.material.icons.outlined.SkipNext
 import androidx.compose.material.icons.outlined.SkipPrevious
 import androidx.compose.material.icons.outlined.Speed
-import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
@@ -90,9 +86,8 @@ import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.speech.SleepTimerPlan
 import com.mozhi.reader.core.speech.SleepTimerPlanner
 import com.mozhi.reader.core.speech.SleepTimerState
+import com.mozhi.reader.core.speech.TtsEngineMode
 import com.mozhi.reader.ui.components.SleepTimerSheet
-import com.mozhi.reader.ui.components.TtsTuningActions
-import com.mozhi.reader.ui.components.TtsTuningSections
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.io.File
 import javax.inject.Inject
@@ -170,6 +165,7 @@ fun ListenPlayerScreen(
     onBack: () -> Unit,
     onOpenReader: (Long) -> Unit,
     onOpenVoiceLibrary: () -> Unit,
+    onOpenRoleAssignments: (Long) -> Unit,
     viewModel: ListenPlayerViewModel = hiltViewModel(),
     tuningViewModel: TtsTuningViewModel = hiltViewModel()
 ) {
@@ -179,7 +175,7 @@ fun ListenPlayerScreen(
     val tuningState by tuningViewModel.uiState.collectAsStateWithLifecycle()
     val current = listenState?.takeIf { it.bookId == bookId }
     var showTimer by remember { mutableStateOf(false) }
-    var showTuning by remember { mutableStateOf(false) }
+    var showSpeed by remember { mutableStateOf(false) }
     var sliderValue by remember { mutableFloatStateOf(0f) }
     var dragging by remember { mutableStateOf(false) }
     LaunchedEffect(current?.chapterProgress, dragging) {
@@ -387,7 +383,7 @@ fun ListenPlayerScreen(
                     GlassPill(
                         icon = Icons.Outlined.Speed,
                         label = "${currentSpeed(tuningState.settings)}×",
-                        onClick = { showTuning = true }
+                        onClick = { showSpeed = true }
                     )
                     GlassPill(
                         icon = Icons.Outlined.Bedtime,
@@ -397,10 +393,13 @@ fun ListenPlayerScreen(
                     )
                     GlassPill(
                         icon = Icons.Outlined.RecordVoiceOver,
-                        label = "音色",
-                        onClick = onOpenVoiceLibrary
+                        label = current?.currentRoleName ?: "多角色",
+                        highlighted = current?.currentRoleName != null,
+                        onClick = {
+                            viewModel.stop()
+                            onOpenRoleAssignments(bookId)
+                        }
                     )
-                    GlassCircleButton(Icons.Outlined.Tune, "听书调节") { showTuning = true }
                 }
             }
         }
@@ -413,34 +412,136 @@ fun ListenPlayerScreen(
             onSelect = viewModel::setSleepTimer
         )
     }
-    if (showTuning) {
+    if (showSpeed) {
         ModalBottomSheet(
-            onDismissRequest = { showTuning = false },
+            onDismissRequest = { showSpeed = false },
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ) {
+            ListenSpeedSheet(
+                settings = tuningState.settings,
+                onEngineChange = tuningViewModel::setEngineMode,
+                onSystemRateChange = tuningViewModel::setSystemRate,
+                onAiSpeedChange = tuningViewModel::setAiSpeed,
+                onOpenVoiceLibrary = onOpenVoiceLibrary
+            )
+        }
+    }
+}
+
+@Composable
+private fun ListenSpeedSheet(
+    settings: com.mozhi.reader.core.speech.TtsSettings,
+    onEngineChange: (TtsEngineMode) -> Unit,
+    onSystemRateChange: (Float) -> Unit,
+    onAiSpeedChange: (Float) -> Unit,
+    onOpenVoiceLibrary: () -> Unit
+) {
+    val speed = if (settings.engineMode == TtsEngineMode.SYSTEM) settings.systemRate else settings.aiSpeed
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(horizontal = 22.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp)
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                "朗读速度",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                "系统旁白与 AI 对白分别保存速度，切换后只调整对应声部。",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            listOf(TtsEngineMode.SYSTEM to "系统旁白", TtsEngineMode.AI to "AI 对白")
+                .forEach { (mode, label) ->
+                    Surface(
+                        onClick = { onEngineChange(mode) },
+                        shape = RoundedCornerShape(16.dp),
+                        color = if (settings.engineMode == mode) {
+                            MaterialTheme.colorScheme.primaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.surfaceContainerHigh
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Column(Modifier.padding(horizontal = 16.dp, vertical = 13.dp)) {
+                            Text(label, style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                if (mode == TtsEngineMode.SYSTEM) "本机实时朗读" else "云端音色朗读",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+        }
+        Surface(
+            shape = RoundedCornerShape(22.dp),
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            modifier = Modifier.fillMaxWidth()
+        ) {
             Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .imePadding()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 20.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(20.dp)
+                modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text(
-                    "听书调节",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.SemiBold
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("${if (settings.engineMode == TtsEngineMode.SYSTEM) "旁白" else "对白"}倍速")
+                    Text(
+                        "%.1f×".format(speed),
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Slider(
+                    value = speed.coerceIn(0.5f, 2f),
+                    onValueChange = {
+                        if (settings.engineMode == TtsEngineMode.SYSTEM) onSystemRateChange(it)
+                        else onAiSpeedChange(it)
+                    },
+                    valueRange = 0.5f..2f,
+                    steps = 14
                 )
-                TtsTuningSections(
-                    settings = tuningState.settings,
-                    cacheSummary = tuningState.bookCache?.let {
-                        "本书已缓存 ${it.fileCount} 段 · ${formatBytes(it.totalBytes)}"
-                    } ?: "本书暂无语音缓存",
-                    actions = tuningActions(tuningViewModel, onOpenVoiceLibrary)
-                )
-                Spacer(Modifier.height(20.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(0.8f, 1f, 1.25f, 1.5f).forEach { preset ->
+                        Surface(
+                            onClick = {
+                                if (settings.engineMode == TtsEngineMode.SYSTEM) onSystemRateChange(preset)
+                                else onAiSpeedChange(preset)
+                            },
+                            shape = CircleShape,
+                            color = if (kotlin.math.abs(speed - preset) < 0.03f) {
+                                MaterialTheme.colorScheme.primaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.surfaceContainerHighest
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(
+                                "${preset}×",
+                                textAlign = TextAlign.Center,
+                                style = MaterialTheme.typography.labelLarge,
+                                modifier = Modifier.padding(vertical = 9.dp)
+                            )
+                        }
+                    }
+                }
             }
         }
+        if (settings.engineMode == TtsEngineMode.AI) {
+            androidx.compose.material3.OutlinedButton(
+                onClick = onOpenVoiceLibrary,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Outlined.RecordVoiceOver, contentDescription = null)
+                Text("管理 AI 音色", modifier = Modifier.padding(start = 8.dp))
+            }
+        }
+        Spacer(Modifier.height(8.dp))
     }
 }
 
@@ -578,28 +679,6 @@ private fun GlassPill(
     }
 }
 
-private fun tuningActions(
-    viewModel: TtsTuningViewModel,
-    onOpenVoiceLibrary: () -> Unit
-) = TtsTuningActions(
-    onEngineModeChange = viewModel::setEngineMode,
-    onAiVoiceChange = viewModel::setAiVoice,
-    onSystemRateChange = viewModel::setSystemRate,
-    onSystemPitchChange = viewModel::setSystemPitch,
-    onAiSpeedChange = viewModel::setAiSpeed,
-    onAiVolumeChange = viewModel::setAiVolume,
-    onAiPitchChange = viewModel::setAiPitch,
-    onAllowAudioMixingChange = viewModel::setAllowAudioMixing,
-    onTrimSilenceChange = viewModel::setTrimSilence,
-    onGranularityChange = viewModel::setGranularity,
-    onMaxCharsChange = viewModel::setMaxChars,
-    onConcurrencyChange = viewModel::setConcurrency,
-    onRetryCountChange = viewModel::setRetryCount,
-    onPrefetchCountChange = viewModel::setPrefetchCount,
-    onOpenVoiceLibrary = onOpenVoiceLibrary,
-    onClearBookCache = viewModel::clearBookCache
-)
-
 private fun currentSpeed(settings: com.mozhi.reader.core.speech.TtsSettings): String =
     "%.1f".format(
         if (settings.engineMode == com.mozhi.reader.core.speech.TtsEngineMode.SYSTEM) {
@@ -611,12 +690,6 @@ private fun currentSpeed(settings: com.mozhi.reader.core.speech.TtsSettings): St
 
 private fun String?.toRoleColor(fallback: Color): Color =
     runCatching { Color(android.graphics.Color.parseColor(this)) }.getOrDefault(fallback)
-
-private fun formatBytes(bytes: Long): String = when {
-    bytes >= 1024L * 1024L -> "%.1f MB".format(bytes / (1024f * 1024f))
-    bytes >= 1024L -> "%.1f KB".format(bytes / 1024f)
-    else -> "$bytes B"
-}
 
 private fun com.mozhi.reader.core.speech.TtsEngineMode.label(): String = when (this) {
     com.mozhi.reader.core.speech.TtsEngineMode.SYSTEM -> "系统 TTS"

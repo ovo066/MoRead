@@ -26,7 +26,7 @@ fun TtsApiProvider.defaultBaseUrl(): String = when (this) {
 }
 
 fun TtsApiProvider.defaultModel(): String = when (this) {
-    TtsApiProvider.MINIMAX_CN, TtsApiProvider.MINIMAX_INTL -> "speech-02-turbo"
+    TtsApiProvider.MINIMAX_CN, TtsApiProvider.MINIMAX_INTL -> "speech-2.8-hd"
     TtsApiProvider.OPENAI_COMPAT -> "gpt-4o-mini-tts"
 }
 

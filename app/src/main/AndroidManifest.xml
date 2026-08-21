@@ -78,7 +78,8 @@
         <service
             android:name=".ai.listen.ListenService"
             android:exported="false"
-            android:foregroundServiceType="mediaPlayback" />
+            android:foregroundServiceType="mediaPlayback"
+            android:stopWithTask="false" />
         <!-- 局域网传书：切到别的应用或熄屏时也别把正在传的书掐断。 -->
         <service
             android:name=".core.importer.lan.LanTransferService"

@@ -7,6 +7,12 @@ import com.mozhi.reader.core.database.entity.AiProviderEntity
 import com.mozhi.reader.core.database.entity.AiProviderType
 import java.util.Base64
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.float
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -51,10 +57,14 @@ class OpenAiMediaClientTest {
 
     @Test
     fun temporaryImageUrlIsDownloadedImmediately() = runBlocking {
-        val expected = byteArrayOf(7, 6, 5, 4)
+        val expected = byteArrayOf(
+            0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A
+        )
         var capturedPath = ""
+        var capturedAuthorization: String? = null
         val client = fakeClient { request ->
             capturedPath = request.url.encodedPath
+            capturedAuthorization = request.header("Authorization")
             expected to "image/png"
         }
         val media = OpenAiMediaClient(
@@ -69,7 +79,31 @@ class OpenAiMediaClientTest {
         )
 
         assertEquals("/generated/1.png", capturedPath)
+        assertEquals("Bearer secret", capturedAuthorization)
         assertArrayEquals(expected, bytes)
+    }
+
+    @Test
+    fun nonImageTemporaryUrlResponseIsRejected() = runBlocking {
+        val media = OpenAiMediaClient(
+            provider = provider(AiProviderAdapter.CUSTOM),
+            model = model(AiModelType.IMAGE),
+            apiKey = "secret",
+            httpClient = fakeClient { "not an image".toByteArray() to "text/plain" }
+        )
+
+        val error = runCatching {
+            media.materializeImage(
+                GeneratedImage(
+                    bytes = null,
+                    url = "https://example.test/generated/result",
+                    mediaType = null
+                )
+            )
+        }.exceptionOrNull()
+
+        assertTrue(error is IllegalArgumentException)
+        assertTrue(error?.message.orEmpty().contains("不是可识别的图片"))
     }
 
     @Test
@@ -155,6 +189,40 @@ class OpenAiMediaClientTest {
         assertTrue(capturedBody.contains("\"pitch\":-2"))
         assertArrayEquals(expected, result.bytes)
         assertEquals("audio/mpeg", result.mediaType)
+    }
+
+    @Test
+    fun miniMaxSpeechAppliesEmotionPerformanceAndPauseMarker() = runBlocking {
+        var capturedBody = ""
+        val client = fakeClient { request ->
+            capturedBody = Buffer().also { request.body?.writeTo(it) }.readUtf8()
+            """{"data":{"audio":"01"},"base_resp":{"status_code":0}}"""
+                .toByteArray() to "application/json"
+        }
+        val media = OpenAiMediaClient(
+            provider = provider(AiProviderAdapter.MINIMAX),
+            model = model(AiModelType.TTS),
+            apiKey = "secret",
+            httpClient = client
+        )
+
+        media.synthesizeSpeech(
+            text = "“别怕。”",
+            voice = "voice-1",
+            speed = 1f,
+            volume = 1f,
+            pitch = 0,
+            emotion = "悲伤",
+            instruction = "轻声，句末短停"
+        )
+
+        val payload = Json.parseToJsonElement(capturedBody).jsonObject
+        val voiceSetting = payload.getValue("voice_setting").jsonObject
+        assertEquals("sad", voiceSetting.getValue("emotion").jsonPrimitive.contentOrNull)
+        assertEquals(0.846f, voiceSetting.getValue("speed").jsonPrimitive.float, 0.001f)
+        assertEquals(0.7544f, voiceSetting.getValue("vol").jsonPrimitive.float, 0.001f)
+        assertEquals(-2, voiceSetting.getValue("pitch").jsonPrimitive.int)
+        assertEquals("“别怕。<#0.28#>”", payload.getValue("text").jsonPrimitive.contentOrNull)
     }
 
     @Test

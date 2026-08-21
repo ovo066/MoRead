@@ -450,22 +450,48 @@ fun MoReadApp(
                         bookId = bookId,
                         onBack = navController::popBackStack,
                         onOpenReader = { navController.navigate("reader/$it") },
-                        onOpenVoiceLibrary = { navController.navigate("tts-voices") }
+                        onOpenVoiceLibrary = { navController.navigate("tts-voices") },
+                        onOpenRoleAssignments = { navController.navigate("audiobook-roles/$it?source=listen") }
                     )
                 }
-                pushComposable("audiobook-roles/{bookId}") {
+                pushComposable(
+                    route = "audiobook-roles/{bookId}?source={source}",
+                    arguments = listOf(
+                        navArgument("source") {
+                            type = NavType.StringType
+                            defaultValue = "production"
+                        }
+                    )
+                ) { entry ->
+                    val source = entry.arguments?.getString("source") ?: "production"
                     AudiobookRoleScreen(
                         onBack = navController::popBackStack,
                         onContinue = { bookId, chapterIndex ->
-                            navController.navigate("audiobook-script/$bookId/$chapterIndex")
+                            navController.navigate("audiobook-script/$bookId/$chapterIndex?source=$source")
                         }
                     )
                 }
-                pushComposable("audiobook-script/{bookId}/{chapter}") {
+                pushComposable(
+                    route = "audiobook-script/{bookId}/{chapter}?source={source}",
+                    arguments = listOf(
+                        navArgument("source") {
+                            type = NavType.StringType
+                            defaultValue = "production"
+                        }
+                    )
+                ) { entry ->
+                    val source = entry.arguments?.getString("source") ?: "production"
                     AudiobookScriptScreen(
                         onBack = navController::popBackStack,
                         onConfirmed = { bookId ->
-                            navController.navigate("audiobook-production/$bookId")
+                            if (source == "listen") {
+                                navController.navigate("listen/$bookId") {
+                                    popUpTo("listen/$bookId") { inclusive = true }
+                                    launchSingleTop = true
+                                }
+                            } else {
+                                navController.navigate("audiobook-production/$bookId")
+                            }
                         }
                     )
                 }

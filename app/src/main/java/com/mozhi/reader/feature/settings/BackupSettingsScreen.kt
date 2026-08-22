@@ -129,7 +129,7 @@ fun BackupSettingsScreen(
             ) {
                 item {
                     Text(
-                        "备份包含书库、进度、批注、对话、预设、书籍文件与插图。API Key、WebDAV 密码和可重建的向量索引不会写入备份。",
+                        "备份包含书库、进度、批注、对话与书籍文件。API Key 和 WebDAV 密码不会写进备份。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

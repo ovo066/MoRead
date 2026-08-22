@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mozhi.reader.ai.agent.AgentEvent
 import com.mozhi.reader.ai.agent.AgentLoop
+import com.mozhi.reader.ai.agent.CompanionToolRouter
 import com.mozhi.reader.ai.agent.ReaderToolset
 import com.mozhi.reader.ai.chat.AiChatRepository
 import com.mozhi.reader.ai.chat.CompanionGenerationTracker
@@ -617,20 +618,27 @@ class ReaderCompanionViewModel @Inject constructor(
             streamBuffer.setLength(0)
             val ticker = viewModelScope.launchStreamingTicker(::publishStreamingSnapshot)
             try {
-                val globallyEnabledTools = if (webSearchSettingsStore.current().enabled) {
-                    setOf("web_search", "web_scrape")
-                } else {
-                    emptySet()
-                }
+                val webSearchEnabled = webSearchSettingsStore.current().enabled
                 val spoilerProtectionEnabled = settingsRepository
                     .companionSpoilerProtectionEnabled
                     .first()
                 val memorySettings = settingsRepository.companionMemorySettings.first()
+                val enabledTools = CompanionToolRouter.select(
+                    userText = memoryQuery ?: session.value.messages
+                        .lastOrNull { it.role == "user" }
+                        ?.content
+                        .orEmpty(),
+                    sceneAvailable = sceneQuote.isNotBlank(),
+                    personaEnabledTools = persona.enabledTools().toSet(),
+                    requiredTools = requiredTools,
+                    webSearchEnabled = webSearchEnabled,
+                    longTermMemoryEnabled = memorySettings.longTermEnabled && persona.memoryEnabled
+                )
                 val tools = readerToolset.forBook(
                     bookId = book,
                     personaId = persona.id,
                     conversationId = conversationId,
-                    enabledTools = persona.enabledTools().toSet() + requiredTools + globallyEnabledTools,
+                    enabledTools = enabledTools,
                     spoilerProtectionEnabled = spoilerProtectionEnabled,
                     memoryScope = MemoryScope(
                         longTermEnabled = memorySettings.longTermEnabled && persona.memoryEnabled,
@@ -643,7 +651,6 @@ class ReaderCompanionViewModel @Inject constructor(
                     bookId = book,
                     scene = sceneQuote.takeIf(String::isNotBlank),
                     memoryQuery = memoryQuery,
-                    toolNames = tools.map { it.spec.name },
                     spoilerProtectionEnabled = spoilerProtectionEnabled
                 )
                 agentLoop.run(conversationId, tools, systemPrompt).collect { event ->

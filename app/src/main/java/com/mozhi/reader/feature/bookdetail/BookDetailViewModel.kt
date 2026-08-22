@@ -41,6 +41,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -65,6 +66,7 @@ data class BookDetailUiState(
     val audiobookReadyChapters: Int = 0,
     val audiobookTotalMillis: Long = 0,
     val audiobookRoleNames: List<String> = emptyList(),
+    val description: String = "",
     val isLoading: Boolean = true,
     val isWorking: Boolean = false
 ) {
@@ -165,6 +167,14 @@ class BookDetailViewModel @Inject constructor(
         val audiobookRoles: List<com.mozhi.reader.core.database.entity.AudiobookRoleEntity>
     )
 
+    private val bookDescription = libraryRepository.observeChapters(bookId).mapLatest { chapters ->
+        BookDescriptionExtractor.extract(
+            chapters.take(DESCRIPTION_CHAPTER_LIMIT).map { chapter ->
+                chapter.title to libraryRepository.readChapterText(bookId, chapter)
+            }
+        )
+    }
+
     private val detailExtras = combine(
         settingsRepository.settings,
         shelfRepository.snapshot,
@@ -184,8 +194,9 @@ class BookDetailViewModel @Inject constructor(
         content,
         libraryRepository.observeReadingDays(bookId),
         working,
-        detailExtras
-    ) { content, days, isWorking, extras ->
+        detailExtras,
+        bookDescription
+    ) { content, days, isWorking, extras, description ->
         BookDetailUiState(
             book = content.book,
             chapters = content.chapters,
@@ -209,6 +220,7 @@ class BookDetailViewModel @Inject constructor(
                 .filter { it.state == "READY" }
                 .sumOf { it.totalMillis },
             audiobookRoleNames = extras.audiobookRoles.map { it.name },
+            description = description,
             isLoading = false,
             isWorking = isWorking
         )
@@ -498,6 +510,7 @@ class BookDetailViewModel @Inject constructor(
     }
 
     private companion object {
+        const val DESCRIPTION_CHAPTER_LIMIT = 4
         const val MAX_TITLE_LENGTH = 200
         const val MAX_AUTHOR_LENGTH = 120
     }

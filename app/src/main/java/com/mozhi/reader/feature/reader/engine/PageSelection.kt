@@ -137,6 +137,54 @@ fun TextPage.selectedText(start: TextPos, end: TextPos): String {
     return builder.toString()
 }
 
+
+/** The selectable position containing [bodyOffset], or the nearest selectable edge on this page. */
+fun TextPage.textPosAtBodyOffset(bodyOffset: Int): TextPos? {
+    val selectable = lines.withIndex().filter { it.value.columns.isNotEmpty() && it.value.charLength > 0 }
+    if (selectable.isEmpty()) return null
+    selectable.forEach { indexedLine ->
+        val line = indexedLine.value
+        var offset = line.chapterPosition
+        line.columns.forEachIndexed { columnIndex, column ->
+            val end = offset + column.charData.length
+            if (bodyOffset < end) return TextPos(indexedLine.index, columnIndex)
+            offset = end
+        }
+    }
+    val last = selectable.last()
+    return TextPos(last.index, last.value.columns.lastIndex)
+}
+
+/** Selection rectangles for an inclusive chapter-body range intersected with this page. */
+fun TextPage.selectionRects(bodyRange: IntRange): List<SelectionRect> {
+    if (bodyRange.isEmpty()) return emptyList()
+    val selectableLines = lines.filter { it.columns.isNotEmpty() && it.charLength > 0 }
+    if (selectableLines.isEmpty()) return emptyList()
+    val pageStart = selectableLines.first().chapterPosition
+    val lastLine = selectableLines.last()
+    val pageEndInclusive = lastLine.chapterPosition + lastLine.charLength - 1
+    val startOffset = maxOf(bodyRange.first, pageStart)
+    val endOffset = minOf(bodyRange.last, pageEndInclusive)
+    if (startOffset > endOffset) return emptyList()
+    val start = textPosAtBodyOffset(startOffset) ?: return emptyList()
+    val end = textPosAtBodyOffset(endOffset) ?: return emptyList()
+    return selectionRects(start, end)
+}
+
+/** Selection state after dragging a chapter-body offset handle. */
+data class BodyHandleDrag(val start: Int, val end: Int, val draggingStart: Boolean)
+
+fun dragSelectionHandle(
+    start: Int,
+    end: Int,
+    hit: Int,
+    draggingStart: Boolean
+): BodyHandleDrag = if (draggingStart) {
+    if (hit <= end) BodyHandleDrag(hit, end, true) else BodyHandleDrag(start, hit, false)
+} else {
+    if (hit >= start) BodyHandleDrag(start, hit, false) else BodyHandleDrag(hit, start, true)
+}
+
 /** Selection state after dragging one handle; handles swap when dragged past the fixed end. */
 data class HandleDrag(val start: TextPos, val end: TextPos, val draggingStart: Boolean)
 

@@ -21,6 +21,7 @@ import com.mozhi.reader.core.datastore.ReaderImageImporter
 import com.mozhi.reader.core.datastore.ReaderSettings
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
 import com.mozhi.reader.core.datastore.ReaderTextReplacementRule
+import com.mozhi.reader.core.datastore.ReaderThemeSlot
 import com.mozhi.reader.core.datastore.validationError
 import com.mozhi.reader.core.library.EditableChapterDraft
 import com.mozhi.reader.core.datastore.ReaderTheme
@@ -414,16 +415,24 @@ class ReaderViewModel @Inject constructor(
         ?.trim()
         .orEmpty()
 
-    fun addBookmark() {
+    fun toggleBookmark() {
         val chapterIndex = contentController.chapterIndex
         val charOffset = contentController.charOffset
-        val label = chapterEntities.getOrNull(chapterIndex)?.title ?: "阅读书签"
-        val excerpt = (contentController.curPage() as? RenderPage.Laid)
-            ?.page?.lines
-            ?.firstOrNull { it.charLength > 0 && !it.isTitle }
-            ?.text?.trim()?.take(48)
-            .orEmpty()
+        val existing = mutableState.value.bookmarks.firstOrNull {
+            it.chapterIndex == chapterIndex && it.charOffset == charOffset
+        }
         viewModelScope.launch {
+            if (existing != null) {
+                libraryRepository.deleteBookmark(existing.id)
+                eventChannel.send(ReaderEvent.ShowMessage("已取消书签"))
+                return@launch
+            }
+            val label = chapterEntities.getOrNull(chapterIndex)?.title ?: "阅读书签"
+            val excerpt = (contentController.curPage() as? RenderPage.Laid)
+                ?.page?.lines
+                ?.firstOrNull { it.charLength > 0 && !it.isTitle }
+                ?.text?.trim()?.take(48)
+                .orEmpty()
             libraryRepository.addBookmark(
                 bookId = bookId,
                 chapterIndex = chapterIndex,
@@ -749,20 +758,27 @@ class ReaderViewModel @Inject constructor(
         viewModelScope.launch { settingsRepository.setShowFooter(value) }
     }
 
-    fun setTheme(value: ReaderTheme) {
-        viewModelScope.launch { settingsRepository.setTheme(value) }
+    fun setTheme(value: ReaderTheme, slot: ReaderThemeSlot = ReaderThemeSlot.DAY) {
+        viewModelScope.launch { settingsRepository.setTheme(value, slot) }
     }
 
-    fun selectCustomTheme(id: Long) {
-        viewModelScope.launch { settingsRepository.selectCustomTheme(id) }
+    fun selectCustomTheme(id: Long, slot: ReaderThemeSlot = ReaderThemeSlot.DAY) {
+        viewModelScope.launch { settingsRepository.selectCustomTheme(id, slot) }
     }
 
-    fun saveCustomTheme(theme: com.mozhi.reader.core.datastore.CustomReaderTheme) {
-        viewModelScope.launch { settingsRepository.saveCustomTheme(theme) }
+    fun saveCustomTheme(
+        theme: com.mozhi.reader.core.datastore.CustomReaderTheme,
+        slot: ReaderThemeSlot = ReaderThemeSlot.DAY
+    ) {
+        viewModelScope.launch { settingsRepository.saveCustomTheme(theme, slot) }
     }
 
     fun deleteCustomTheme(id: Long) {
         viewModelScope.launch { settingsRepository.deleteCustomTheme(id) }
+    }
+
+    fun setDayNightThemeAuto(enabled: Boolean) {
+        viewModelScope.launch { settingsRepository.setDayNightThemeAuto(enabled) }
     }
 
     fun setPageTurnAnimation(value: PageTurnAnimation) {
@@ -785,10 +801,12 @@ class ReaderViewModel @Inject constructor(
         viewModelScope.launch { settingsRepository.setVolumeKeysPageTurn(value) }
     }
 
-    fun importBackgroundImage(uri: Uri) {
+    fun importBackgroundImage(uri: Uri, slot: ReaderThemeSlot = ReaderThemeSlot.DAY) {
         viewModelScope.launch {
-            runCatching { imageImporter.importImage(uri, selectAsBackground = true) }
-                .onSuccess {
+            // 先只入库，再按槽选中——importer 只认全局背景，日夜两套得由这里指定去处。
+            runCatching { imageImporter.importImage(uri, selectAsBackground = false) }
+                .onSuccess { asset ->
+                    settingsRepository.selectBackgroundImage(asset.id, slot)
                     eventChannel.send(ReaderEvent.ShowMessage("已加入图片库并设为阅读背景"))
                 }
                 .onFailure { error ->
@@ -801,16 +819,16 @@ class ReaderViewModel @Inject constructor(
         }
     }
 
-    fun selectBackgroundImage(imageId: String) {
-        viewModelScope.launch { settingsRepository.selectBackgroundImage(imageId) }
+    fun selectBackgroundImage(imageId: String, slot: ReaderThemeSlot = ReaderThemeSlot.DAY) {
+        viewModelScope.launch { settingsRepository.selectBackgroundImage(imageId, slot) }
     }
 
-    fun clearBackgroundImage() {
-        viewModelScope.launch { settingsRepository.setBackgroundImagePath(null) }
+    fun clearBackgroundImage(slot: ReaderThemeSlot = ReaderThemeSlot.DAY) {
+        viewModelScope.launch { settingsRepository.setBackgroundImagePath(null, slot) }
     }
 
-    fun setBackgroundImageOpacity(value: Float) {
-        viewModelScope.launch { settingsRepository.setBackgroundImageOpacity(value) }
+    fun setBackgroundImageOpacity(value: Float, slot: ReaderThemeSlot = ReaderThemeSlot.DAY) {
+        viewModelScope.launch { settingsRepository.setBackgroundImageOpacity(value, slot) }
     }
 
     fun setSyntaxHighlightEnabled(value: Boolean) {

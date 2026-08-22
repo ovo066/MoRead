@@ -9,15 +9,18 @@ import org.junit.Test
 
 class StatsViewModelTest {
     @Test
-    fun `ranges use exact day month and year boundaries`() {
+    fun `ranges use exact day week month and year boundaries`() {
         val leapDay = LocalDate.of(2024, 2, 29)
 
         val day = statsPeriodRange(StatsPeriod.DAY, leapDay)
+        val week = statsPeriodRange(StatsPeriod.WEEK, leapDay)
         val month = statsPeriodRange(StatsPeriod.MONTH, leapDay)
         val year = statsPeriodRange(StatsPeriod.YEAR, leapDay)
 
         assertEquals(LocalDate.of(2024, 2, 29).toEpochDay(), day.startEpochDay)
         assertEquals(LocalDate.of(2024, 3, 1).toEpochDay(), day.endEpochDayExclusive)
+        assertEquals(LocalDate.of(2024, 2, 26).toEpochDay(), week.startEpochDay)
+        assertEquals(LocalDate.of(2024, 3, 4).toEpochDay(), week.endEpochDayExclusive)
         assertEquals(LocalDate.of(2024, 2, 1).toEpochDay(), month.startEpochDay)
         assertEquals(LocalDate.of(2024, 3, 1).toEpochDay(), month.endEpochDayExclusive)
         assertEquals(LocalDate.of(2024, 1, 1).toEpochDay(), year.startEpochDay)

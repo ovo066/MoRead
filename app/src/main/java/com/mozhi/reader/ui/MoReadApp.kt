@@ -78,6 +78,10 @@ import com.mozhi.reader.feature.reader.CompanionChatScreen
 import com.mozhi.reader.feature.reader.ReaderLocateRequest
 import com.mozhi.reader.feature.reader.ReaderScreen
 import com.mozhi.reader.feature.settings.AiServiceScreen
+import com.mozhi.reader.feature.settings.AiAndCompanionSettingsScreen
+import com.mozhi.reader.feature.settings.AboutSettingsScreen
+import com.mozhi.reader.feature.settings.DataSettingsScreen
+import com.mozhi.reader.feature.settings.ReadingAppearanceSettingsScreen
 import com.mozhi.reader.feature.settings.ApiLogScreen
 import com.mozhi.reader.feature.settings.AppUpdatePrompt
 import com.mozhi.reader.feature.settings.ImageGenSettingsScreen
@@ -271,16 +275,55 @@ fun MoReadApp(
                     SettingsScreen(
                         contentPadding = padding,
                         viewModel = hiltViewModel(entry),
+                        onOpenReading = { navController.navigate("settings-reading") },
+                        onOpenTts = { navController.navigate("tts-settings") },
                         onOpenAiServices = { navController.navigate("ai-services") },
-                        onOpenWebSearch = { navController.navigate("web-search-settings") },
+                        onOpenAi = { navController.navigate("settings-ai") },
+                        onOpenBackup = { navController.navigate("backup-settings") },
+                        onOpenData = { navController.navigate("settings-data") },
+                        onOpenAbout = { navController.navigate("settings-about") }
+                    )
+                }
+                pushComposable("settings-reading") { entry ->
+                    val settingsEntry = remember(entry) {
+                        navController.getBackStackEntry(RootDestination.Settings.route)
+                    }
+                    ReadingAppearanceSettingsScreen(
+                        onBack = navController::popBackStack,
                         onOpenTtsSettings = { navController.navigate("tts-settings") },
                         onOpenVoiceLibrary = { navController.navigate("tts-voices") },
                         onOpenImageGenSettings = { navController.navigate("image-gen-settings") },
                         onOpenFontLibrary = { navController.navigate("font-library") },
                         onOpenImageLibrary = { navController.navigate("image-library") },
+                        viewModel = hiltViewModel<SettingsViewModel>(settingsEntry)
+                    )
+                }
+                pushComposable("settings-ai") { entry ->
+                    val settingsEntry = remember(entry) {
+                        navController.getBackStackEntry(RootDestination.Settings.route)
+                    }
+                    AiAndCompanionSettingsScreen(
+                        onBack = navController::popBackStack,
+                        onOpenAiServices = { navController.navigate("ai-services") },
+                        onOpenWebSearch = { navController.navigate("web-search-settings") },
                         onOpenGlobalPresets = { navController.navigate("global-presets") },
                         onOpenUserMasks = { navController.navigate("user-masks") },
+                        viewModel = hiltViewModel<SettingsViewModel>(settingsEntry)
+                    )
+                }
+                pushComposable("settings-data") { entry ->
+                    val settingsEntry = remember(entry) {
+                        navController.getBackStackEntry(RootDestination.Settings.route)
+                    }
+                    DataSettingsScreen(
+                        onBack = navController::popBackStack,
                         onOpenBackup = { navController.navigate("backup-settings") },
+                        viewModel = hiltViewModel<SettingsViewModel>(settingsEntry)
+                    )
+                }
+                pushComposable("settings-about") {
+                    AboutSettingsScreen(
+                        onBack = navController::popBackStack,
                         onOpenApiLog = { navController.navigate("api-log") }
                     )
                 }

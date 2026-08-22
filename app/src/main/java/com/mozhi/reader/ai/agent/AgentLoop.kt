@@ -76,9 +76,10 @@ class AgentLoop @Inject constructor(
     fun run(
         conversationId: Long,
         tools: List<AgentTool>,
-        systemPrompt: String? = null
+        systemPrompt: String? = null,
+        modelRole: ModelRole = ModelRole.CHAT
     ): Flow<AgentEvent> = runWith(conversationId, tools, systemPrompt) {
-        val resolved = clientFactory.get().forRole(ModelRole.CHAT)
+        val resolved = clientFactory.get().forRole(modelRole)
         Streamer { messages, specs ->
             resolved.client.chatStream(messages, specs, resolved.options)
         }

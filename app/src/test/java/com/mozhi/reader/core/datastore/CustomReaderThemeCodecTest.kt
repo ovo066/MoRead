@@ -38,4 +38,36 @@ class CustomReaderThemeCodecTest {
             CustomReaderThemeCodec.decode(raw)
         )
     }
+
+    @Test
+    fun `单个损坏主题不会清空其他主题`() {
+        val raw = """[
+            {"id":7,"name":"保留","backgroundArgb":1,"textArgb":2,"accentArgb":3},
+            {"id":"坏"}
+        ]""".trimIndent()
+
+        assertEquals(
+            listOf(CustomReaderTheme(7L, "保留", 1, 2, 3)),
+            CustomReaderThemeCodec.decode(raw)
+        )
+    }
+
+    @Test
+    fun `主题素材路径可以往返保存`() {
+        val theme = CustomReaderTheme(
+            id = 8L,
+            name = "图片主题",
+            backgroundArgb = 1,
+            textArgb = 2,
+            accentArgb = 3,
+            font = ReaderFont.CUSTOM,
+            customFontId = "font-1",
+            customFontPath = "/fonts/a.ttf",
+            customFontName = "阅读字体",
+            backgroundImageId = "image-1",
+            backgroundImagePath = "/images/a.jpg"
+        )
+
+        assertEquals(listOf(theme), CustomReaderThemeCodec.decode(CustomReaderThemeCodec.encode(listOf(theme))))
+    }
 }

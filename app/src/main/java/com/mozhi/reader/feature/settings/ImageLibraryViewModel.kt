@@ -75,7 +75,10 @@ class ImageLibraryViewModel @Inject constructor(
 
     fun delete(image: ReaderImageAsset) = launchWorking {
         val settings = settingsRepository.settings.first()
-        val usedAsBackground = settings.backgroundImagePath == image.filePath
+        // 日、夜两套配色各有背景图，任一套在用都不能删。
+        val usedAsBackground = settings.backgroundImagePath == image.filePath ||
+            settings.selectedBackgroundImageId == image.id ||
+            settings.nightSelectedBackgroundImageId == image.id
         val coverCount = libraryRepository.getBooks().count { it.coverPath == image.filePath }
         require(!usedAsBackground && coverCount == 0) {
             buildString {

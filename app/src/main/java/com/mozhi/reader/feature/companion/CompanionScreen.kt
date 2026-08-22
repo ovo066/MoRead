@@ -17,7 +17,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -36,7 +38,6 @@ import com.mozhi.reader.core.database.entity.PersonaEntity
 import com.mozhi.reader.ui.components.PersonaAvatarImage
 import com.mozhi.reader.core.database.entity.chatAppearance
 import com.mozhi.reader.core.database.entity.worldBook
-import com.mozhi.reader.ui.components.DashedAddRow
 import com.mozhi.reader.ui.components.FrostedSurface
 import com.mozhi.reader.ui.theme.MoReadTokens
 
@@ -60,7 +61,7 @@ fun CompanionScreen(
     ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 20.dp, top = 18.dp, end = 20.dp, bottom = 124.dp),
+            contentPadding = PaddingValues(start = 20.dp, top = 18.dp, end = 20.dp, bottom = 172.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             item {
@@ -94,9 +95,6 @@ fun CompanionScreen(
                     onEdit = { onEditPersona(persona.id) }
                 )
             }
-            item {
-                DashedAddRow(label = "新建角色", onClick = onCreatePersona)
-            }
             if (state.loaded && state.personas.isEmpty()) {
                 item {
                     Text(
@@ -107,6 +105,18 @@ fun CompanionScreen(
                     )
                 }
             }
+        }
+
+        FloatingActionButton(
+            onClick = onCreatePersona,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 20.dp, bottom = 96.dp),
+            shape = CircleShape,
+            containerColor = MaterialTheme.colorScheme.primary,
+            contentColor = MaterialTheme.colorScheme.onPrimary
+        ) {
+            Icon(Icons.Outlined.Add, contentDescription = "新建角色")
         }
     }
 }

@@ -80,6 +80,27 @@ class PageSelectionTest {
     }
 
     @Test
+    fun `body range rectangles span page intersections`() {
+        val page = page()
+        val firstLine = page.lines.first { it.charLength > 0 }
+        val secondLine = page.lines.dropWhile { it !== firstLine }.drop(1).first { it.charLength > 0 }
+        val range = (firstLine.chapterPosition + 2)..(secondLine.chapterPosition + 2)
+
+        val rects = page.selectionRects(range)
+
+        assertEquals(2, rects.size)
+        assertEquals(firstLine.columns[2].start, rects.first().left, 0.01f)
+        assertEquals(secondLine.columns[2].end, rects.last().right, 0.01f)
+    }
+
+    @Test
+    fun `body handle swaps when crossing fixed endpoint`() {
+        assertEquals(BodyHandleDrag(10, 30, false), dragSelectionHandle(10, 20, 30, true))
+        assertEquals(BodyHandleDrag(5, 10, true), dragSelectionHandle(10, 20, 5, false))
+        assertEquals(BodyHandleDrag(10, 25, false), dragSelectionHandle(10, 30, 25, false))
+    }
+
+    @Test
     fun `dragging a handle moves its edge and keeps the other fixed`() {
         val start = TextPos(0, 2)
         val end = TextPos(1, 3)

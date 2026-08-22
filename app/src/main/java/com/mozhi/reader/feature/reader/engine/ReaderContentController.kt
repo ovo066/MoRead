@@ -505,6 +505,9 @@ class ReaderContentController(
             .trim()
     }
 
+    /** Body text for a chapter currently held by the three-chapter window. */
+    fun chapterBody(index: Int): String? = slotFor(index)?.body
+
     fun bookProgress(): Float = progressAt(chapterIndex, charOffset)
 
     /** 听书自动翻页用：该章内偏移是否正落在当前显示页上；本章尚未排版时按“已显示”处理。 */

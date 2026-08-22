@@ -125,7 +125,20 @@ data class ReaderSettings(
     /** 用户保存的自定义主题预设。 */
     val customThemes: List<CustomReaderTheme> = emptyList(),
     /** 非空表示自定义主题生效，覆盖 [theme]；选内置主题时清空。 */
-    val activeCustomThemeId: Long? = null
+    val activeCustomThemeId: Long? = null,
+    /**
+     * 日夜自动切换：开启后深色模式下改用夜间槽的配色与背景图。默认关闭——
+     * 老配置只有一套纸色，默默换成两套等于替用户改了外观。
+     */
+    val dayNightThemeAuto: Boolean = false,
+    /** 夜间槽的内置主题。 */
+    val nightTheme: ReaderTheme = ReaderTheme.DARK,
+    /** 夜间槽的自定义主题；语义同 [activeCustomThemeId]。 */
+    val nightActiveCustomThemeId: Long? = null,
+    /** 夜间槽的背景图。 */
+    val nightSelectedBackgroundImageId: String? = null,
+    /** 夜间槽的背景图不透明度。 */
+    val nightBackgroundImageOpacity: Float = 0.28f
 )
 
 /** 当前生效的自定义主题；id 悬空（预设已删）按未启用处理。 */
@@ -219,7 +232,16 @@ class ReaderSettingsRepository @Inject constructor(
                 preferences[Keys.TextReplacementRules]
             ),
             customThemes = CustomReaderThemeCodec.decode(preferences[Keys.CustomThemes]),
-            activeCustomThemeId = preferences[Keys.ActiveCustomThemeId]
+            activeCustomThemeId = preferences[Keys.ActiveCustomThemeId],
+            dayNightThemeAuto = preferences[Keys.DayNightThemeAuto] ?: false,
+            nightTheme = preferences[Keys.NightTheme]
+                ?.let { runCatching { ReaderTheme.valueOf(it) }.getOrNull() }
+                ?: ReaderTheme.DARK,
+            nightActiveCustomThemeId = preferences[Keys.NightActiveCustomThemeId],
+            nightSelectedBackgroundImageId = preferences[Keys.NightSelectedBackgroundImageId]
+                ?.takeIf { id -> imageLibrary.any { it.id == id } },
+            nightBackgroundImageOpacity = (preferences[Keys.NightBackgroundImageOpacity] ?: 0.28f)
+                .coerceIn(0.05f, 1f)
         )
     }
 
@@ -437,22 +459,42 @@ class ReaderSettingsRepository @Inject constructor(
     }
 
     /** 选内置主题即退出自定义主题，两者互斥（与强调色预设/自定义同款语义）。 */
-    suspend fun setTheme(value: ReaderTheme) {
+    suspend fun setTheme(value: ReaderTheme, slot: ReaderThemeSlot = ReaderThemeSlot.DAY) {
         dataStore.edit {
-            it[Keys.Theme] = value.name
-            it.remove(Keys.ActiveCustomThemeId)
+            it[themeKey(slot)] = value.name
+            it.remove(customThemeKey(slot))
         }
     }
 
-    /** 保存（新建或覆盖）自定义主题并立即应用；返回落盘的 id。 */
-    suspend fun saveCustomTheme(theme: CustomReaderTheme): Long {
+    /**
+     * 日夜自动切换。首次开启时若夜间槽还没配过，种一套内置「夜间」纸色——
+     * 只补空，不动用户已经配好的日间槽。
+     */
+    suspend fun setDayNightThemeAuto(enabled: Boolean) {
+        dataStore.edit { preferences ->
+            preferences[Keys.DayNightThemeAuto] = enabled
+            if (enabled && preferences[Keys.NightTheme] == null &&
+                preferences[Keys.NightActiveCustomThemeId] == null
+            ) {
+                preferences[Keys.NightTheme] = ReaderTheme.DARK.name
+            }
+        }
+    }
+
+    /** 保存（新建或覆盖）自定义主题并立即应用到指定槽；返回落盘的 id。 */
+    suspend fun saveCustomTheme(
+        theme: CustomReaderTheme,
+        slot: ReaderThemeSlot = ReaderThemeSlot.DAY
+    ): Long {
         var assigned = theme.id
         dataStore.edit { preferences ->
             val existing = CustomReaderThemeCodec.decode(preferences[Keys.CustomThemes])
             if (assigned == 0L) assigned = (existing.maxOfOrNull { it.id } ?: 0L) + 1
-            val updated = existing.filterNot { it.id == assigned } + theme.copy(id = assigned)
-            preferences[Keys.CustomThemes] = CustomReaderThemeCodec.encode(updated)
-            preferences[Keys.ActiveCustomThemeId] = assigned
+            val saved = theme.copy(id = assigned)
+            preferences[Keys.CustomThemes] = CustomReaderThemeCodec.encode(
+                existing.filterNot { it.id == assigned } + saved
+            )
+            applyCustomTheme(preferences, saved, slot)
         }
         return assigned
     }
@@ -462,16 +504,122 @@ class ReaderSettingsRepository @Inject constructor(
             val remaining = CustomReaderThemeCodec.decode(preferences[Keys.CustomThemes])
                 .filterNot { it.id == id }
             preferences[Keys.CustomThemes] = CustomReaderThemeCodec.encode(remaining)
-            if (preferences[Keys.ActiveCustomThemeId] == id) {
-                preferences.remove(Keys.ActiveCustomThemeId)
+            ReaderThemeSlot.entries.forEach { slot ->
+                if (preferences[customThemeKey(slot)] == id) preferences.remove(customThemeKey(slot))
             }
         }
     }
 
-    suspend fun selectCustomTheme(id: Long) {
-        dataStore.edit { it[Keys.ActiveCustomThemeId] = id }
+    suspend fun selectCustomTheme(id: Long, slot: ReaderThemeSlot = ReaderThemeSlot.DAY) {
+        dataStore.edit { preferences ->
+            val theme = CustomReaderThemeCodec.decode(preferences[Keys.CustomThemes])
+                .firstOrNull { it.id == id } ?: return@edit
+            applyCustomTheme(preferences, theme, slot)
+        }
     }
 
+    /**
+     * 点选主题是「换一整套」：配色、背景归所选槽，排版快照照旧写全局。
+     * 自动日夜切换只换前者，所以两套方案的字号行距不会互相打架。
+     */
+    private fun applyCustomTheme(
+        preferences: androidx.datastore.preferences.core.MutablePreferences,
+        theme: CustomReaderTheme,
+        slot: ReaderThemeSlot
+    ) {
+        persistLegacyReaderAssets(preferences)
+        persistThemeAssets(preferences, theme)
+        preferences[customThemeKey(slot)] = theme.id
+        preferences[Keys.FontScale] = theme.fontScale.coerceIn(0.7f, 1.8f)
+        preferences[Keys.Font] = theme.font.name
+        preferences[Keys.FontWeight] = theme.fontWeight.coerceIn(300, 700)
+        preferences[Keys.LineHeight] = theme.lineHeight.coerceIn(1f, 2.2f)
+        preferences[Keys.PageMarginLeft] = theme.pageMarginLeft.coerceIn(0f, 2f)
+        preferences[Keys.PageMarginRight] = theme.pageMarginRight.coerceIn(0f, 2f)
+        preferences[Keys.PageMarginTop] = theme.pageMarginTop.coerceIn(0f, 2f)
+        preferences[Keys.PageMarginBottom] = theme.pageMarginBottom.coerceIn(0f, 2f)
+        preferences[Keys.LetterSpacingEm] = theme.letterSpacingEm.coerceIn(-0.05f, 0.2f)
+        preferences[Keys.ParagraphSpacingEm] = theme.paragraphSpacingEm.coerceIn(0f, 1.5f)
+        preferences[Keys.FirstLineIndentEm] = theme.firstLineIndentEm.coerceIn(0f, 4f)
+        preferences[Keys.TitleScale] = theme.titleScale.coerceIn(1f, 2f)
+        preferences[Keys.TitleTopSpacing] = theme.titleTopSpacing.coerceIn(0f, 3f)
+        preferences[Keys.TitleBottomSpacing] = theme.titleBottomSpacing.coerceIn(0f, 3f)
+        preferences[Keys.HeaderMarginTop] = theme.headerMarginTop.coerceIn(0f, 2f)
+        preferences[Keys.FooterMarginBottom] = theme.footerMarginBottom.coerceIn(0f, 2f)
+        preferences[Keys.TextJustification] = theme.textJustification
+        preferences[Keys.ShowHeader] = theme.showHeader
+        preferences[Keys.ShowFooter] = theme.showFooter
+        preferences[backgroundOpacityKey(slot)] =
+            theme.backgroundImageOpacity.coerceIn(0.05f, 1f)
+
+        val fontId = theme.customFontId ?: theme.customFontPath?.let(ReaderFontLibraryCodec::legacyId)
+        if (theme.font == ReaderFont.CUSTOM && fontId != null) {
+            preferences[Keys.SelectedCustomFontId] = fontId
+        } else {
+            preferences.remove(Keys.SelectedCustomFontId)
+        }
+        val backgroundId = theme.backgroundImageId
+            ?: theme.backgroundImagePath?.let(ReaderImageLibraryCodec::legacyId)
+        backgroundId?.let { preferences[backgroundImageKey(slot)] = it }
+            ?: preferences.remove(backgroundImageKey(slot))
+        preferences.remove(Keys.CustomFontPath)
+        preferences.remove(Keys.CustomFontName)
+        preferences.remove(Keys.BackgroundImagePath)
+    }
+
+    private fun persistThemeAssets(
+        preferences: androidx.datastore.preferences.core.MutablePreferences,
+        theme: CustomReaderTheme
+    ) {
+        val fontPath = theme.customFontPath?.takeIf(String::isNotBlank)
+        if (theme.font == ReaderFont.CUSTOM && fontPath != null) {
+            val fontId = theme.customFontId ?: ReaderFontLibraryCodec.legacyId(fontPath)
+            val fonts = ReaderFontLibraryCodec.decode(preferences[Keys.FontLibrary])
+            if (fonts.none { it.id == fontId }) {
+                preferences[Keys.FontLibrary] = ReaderFontLibraryCodec.encode(
+                    fonts + ReaderFontAsset(
+                        id = fontId,
+                        displayName = theme.customFontName?.takeIf(String::isNotBlank) ?: "自定义字体",
+                        filePath = fontPath
+                    )
+                )
+            }
+        }
+        val backgroundPath = theme.backgroundImagePath?.takeIf(String::isNotBlank)
+        if (backgroundPath != null) {
+            val imageId = theme.backgroundImageId ?: ReaderImageLibraryCodec.legacyId(backgroundPath)
+            val images = ReaderImageLibraryCodec.decode(preferences[Keys.ImageLibrary])
+            if (images.none { it.id == imageId }) {
+                preferences[Keys.ImageLibrary] = ReaderImageLibraryCodec.encode(
+                    images + ReaderImageAsset(
+                        id = imageId,
+                        displayName = "主题背景",
+                        filePath = backgroundPath
+                    )
+                )
+            }
+        }
+    }
+    private fun persistLegacyReaderAssets(
+        preferences: androidx.datastore.preferences.core.MutablePreferences
+    ) {
+        val legacyFontPath = preferences[Keys.CustomFontPath]?.takeIf(String::isNotBlank)
+        if (legacyFontPath != null) {
+            val fonts = ReaderFontLibraryCodec.decode(preferences[Keys.FontLibrary])
+            val migrated = ReaderFontLibraryCodec.includeLegacy(
+                fonts,
+                legacyFontPath,
+                preferences[Keys.CustomFontName]
+            )
+            if (migrated != fonts) preferences[Keys.FontLibrary] = ReaderFontLibraryCodec.encode(migrated)
+        }
+        val legacyBackgroundPath = preferences[Keys.BackgroundImagePath]?.takeIf(String::isNotBlank)
+        if (legacyBackgroundPath != null) {
+            val images = ReaderImageLibraryCodec.decode(preferences[Keys.ImageLibrary])
+            val migrated = ReaderImageLibraryCodec.includeLegacyBackground(images, legacyBackgroundPath)
+            if (migrated != images) preferences[Keys.ImageLibrary] = ReaderImageLibraryCodec.encode(migrated)
+        }
+    }
     suspend fun setPageMode(value: PageMode) {
         dataStore.edit { it[Keys.PageMode] = value.name }
     }
@@ -496,11 +644,11 @@ class ReaderSettingsRepository @Inject constructor(
         dataStore.edit { it[Keys.VolumeKeysPageTurn] = value }
     }
 
-    suspend fun setBackgroundImagePath(path: String?) {
+    suspend fun setBackgroundImagePath(path: String?, slot: ReaderThemeSlot = ReaderThemeSlot.DAY) {
         dataStore.edit { preferences ->
             if (path.isNullOrBlank()) {
                 preferences.remove(Keys.BackgroundImagePath)
-                preferences.remove(Keys.SelectedBackgroundImageId)
+                preferences.remove(backgroundImageKey(slot))
             } else {
                 val images = imageLibraryFrom(preferences)
                 val image = images.firstOrNull { it.filePath == path }
@@ -511,7 +659,7 @@ class ReaderSettingsRepository @Inject constructor(
                     ).also { legacy ->
                         preferences[Keys.ImageLibrary] = ReaderImageLibraryCodec.encode(images + legacy)
                     }
-                preferences[Keys.SelectedBackgroundImageId] = image.id
+                preferences[backgroundImageKey(slot)] = image.id
                 preferences.remove(Keys.BackgroundImagePath)
             }
         }
@@ -530,10 +678,10 @@ class ReaderSettingsRepository @Inject constructor(
         }
     }
 
-    suspend fun selectBackgroundImage(id: String) {
+    suspend fun selectBackgroundImage(id: String, slot: ReaderThemeSlot = ReaderThemeSlot.DAY) {
         dataStore.edit { preferences ->
             require(imageLibraryFrom(preferences).any { it.id == id }) { "图片不存在或已删除" }
-            preferences[Keys.SelectedBackgroundImageId] = id
+            preferences[backgroundImageKey(slot)] = id
             preferences.remove(Keys.BackgroundImagePath)
         }
     }
@@ -544,11 +692,16 @@ class ReaderSettingsRepository @Inject constructor(
         dataStore.edit { preferences ->
             val images = imageLibraryFrom(preferences)
             require(images.any { it.id == id }) { "图片不存在或已删除" }
-            val activeId = activeBackgroundId(preferences, images)
+            // 裸路径背景在改名时会被收编进图片库，先把两槽当前选中项记下来再重写。
+            val active = ReaderThemeSlot.entries.associateWith { slot ->
+                activeBackgroundId(preferences, images, slot)
+            }
             preferences[Keys.ImageLibrary] = ReaderImageLibraryCodec.encode(
                 images.map { if (it.id == id) it.copy(displayName = name) else it }
             )
-            if (activeId != null) preferences[Keys.SelectedBackgroundImageId] = activeId
+            active.forEach { (slot, activeId) ->
+                if (activeId != null) preferences[backgroundImageKey(slot)] = activeId
+            }
             preferences.remove(Keys.BackgroundImagePath)
         }
     }
@@ -556,20 +709,26 @@ class ReaderSettingsRepository @Inject constructor(
     suspend fun removeReaderImage(id: String) {
         dataStore.edit { preferences ->
             val images = imageLibraryFrom(preferences)
-            val activeId = activeBackgroundId(preferences, images)
-            val remaining = images.filterNot { it.id == id }
-            preferences[Keys.ImageLibrary] = ReaderImageLibraryCodec.encode(remaining)
-            if (activeId == id) {
-                preferences.remove(Keys.SelectedBackgroundImageId)
-            } else if (activeId != null) {
-                preferences[Keys.SelectedBackgroundImageId] = activeId
+            val active = ReaderThemeSlot.entries.associateWith { slot ->
+                activeBackgroundId(preferences, images, slot)
+            }
+            preferences[Keys.ImageLibrary] = ReaderImageLibraryCodec.encode(images.filterNot { it.id == id })
+            active.forEach { (slot, activeId) ->
+                when (activeId) {
+                    null -> Unit
+                    id -> preferences.remove(backgroundImageKey(slot))
+                    else -> preferences[backgroundImageKey(slot)] = activeId
+                }
             }
             preferences.remove(Keys.BackgroundImagePath)
         }
     }
 
-    suspend fun setBackgroundImageOpacity(value: Float) {
-        dataStore.edit { it[Keys.BackgroundImageOpacity] = value.coerceIn(0.05f, 1f) }
+    suspend fun setBackgroundImageOpacity(
+        value: Float,
+        slot: ReaderThemeSlot = ReaderThemeSlot.DAY
+    ) {
+        dataStore.edit { it[backgroundOpacityKey(slot)] = value.coerceIn(0.05f, 1f) }
     }
 
     suspend fun setSyntaxHighlightEnabled(value: Boolean) {
@@ -628,14 +787,34 @@ class ReaderSettingsRepository @Inject constructor(
             preferences[Keys.BackgroundImagePath]
         )
 
+    // 日间槽沿用原有键名，夜间槽另起四个键；这样老配置就是现成的日间方案，无需迁移。
+    private fun themeKey(slot: ReaderThemeSlot) =
+        if (slot == ReaderThemeSlot.DAY) Keys.Theme else Keys.NightTheme
+
+    private fun customThemeKey(slot: ReaderThemeSlot) =
+        if (slot == ReaderThemeSlot.DAY) Keys.ActiveCustomThemeId else Keys.NightActiveCustomThemeId
+
+    private fun backgroundImageKey(slot: ReaderThemeSlot) = if (slot == ReaderThemeSlot.DAY) {
+        Keys.SelectedBackgroundImageId
+    } else {
+        Keys.NightSelectedBackgroundImageId
+    }
+
+    private fun backgroundOpacityKey(slot: ReaderThemeSlot) = if (slot == ReaderThemeSlot.DAY) {
+        Keys.BackgroundImageOpacity
+    } else {
+        Keys.NightBackgroundImageOpacity
+    }
+
     private fun activeBackgroundId(
         preferences: Preferences,
-        images: List<ReaderImageAsset>
-    ): String? = preferences[Keys.SelectedBackgroundImageId]
+        images: List<ReaderImageAsset>,
+        slot: ReaderThemeSlot = ReaderThemeSlot.DAY
+    ): String? = preferences[backgroundImageKey(slot)]
         ?.takeIf { id -> images.any { it.id == id } }
-        ?: preferences[Keys.BackgroundImagePath]?.let { path ->
-            images.firstOrNull { it.filePath == path }?.id
-        }
+        ?: preferences[Keys.BackgroundImagePath]
+            ?.takeIf { slot == ReaderThemeSlot.DAY }
+            ?.let { path -> images.firstOrNull { it.filePath == path }?.id }
 
     /** 当前伴读角色（personas.id）；null = 未选择，界面按第一个角色处理。 */
     val activePersonaId: Flow<Long?> = dataStore.data.map { it[Keys.ActivePersonaId] }
@@ -766,5 +945,12 @@ class ReaderSettingsRepository @Inject constructor(
         val LastAnnotationColor = stringPreferencesKey("reader_annotation_last_color")
         val CustomThemes = stringPreferencesKey("reader_custom_themes")
         val ActiveCustomThemeId = longPreferencesKey("reader_active_custom_theme_id")
+        val DayNightThemeAuto = booleanPreferencesKey("reader_theme_day_night_auto")
+        val NightTheme = stringPreferencesKey("reader_theme_night")
+        val NightActiveCustomThemeId = longPreferencesKey("reader_active_custom_theme_night_id")
+        val NightSelectedBackgroundImageId =
+            stringPreferencesKey("reader_selected_background_image_night_id")
+        val NightBackgroundImageOpacity =
+            floatPreferencesKey("reader_background_image_night_opacity")
     }
 }

@@ -4,11 +4,15 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -37,9 +41,16 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Brush
 import androidx.compose.material.icons.outlined.Check
-import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.LightMode
+import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.material.icons.outlined.Straighten
+import androidx.compose.material.icons.outlined.TextFields
+import androidx.compose.material.icons.outlined.TouchApp
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.UploadFile
 import androidx.compose.material.icons.outlined.Wallpaper
 import androidx.compose.runtime.Composable
@@ -49,9 +60,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Brush as ShaderBrush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -61,13 +74,22 @@ import com.mozhi.reader.core.datastore.CustomReaderTheme
 import com.mozhi.reader.core.datastore.PageMode
 import com.mozhi.reader.core.datastore.PageTurnAnimation
 import com.mozhi.reader.core.datastore.ReaderFont
+import com.mozhi.reader.core.datastore.ReaderFontLibraryCodec
+import com.mozhi.reader.core.datastore.ReaderImageLibraryCodec
 import com.mozhi.reader.core.datastore.ReaderSettings
 import com.mozhi.reader.core.datastore.ReaderSyntaxFont
 import com.mozhi.reader.core.datastore.ReaderSyntaxMatchMode
 import com.mozhi.reader.core.datastore.ReaderSyntaxRule
 import com.mozhi.reader.core.datastore.ReaderTheme
+import com.mozhi.reader.core.datastore.ReaderThemeSlot
+import com.mozhi.reader.core.datastore.backgroundImageIdFor
+import com.mozhi.reader.core.datastore.backgroundOpacityFor
+import com.mozhi.reader.core.datastore.customThemeIdFor
+import com.mozhi.reader.core.datastore.resolveThemeSlot
+import com.mozhi.reader.core.datastore.themeFor
 import com.mozhi.reader.feature.reader.render.ReaderPageStyle
 import com.mozhi.reader.ui.components.NoteStyleColorPalette
+import com.mozhi.reader.ui.theme.isDarkTheme
 import com.mozhi.reader.ui.theme.onAccent
 import coil3.compose.AsyncImage
 import java.io.File
@@ -77,6 +99,8 @@ import kotlin.math.roundToInt
 /**
  * 排版面板的全部回调。之前是三十多个平铺参数，加一项设置要在调用点与签名两处各改一遍；
  * 收成一个对象后，分类页只取自己需要的那几个字段。
+ *
+ * 配色与背景相关的回调都带 [ReaderThemeSlot]：日、夜各存一套，改的是哪一套由面板决定。
  */
 data class ReaderTypographyActions(
     val onFontScaleChange: (Float) -> Unit,
@@ -100,14 +124,15 @@ data class ReaderTypographyActions(
     val onTextJustificationChange: (Boolean) -> Unit,
     val onShowHeaderChange: (Boolean) -> Unit,
     val onShowFooterChange: (Boolean) -> Unit,
-    val onThemeChange: (ReaderTheme) -> Unit,
-    val onCustomThemeSelect: (Long) -> Unit,
-    val onSaveCustomTheme: (CustomReaderTheme) -> Unit,
+    val onThemeChange: (ReaderTheme, ReaderThemeSlot) -> Unit,
+    val onCustomThemeSelect: (Long, ReaderThemeSlot) -> Unit,
+    val onSaveCustomTheme: (CustomReaderTheme, ReaderThemeSlot) -> Unit,
     val onDeleteCustomTheme: (Long) -> Unit,
-    val onImportBackground: () -> Unit,
-    val onBackgroundImageSelect: (String) -> Unit,
-    val onClearBackground: () -> Unit,
-    val onBackgroundOpacityChange: (Float) -> Unit,
+    val onDayNightAutoChange: (Boolean) -> Unit,
+    val onImportBackground: (ReaderThemeSlot) -> Unit,
+    val onBackgroundImageSelect: (String, ReaderThemeSlot) -> Unit,
+    val onClearBackground: (ReaderThemeSlot) -> Unit,
+    val onBackgroundOpacityChange: (Float, ReaderThemeSlot) -> Unit,
     val onSyntaxHighlightEnabledChange: (Boolean) -> Unit,
     val onSaveSyntaxRule: (ReaderSyntaxRule) -> Unit,
     val onDeleteSyntaxRule: (Long) -> Unit,
@@ -118,78 +143,83 @@ data class ReaderTypographyActions(
     val onVolumeKeysPageTurnChange: (Boolean) -> Unit
 )
 
+/** 待编辑的自定义主题草稿；[slot] 决定保存后应用到日间还是夜间。 */
+private data class CustomThemeDraft(val theme: CustomReaderTheme, val slot: ReaderThemeSlot)
+
 /**
  * 排版面板。
  *
- * 分两层：主面板只放调得最频繁的四项（字号、行距、主题、翻页），其余收进分类二级页。
- * 之前是一根长滚动条，字号和「页脚边距」并排躺着，找一项要滚半天——层级不分明的
- * 直接后果就是每次都得重新找一遍。
+ * 一级页只放改得最勤的四项：字号、行距、主题、翻页，半高 sheet 一屏放得下，不必下滑；
+ * 其余全进二级页，入口做成一排胶囊——列表行太占高，六行入口会把主题挤到屏幕外，
+ * 而主题恰恰是最常改的那一项。
  *
- * 每个分类入口都带当前值摘要（「思源宋体 · 17 · 1.55× 行距」这种），不点进去也知道
- * 现在是什么设定；这是「收纳」和「藏起来」之间的唯一区别。
+ * @param settings 原始设置（含日、夜两套配色），不是按当前明暗解析后的结果。
+ * @param slot 此刻生效的配色槽；一级页改的就是它，所见即所改。
  */
 @Composable
 fun ReaderTypographySheet(
     settings: ReaderSettings,
+    slot: ReaderThemeSlot,
     palette: ReaderPalette,
     actions: ReaderTypographyActions
 ) {
-    var editorDraft by remember { mutableStateOf<CustomReaderTheme?>(null) }
+    var editorDraft by remember { mutableStateOf<CustomThemeDraft?>(null) }
     var syntaxDraft by remember { mutableStateOf<ReaderSyntaxRule?>(null) }
     var secondaryPage by remember { mutableStateOf<TypographySecondaryPage?>(null) }
+    val systemDark = isDarkTheme()
+    // 新建主题时取目标槽当前的纸色做种子，配夜间方案时不会从白纸起步。
+    val dayPalette = readerPalette(settings.resolveThemeSlot(ReaderThemeSlot.DAY), systemDark)
+    val nightPalette = readerPalette(settings.resolveThemeSlot(ReaderThemeSlot.NIGHT), systemDark)
+    val createDraft: (ReaderThemeSlot) -> CustomThemeDraft = { target ->
+        val seed = if (target == ReaderThemeSlot.NIGHT) nightPalette else dayPalette
+        CustomThemeDraft(
+            theme = settings.toCustomReaderTheme(
+                id = 0L,
+                name = "自定义 " + (settings.customThemes.size + 1),
+                backgroundArgb = seed.background.toArgb(),
+                textArgb = seed.onBackground.toArgb(),
+                accentArgb = seed.accent.toArgb(),
+                isDark = seed.isDark,
+                slot = target
+            ),
+            slot = target
+        )
+    }
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 18.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+            .padding(start = 18.dp, end = 18.dp, top = 4.dp, bottom = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(13.dp)
     ) {
         val page = secondaryPage
         if (page == null) {
             TypographyMainPanel(
                 settings = settings,
+                slot = slot,
                 palette = palette,
                 actions = actions,
-                onOpenPage = { secondaryPage = it }
+                onOpenPage = { secondaryPage = it },
+                onEditCustomTheme = { theme -> editorDraft = CustomThemeDraft(theme, slot) },
+                onCreateCustomTheme = { editorDraft = createDraft(slot) }
             )
         } else {
             TypographySecondaryHeader(page.title) { secondaryPage = null }
             when (page) {
                 TypographySecondaryPage.FONT -> FontPage(settings, palette, actions)
-                TypographySecondaryPage.LAYOUT -> LayoutPage(settings, palette, actions)
+                TypographySecondaryPage.MARGIN -> MarginPage(settings, palette, actions)
                 TypographySecondaryPage.THEME -> ThemePage(
                     settings = settings,
+                    activeSlot = slot,
                     palette = palette,
                     actions = actions,
-                    onEditCustomTheme = { editorDraft = it },
-                    onCreateCustomTheme = {
-                        editorDraft = CustomReaderTheme(
-                            id = 0L,
-                            name = "自定义 " + (settings.customThemes.size + 1),
-                            backgroundArgb = palette.background.toArgb(),
-                            textArgb = palette.onBackground.toArgb(),
-                            accentArgb = palette.accent.toArgb()
-                        )
-                    }
+                    onEditCustomTheme = { theme, target ->
+                        editorDraft = CustomThemeDraft(theme, target)
+                    },
+                    onCreateCustomTheme = { target -> editorDraft = createDraft(target) }
                 )
-                TypographySecondaryPage.PAGING -> PagingPage(settings, palette, actions)
-                TypographySecondaryPage.ADVANCED -> AdvancedTypographyEditor(
-                    settings = settings,
-                    palette = palette,
-                    onFontWeightChange = actions.onFontWeightChange,
-                    onLetterSpacingChange = actions.onLetterSpacingChange,
-                    onParagraphSpacingChange = actions.onParagraphSpacingChange,
-                    onFirstLineIndentChange = actions.onFirstLineIndentChange,
-                    onTitleScaleChange = actions.onTitleScaleChange,
-                    onTitleTopSpacingChange = actions.onTitleTopSpacingChange,
-                    onTitleBottomSpacingChange = actions.onTitleBottomSpacingChange,
-                    onTextJustificationChange = actions.onTextJustificationChange,
-                    onShowHeaderChange = actions.onShowHeaderChange,
-                    onShowFooterChange = actions.onShowFooterChange,
-                    onHeaderMarginTopChange = actions.onHeaderMarginTopChange,
-                    onFooterMarginBottomChange = actions.onFooterMarginBottomChange
-                )
+                TypographySecondaryPage.ADVANCED -> AdvancedTypographyPage(settings, palette, actions)
                 TypographySecondaryPage.SYNTAX -> SyntaxHighlightEditor(
                     settings = settings,
                     palette = palette,
@@ -205,21 +235,26 @@ fun ReaderTypographySheet(
                         )
                     }
                 )
+                TypographySecondaryPage.BEHAVIOR -> BehaviorPage(settings, palette, actions)
             }
         }
     }
 
     editorDraft?.let { draft ->
         CustomThemeEditorDialog(
-            initial = draft,
+            initial = draft.theme,
+            settings = settings,
+            palette = palette,
+            onImportFont = actions.onImportFont,
+            onImportBackground = { actions.onImportBackground(draft.slot) },
             onDismiss = { editorDraft = null },
             onSave = { theme ->
-                actions.onSaveCustomTheme(theme)
+                actions.onSaveCustomTheme(theme, draft.slot)
                 editorDraft = null
             },
-            onDelete = if (draft.id != 0L) {
+            onDelete = if (draft.theme.id != 0L) {
                 {
-                    actions.onDeleteCustomTheme(draft.id)
+                    actions.onDeleteCustomTheme(draft.theme.id)
                     editorDraft = null
                 }
             } else {
@@ -246,13 +281,16 @@ fun ReaderTypographySheet(
     }
 }
 
-/** 主面板：高频四项直调 + 六个分类入口。 */
+/** 一级页：字号、行距、主题、翻页直调，其余按目标进入二级页。 */
 @Composable
 private fun TypographyMainPanel(
     settings: ReaderSettings,
+    slot: ReaderThemeSlot,
     palette: ReaderPalette,
     actions: ReaderTypographyActions,
-    onOpenPage: (TypographySecondaryPage) -> Unit
+    onOpenPage: (TypographySecondaryPage) -> Unit,
+    onEditCustomTheme: (CustomReaderTheme) -> Unit,
+    onCreateCustomTheme: () -> Unit
 ) {
     Text("排版", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Medium)
 
@@ -289,25 +327,18 @@ private fun TypographyMainPanel(
     }
 
     SheetRow(label = "主题", palette = palette) {
-        Row(
-            modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            ReaderTheme.entries.forEach { theme ->
-                ThemeSwatch(
-                    theme = theme,
-                    selected = settings.activeCustomThemeId == null && settings.theme == theme,
-                    palette = palette
-                ) { actions.onThemeChange(theme) }
-            }
-            settings.customThemes.forEach { custom ->
-                CustomThemeSwatch(
-                    theme = custom,
-                    selected = settings.activeCustomThemeId == custom.id,
-                    palette = palette
-                ) { actions.onCustomThemeSelect(custom.id) }
-            }
+        ThemeSwatchStrip(
+            settings = settings,
+            slot = slot,
+            palette = palette,
+            actions = actions,
+            onEditCustomTheme = onEditCustomTheme,
+            onCreateCustomTheme = onCreateCustomTheme,
+            modifier = Modifier.weight(1f)
+        )
+        // 日夜各一套时，标出此刻在改哪一套；点进去可以配另一套。
+        if (settings.dayNightThemeAuto) {
+            SlotPill(slot = slot, palette = palette) { onOpenPage(TypographySecondaryPage.THEME) }
         }
     }
 
@@ -334,12 +365,129 @@ private fun TypographyMainPanel(
 
     HorizontalDivider(color = palette.glassBorder)
 
-    TypographySecondaryPage.entries.forEach { page ->
-        SecondaryPageRow(
-            title = page.title,
-            summary = page.summaryOf(settings),
-            palette = palette
-        ) { onOpenPage(page) }
+    SecondaryPageChips(palette = palette, onOpenPage = onOpenPage)
+}
+
+/** 二级页入口：一排胶囊，两行放下六个，不占用一级页的纵向预算。 */
+@Composable
+@OptIn(ExperimentalLayoutApi::class)
+private fun SecondaryPageChips(
+    palette: ReaderPalette,
+    onOpenPage: (TypographySecondaryPage) -> Unit
+) {
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        TypographySecondaryPage.entries.forEach { page ->
+            EntryChip(
+                icon = page.icon,
+                text = page.chipLabel,
+                palette = palette
+            ) { onOpenPage(page) }
+        }
+    }
+}
+
+@Composable
+private fun EntryChip(
+    icon: ImageVector,
+    text: String,
+    palette: ReaderPalette,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        shape = CircleShape,
+        color = Color.Transparent,
+        contentColor = palette.onBackground,
+        border = BorderStroke(1.dp, palette.glassBorder)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 13.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Icon(icon, contentDescription = null, tint = palette.muted, modifier = Modifier.size(15.dp))
+            Text(text, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+        }
+    }
+}
+
+/** 日/夜标记：一级页用它说明「现在改的是哪一套」，点击进主题页配另一套。 */
+@Composable
+private fun SlotPill(slot: ReaderThemeSlot, palette: ReaderPalette, onClick: () -> Unit) {
+    val night = slot == ReaderThemeSlot.NIGHT
+    Surface(
+        onClick = onClick,
+        shape = CircleShape,
+        color = palette.accentContainer,
+        contentColor = palette.accent,
+        border = BorderStroke(1.dp, palette.accent.copy(alpha = 0.3f))
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Icon(
+                imageVector = if (night) Icons.Outlined.DarkMode else Icons.Outlined.LightMode,
+                contentDescription = null,
+                modifier = Modifier.size(14.dp)
+            )
+            Text(
+                text = if (night) "夜间" else "日间",
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1
+            )
+        }
+    }
+}
+
+/** 内置色卡 + 我的主题 + 新建，横滑一排；一级页与主题页共用。 */
+@Composable
+private fun ThemeSwatchStrip(
+    settings: ReaderSettings,
+    slot: ReaderThemeSlot,
+    palette: ReaderPalette,
+    actions: ReaderTypographyActions,
+    onEditCustomTheme: (CustomReaderTheme) -> Unit,
+    onCreateCustomTheme: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val activeCustomId = settings.customThemeIdFor(slot)
+    val activeTheme = settings.themeFor(slot)
+    Row(
+        modifier = modifier.horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(9.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        ReaderTheme.entries
+            // 日夜自动切换开着时，「跟随系统」已经由日夜两套方案接管，留着只会让人迷惑。
+            .filterNot { settings.dayNightThemeAuto && it == ReaderTheme.SYSTEM }
+            .forEach { theme ->
+                ThemeSwatch(
+                    theme = theme,
+                    selected = activeCustomId == null && activeTheme == theme,
+                    palette = palette
+                ) { actions.onThemeChange(theme, slot) }
+            }
+        settings.customThemes.forEach { custom ->
+            val selected = activeCustomId == custom.id
+            val imagePath = settings.imageLibrary.firstOrNull {
+                it.id == custom.backgroundImageId
+            }?.filePath ?: custom.backgroundImagePath
+            CustomThemeSwatch(
+                theme = custom,
+                imagePath = imagePath,
+                selected = selected,
+                palette = palette
+            ) {
+                if (selected) onEditCustomTheme(custom) else actions.onCustomThemeSelect(custom.id, slot)
+            }
+        }
+        AddThemeSwatch(palette = palette, onClick = onCreateCustomTheme)
     }
 }
 
@@ -409,10 +557,21 @@ private fun FontPage(
         palette = palette,
         onValueChange = actions.onLineHeightChange
     )
+    Text("正文字重", style = MaterialTheme.typography.labelMedium, color = palette.muted)
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        listOf(300, 400, 500, 600, 700).forEach { weight ->
+            SegChip(
+                text = weight.toString(),
+                selected = settings.fontWeight == weight,
+                palette = palette,
+                modifier = Modifier.weight(1f)
+            ) { actions.onFontWeightChange(weight) }
+        }
+    }
 }
 
 @Composable
-private fun LayoutPage(
+private fun MarginPage(
     settings: ReaderSettings,
     palette: ReaderPalette,
     actions: ReaderTypographyActions
@@ -454,45 +613,97 @@ private fun LayoutPage(
         palette = palette,
         onValueChange = actions.onPageMarginBottomChange
     )
+    HorizontalDivider(color = palette.glassBorder)
+    Text("页眉与页脚", style = MaterialTheme.typography.labelMedium, color = palette.muted)
+    AdvancedSwitchRow(
+        "显示页眉",
+        "章节标题",
+        settings.showHeader,
+        palette,
+        actions.onShowHeaderChange
+    )
+    TypographyValueSlider(
+        label = "页眉上边距",
+        valueText = chromeMarginText(settings.headerMarginTop),
+        value = settings.headerMarginTop,
+        range = 0f..2f,
+        steps = 19,
+        palette = palette,
+        onValueChange = actions.onHeaderMarginTopChange
+    )
+    AdvancedSwitchRow(
+        "显示页脚",
+        "页码、进度、时间与电量",
+        settings.showFooter,
+        palette,
+        actions.onShowFooterChange
+    )
+    TypographyValueSlider(
+        label = "页脚边距",
+        valueText = chromeMarginText(settings.footerMarginBottom),
+        value = settings.footerMarginBottom,
+        range = 0f..2f,
+        steps = 19,
+        palette = palette,
+        onValueChange = actions.onFooterMarginBottomChange
+    )
 }
 
+/**
+ * 主题页：日夜两套方案在这里配。开了自动切换后，白天也能提前把夜间那套调好——
+ * 否则只能等天黑了再摸黑调。
+ */
 @Composable
 private fun ThemePage(
     settings: ReaderSettings,
+    activeSlot: ReaderThemeSlot,
     palette: ReaderPalette,
     actions: ReaderTypographyActions,
-    onEditCustomTheme: (CustomReaderTheme) -> Unit,
-    onCreateCustomTheme: () -> Unit
+    onEditCustomTheme: (CustomReaderTheme, ReaderThemeSlot) -> Unit,
+    onCreateCustomTheme: (ReaderThemeSlot) -> Unit
 ) {
-    SheetRow(label = "配色", palette = palette) {
-        Row(
-            modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            ReaderTheme.entries.forEach { theme ->
-                ThemeSwatch(
-                    theme = theme,
-                    selected = settings.activeCustomThemeId == null && settings.theme == theme,
-                    palette = palette
-                ) { actions.onThemeChange(theme) }
-            }
-            settings.customThemes.forEach { custom ->
-                val selected = settings.activeCustomThemeId == custom.id
-                CustomThemeSwatch(theme = custom, selected = selected, palette = palette) {
-                    // 已选中的自定义主题再点一次进入编辑。
-                    if (selected) {
-                        onEditCustomTheme(custom)
-                    } else {
-                        actions.onCustomThemeSelect(custom.id)
-                    }
-                }
-            }
-            AddThemeSwatch(palette = palette, onClick = onCreateCustomTheme)
+    var editingSlot by remember { mutableStateOf(activeSlot) }
+    val slot = if (settings.dayNightThemeAuto) editingSlot else ReaderThemeSlot.DAY
+
+    AdvancedSwitchRow(
+        "日夜自动切换",
+        "白天和夜里各用一套配色，跟随应用日夜模式换",
+        settings.dayNightThemeAuto,
+        palette,
+        actions.onDayNightAutoChange
+    )
+    if (settings.dayNightThemeAuto) {
+        SheetRow(label = "方案", palette = palette) {
+            SegChip(
+                text = "日间",
+                selected = slot == ReaderThemeSlot.DAY,
+                palette = palette,
+                modifier = Modifier.weight(1f)
+            ) { editingSlot = ReaderThemeSlot.DAY }
+            SegChip(
+                text = "夜间",
+                selected = slot == ReaderThemeSlot.NIGHT,
+                palette = palette,
+                modifier = Modifier.weight(1f)
+            ) { editingSlot = ReaderThemeSlot.NIGHT }
         }
     }
 
+    SheetRow(label = "纸色", palette = palette) {
+        ThemeSwatchStrip(
+            settings = settings,
+            slot = slot,
+            palette = palette,
+            actions = actions,
+            onEditCustomTheme = { theme -> onEditCustomTheme(theme, slot) },
+            onCreateCustomTheme = { onCreateCustomTheme(slot) },
+            modifier = Modifier.weight(1f)
+        )
+    }
+
+    HorizontalDivider(color = palette.glassBorder)
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        val backgroundId = settings.backgroundImageIdFor(slot)
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
                 Icons.Outlined.Wallpaper,
@@ -501,20 +712,15 @@ private fun ThemePage(
                 modifier = Modifier.size(18.dp)
             )
             Column(modifier = Modifier.weight(1f).padding(start = 8.dp)) {
-                Text("阅读背景", style = MaterialTheme.typography.bodyMedium)
+                Text("背景图片", style = MaterialTheme.typography.bodyMedium)
                 Text(
-                    if (settings.backgroundImagePath == null) {
-                        "使用主题底色"
-                    } else {
-                        settings.imageLibrary.firstOrNull {
-                            it.id == settings.selectedBackgroundImageId
-                        }?.displayName ?: "背景图片已启用"
-                    },
+                    settings.imageLibrary.firstOrNull { it.id == backgroundId }?.displayName
+                        ?: "未设置",
                     style = MaterialTheme.typography.labelSmall,
                     color = palette.muted
                 )
             }
-            TextButton(onClick = actions.onImportBackground) { Text("导入") }
+            TextButton(onClick = { actions.onImportBackground(slot) }) { Text("导入") }
         }
         LazyRow(
             modifier = Modifier.fillMaxWidth().height(98.dp),
@@ -522,63 +728,44 @@ private fun ThemePage(
         ) {
             item {
                 BackgroundChoice(
-                    name = "主题底色",
+                    name = "无背景图",
                     imagePath = null,
-                    selected = settings.backgroundImagePath == null,
+                    selected = backgroundId == null,
                     palette = palette,
-                    onClick = actions.onClearBackground
+                    onClick = { actions.onClearBackground(slot) }
                 )
             }
             items(settings.imageLibrary, key = { it.id }) { image ->
                 BackgroundChoice(
                     name = image.displayName,
                     imagePath = image.filePath,
-                    selected = settings.selectedBackgroundImageId == image.id,
+                    selected = backgroundId == image.id,
                     palette = palette,
-                    onClick = { actions.onBackgroundImageSelect(image.id) }
+                    onClick = { actions.onBackgroundImageSelect(image.id, slot) }
                 )
             }
         }
-        if (settings.backgroundImagePath != null) {
+        if (backgroundId != null) {
+            val opacity = settings.backgroundOpacityFor(slot)
             TypographyValueSlider(
                 label = "背景强度",
-                valueText = "" + (settings.backgroundImageOpacity * 100).roundToInt() + "%",
-                value = settings.backgroundImageOpacity,
+                valueText = "" + (opacity * 100).roundToInt() + "%",
+                value = opacity,
                 range = 0.05f..1f,
                 steps = 18,
                 palette = palette,
-                onValueChange = actions.onBackgroundOpacityChange
+                onValueChange = { actions.onBackgroundOpacityChange(it, slot) }
             )
         }
     }
 }
 
 @Composable
-private fun PagingPage(
+private fun BehaviorPage(
     settings: ReaderSettings,
     palette: ReaderPalette,
     actions: ReaderTypographyActions
 ) {
-    SheetRow(label = "翻页方式", palette = palette) {
-        val paginated = settings.pageMode == PageMode.PAGINATED
-        PageTurnAnimation.entries.forEach { animation ->
-            SegChip(
-                text = animation.shortLabel(),
-                selected = paginated && settings.pageTurnAnimation == animation,
-                palette = palette,
-                modifier = Modifier.weight(1f)
-            ) {
-                actions.onPageModeChange(PageMode.PAGINATED)
-                actions.onAnimationChange(animation)
-            }
-        }
-        SegChip(
-            text = "上下",
-            selected = settings.pageMode == PageMode.SCROLL,
-            palette = palette,
-            modifier = Modifier.weight(1f)
-        ) { actions.onPageModeChange(PageMode.SCROLL) }
-    }
     AdvancedSwitchRow(
         "阅读时保持亮屏",
         "适合长时间连读",
@@ -665,61 +852,19 @@ private fun BackgroundChoice(
     }
 }
 
-/**
- * 分类二级页。[summaryOf] 让入口行显示当前值——不点进去也知道现在是什么设定，
- * 这是「收纳」与「藏起来」之间的唯一区别。
- */
-private enum class TypographySecondaryPage(val title: String) {
-    FONT("字体与字号"),
-    LAYOUT("版面留白"),
-    THEME("主题与背景"),
-    PAGING("翻页与交互"),
-    ADVANCED("高级排版"),
-    SYNTAX("语法高亮");
-
-    fun summaryOf(settings: ReaderSettings): String = when (this) {
-        FONT -> listOf(
-            settings.currentFontLabel(),
-            "" + (ReaderPageStyle.BASE_CONTENT_SP * settings.fontScale).roundToInt() + " sp",
-            String.format(java.util.Locale.ROOT, "%.2f× 行距", settings.lineHeight)
-        ).joinToString(" · ")
-        LAYOUT -> "左右 " + horizontalMarginText(settings.pageMarginLeft) + "／" +
-            horizontalMarginText(settings.pageMarginRight) + " · 上下 " +
-            verticalMarginText(settings.pageMarginTop) + "／" +
-            verticalMarginText(settings.pageMarginBottom)
-        THEME -> listOf(
-            settings.currentThemeLabel(),
-            if (settings.backgroundImagePath == null) "无背景图" else "已配背景图"
-        ).joinToString(" · ")
-        PAGING -> listOfNotNull(
-            if (settings.pageMode == PageMode.SCROLL) {
-                "上下滚动"
-            } else {
-                settings.pageTurnAnimation.shortLabel()
-            },
-            "音量键" + if (settings.volumeKeysPageTurn) "开" else "关",
-            if (settings.keepScreenOn) "常亮" else null
-        ).joinToString(" · ")
-        ADVANCED -> "字重 " + settings.fontWeight + " · " +
-            String.format(java.util.Locale.ROOT, "段距 %.2f em", settings.paragraphSpacingEm) +
-            " · 页眉" + (if (settings.showHeader) "开" else "关")
-        SYNTAX -> if (settings.syntaxHighlightEnabled) {
-            "已启用 · " + settings.syntaxHighlightRules.size + " 条规则"
-        } else {
-            "已关闭"
-        }
-    }
+/** 分类二级页。[chipLabel] 上胶囊，[title] 上二级页标题栏。 */
+private enum class TypographySecondaryPage(
+    val chipLabel: String,
+    val title: String,
+    val icon: ImageVector
+) {
+    FONT("字体", "字体与字号", Icons.Outlined.TextFields),
+    MARGIN("边距", "版面留白", Icons.Outlined.Straighten),
+    THEME("主题", "主题与背景", Icons.Outlined.Palette),
+    ADVANCED("细排版", "高级排版", Icons.Outlined.Tune),
+    SYNTAX("高亮", "语法高亮", Icons.Outlined.Brush),
+    BEHAVIOR("交互", "阅读交互", Icons.Outlined.TouchApp)
 }
-
-private fun ReaderSettings.currentFontLabel(): String = if (font == ReaderFont.CUSTOM) {
-    fontLibrary.firstOrNull { it.id == selectedCustomFontId }?.displayName ?: "自定义字体"
-} else {
-    font.shortLabel()
-}
-
-private fun ReaderSettings.currentThemeLabel(): String = activeCustomThemeId
-    ?.let { id -> customThemes.firstOrNull { it.id == id }?.name }
-    ?: theme.swatchLabel()
 
 @Composable
 private fun TypographySecondaryHeader(title: String, onBack: () -> Unit) {
@@ -745,60 +890,11 @@ private fun TypographySecondaryHeader(title: String, onBack: () -> Unit) {
 }
 
 @Composable
-private fun SecondaryPageRow(
-    title: String,
-    summary: String,
-    palette: ReaderPalette,
-    onClick: () -> Unit
-) {
-    Surface(
-        onClick = onClick,
-        color = Color.Transparent,
-        shape = RoundedCornerShape(14.dp),
-        border = BorderStroke(1.dp, palette.glassBorder),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 11.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(title, style = MaterialTheme.typography.bodyMedium)
-                Text(summary, style = MaterialTheme.typography.labelSmall, color = palette.muted)
-            }
-            Icon(Icons.Outlined.ChevronRight, contentDescription = null, tint = palette.muted)
-        }
-    }
-}
-
-@Composable
-private fun AdvancedTypographyEditor(
+private fun AdvancedTypographyPage(
     settings: ReaderSettings,
     palette: ReaderPalette,
-    onFontWeightChange: (Int) -> Unit,
-    onLetterSpacingChange: (Float) -> Unit,
-    onParagraphSpacingChange: (Float) -> Unit,
-    onFirstLineIndentChange: (Float) -> Unit,
-    onTitleScaleChange: (Float) -> Unit,
-    onTitleTopSpacingChange: (Float) -> Unit,
-    onTitleBottomSpacingChange: (Float) -> Unit,
-    onTextJustificationChange: (Boolean) -> Unit,
-    onShowHeaderChange: (Boolean) -> Unit,
-    onShowFooterChange: (Boolean) -> Unit,
-    onHeaderMarginTopChange: (Float) -> Unit,
-    onFooterMarginBottomChange: (Float) -> Unit
+    actions: ReaderTypographyActions
 ) {
-    Text("正文字重", style = MaterialTheme.typography.labelMedium, color = palette.muted)
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        listOf(300, 400, 500, 600, 700).forEach { weight ->
-            SegChip(
-                text = weight.toString(),
-                selected = settings.fontWeight == weight,
-                palette = palette,
-                modifier = Modifier.weight(1f)
-            ) { onFontWeightChange(weight) }
-        }
-    }
     TypographyValueSlider(
         label = "字间距",
         valueText = String.format(java.util.Locale.ROOT, "%.2f em", settings.letterSpacingEm),
@@ -806,7 +902,7 @@ private fun AdvancedTypographyEditor(
         range = -0.05f..0.2f,
         steps = 24,
         palette = palette,
-        onValueChange = onLetterSpacingChange
+        onValueChange = actions.onLetterSpacingChange
     )
     TypographyValueSlider(
         label = "段落间距",
@@ -815,7 +911,7 @@ private fun AdvancedTypographyEditor(
         range = 0f..1.5f,
         steps = 29,
         palette = palette,
-        onValueChange = onParagraphSpacingChange
+        onValueChange = actions.onParagraphSpacingChange
     )
     TypographyValueSlider(
         label = "段首缩进",
@@ -824,8 +920,22 @@ private fun AdvancedTypographyEditor(
         range = 0f..4f,
         steps = 15,
         palette = palette,
-        onValueChange = onFirstLineIndentChange
+        onValueChange = actions.onFirstLineIndentChange
     )
+    SheetRow(label = "对齐", palette = palette) {
+        SegChip(
+            text = "两端",
+            selected = settings.textJustification,
+            palette = palette,
+            modifier = Modifier.weight(1f)
+        ) { actions.onTextJustificationChange(true) }
+        SegChip(
+            text = "左对齐",
+            selected = !settings.textJustification,
+            palette = palette,
+            modifier = Modifier.weight(1f)
+        ) { actions.onTextJustificationChange(false) }
+    }
     Text("标题", style = MaterialTheme.typography.labelMedium, color = palette.muted)
     TypographyValueSlider(
         label = "标题比例",
@@ -834,7 +944,7 @@ private fun AdvancedTypographyEditor(
         range = 1f..2f,
         steps = 19,
         palette = palette,
-        onValueChange = onTitleScaleChange
+        onValueChange = actions.onTitleScaleChange
     )
     TypographyValueSlider(
         label = "标题上边距",
@@ -843,7 +953,7 @@ private fun AdvancedTypographyEditor(
         range = 0f..3f,
         steps = 29,
         palette = palette,
-        onValueChange = onTitleTopSpacingChange
+        onValueChange = actions.onTitleTopSpacingChange
     )
     TypographyValueSlider(
         label = "标题下边距",
@@ -852,42 +962,7 @@ private fun AdvancedTypographyEditor(
         range = 0f..3f,
         steps = 29,
         palette = palette,
-        onValueChange = onTitleBottomSpacingChange
-    )
-    SheetRow(label = "对齐", palette = palette) {
-        SegChip(
-            text = "两端",
-            selected = settings.textJustification,
-            palette = palette,
-            modifier = Modifier.weight(1f)
-        ) { onTextJustificationChange(true) }
-        SegChip(
-            text = "左对齐",
-            selected = !settings.textJustification,
-            palette = palette,
-            modifier = Modifier.weight(1f)
-        ) { onTextJustificationChange(false) }
-    }
-    Text("页眉与页脚", style = MaterialTheme.typography.labelMedium, color = palette.muted)
-    AdvancedSwitchRow("显示页眉", "章节标题", settings.showHeader, palette, onShowHeaderChange)
-    TypographyValueSlider(
-        label = "页眉上边距",
-        valueText = chromeMarginText(settings.headerMarginTop),
-        value = settings.headerMarginTop,
-        range = 0f..2f,
-        steps = 19,
-        palette = palette,
-        onValueChange = onHeaderMarginTopChange
-    )
-    AdvancedSwitchRow("显示页脚", "页码、进度、时间与电量", settings.showFooter, palette, onShowFooterChange)
-    TypographyValueSlider(
-        label = "页脚边距",
-        valueText = chromeMarginText(settings.footerMarginBottom),
-        value = settings.footerMarginBottom,
-        range = 0f..2f,
-        steps = 19,
-        palette = palette,
-        onValueChange = onFooterMarginBottomChange
+        onValueChange = actions.onTitleBottomSpacingChange
     )
 }
 
@@ -1297,7 +1372,7 @@ private fun ThemeSwatch(
                 .background
             val dark = readerPalette(ReaderTheme.DARK, systemDark = true, palette.accent)
                 .background
-            Brush.linearGradient(
+            ShaderBrush.linearGradient(
                 0f to light,
                 0.5f to light,
                 0.5f to dark,
@@ -1306,7 +1381,7 @@ private fun ThemeSwatch(
         }
         else -> {
             val color = readerPalette(theme, systemDark = false, palette.accent).background
-            Brush.linearGradient(listOf(color, color))
+            ShaderBrush.linearGradient(listOf(color, color))
         }
     }
     Box(
@@ -1380,42 +1455,66 @@ private fun ReaderTheme.swatchLabel(): String = when (this) {
     ReaderTheme.MIST -> "青简"
 }
 
-/** 自定义主题色板：背景色打底、右下角强调色小点；选中后再点进入编辑。 */
+/** 自定义主题卡片优先展示背景图片；再次点击当前主题进入编辑。 */
 @Composable
 private fun CustomThemeSwatch(
     theme: CustomReaderTheme,
+    imagePath: String?,
     selected: Boolean,
     palette: ReaderPalette,
     onClick: () -> Unit
 ) {
     val background = Color(theme.backgroundArgb)
     val accent = Color(theme.accentArgb)
-    Box(
-        modifier = Modifier
-            .size(30.dp)
-            .background(background, CircleShape)
-            .border(
-                width = if (selected) 2.dp else 1.dp,
-                color = if (selected) palette.accent else palette.glassBorder,
-                shape = CircleShape
-            )
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
+    Column(
+        modifier = Modifier.width(50.dp).clickable(onClick = onClick),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(3.dp)
     ) {
-        if (selected) {
-            Icon(
-                imageVector = Icons.Outlined.Edit,
-                contentDescription = "编辑「${theme.name}」",
-                tint = Color(theme.textArgb),
-                modifier = Modifier.size(13.dp)
-            )
-        }
         Box(
             modifier = Modifier
-                .size(9.dp)
-                .align(Alignment.BottomEnd)
-                .background(accent, CircleShape)
-                .border(1.dp, background, CircleShape)
+                .size(30.dp)
+                .clip(CircleShape)
+                .background(background)
+                .border(
+                    width = if (selected) 2.dp else 1.dp,
+                    color = if (selected) palette.accent else palette.glassBorder,
+                    shape = CircleShape
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (imagePath != null) {
+                AsyncImage(
+                    model = File(imagePath),
+                    contentDescription = theme.name,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+            if (selected) {
+                Icon(
+                    imageVector = Icons.Outlined.Edit,
+                    contentDescription = "编辑「${theme.name}」",
+                    tint = Color(theme.textArgb),
+                    modifier = Modifier.size(15.dp)
+                        .background(background.copy(alpha = 0.72f), CircleShape)
+                        .padding(2.dp)
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .size(9.dp)
+                    .align(Alignment.BottomEnd)
+                    .background(accent, CircleShape)
+                    .border(1.dp, background, CircleShape)
+            )
+        }
+        Text(
+            text = theme.name,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (selected) palette.accent else palette.muted,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
@@ -1433,21 +1532,73 @@ private fun AddThemeSwatch(palette: ReaderPalette, onClick: () -> Unit) {
             imageVector = Icons.Outlined.Add,
             contentDescription = "新建自定义主题",
             tint = palette.muted,
-            modifier = Modifier.size(16.dp)
+            modifier = Modifier.size(17.dp)
         )
     }
 }
 
+/** 把当前排版与指定槽的配色打包成一套自定义主题的初值。 */
+private fun ReaderSettings.toCustomReaderTheme(
+    id: Long,
+    name: String,
+    backgroundArgb: Int,
+    textArgb: Int,
+    accentArgb: Int,
+    isDark: Boolean,
+    slot: ReaderThemeSlot
+): CustomReaderTheme {
+    val selectedFont = fontLibrary.firstOrNull { it.id == selectedCustomFontId }
+    val backgroundId = backgroundImageIdFor(slot)
+    val selectedBackground = imageLibrary.firstOrNull { it.id == backgroundId }
+    return CustomReaderTheme(
+        id = id,
+        name = name,
+        backgroundArgb = backgroundArgb,
+        textArgb = textArgb,
+        accentArgb = accentArgb,
+        isDark = isDark,
+        font = font,
+        customFontId = selectedCustomFontId,
+        customFontPath = selectedFont?.filePath ?: customFontPath,
+        customFontName = selectedFont?.displayName ?: customFontName,
+        fontScale = fontScale,
+        fontWeight = fontWeight,
+        lineHeight = lineHeight,
+        pageMarginLeft = pageMarginLeft,
+        pageMarginRight = pageMarginRight,
+        pageMarginTop = pageMarginTop,
+        pageMarginBottom = pageMarginBottom,
+        letterSpacingEm = letterSpacingEm,
+        paragraphSpacingEm = paragraphSpacingEm,
+        firstLineIndentEm = firstLineIndentEm,
+        titleScale = titleScale,
+        titleTopSpacing = titleTopSpacing,
+        titleBottomSpacing = titleBottomSpacing,
+        headerMarginTop = headerMarginTop,
+        footerMarginBottom = footerMarginBottom,
+        textJustification = textJustification,
+        showHeader = showHeader,
+        showFooter = showFooter,
+        backgroundImageId = backgroundId,
+        backgroundImagePath = selectedBackground?.filePath,
+        backgroundImageOpacity = backgroundOpacityFor(slot)
+    )
+}
+
 private enum class ThemeColorTarget(val label: String) {
-    BACKGROUND("背景"),
+    BACKGROUND("底色"),
     TEXT("正文"),
     ACCENT("强调")
 }
 
-/** 三色编辑器：实时预览 + 目标切换 + 笔记软件式直观色板；保存即应用。 */
+/** 完整主题编辑器：字体、背景图片与配色在同一处选择，保存后立即应用。 */
 @Composable
 private fun CustomThemeEditorDialog(
     initial: CustomReaderTheme,
+    settings: ReaderSettings,
+    palette: ReaderPalette,
+    onImportFont: () -> Unit,
+    onImportBackground: () -> Unit,
     onDismiss: () -> Unit,
     onSave: (CustomReaderTheme) -> Unit,
     onDelete: (() -> Unit)?
@@ -1456,6 +1607,15 @@ private fun CustomThemeEditorDialog(
     var background by remember { mutableStateOf(Color(initial.backgroundArgb)) }
     var text by remember { mutableStateOf(Color(initial.textArgb)) }
     var accent by remember { mutableStateOf(Color(initial.accentArgb)) }
+    var isDark by remember { mutableStateOf(initial.isDark ?: (Color(initial.backgroundArgb).luminance() < 0.5f)) }
+    var selectedFont by remember { mutableStateOf(initial.font) }
+    val initialCustomFontId = initial.customFontId
+        ?: initial.customFontPath?.let(ReaderFontLibraryCodec::legacyId)
+    val initialBackgroundImageId = initial.backgroundImageId
+        ?: initial.backgroundImagePath?.let(ReaderImageLibraryCodec::legacyId)
+    var selectedCustomFontId by remember { mutableStateOf(initialCustomFontId) }
+    var selectedBackgroundImageId by remember { mutableStateOf(initialBackgroundImageId) }
+    var backgroundImageOpacity by remember { mutableStateOf(initial.backgroundImageOpacity) }
     var target by remember { mutableStateOf(ThemeColorTarget.BACKGROUND) }
 
     val current = when (target) {
@@ -1463,6 +1623,10 @@ private fun CustomThemeEditorDialog(
         ThemeColorTarget.TEXT -> text
         ThemeColorTarget.ACCENT -> accent
     }
+    val selectedBackground = settings.imageLibrary.firstOrNull { it.id == selectedBackgroundImageId }
+    val selectedBackgroundPath = selectedBackground?.filePath
+        ?: initial.backgroundImagePath.takeIf { selectedBackgroundImageId == initialBackgroundImageId }
+    val selectedFontAsset = settings.fontLibrary.firstOrNull { it.id == selectedCustomFontId }
     fun update(color: Color) = when (target) {
         ThemeColorTarget.BACKGROUND -> background = color
         ThemeColorTarget.TEXT -> text = color
@@ -1475,43 +1639,141 @@ private fun CustomThemeEditorDialog(
         text = {
             Column(
                 modifier = Modifier
-                    .heightIn(max = 520.dp)
+                    .heightIn(max = 620.dp)
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it.take(12) },
-                    label = { Text("方案名称") },
+                    label = { Text("主题名称") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                // 实时预览：正文样张 + 强调胶囊，所见即所得。
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 64.dp)
-                        .background(background, RoundedCornerShape(14.dp))
-                        .border(1.dp, text.copy(alpha = 0.18f), RoundedCornerShape(14.dp))
-                        .padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                // 只决定界面元素按浅底还是深底渲染；日夜自动切换在「主题与背景」里设。
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "春江潮水连海平，海上明月共潮生。",
-                        color = text,
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                    Text("明暗基调", style = MaterialTheme.typography.labelMedium)
+                    FilterChip(
+                        selected = !isDark,
+                        onClick = { isDark = false },
+                        label = { Text("浅色") }
                     )
-                    Surface(color = accent, shape = RoundedCornerShape(9.dp)) {
-                        Text(
-                            text = "强调色",
-                            color = accent.onAccent(),
-                            style = MaterialTheme.typography.labelSmall,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                    FilterChip(
+                        selected = isDark,
+                        onClick = { isDark = true },
+                        label = { Text("深色") }
+                    )
+                }
+
+                Text("字体", style = MaterialTheme.typography.labelMedium)
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(7.dp)
+                ) {
+                    ReaderFont.entries.filter { it != ReaderFont.CUSTOM }.forEach { font ->
+                        SegChip(
+                            text = font.shortLabel(),
+                            selected = selectedFont == font,
+                            palette = palette
+                        ) { selectedFont = font }
+                    }
+                    settings.fontLibrary.forEach { font ->
+                        SegChip(
+                            text = font.displayName,
+                            selected = selectedFont == ReaderFont.CUSTOM && selectedCustomFontId == font.id,
+                            palette = palette
+                        ) {
+                            selectedFont = ReaderFont.CUSTOM
+                            selectedCustomFontId = font.id
+                        }
+                    }
+                }
+                TextButton(onClick = onImportFont) {
+                    Icon(Icons.Outlined.UploadFile, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Text("导入字体", modifier = Modifier.padding(start = 5.dp))
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("背景图片", style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
+                    TextButton(onClick = onImportBackground) { Text("导入图片") }
+                }
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth().height(98.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    item {
+                        BackgroundChoice(
+                            name = "无背景图",
+                            imagePath = null,
+                            selected = selectedBackgroundImageId == null,
+                            palette = palette,
+                            onClick = { selectedBackgroundImageId = null }
+                        )
+                    }
+                    items(settings.imageLibrary, key = { it.id }) { image ->
+                        BackgroundChoice(
+                            name = image.displayName,
+                            imagePath = image.filePath,
+                            selected = selectedBackgroundImageId == image.id,
+                            palette = palette,
+                            onClick = { selectedBackgroundImageId = image.id }
                         )
                     }
                 }
+                if (selectedBackgroundImageId != null) {
+                    TypographyValueSlider(
+                        label = "背景强度",
+                        valueText = "" + (backgroundImageOpacity * 100).roundToInt() + "%",
+                        value = backgroundImageOpacity,
+                        range = 0.05f..1f,
+                        steps = 18,
+                        palette = palette,
+                        onValueChange = { backgroundImageOpacity = it }
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 76.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(background)
+                        .border(1.dp, text.copy(alpha = 0.18f), RoundedCornerShape(14.dp))
+                ) {
+                    if (selectedBackgroundPath != null) {
+                        AsyncImage(
+                            model = File(selectedBackgroundPath),
+                            contentDescription = "主题背景预览",
+                            contentScale = ContentScale.Crop,
+                            alpha = backgroundImageOpacity,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = "春江潮水连海平，海上明月共潮生。",
+                            color = text,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Surface(color = accent, shape = RoundedCornerShape(9.dp)) {
+                            Text(
+                                text = "强调色",
+                                color = accent.onAccent(),
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
+                }
+                Text("配色", style = MaterialTheme.typography.labelMedium)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     ThemeColorTarget.entries.forEach { candidate ->
                         val dotColor = when (candidate) {
@@ -1528,32 +1790,38 @@ private fun CustomThemeEditorDialog(
                                     modifier = Modifier
                                         .size(13.dp)
                                         .background(dotColor, CircleShape)
-                                        .border(
-                                            1.dp,
-                                            MaterialTheme.colorScheme.outlineVariant,
-                                            CircleShape
-                                        )
+                                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
                                 )
                             }
                         )
                     }
                 }
-                NoteStyleColorPalette(
-                    color = current,
-                    onColorChange = ::update
-                )
+                NoteStyleColorPalette(color = current, onColorChange = ::update)
             }
         },
         confirmButton = {
             TextButton(
                 onClick = {
                     onSave(
-                        CustomReaderTheme(
-                            id = initial.id,
+                        initial.copy(
                             name = name.trim().ifBlank { "自定义主题" },
                             backgroundArgb = background.toArgb(),
                             textArgb = text.toArgb(),
-                            accentArgb = accent.toArgb()
+                            accentArgb = accent.toArgb(),
+                            isDark = isDark,
+                            font = selectedFont,
+                            customFontId = selectedCustomFontId.takeIf { selectedFont == ReaderFont.CUSTOM },
+                            customFontPath = if (selectedFont == ReaderFont.CUSTOM) {
+                                selectedFontAsset?.filePath
+                                    ?: initial.customFontPath.takeIf { selectedCustomFontId == initialCustomFontId }
+                            } else null,
+                            customFontName = if (selectedFont == ReaderFont.CUSTOM) {
+                                selectedFontAsset?.displayName
+                                    ?: initial.customFontName.takeIf { selectedCustomFontId == initialCustomFontId }
+                            } else null,
+                            backgroundImageId = selectedBackgroundImageId,
+                            backgroundImagePath = selectedBackgroundPath,
+                            backgroundImageOpacity = backgroundImageOpacity
                         )
                     )
                 }

@@ -6,9 +6,11 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.os.BatteryManager
+import android.os.SystemClock
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.magnifier
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -87,9 +89,9 @@ import com.mozhi.reader.feature.reader.engine.annotationGeometry
 import com.mozhi.reader.feature.reader.engine.dragSelectionHandle
 import com.mozhi.reader.feature.reader.engine.hitTextPos
 import com.mozhi.reader.feature.reader.engine.illustrationMarkers
-import com.mozhi.reader.feature.reader.engine.selectedText
 import com.mozhi.reader.feature.reader.engine.selectionBodyRange
 import com.mozhi.reader.feature.reader.engine.selectionRects
+import com.mozhi.reader.feature.reader.engine.textPosAtBodyOffset
 import com.mozhi.reader.feature.reader.engine.wordSelectionAt
 import com.mozhi.reader.feature.reader.render.PageBitmapRenderer
 import com.mozhi.reader.feature.reader.render.ReaderPageStyle
@@ -300,7 +302,7 @@ fun ReaderPane(
 
     DisposableEffect(controller) {
         registerContentHook { relativePosition ->
-            if (relativePosition == 0) selection.clear()
+            if (relativePosition == 0 && !selection.consumePreservedPageChange()) selection.clear()
             holder.refresh(relativePosition)
             frameTick++
         }
@@ -358,6 +360,15 @@ fun ReaderPane(
                         viewport = size
                     }
                 }
+                .magnifier(
+                    sourceCenter = { selection.magnifierCenter ?: Offset.Unspecified },
+                    magnifierCenter = {
+                        selection.magnifierCenter?.let { center ->
+                            Offset(center.x, center.y - 72.dp.toPx())
+                        } ?: Offset.Unspecified
+                    },
+                    zoom = 1.8f
+                )
                 .readerPageTouch(
                     enabled = enabled,
                     driver = driver,
@@ -593,145 +604,201 @@ private class ReaderSelectionController(
 ) : SelectionGestureHooks {
 
     data class ActiveSelection(
-        val page: com.mozhi.reader.feature.reader.engine.TextPage,
-        val anchorStart: TextPos,
-        val anchorEnd: TextPos,
-        val start: TextPos,
-        val end: TextPos,
-        val rects: List<SelectionRect>,
+        val chapterIndex: Int,
+        val anchorStartOffset: Int,
+        val anchorEndOffset: Int,
+        val startOffset: Int,
+        val endOffset: Int,
         val dragging: Boolean
-    )
+    ) {
+        val bodyRange: IntRange get() = startOffset..endOffset
+    }
 
     private enum class Handle { START, END }
 
     var active by mutableStateOf<ActiveSelection?>(null)
         private set
+    var magnifierCenter by mutableStateOf<Offset?>(null)
+        private set
 
-    /** Non-null while a handle drag owns the gesture; long-press drags keep the anchor model. */
     private var draggedHandle: Handle? = null
+    private var preserveNextPageChange = false
+    private var lastAutoTurnAt = 0L
 
     override val isActive: Boolean get() = active != null
 
     override fun begin(position: Offset): Boolean {
         val laid = controller.curPage() as? RenderPage.Laid ?: return false
-        val page = laid.page
         val local = holder.toContentLocal(position) ?: return false
-        val hit = page.hitTextPos(local.x, local.y, exact = true) ?: return false
-        val (start, end) = page.wordSelectionAt(hit)
+        val hit = laid.page.hitTextPos(local.x, local.y, exact = true) ?: return false
+        val word = laid.page.wordSelectionAt(hit)
+        val range = laid.page.selectionBodyRange(word.first, word.second)
         draggedHandle = null
         active = ActiveSelection(
-            page = page,
-            anchorStart = start,
-            anchorEnd = end,
-            start = start,
-            end = end,
-            rects = page.selectionRects(start, end),
+            chapterIndex = laid.chapterIndex,
+            anchorStartOffset = range.first,
+            anchorEndOffset = range.last,
+            startOffset = range.first,
+            endOffset = range.last,
             dragging = true
         )
+        magnifierCenter = position
         onSelectionStarted()
         return true
     }
 
     override fun grabHandle(position: Offset, radiusPx: Float): Boolean {
         val current = active ?: return false
+        val laid = controller.curPage() as? RenderPage.Laid ?: return false
+        if (laid.chapterIndex != current.chapterIndex) return false
         val origin = holder.contentOrigin() ?: return false
-        val first = current.rects.firstOrNull() ?: return false
-        val last = current.rects.last()
-        val startCenter = Offset(origin.x + first.left, origin.y + first.bottom)
-        val endCenter = Offset(origin.x + last.right, origin.y + last.bottom)
-        val startDistance = (position - startCenter).getDistance()
-        val endDistance = (position - endCenter).getDistance()
+        val startCenter = endpointCenter(laid.page, current.startOffset, origin, startSide = true)
+        val endCenter = endpointCenter(laid.page, current.endOffset, origin, startSide = false)
+        val startDistance = startCenter?.let { (position - it).getDistance() } ?: Float.MAX_VALUE
+        val endDistance = endCenter?.let { (position - it).getDistance() } ?: Float.MAX_VALUE
         draggedHandle = when {
             startDistance > radiusPx && endDistance > radiusPx -> return false
             startDistance <= endDistance -> Handle.START
             else -> Handle.END
         }
+        magnifierCenter = position
         active = current.copy(dragging = true)
         return true
     }
 
     override fun drag(position: Offset) {
+        magnifierCenter = position
         val current = active ?: return
+        if (autoTurnAtEdge(position, current)) return
+        val laid = controller.curPage() as? RenderPage.Laid ?: return
+        if (laid.chapterIndex != current.chapterIndex) return
         val local = holder.toContentLocal(position) ?: return
-        val hit = current.page.hitTextPos(local.x, local.y, exact = false) ?: return
+        val hit = laid.page.hitTextPos(local.x, local.y, exact = false) ?: return
+        val hitRange = laid.page.selectionBodyRange(hit, hit)
         val handle = draggedHandle
-        val (start, end) = if (handle != null) {
-            val dragged = dragSelectionHandle(
-                start = current.start,
-                end = current.end,
-                hit = hit,
+        val next = if (handle != null) {
+            val moved = dragSelectionHandle(
+                start = current.startOffset,
+                end = current.endOffset,
+                hit = if (handle == Handle.START) hitRange.first else hitRange.last,
                 draggingStart = handle == Handle.START
             )
-            draggedHandle = if (dragged.draggingStart) Handle.START else Handle.END
-            dragged.start to dragged.end
+            draggedHandle = if (moved.draggingStart) Handle.START else Handle.END
+            current.copy(startOffset = moved.start, endOffset = moved.end)
         } else {
             when {
-                hit < current.anchorStart -> hit to current.anchorEnd
-                hit > current.anchorEnd -> current.anchorStart to hit
-                else -> current.anchorStart to current.anchorEnd
+                hitRange.first < current.anchorStartOffset -> current.copy(
+                    startOffset = hitRange.first,
+                    endOffset = current.anchorEndOffset
+                )
+                hitRange.last > current.anchorEndOffset -> current.copy(
+                    startOffset = current.anchorStartOffset,
+                    endOffset = hitRange.last
+                )
+                else -> current.copy(
+                    startOffset = current.anchorStartOffset,
+                    endOffset = current.anchorEndOffset
+                )
             }
         }
-        if (start == current.start && end == current.end) return
-        active = current.copy(
-            start = start,
-            end = end,
-            rects = current.page.selectionRects(start, end)
-        )
+        if (next.startOffset != current.startOffset || next.endOffset != current.endOffset) {
+            active = next
+        }
+    }
+
+    private fun autoTurnAtEdge(position: Offset, current: ActiveSelection): Boolean {
+        val now = SystemClock.uptimeMillis()
+        if (now - lastAutoTurnAt < AUTO_TURN_COOLDOWN_MS) return false
+        val edge = holder.viewHeight * AUTO_TURN_EDGE_FRACTION
+        val direction = when {
+            position.y <= edge -> PageTurnDirection.PREVIOUS
+            position.y >= holder.viewHeight - edge -> PageTurnDirection.NEXT
+            else -> return false
+        }
+        val candidate = when (direction) {
+            PageTurnDirection.PREVIOUS -> controller.prevPage()
+            PageTurnDirection.NEXT -> controller.nextPage()
+        } as? RenderPage.Laid ?: return false
+        if (candidate.chapterIndex != current.chapterIndex) return false
+        preserveNextPageChange = true
+        val moved = when (direction) {
+            PageTurnDirection.PREVIOUS -> controller.moveToPrevPage()
+            PageTurnDirection.NEXT -> controller.moveToNextPage()
+        }
+        if (!moved) preserveNextPageChange = false
+        lastAutoTurnAt = now
+        return moved
+    }
+
+    fun consumePreservedPageChange(): Boolean {
+        val preserve = preserveNextPageChange
+        preserveNextPageChange = false
+        return preserve
     }
 
     override fun end() {
         draggedHandle = null
+        magnifierCenter = null
         active = active?.copy(dragging = false)
     }
 
     override fun clear() {
         draggedHandle = null
+        magnifierCenter = null
         active = null
     }
 
     fun selectedText(): String {
         val current = active ?: return ""
-        return current.page.selectedText(current.start, current.end)
+        val body = controller.chapterBody(current.chapterIndex) ?: return ""
+        val start = current.startOffset.coerceIn(0, body.length)
+        val endExclusive = (current.endOffset + 1).coerceIn(start, body.length)
+        return body.substring(start, endExclusive)
+            .replace('\uFFFC'.toString(), "［图片］")
     }
 
-    /** Body offsets of the current selection, for context assembly. */
-    fun bodyRange(): IntRange? {
-        val current = active ?: return null
-        return current.page.selectionBodyRange(current.start, current.end)
-    }
+    fun bodyRange(): IntRange? = active?.bodyRange
 
     fun drawHighlight(drawScope: DrawScope, palette: ReaderPalette) {
         val current = active ?: return
+        val laid = controller.curPage() as? RenderPage.Laid ?: return
+        if (laid.chapterIndex != current.chapterIndex) return
         val origin = holder.contentOrigin() ?: return
-        // The veil sits on top of the glyphs; on dark paper a light accent at 30% washes the
-        // text out, so the overlay thins while the handles keep full accent strength.
+        val rects = laid.page.selectionRects(current.bodyRange)
         val color = palette.accent.copy(alpha = if (palette.isDark) 0.18f else 0.30f)
-        for (rect in current.rects) {
+        for (rect in rects) {
             drawScope.drawRect(
                 color = color,
                 topLeft = Offset(origin.x + rect.left, origin.y + rect.top),
                 size = Size(rect.right - rect.left, rect.bottom - rect.top)
             )
         }
-        val first = current.rects.firstOrNull() ?: return
-        val last = current.rects.last()
-        drawHandle(
-            drawScope = drawScope,
-            palette = palette,
-            x = origin.x + first.left,
-            top = origin.y + first.top,
-            bottom = origin.y + first.bottom
-        )
-        drawHandle(
-            drawScope = drawScope,
-            palette = palette,
-            x = origin.x + last.right,
-            top = origin.y + last.top,
-            bottom = origin.y + last.bottom
-        )
+        endpointCenter(laid.page, current.startOffset, origin, startSide = true)?.let { center ->
+            val pos = laid.page.textPosAtBodyOffset(current.startOffset) ?: return@let
+            val line = laid.page.lines[pos.lineIndex]
+            drawHandle(drawScope, palette, center.x, origin.y + line.lineTop, origin.y + line.lineBottom)
+        }
+        endpointCenter(laid.page, current.endOffset, origin, startSide = false)?.let { center ->
+            val pos = laid.page.textPosAtBodyOffset(current.endOffset) ?: return@let
+            val line = laid.page.lines[pos.lineIndex]
+            drawHandle(drawScope, palette, center.x, origin.y + line.lineTop, origin.y + line.lineBottom)
+        }
     }
 
-    /** Platform-style grab handle: a cursor bar over the line plus a ball hanging below it. */
+    private fun endpointCenter(
+        page: com.mozhi.reader.feature.reader.engine.TextPage,
+        offset: Int,
+        origin: Offset,
+        startSide: Boolean
+    ): Offset? {
+        val pageEnd = page.chapterPosition + page.charLength
+        if (offset !in page.chapterPosition until pageEnd) return null
+        val pos = page.textPosAtBodyOffset(offset) ?: return null
+        val line = page.lines[pos.lineIndex]
+        val column = line.columns[pos.columnIndex]
+        return Offset(origin.x + if (startSide) column.start else column.end, origin.y + line.lineBottom)
+    }
+
     private fun drawHandle(
         drawScope: DrawScope,
         palette: ReaderPalette,
@@ -753,16 +820,21 @@ private class ReaderSelectionController(
         )
     }
 
-    /** Toolbar y in view px: above the selection, or below it when too close to the top. */
     fun toolbarTop(current: ActiveSelection, density: Density): Int {
+        val laid = controller.curPage() as? RenderPage.Laid ?: return 0
         val origin = holder.contentOrigin() ?: return 0
+        val rects = laid.page.selectionRects(current.bodyRange)
         val gap = with(density) { 12.dp.toPx() }
         val barHeight = with(density) { 48.dp.toPx() }
-        val first = current.rects.firstOrNull() ?: return 0
+        val first = rects.firstOrNull() ?: return 0
         val above = origin.y + first.top - gap - barHeight
         if (above > origin.y * 0.4f) return above.toInt()
-        val last = current.rects.last()
-        return (origin.y + last.bottom + gap).toInt()
+        return (origin.y + rects.last().bottom + gap).toInt()
+    }
+
+    private companion object {
+        const val AUTO_TURN_EDGE_FRACTION = 0.08f
+        const val AUTO_TURN_COOLDOWN_MS = 420L
     }
 }
 

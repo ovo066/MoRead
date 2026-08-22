@@ -97,8 +97,7 @@ fun ImageGenSettingsScreen(
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Text(
-                    "填好 Base URL 与模型后，本页配置优先于「模型分配」的生图模型；" +
-                        "清空模型名即可回落。API Key 加密存储在本机。",
+                    "填好服务商与模型即可生成插图；API Key 加密保存在本机。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -240,7 +239,7 @@ fun ImageGenSettingsScreen(
                         onValueChange = viewModel::setPositivePrompt,
                         label = { Text("固定正面提示词（可选）") },
                         supportingText = {
-                            Text("使用英文 Danbooru tags，自动加在 LLM 生成的动态 tags 前面")
+                            Text("英文 tags，会加在自动生成的提示词前面")
                         },
                         minLines = 2,
                         modifier = Modifier.fillMaxWidth()
@@ -304,7 +303,7 @@ fun ImageGenSettingsScreen(
                         value = settings.negativePrompt,
                         onValueChange = viewModel::setNegativePrompt,
                         label = { Text("负面提示词（可选）") },
-                        supportingText = { Text("使用英文 Danbooru tags；留空使用内置默认负面词") },
+                        supportingText = { Text("英文 tags；留空用内置默认负面词") },
                         minLines = 2,
                         modifier = Modifier.fillMaxWidth()
                     )

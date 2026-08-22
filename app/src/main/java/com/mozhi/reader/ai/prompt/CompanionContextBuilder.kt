@@ -29,7 +29,7 @@ data class BookProgress(
 
 /**
  * 伴读上下文构建器（DEVELOPMENT_PLAN §4.5）：每次请求前组装系统提示词——
- * 人设 → 书籍进度 → 防剧透铁律 → 工具指引 → 主动记忆 → 场景原文，
+ * 人设 → 书籍进度 → 防剧透边界 → 主动记忆 → 场景原文，
  * 按「字符数/2 ≈ token」做预算控制，超限先弃记忆、再截场景，人设与防剧透永不裁。
  *
  * 防剧透在这里只是「声明」层；硬过滤在 search_book 的查询层与 embedding 管线两端各有一道。
@@ -45,14 +45,12 @@ class CompanionContextBuilder @Inject constructor(
     /**
      * @param scene 调用方备好的场景原文（选段及其邻域，或章节开头），可空
      * @param memoryQuery 用于主动记忆检索的文本（通常是用户最新一条输入），可空
-     * @param toolNames 本轮实际注册的工具名，决定工具指引怎么写
      */
     suspend fun build(
         persona: PersonaEntity?,
         bookId: Long?,
         scene: String? = null,
         memoryQuery: String? = null,
-        toolNames: Collection<String> = emptySet(),
         spoilerProtectionEnabled: Boolean = true,
         budgetChars: Int = DEFAULT_BUDGET_CHARS
     ): String {
@@ -97,7 +95,6 @@ class CompanionContextBuilder @Inject constructor(
                 ?.takeIf { it.memoryEnabled && memorySettings.longTermEnabled }
                 ?.userProfile
                 .orEmpty(),
-            toolNames = toolNames,
             spoilerProtectionEnabled = spoilerProtectionEnabled,
             // 关键词触发的世界书条目拿「场景原文 + 用户最新输入」当命中材料。
             loreTrigger = listOfNotNull(scene, memoryQuery).joinToString("\n"),
@@ -144,8 +141,7 @@ class CompanionContextBuilder @Inject constructor(
             scene: String?,
             memories: List<String>,
             userProfile: String = "",
-            toolNames: Collection<String> = emptySet(),
-            spoilerProtectionEnabled: Boolean = true,
+                spoilerProtectionEnabled: Boolean = true,
             loreTrigger: String = "",
             budgetChars: Int = DEFAULT_BUDGET_CHARS
         ): String {
@@ -155,8 +151,7 @@ class CompanionContextBuilder @Inject constructor(
                 userProfileBlock(userProfile),
                 userMaskBlock(userMask),
                 progressBlock(progress),
-                spoilerBlock(progress, spoilerProtectionEnabled),
-                toolsBlock(toolNames, spoilerProtectionEnabled)
+                spoilerBlock(progress, spoilerProtectionEnabled)
             )
             val closing = "回答使用简体中文。"
             var memoryBlock = memoryBlock(memories)
@@ -264,72 +259,8 @@ class CompanionContextBuilder @Inject constructor(
         private fun spoilerBlock(
             progress: BookProgress?,
             spoilerProtectionEnabled: Boolean
-        ): String? = progress?.let {
-            if (spoilerProtectionEnabled) {
-                "【防剧透铁律】你的知识范围截止到第 ${it.currentChapterIndex + 1} 章：" +
-                    "之后的情节你一概不知道，不得叙述、推测或暗示。" +
-                    "用户问到后续内容时，坦率说明你也只读到这里；" +
-                    "可以基于已读内容一起猜想，但必须说明那只是猜想。"
-            } else {
-                "【阅读范围】用户已关闭防剧透模式。你可以检索和讨论整本《${it.title}》的内容，" +
-                    "但仍应按用户的问题组织回答，并在涉及后续剧情时清楚说明范围。"
-            }
-        }
-
-        private fun toolsBlock(
-            toolNames: Collection<String>,
-            spoilerProtectionEnabled: Boolean
-        ): String? {
-            val lines = buildList {
-                if ("search_book" in toolNames) {
-                    add(
-                        if (spoilerProtectionEnabled) {
-                            "需要引用或核对前文细节时，先用 search_book 检索原文（向量失败会自动本地回退，结果严格按用户实际进度过滤）。"
-                        } else {
-                            "需要引用或核对全书细节时，先用 search_book 检索原文（向量失败会自动本地回退）。"
-                        }
-                    )
-                }
-                if ("read_book_section" in toolNames) {
-                    add("用户要求概括指定章节或章节范围时，用 read_book_section 读取该范围，不要用零散搜索结果代替完整指定内容；长内容按工具返回的 start_char 继续读取。")
-                }
-                if ("recall_memory" in toolNames) {
-                    add("用户提到过往的约定、偏好或聊过的话题时，用 recall_memory 回忆。")
-                }
-                if ("get_reading_progress" in toolNames) {
-                    add("回答与进度相关的问题前，用 get_reading_progress 确认最新进度。")
-                }
-                if ("web_search" in toolNames) {
-                    add(
-                        if (spoilerProtectionEnabled) {
-                            "遇到书外知识、近期事实或用户明确要求联网时，用 web_search 搜索并在回答中附上来源链接；本书剧情仍只用书内工具，严禁借联网搜索绕过防剧透范围。"
-                        } else {
-                            "遇到书外知识、近期事实或用户明确要求联网时，用 web_search 搜索并在回答中附上来源链接；本书剧情优先使用书内工具。"
-                        }
-                    )
-                }
-                if ("web_scrape" in toolNames) {
-                    add("当搜索摘要不足或用户给出了具体网址时，用 web_scrape 抓取正文后再回答；不要无必要地抓取每条搜索结果。")
-                }
-                if ("add_annotation" in toolNames) {
-                    add("用户要求对原文段落作批注时，先读取原文，再把逐字 quote 和评论交给 add_annotation；批注会显示在正文旁的段落评论区。")
-                }
-                if ("write_note" in toolNames) {
-                    add("用户明确要求保存读书笔记时，用 write_note 写入笔记库；普通对话不要擅自保存。")
-                }
-                if ("save_plot_summary" in toolNames) {
-                    add("用户要求生成并保存/更新剧情梗概时，先核对进度与已读内容，再用 save_plot_summary 保存；梗概范围不得超过当前进度。")
-                }
-                if ("generate_image" in toolNames) {
-                    add("用户明确要求插图或画面时可用 generate_image；提示词不得包含阅读进度之后的信息，结果会永久进入本书插图廊。")
-                }
-                if ("synthesize_speech" in toolNames) {
-                    add("用户要求朗读或配音时可用 synthesize_speech；按需传 voice_id、speed、volume、pitch，相同参数会复用缓存。")
-                }
-            }
-            if (lines.isEmpty()) return null
-            return "【工具使用】\n" + lines.joinToString("\n") +
-                "\n工具结果之外的书中情节不要凭空编造。"
+        ): String? = progress?.takeIf { spoilerProtectionEnabled }?.let {
+            "【防剧透铁律】仅讨论用户已读至第 ${it.currentChapterIndex + 1} 章的内容，不得透露或暗示后续情节。"
         }
 
         private fun memoryBlock(memories: List<String>): String? =

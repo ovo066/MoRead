@@ -23,6 +23,7 @@ data class TxtImportPreview(
     val sessionId: String,
     val sourceName: String,
     val suggestedTitle: String,
+    val suggestedAuthor: String,
     val charsetName: String,
     val selectedRuleId: Long?,
     val selectedRuleName: String,
@@ -36,6 +37,7 @@ data class TxtImportSession(
     val id: String,
     val sourceName: String,
     val suggestedTitle: String,
+    val suggestedAuthor: String,
     val charsetName: String,
     val text: String,
     val rules: List<TxtTocRule>,
@@ -45,6 +47,7 @@ data class TxtImportSession(
         sessionId = id,
         sourceName = sourceName,
         suggestedTitle = suggestedTitle,
+        suggestedAuthor = suggestedAuthor,
         charsetName = charsetName,
         selectedRuleId = splitResult.rule?.id,
         selectedRuleName = splitResult.rule?.name ?: "按字数自动分节",
@@ -67,6 +70,7 @@ private data class StoredTxtImportSession(
     val id: String,
     val sourceName: String,
     val suggestedTitle: String,
+    val suggestedAuthor: String = "",
     val charsetName: String,
     val selectedRule: TxtTocRule?
 )
@@ -92,6 +96,7 @@ class ImportSessionStore @Inject constructor(
     fun create(
         sourceName: String,
         suggestedTitle: String,
+        suggestedAuthor: String,
         charsetName: String,
         text: String,
         rules: List<TxtTocRule>,
@@ -103,6 +108,7 @@ class ImportSessionStore @Inject constructor(
             id = sessionId,
             sourceName = sourceName,
             suggestedTitle = suggestedTitle,
+            suggestedAuthor = suggestedAuthor,
             charsetName = charsetName,
             text = text,
             rules = rules,
@@ -135,6 +141,7 @@ class ImportSessionStore @Inject constructor(
             id = session.id,
             sourceName = session.sourceName,
             suggestedTitle = session.suggestedTitle,
+            suggestedAuthor = session.suggestedAuthor,
             charsetName = session.charsetName,
             selectedRule = session.splitResult.rule
         )
@@ -164,6 +171,7 @@ class ImportSessionStore @Inject constructor(
             id = metadata.id,
             sourceName = metadata.sourceName,
             suggestedTitle = metadata.suggestedTitle,
+            suggestedAuthor = metadata.suggestedAuthor,
             charsetName = metadata.charsetName,
             text = text,
             rules = ruleLoader.rules,

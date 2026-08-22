@@ -2,7 +2,6 @@ package com.mozhi.reader.ai.audiobook
 
 import com.mozhi.reader.ai.agent.AgentEvent
 import com.mozhi.reader.ai.agent.AgentLoop
-import com.mozhi.reader.ai.agent.ReaderToolset
 import com.mozhi.reader.ai.client.ChatMessage
 import com.mozhi.reader.ai.client.ChatRole
 import com.mozhi.reader.ai.client.AiJson
@@ -33,8 +32,7 @@ class AudiobookScriptAgent @Inject constructor(
     private val libraryRepository: LibraryRepository,
     private val audiobookRepository: AudiobookRepository,
     private val readerSettingsRepository: ReaderSettingsRepository,
-    private val agentLoop: AgentLoop,
-    private val readerToolset: ReaderToolset
+    private val agentLoop: AgentLoop
 ) {
     suspend fun generate(
         bookId: Long,
@@ -184,13 +182,9 @@ class AudiobookScriptAgent @Inject constructor(
         val output = StringBuilder()
         agentLoop.runDetached(
             history = history,
-            tools = readerToolset.forBook(
-                bookId = bookId,
-                enabledTools = SAFE_TOOL_NAMES,
-                spoilerProtectionEnabled = false
-            ),
-            maxRounds = 3,
-            modelRole = ModelRole.CHAT
+            tools = emptyList(),
+            maxRounds = 1,
+            modelRole = ModelRole.CHEAP
         ).collect { event ->
             if (event is AgentEvent.Text) output.append(event.text)
         }
@@ -219,10 +213,6 @@ class AudiobookScriptAgent @Inject constructor(
         ?.takeIf { it in VALID_EMOTIONS } ?: "中性"
 
     private companion object {
-        val SAFE_TOOL_NAMES = setOf(
-            "search_book",
-            "read_book_section"
-        )
         val VALID_EMOTIONS = setOf("开心", "悲伤", "愤怒", "恐惧", "厌恶", "惊讶", "中性")
         const val LOCAL_LOCK_CONFIDENCE = 0.85f
         const val MIN_AI_ASSIGNMENT_CONFIDENCE = 0.42f

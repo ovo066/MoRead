@@ -444,7 +444,7 @@ internal fun ModelRole.label(): String = when (this) {
 private fun ModelRole.purpose(): String = when (this) {
     ModelRole.CHAT -> "角色对话与问答"
     ModelRole.CHEAP -> "摘要、索引等后台任务"
-    ModelRole.SUGGESTION -> "伴读输入区快捷回复，缺省用批量任务模型"
+    ModelRole.SUGGESTION -> "输入框上方的快捷回复，不选就用批量任务模型"
     ModelRole.EMBEDDING -> "全文与想法检索"
     ModelRole.TTS -> "听书语音合成"
     ModelRole.IMAGE -> "角色头像与插图"

@@ -36,6 +36,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.MenuBook
+import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.outlined.BookmarkAdd
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Bookmarks
@@ -131,7 +132,7 @@ fun customReaderPalette(theme: CustomReaderTheme): ReaderPalette {
     val background = Color(theme.backgroundArgb)
     val text = Color(theme.textArgb)
     val accent = Color(theme.accentArgb)
-    val dark = background.luminance() < 0.5f
+    val dark = theme.isDark ?: (background.luminance() < 0.5f)
     val glassBase = lerp(background, Color.White, if (dark) 0.07f else 0.42f)
     val glassStrongBase = lerp(background, Color.White, if (dark) 0.10f else 0.55f)
     return ReaderPalette(
@@ -246,7 +247,8 @@ fun ReaderChrome(
     palette: ReaderPalette,
     onBack: () -> Unit,
     onOpenDetails: () -> Unit,
-    onAddBookmark: () -> Unit,
+    isCurrentPositionBookmarked: Boolean,
+    onToggleBookmark: () -> Unit,
     onPrevChapter: () -> Unit,
     onNextChapter: () -> Unit,
     onSeekChapter: (Float) -> Unit,
@@ -272,7 +274,8 @@ fun ReaderChrome(
                 palette = palette,
                 onBack = onBack,
                 onOpenDetails = onOpenDetails,
-                onAddBookmark = onAddBookmark,
+                isCurrentPositionBookmarked = isCurrentPositionBookmarked,
+                onToggleBookmark = onToggleBookmark,
                 onSearch = onSearch,
                 onReidentifyChapters = onReidentifyChapters,
                 onTextReplacementRules = onTextReplacementRules
@@ -311,7 +314,8 @@ private fun ReaderTopBar(
     palette: ReaderPalette,
     onBack: () -> Unit,
     onOpenDetails: () -> Unit,
-    onAddBookmark: () -> Unit,
+    isCurrentPositionBookmarked: Boolean,
+    onToggleBookmark: () -> Unit,
     onSearch: () -> Unit,
     onReidentifyChapters: () -> Unit,
     onTextReplacementRules: () -> Unit
@@ -388,11 +392,15 @@ private fun ReaderTopBar(
                 maxWidth = 160.dp
             ) {
                 MoReadMenuItem(
-                    text = "添加书签",
-                    icon = Icons.Outlined.BookmarkAdd,
+                    text = if (isCurrentPositionBookmarked) "取消书签" else "添加书签",
+                    icon = if (isCurrentPositionBookmarked) {
+                        Icons.Filled.Bookmark
+                    } else {
+                        Icons.Outlined.BookmarkAdd
+                    },
                     onClick = {
                         menuExpanded = false
-                        onAddBookmark()
+                        onToggleBookmark()
                     }
                 )
                 MoReadMenuItem(

@@ -86,8 +86,7 @@ fun GlobalPresetSettingsScreen(
             ) {
                 item {
                     Text(
-                        "参考 SillyTavern 的 Prompt Manager：启用的提示词会注入所有对话模型请求，" +
-                            "但不会改写已保存的聊天消息。辅助批量任务不受影响。",
+                        "开启的预设会加进每次伴读对话，已经发生的聊天记录不受影响。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

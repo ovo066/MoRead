@@ -86,7 +86,7 @@ fun WebSearchSettingsScreen(
         ) {
             item {
                 Text(
-                    "启用后，伴读 Agent 可按需搜索互联网，并进一步抓取网页正文。书内检索与防剧透规则不变。",
+                    "开启后，伴读角色可以联网查资料、读网页。",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -108,9 +108,9 @@ fun WebSearchSettingsScreen(
                             modifier = Modifier.padding(end = 12.dp)
                         )
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("允许 Agent 联网", style = MaterialTheme.typography.titleSmall)
+                            Text("允许伴读联网", style = MaterialTheme.typography.titleSmall)
                             Text(
-                                if (state.settings.enabled) "当前使用 ${provider.label}" else "关闭时不会发起搜索请求",
+                                if (state.settings.enabled) "当前使用 ${provider.label}" else "关闭时不会联网",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -214,7 +214,7 @@ fun WebSearchSettingsScreen(
                                 onSelect = viewModel::setTavilyExtractDepth
                             )
                             Text(
-                                "Basic 速度快、消耗低；Advanced 覆盖更深，但搜索通常消耗 2 个 credit。",
+                                "Basic 快且省；Advanced 查得更深，每次搜索多花一倍额度。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -252,7 +252,7 @@ fun WebSearchSettingsScreen(
             }
             item {
                 Text(
-                    "API Key 仅保存在系统加密存储中，不进入数据备份；搜索词与待抓取网址会发送给所选服务商。",
+                    "API Key 加密保存在本机，不进备份；搜索词与要打开的网址会发给所选服务商。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

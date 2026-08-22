@@ -85,6 +85,8 @@ import com.mozhi.reader.core.datastore.PendingReaderFont
 import com.mozhi.reader.core.datastore.ReaderSettings
 import com.mozhi.reader.core.datastore.ReaderTextReplacementRule
 import com.mozhi.reader.core.datastore.ReaderTheme
+import com.mozhi.reader.core.datastore.activeThemeSlot
+import com.mozhi.reader.core.datastore.resolveThemeSlot
 import com.mozhi.reader.feature.reader.engine.ReaderAnnotationMark
 import com.mozhi.reader.feature.reader.engine.ReaderIllustrationMark
 import kotlinx.coroutines.flow.drop
@@ -165,16 +167,23 @@ fun ReaderScreen(
     }
     val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
-    val palette = readerPalette(state.settings, systemDark)
+    // 日夜各存一套配色：先定此刻用哪一槽，再把它解析到顶层字段，调色板与渲染只认解析结果。
+    val themeSlot = state.settings.activeThemeSlot(systemDark)
+    val readerSettings = state.settings.resolveThemeSlot(themeSlot)
+    val palette = readerPalette(readerSettings, systemDark)
     val listeningThisBook = listenState?.bookId == bookId
     // 滚动模式：听书「按页跳」与「翻页回写朗读位置」都不适用，跟读交给滚动面自己做。
     val scrollMode = state.settings.pageMode == com.mozhi.reader.core.datastore.PageMode.SCROLL
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { }
+    // 导入背景图落到哪一槽（日/夜），由发起入口指定；launcher 回调时已经离开那次点击。
+    var backgroundImportSlot by remember {
+        mutableStateOf(com.mozhi.reader.core.datastore.ReaderThemeSlot.DAY)
+    }
     val backgroundImageLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
-    ) { uri -> uri?.let(viewModel::importBackgroundImage) }
+    ) { uri -> uri?.let { viewModel.importBackgroundImage(it, backgroundImportSlot) } }
     val customFontLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri -> uri?.let(viewModel::importCustomFont) }
@@ -485,7 +494,7 @@ fun ReaderScreen(
                 if (scrollMode) {
                     ReaderScrollPane(
                         controller = viewModel.contentController,
-                        settings = state.settings,
+                        settings = readerSettings,
                         palette = palette,
                         enabled = paneEnabled,
                         registerContentHook = viewModel::setContentHook,
@@ -509,7 +518,7 @@ fun ReaderScreen(
                 } else {
                     ReaderPane(
                         controller = viewModel.contentController,
-                        settings = state.settings,
+                        settings = readerSettings,
                         palette = palette,
                         enabled = paneEnabled,
                         registerContentHook = viewModel::setContentHook,
@@ -564,7 +573,11 @@ fun ReaderScreen(
                     chromeVisible = false
                     detailsVisible = true
                 },
-                onAddBookmark = viewModel::addBookmark,
+                isCurrentPositionBookmarked = state.bookmarks.any {
+                    it.chapterIndex == state.currentChapterIndex &&
+                        it.charOffset == state.currentCharOffset
+                },
+                onToggleBookmark = viewModel::toggleBookmark,
                 onPrevChapter = viewModel::goToPrevChapter,
                 onNextChapter = viewModel::goToNextChapter,
                 onSeekChapter = viewModel::seekWithinChapter,
@@ -779,6 +792,7 @@ fun ReaderScreen(
         ) {
             ReaderTypographySheet(
                 settings = state.settings,
+                slot = themeSlot,
                 palette = palette,
                 actions = ReaderTypographyActions(
                     onFontScaleChange = viewModel::setFontScale,
@@ -806,7 +820,11 @@ fun ReaderScreen(
                     onCustomThemeSelect = viewModel::selectCustomTheme,
                     onSaveCustomTheme = viewModel::saveCustomTheme,
                     onDeleteCustomTheme = viewModel::deleteCustomTheme,
-                    onImportBackground = { backgroundImageLauncher.launch(arrayOf("image/*")) },
+                    onDayNightAutoChange = viewModel::setDayNightThemeAuto,
+                    onImportBackground = { slot ->
+                        backgroundImportSlot = slot
+                        backgroundImageLauncher.launch(arrayOf("image/*"))
+                    },
                     onBackgroundImageSelect = viewModel::selectBackgroundImage,
                     onClearBackground = viewModel::clearBackgroundImage,
                     onBackgroundOpacityChange = viewModel::setBackgroundImageOpacity,

@@ -119,8 +119,7 @@ fun SpeechCacheScreen(
                                         SpeechCacheStore.MAX_BUDGET_BYTES.toFloat()
                                 )
                                 Text(
-                                    "上限 ${formatBytes(state.stats.budgetBytes)}；" +
-                                        "超出后按最久没听的先删。",
+                                    "超出上限后，最久没听的先删。",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -141,14 +140,13 @@ fun SpeechCacheScreen(
                                 SettingsRow(
                                     icon = Icons.Outlined.CloudSync,
                                     title = "先配置 WebDAV",
-                                    subtitle = "语音缓存与数据备份共用同一个账号，去「备份与同步」填一次即可",
+                                    subtitle = "和数据备份共用一个账号，去「备份与同步」填一次即可",
                                     onClick = onOpenBackupSettings
                                 )
                             } else {
                                 SettingsBlock(
                                     title = "同步到云盘",
-                                    subtitle = "文件名就是内容指纹，两端各补各缺的，不存在冲突。" +
-                                        "换手机或重装后同一段语音不必再花一次钱。"
+                                    subtitle = "换手机或重装后，同一段语音不用再花钱合成一次。"
                                 ) {
                                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                         Button(
@@ -168,7 +166,7 @@ fun SpeechCacheScreen(
                                 SettingsSwitchRow(
                                     icon = Icons.Outlined.Wifi,
                                     title = "仅 Wi-Fi 自动同步",
-                                    subtitle = "每 12 小时在不计费网络下同步一次；同步是为了省钱，不该吃流量",
+                                    subtitle = "每 12 小时同步一次，不走流量",
                                     checked = state.stats.autoSyncOnWifi,
                                     onCheckedChange = viewModel::setAutoSync
                                 )
@@ -188,9 +186,9 @@ fun SpeechCacheScreen(
             title = { Text("清空语音缓存？") },
             text = {
                 Text(
-                    "会删掉本机全部 ${state.stats.fileCount} 段合成语音（" +
+                    "会删掉本机全部 ${state.stats.fileCount} 段语音（" +
                         "${formatBytes(state.stats.totalBytes)}）。" +
-                        "已同步到云盘的那部分还能再拉回来，没同步的需要重新付费合成。"
+                        "同步过云盘的可以拉回来，没同步的要重新花钱合成。"
                 )
             },
             confirmButton = {

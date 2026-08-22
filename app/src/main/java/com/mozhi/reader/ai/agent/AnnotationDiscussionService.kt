@@ -7,6 +7,7 @@ import com.mozhi.reader.core.database.entity.AnnotationEntity
 import com.mozhi.reader.core.database.entity.AnnotationReplyEntity
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.PersonaEntity
+import com.mozhi.reader.core.database.entity.enabledTools
 import com.mozhi.reader.core.library.AnnotationRepository
 import com.mozhi.reader.core.library.LibraryRepository
 import javax.inject.Inject
@@ -64,10 +65,17 @@ class AnnotationDiscussionService @Inject constructor(
             )
             val latestUser = replies.lastOrNull { it.personaId == null }?.contentMarkdown
                 ?: annotation.note.ifBlank { "（用户只划了这段原文，没有写想法）" }
+            val enabledTools = CompanionToolRouter.select(
+                userText = latestUser,
+                sceneAvailable = true,
+                personaEnabledTools = persona.enabledTools().toSet(),
+                webSearchEnabled = false,
+                longTermMemoryEnabled = persona.memoryEnabled
+            )
             val tools = toolset.forBook(
                 bookId = bookId,
                 personaId = personaId,
-                enabledTools = setOf("search_book", "recall_memory")
+                enabledTools = enabledTools
             )
             val history = listOf(
                 ChatMessage(ChatRole.SYSTEM, system),

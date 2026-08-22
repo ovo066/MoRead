@@ -109,7 +109,7 @@ fun TtsSettingsScreen(
 
                 if (settings.engineMode == TtsEngineMode.SYSTEM) {
                     Text(
-                        "使用手机上已安装的语音引擎朗读（如 Multi TTS、系统自带引擎），不消耗 API 额度。",
+                        "用手机上已装的语音引擎朗读，不花钱。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -178,8 +178,7 @@ fun TtsSettingsScreen(
                     )
                 } else {
                     Text(
-                        "在此独立配置云端语音 API（优先生效）；留空 Base URL 或模型时，" +
-                            "回落到「设置 › 模型分配」的语音模型。Key 加密存储在本机。",
+                        "云端语音效果更好，按用量计费。API Key 加密保存在本机。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -317,7 +316,7 @@ fun TtsSettingsScreen(
                         )
                     }
                     Text(
-                        "OpenAI 会忽略音量与音调；相同参数会复用本地语音缓存。",
+                        "OpenAI 不支持音量与音调。",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

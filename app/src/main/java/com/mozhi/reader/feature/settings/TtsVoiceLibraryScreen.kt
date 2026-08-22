@@ -354,54 +354,32 @@ fun TtsVoiceLibraryScreen(
                 ),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                item {
-                    FrostedSurface(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(20.dp),
-                        shadowElevation = 4.dp
-                    ) {
-                        Column(Modifier.padding(16.dp)) {
-                            Text(
-                                "音色库是干什么的",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Spacer(Modifier.height(6.dp))
-                            Text(
-                                "AI 语音服务用一串音色 ID 来指定谁在说话。这里给这些 ID 起个人话名字、" +
-                                    "打上标签，之后听书的默认发声人、有声书里每个角色的音色，都直接从这份清单里挑。",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            val defaultName = state.voices
-                                .firstOrNull { it.voiceId == state.defaultVoiceId }
-                                ?.displayName
-                            if (state.defaultVoiceId.isNotBlank()) {
-                                Spacer(Modifier.height(10.dp))
-                                Surface(
-                                    shape = MoReadTokens.CapsuleShape,
-                                    color = MaterialTheme.colorScheme.primaryContainer,
-                                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                                ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Outlined.TaskAlt,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(15.dp)
-                                        )
-                                        Text(
-                                            "听书默认：${defaultName ?: state.defaultVoiceId}",
-                                            style = MaterialTheme.typography.labelMedium,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                }
+                val defaultName = state.voices
+                    .firstOrNull { it.voiceId == state.defaultVoiceId }
+                    ?.displayName
+                if (state.defaultVoiceId.isNotBlank()) {
+                    item {
+                        Surface(
+                            shape = MoReadTokens.CapsuleShape,
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    Icons.Outlined.TaskAlt,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Text(
+                                    "听书默认：${defaultName ?: state.defaultVoiceId}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                             }
                         }
                     }
@@ -614,7 +592,7 @@ private fun EmptyVoiceLibrary(onImportPresets: () -> Unit, onCreate: () -> Unit)
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                "用 MiniMax 的话，一键导入常用音色即可开始；别的服务商就手动添一条，填上服务商给的音色 ID。",
+                "用 MiniMax 可以一键导入常用音色；其他服务商手动添加，填上服务商给的音色 ID。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -850,7 +828,7 @@ private fun VoiceEditorDialog(
                     voice.extraJson,
                     { voice = voice.copy(extraJson = it) },
                     label = { Text("参数覆盖 JSON（可选）") },
-                    supportingText = { Text("留空即可；填了会合并进这枚音色的请求体") },
+                    supportingText = { Text("一般留空；填了会附加到这枚音色的请求里") },
                     minLines = 2,
                     modifier = Modifier.fillMaxWidth()
                 )

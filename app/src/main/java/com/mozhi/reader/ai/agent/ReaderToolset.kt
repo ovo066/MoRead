@@ -169,11 +169,7 @@ class ReaderToolset @Inject constructor(
             }
         }
         return enabledTools?.let { allowed ->
-            tools.filter { tool ->
-                tool.spec.name in allowed ||
-                    (tool.spec.name == "read_book_section" && "search_book" in allowed) ||
-                    (tool.spec.name == "save_plot_summary" && "write_note" in allowed)
-            }
+            tools.filter { tool -> tool.spec.name in allowed }
         } ?: tools
     }
 }

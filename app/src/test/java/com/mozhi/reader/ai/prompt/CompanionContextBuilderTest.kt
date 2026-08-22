@@ -71,7 +71,7 @@ class CompanionContextBuilderTest {
         )
         assertTrue(prompt.contains("《长安十二时辰》"))
         assertTrue(prompt.contains("当前读到第 12 章「午正」"))
-        assertTrue(prompt.contains("【防剧透铁律】你的知识范围截止到第 12 章"))
+        assertTrue(prompt.contains("【防剧透铁律】仅讨论用户已读至第 12 章的内容"))
     }
 
     @Test
@@ -107,54 +107,6 @@ class CompanionContextBuilderTest {
         assertTrue(prompt.contains("不是你的角色设定"))
     }
 
-    @Test
-    fun toolGuidanceOnlyMentionsRegisteredTools() {
-        val withSearch = CompanionContextBuilder.assemble(
-            persona = null,
-            progress = progress,
-            scene = null,
-            memories = emptyList(),
-            toolNames = setOf("search_book")
-        )
-        assertTrue(withSearch.contains("search_book"))
-        assertFalse(withSearch.contains("recall_memory"))
-
-        val without = CompanionContextBuilder.assemble(
-            persona = null,
-            progress = progress,
-            scene = null,
-            memories = emptyList()
-        )
-        assertFalse(without.contains("【工具使用】"))
-    }
-
-    @Test
-    fun webSearchGuidancePreservesSpoilerBoundary() {
-        val prompt = CompanionContextBuilder.assemble(
-            persona = null,
-            progress = progress,
-            scene = null,
-            memories = emptyList(),
-            toolNames = setOf("web_search")
-        )
-
-        assertTrue(prompt.contains("来源链接"))
-        assertTrue(prompt.contains("严禁借联网搜索绕过防剧透范围"))
-    }
-
-    @Test
-    fun webScrapeGuidanceUsesFullPageOnlyWhenNeeded() {
-        val prompt = CompanionContextBuilder.assemble(
-            persona = null,
-            progress = progress,
-            scene = null,
-            memories = emptyList(),
-            toolNames = setOf("web_search", "web_scrape")
-        )
-
-        assertTrue(prompt.contains("web_scrape"))
-        assertTrue(prompt.contains("搜索摘要不足"))
-    }
 
     @Test
     fun memoriesRenderAsBulletList() {

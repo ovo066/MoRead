@@ -116,8 +116,7 @@ fun ApiLogScreen(
                             Column(modifier = Modifier.weight(1f)) {
                                 Text("记录 API 调用", style = MaterialTheme.typography.bodyLarge)
                                 Text(
-                                    "记录每次 AI 请求的地址、状态、耗时与截断预览，便于排查连接问题；" +
-                                        "日志仅保存在本机，不含 API Key",
+                                    "出问题时用来排查；只存在本机，不含 API Key",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -131,7 +130,7 @@ fun ApiLogScreen(
                     item {
                         Text(
                             text = if (enabled) {
-                                "暂无记录。发起任意 AI 请求（对话、测连、拉取模型目录等）后会出现在这里。"
+                                "还没有记录。用过 AI 之后会出现在这里。"
                             } else {
                                 "开启开关后，新的 AI 请求会记录在这里。"
                             },
@@ -269,7 +268,7 @@ private fun ApiLogEntryCard(entry: ApiCallLogEntry) {
                 entry.responsePreview?.let { DetailBlock(label = "响应预览", value = it, mono = true) }
                 if (entry.streaming) {
                     Text(
-                        "流式响应的正文不记录，以免干扰实时输出。",
+                        "流式回复不记录正文。",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 4.dp)

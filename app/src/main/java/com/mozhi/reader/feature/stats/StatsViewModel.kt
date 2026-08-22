@@ -24,6 +24,7 @@ enum class StatsPeriod(
     val topBooksLabel: String
 ) {
     DAY("日", "当日阅读", "前一日", "当日读得最多"),
+    WEEK("周", "本周阅读", "上周", "本周读得最多"),
     MONTH("月", "当月阅读", "上月", "当月读得最多"),
     YEAR("年", "当年阅读", "上年", "当年读得最多")
 }
@@ -35,6 +36,7 @@ data class PeriodBookStat(
 
 data class StatsUiState(
     val period: StatsPeriod = StatsPeriod.MONTH,
+    val anchorDate: LocalDate = LocalDate.now(),
     val periodLabel: String = "",
     val canGoNext: Boolean = false,
     val periodDurationMs: Long = 0,
@@ -90,6 +92,10 @@ class StatsViewModel @Inject constructor(
 
     fun setPeriod(period: StatsPeriod) {
         selectedPeriod.value = period
+    }
+
+    fun selectDate(date: LocalDate) {
+        anchorDate.value = date.coerceAtMost(LocalDate.now())
     }
 
     fun previousPeriod() {
@@ -169,6 +175,7 @@ internal fun buildStatsState(
 
     return StatsUiState(
         period = selection.period,
+        anchorDate = selection.anchorDate,
         periodLabel = statsPeriodLabel(selection.period, selection.anchorDate),
         canGoNext = range.startEpochDay < currentRangeStart,
         periodDurationMs = periodDays.values.sum(),
@@ -187,6 +194,7 @@ internal fun buildStatsState(
 internal fun statsPeriodRange(period: StatsPeriod, anchor: LocalDate): StatsPeriodRange {
     val start = when (period) {
         StatsPeriod.DAY -> anchor
+        StatsPeriod.WEEK -> anchor.minusDays((anchor.dayOfWeek.value - 1).toLong())
         StatsPeriod.MONTH -> anchor.withDayOfMonth(1)
         StatsPeriod.YEAR -> anchor.withDayOfYear(1)
     }
@@ -201,12 +209,22 @@ internal fun statsPeriodRange(period: StatsPeriod, anchor: LocalDate): StatsPeri
 
 internal fun statsPeriodLabel(period: StatsPeriod, anchor: LocalDate): String = when (period) {
     StatsPeriod.DAY -> "${anchor.year}年${anchor.monthValue}月${anchor.dayOfMonth}日"
+    StatsPeriod.WEEK -> {
+        val start = anchor.minusDays((anchor.dayOfWeek.value - 1).toLong())
+        val end = start.plusDays(6)
+        if (start.year == end.year && start.monthValue == end.monthValue) {
+            "${start.year}年${start.monthValue}月${start.dayOfMonth}—${end.dayOfMonth}日"
+        } else {
+            "${start.monthValue}月${start.dayOfMonth}日—${end.monthValue}月${end.dayOfMonth}日"
+        }
+    }
     StatsPeriod.MONTH -> "${anchor.year}年${anchor.monthValue}月"
     StatsPeriod.YEAR -> "${anchor.year}年"
 }
 
 private fun shiftPeriod(date: LocalDate, period: StatsPeriod, amount: Long): LocalDate = when (period) {
     StatsPeriod.DAY -> date.plusDays(amount)
+    StatsPeriod.WEEK -> date.plusWeeks(amount)
     StatsPeriod.MONTH -> date.plusMonths(amount)
     StatsPeriod.YEAR -> date.plusYears(amount)
 }

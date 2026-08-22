@@ -344,9 +344,9 @@ private fun ProviderForm(
                         )
                         Text(
                             if (adapter == AiProviderAdapter.OPENROUTER) {
-                                "只影响对话模型；向量、生图与语音始终按 OpenRouter 专用端点路由"
+                                "只影响对话模型，其余能力自动选择接口"
                             } else {
-                                "模型可以单独覆盖聊天协议；非聊天能力按供应商适配自动路由"
+                                "每个模型也可以单独指定协议"
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -373,7 +373,7 @@ private fun ProviderForm(
                         modifier = Modifier.fillMaxWidth()
                     )
                     Text(
-                        "能力类型改在每个模型上设置；同一供应商可同时添加对话、向量、语音与生图模型。",
+                        "对话、向量、语音、生图的能力在每个模型上单独设置。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -397,7 +397,7 @@ private fun ProviderForm(
                     Column {
                         Text("思考等级", style = MaterialTheme.typography.titleSmall)
                         Text(
-                            "推理模型的思考深度：Claude/Gemini 按 token 预算，OpenAI 按 effort 档",
+                            "只对推理模型生效，想得越深越慢、越贵",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -423,8 +423,7 @@ private fun ProviderForm(
                         Column {
                             Text("提示词缓存", style = MaterialTheme.typography.titleSmall)
                             Text(
-                                "把人设与工具定义缓存在 Anthropic 侧，命中读取费约一折；" +
-                                    "1 小时档写入费更高，适合低频长对话",
+                                "角色设定等重复内容缓存在服务端，长对话更省钱",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -455,7 +454,7 @@ private fun ProviderForm(
                         onValueChange = { extraJson = it },
                         label = { Text("厂商附加参数 JSON") },
                         supportingText = {
-                            Text("支持 temperature/top_p/max_tokens、headers、body 透传")
+                            Text("如 temperature、top_p、max_tokens")
                         },
                         minLines = 2,
                         modifier = Modifier.fillMaxWidth()
@@ -486,7 +485,7 @@ private fun ProviderForm(
         } else {
             item {
                 Text(
-                    text = "保存后可在本页拉取模型目录、管理模型并测试连接。",
+                    text = "保存后就能拉取模型列表并测试连接。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 24.dp)
@@ -727,7 +726,7 @@ private fun ModelEditorDialog(
                                     } else {
                                         "OpenAI 例：{\"body\":{\"voice\":\"alloy\",\"response_format\":\"mp3\",\"speed\":1.0}}"
                                     }
-                                    else -> "支持 headers 与 body；模型配置覆盖供应商同名项"
+                                    else -> "会覆盖供应商上的同名参数"
                                 }
                             )
                         },

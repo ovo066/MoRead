@@ -17,8 +17,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.ChevronLeft
 import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -27,6 +30,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -47,7 +53,9 @@ import com.mozhi.reader.ui.components.SectionLabel
 import com.mozhi.reader.ui.components.StatCell
 import com.mozhi.reader.ui.theme.sealColor
 import java.io.File
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneOffset
 
 /** 全局统计页（design/ui-adaptation-plan.md §4）。 */
 @Composable
@@ -56,6 +64,7 @@ fun StatsScreen(
     viewModel: StatsViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    var showDatePicker by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = Modifier
@@ -75,11 +84,28 @@ fun StatsScreen(
                     IconButton(onClick = viewModel::previousPeriod) {
                         Icon(Icons.Outlined.ChevronLeft, contentDescription = "上一周期")
                     }
-                    Text(
-                        text = state.periodLabel,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Surface(
+                        onClick = { showDatePicker = true },
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                Icons.Outlined.CalendarMonth,
+                                contentDescription = null,
+                                modifier = Modifier.size(17.dp)
+                            )
+                            Text(
+                                text = state.periodLabel,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                     IconButton(
                         onClick = viewModel::nextPeriod,
                         enabled = state.canGoNext
@@ -160,6 +186,37 @@ fun StatsScreen(
                     }
                 }
             }
+        }
+    }
+
+    if (showDatePicker) {
+        val pickerState = androidx.compose.material3.rememberDatePickerState(
+            initialSelectedDateMillis = state.anchorDate
+                .atStartOfDay(ZoneOffset.UTC)
+                .toInstant()
+                .toEpochMilli()
+        )
+        DatePickerDialog(
+            onDismissRequest = { showDatePicker = false },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = {
+                        pickerState.selectedDateMillis?.let { millis ->
+                            viewModel.selectDate(
+                                Instant.ofEpochMilli(millis).atZone(ZoneOffset.UTC).toLocalDate()
+                            )
+                        }
+                        showDatePicker = false
+                    }
+                ) { Text("跳转") }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { showDatePicker = false }) {
+                    Text("取消")
+                }
+            }
+        ) {
+            DatePicker(state = pickerState)
         }
     }
 }

@@ -67,7 +67,8 @@ class ImportPreviewViewModel @Inject constructor(
                 } else {
                     current.copy(
                         preview = preview,
-                        title = current.title.ifBlank { preview.suggestedTitle }
+                        title = current.title.ifBlank { preview.suggestedTitle },
+                        author = current.author.ifBlank { preview.suggestedAuthor }
                     )
                 }
             }

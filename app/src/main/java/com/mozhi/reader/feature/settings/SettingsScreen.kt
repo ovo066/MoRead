@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
@@ -19,6 +21,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
@@ -56,6 +59,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -94,51 +98,48 @@ import com.mozhi.reader.ui.theme.isDarkTheme
 import com.mozhi.reader.ui.theme.onAccent
 import java.util.Locale
 
-/** 设置页（design/ui-adaptation-plan.md §6）：仅大标题 + 三个小节，无 hero、无隐私卡。 */
-@OptIn(ExperimentalMaterial3Api::class)
+/** 设置首页按用户目标分组，常用入口直接可达，复杂选项再进入二级页。 */
 @Composable
 fun SettingsScreen(
     contentPadding: PaddingValues,
-    onOpenAiServices: () -> Unit = {},
-    onOpenWebSearch: () -> Unit = {},
-    onOpenTtsSettings: () -> Unit = {},
-    onOpenVoiceLibrary: () -> Unit = {},
-    onOpenImageGenSettings: () -> Unit = {},
-    onOpenFontLibrary: () -> Unit = {},
-    onOpenImageLibrary: () -> Unit = {},
-    onOpenGlobalPresets: () -> Unit = {},
-    onOpenUserMasks: () -> Unit = {},
-    onOpenBackup: () -> Unit = {},
-    onOpenApiLog: () -> Unit = {},
+    onOpenReading: () -> Unit,
+    onOpenTts: () -> Unit,
+    onOpenAiServices: () -> Unit,
+    onOpenAi: () -> Unit,
+    onOpenBackup: () -> Unit,
+    onOpenData: () -> Unit,
+    onOpenAbout: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    val snackbarHostState = remember { SnackbarHostState() }
-
-    LaunchedEffect(viewModel) {
-        viewModel.events.collect { event ->
-            when (event) {
-                is SettingsEvent.ShowMessage -> snackbarHostState.showSnackbar(event.message)
-            }
-        }
-    }
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(contentPadding)
-    ) {
+    Box(Modifier.fillMaxSize().padding(contentPadding)) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 20.dp, top = 18.dp, end = 20.dp, bottom = 124.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item {
                 Text("设置", style = MaterialTheme.typography.headlineLarge)
             }
-
             item {
-                SettingsGroup(title = "AI", icon = Icons.Outlined.AutoAwesome) {
+                SettingsGroup(title = "阅读体验", icon = Icons.AutoMirrored.Outlined.MenuBook) {
+                    SettingsRow(
+                        icon = Icons.Outlined.Palette,
+                        title = "阅读与外观",
+                        subtitle = "主题、字体、背景、书架与图像",
+                        onClick = onOpenReading
+                    )
+                    SettingsRowDivider()
+                    SettingsRow(
+                        icon = Icons.Outlined.RecordVoiceOver,
+                        title = "朗读与音色",
+                        subtitle = "朗读引擎、参数、音色与缓存",
+                        onClick = onOpenTts
+                    )
+                }
+            }
+            item {
+                SettingsGroup(title = "智能服务", icon = Icons.Outlined.AutoAwesome) {
                     SettingsRow(
                         icon = Icons.Outlined.Hub,
                         title = "AI 服务",
@@ -147,207 +148,273 @@ fun SettingsScreen(
                     )
                     SettingsRowDivider()
                     SettingsRow(
-                        icon = Icons.Outlined.Language,
-                        title = "网络搜索",
-                        subtitle = "Firecrawl、Exa、Tavily 与兼容接口",
-                        onClick = onOpenWebSearch
-                    )
-                    SettingsRowDivider()
-                    SettingsRow(
-                        icon = Icons.Outlined.Tune,
-                        title = "全局预设",
-                        subtitle = "自定义提示词与注入位置",
-                        onClick = onOpenGlobalPresets
-                    )
-                    SettingsRowDivider()
-                    SettingsRow(
-                        icon = Icons.Outlined.PersonOutline,
-                        title = "用户面具",
-                        subtitle = "创建、选择或关闭对话中的用户人设",
-                        onClick = onOpenUserMasks
-                    )
-                    SettingsRowDivider()
-                    SettingsSwitchRow(
-                        icon = Icons.Outlined.Bolt,
-                        title = "AI 建议回复",
-                        subtitle = "AI 回复后生成 3 条快捷回复，走「建议回复」模型分配",
-                        checked = state.suggestionRepliesEnabled,
-                        onCheckedChange = viewModel::setSuggestionReplies
-                    )
-                    SettingsRowDivider()
-                    SettingsSwitchRow(
-                        icon = Icons.Outlined.BorderColor,
-                        title = "显示 AI 批注",
-                        subtitle = "关闭后阅读页只显示你自己的划线，角色批注仍可在详情回顾",
-                        checked = state.showAiAnnotations,
-                        onCheckedChange = viewModel::setShowAiAnnotations
+                        icon = Icons.Outlined.Psychology,
+                        title = "伴读与联网",
+                        subtitle = "记忆、建议回复、搜索与提示词预设",
+                        onClick = onOpenAi
                     )
                 }
             }
-
             item {
-                SettingsGroup(title = "伴读记忆", icon = Icons.Outlined.Psychology) {
-                    SettingsSwitchRow(
-                        icon = Icons.Outlined.Bookmarks,
-                        title = "长期记忆",
-                        subtitle = "让角色记住你的偏好与约定；关闭后只做当次问答，已有记忆保留不删",
-                        checked = state.memory.longTermEnabled,
-                        onCheckedChange = viewModel::setLongTermMemory
+                SettingsGroup(title = "数据管理", icon = Icons.Outlined.Storage) {
+                    SettingsRow(
+                        icon = Icons.Outlined.CloudSync,
+                        title = "备份与恢复",
+                        subtitle = "本地、WebDAV 与自动备份",
+                        onClick = onOpenBackup
                     )
                     SettingsRowDivider()
-                    SettingsSwitchRow(
-                        icon = Icons.Outlined.MenuBook,
-                        title = "跨书记忆",
-                        subtitle = "关闭后只回忆当前这本书聊过的内容，角色画像也不再记「一起读过的书」",
-                        checked = state.memory.crossBookEnabled,
-                        enabled = state.memory.longTermEnabled,
-                        onCheckedChange = viewModel::setCrossBookMemory
-                    )
-                    SettingsRowDivider()
-                    SettingsSwitchRow(
-                        icon = Icons.Outlined.Search,
-                        title = "跨书对话检索",
-                        subtitle = "允许角色主动翻出在别的书里聊过的相关记忆",
-                        checked = state.memory.crossBookChatSearchEnabled,
-                        enabled = state.memory.longTermEnabled,
-                        onCheckedChange = viewModel::setCrossBookChatSearch
+                    SettingsRow(
+                        icon = Icons.Outlined.Storage,
+                        title = "存储与缓存",
+                        subtitle = state.bookStorageBytes?.let { "书籍已占用 ${formatBytes(it)}" } ?: "查看书籍与封面缓存",
+                        onClick = onOpenData
                     )
                 }
             }
-
             item {
-                SettingsGroup(title = "语音与图像", icon = Icons.Outlined.GraphicEq) {
+                SettingsGroup(title = "应用", icon = Icons.Outlined.Info) {
                     SettingsRow(
-                        icon = Icons.Outlined.RecordVoiceOver,
-                        title = "朗读引擎与音色",
-                        subtitle = "系统 TTS（如 Multi TTS）或云端 AI 语音，语速音调在此配置",
-                        onClick = onOpenTtsSettings
-                    )
-                    SettingsRowDivider()
-                    SettingsRow(
-                        icon = Icons.Outlined.LibraryMusic,
-                        title = "音色库",
-                        subtitle = "收藏常用 AI 音色，听书与有声书角色都从这里选",
-                        onClick = onOpenVoiceLibrary
-                    )
-                    SettingsRowDivider()
-                    SettingsRow(
-                        icon = Icons.Outlined.Brush,
-                        title = "生图 API",
-                        subtitle = "gpt-image（生图/聊天两种端点）或 NovelAI，独立于对话模型",
-                        onClick = onOpenImageGenSettings
+                        icon = Icons.Outlined.Info,
+                        title = "关于与诊断",
+                        subtitle = "版本 ${BuildConfig.VERSION_NAME} · 更新、日志与许可",
+                        onClick = onOpenAbout
                     )
                 }
             }
-
-            item {
-                SettingsGroup(title = "外观", icon = Icons.Outlined.Palette) {
-                    AppearanceCard(
-                        appearance = state.appearance,
-                        onThemeModeChange = viewModel::setThemeMode,
-                        onAccentChange = viewModel::setAccentPreset,
-                        onCustomAccent = viewModel::setCustomAccent
-                    )
-                    SettingsRowDivider()
-                    SettingsRow(
-                        icon = Icons.Outlined.FontDownload,
-                        title = "字体库",
-                        subtitle = "导入、重命名和删除字体，供正文与高亮规则使用",
-                        onClick = onOpenFontLibrary
-                    )
-                    SettingsRowDivider()
-                    SettingsRow(
-                        icon = Icons.Outlined.PhotoLibrary,
-                        title = "图片库",
-                        subtitle = "导入、重命名和删除图片，供阅读背景与书籍封面使用",
-                        onClick = onOpenImageLibrary
-                    )
-                }
+        }
+    }
+}
+@Composable
+fun AiAndCompanionSettingsScreen(
+    onBack: () -> Unit,
+    onOpenAiServices: () -> Unit,
+    onOpenWebSearch: () -> Unit,
+    onOpenGlobalPresets: () -> Unit,
+    onOpenUserMasks: () -> Unit,
+    viewModel: SettingsViewModel = hiltViewModel()
+) {
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    SettingsSecondaryPage(title = "AI 与伴读", onBack = onBack) {
+        item {
+            SettingsGroup(title = "AI 服务", icon = Icons.Outlined.AutoAwesome) {
+                SettingsRow(Icons.Outlined.Hub, "AI 服务", subtitle = aiServiceSummary(state.providers.size, state.models.size), onClick = onOpenAiServices)
+                SettingsRowDivider()
+                SettingsRow(Icons.Outlined.Language, "网络搜索", subtitle = "搜索服务与兼容接口", onClick = onOpenWebSearch)
+                SettingsRowDivider()
+                SettingsRow(Icons.Outlined.Tune, "全局预设", subtitle = "按场景注入自定义提示词", onClick = onOpenGlobalPresets)
+                SettingsRowDivider()
+                SettingsRow(Icons.Outlined.PersonOutline, "用户面具", subtitle = "管理对话中的用户人设", onClick = onOpenUserMasks)
+                SettingsRowDivider()
+                SettingsSwitchRow(
+                    icon = Icons.Outlined.Bolt,
+                    title = "AI 建议回复",
+                    subtitle = "回复后生成快捷建议",
+                    checked = state.suggestionRepliesEnabled,
+                    onCheckedChange = viewModel::setSuggestionReplies
+                )
+                SettingsRowDivider()
+                SettingsSwitchRow(
+                    icon = Icons.Outlined.BorderColor,
+                    title = "显示 AI 批注",
+                    subtitle = "阅读页显示角色划线与评论标记",
+                    checked = state.showAiAnnotations,
+                    onCheckedChange = viewModel::setShowAiAnnotations
+                )
             }
+        }
+        item {
+            SettingsGroup(title = "伴读记忆", icon = Icons.Outlined.Psychology) {
+                SettingsSwitchRow(
+                    icon = Icons.Outlined.Bookmarks,
+                    title = "长期记忆",
+                    subtitle = "让角色记住偏好与约定",
+                    checked = state.memory.longTermEnabled,
+                    onCheckedChange = viewModel::setLongTermMemory
+                )
+                SettingsRowDivider()
+                SettingsSwitchRow(
+                    icon = Icons.AutoMirrored.Outlined.MenuBook,
+                    title = "跨书记忆",
+                    subtitle = "允许回忆其他书籍中的交流",
+                    checked = state.memory.crossBookEnabled,
+                    enabled = state.memory.longTermEnabled,
+                    onCheckedChange = viewModel::setCrossBookMemory
+                )
+                SettingsRowDivider()
+                SettingsSwitchRow(
+                    icon = Icons.Outlined.Search,
+                    title = "跨书对话检索",
+                    subtitle = "主动检索其他书籍的相关记忆",
+                    checked = state.memory.crossBookChatSearchEnabled,
+                    enabled = state.memory.longTermEnabled,
+                    onCheckedChange = viewModel::setCrossBookChatSearch
+                )
+            }
+        }
+    }
+}
 
-            item {
-                SettingsGroup(title = "书架", icon = Icons.Outlined.AutoStories) {
-                    SettingsBlock(title = "默认布局") {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            ShelfLayout.entries.forEach { layout ->
-                                FilterChip(
-                                    selected = state.shelfLayout == layout,
-                                    onClick = { viewModel.setShelfLayout(layout) },
-                                    shape = MoReadTokens.CapsuleShape,
-                                    label = { Text(layout.label()) }
-                                )
-                            }
+@Composable
+fun ReadingAppearanceSettingsScreen(
+    onBack: () -> Unit,
+    onOpenTtsSettings: () -> Unit,
+    onOpenVoiceLibrary: () -> Unit,
+    onOpenImageGenSettings: () -> Unit,
+    onOpenFontLibrary: () -> Unit,
+    onOpenImageLibrary: () -> Unit,
+    viewModel: SettingsViewModel = hiltViewModel()
+) {
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    SettingsSecondaryPage(title = "阅读与外观", onBack = onBack) {
+        item {
+            SettingsGroup(title = "应用外观", icon = Icons.Outlined.Palette) {
+                AppearanceCard(
+                    appearance = state.appearance,
+                    onThemeModeChange = viewModel::setThemeMode,
+                    onAccentChange = viewModel::setAccentPreset,
+                    onCustomAccent = viewModel::setCustomAccent
+                )
+                SettingsRowDivider()
+                SettingsRow(Icons.Outlined.FontDownload, "字体库", subtitle = "阅读字体与语法样式字体", onClick = onOpenFontLibrary)
+                SettingsRowDivider()
+                SettingsRow(Icons.Outlined.PhotoLibrary, "图片库", subtitle = "阅读背景与书籍封面素材", onClick = onOpenImageLibrary)
+            }
+        }
+        item {
+            SettingsGroup(title = "语音与图像", icon = Icons.Outlined.GraphicEq) {
+                SettingsRow(Icons.Outlined.RecordVoiceOver, "朗读引擎与音色", subtitle = "系统 TTS 或云端 AI 语音", onClick = onOpenTtsSettings)
+                SettingsRowDivider()
+                SettingsRow(Icons.Outlined.LibraryMusic, "音色库", subtitle = "管理听书与有声书音色", onClick = onOpenVoiceLibrary)
+                SettingsRowDivider()
+                SettingsRow(Icons.Outlined.Brush, "生图 API", subtitle = "管理插图与封面生成服务", onClick = onOpenImageGenSettings)
+            }
+        }
+        item {
+            SettingsGroup(title = "书架", icon = Icons.Outlined.AutoStories) {
+                SettingsBlock(title = "默认布局") {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ShelfLayout.entries.forEach { layout ->
+                            FilterChip(
+                                selected = state.shelfLayout == layout,
+                                onClick = { viewModel.setShelfLayout(layout) },
+                                shape = MoReadTokens.CapsuleShape,
+                                label = { Text(layout.label()) }
+                            )
                         }
                     }
                 }
             }
+        }
+    }
+}
 
+@Composable
+fun DataSettingsScreen(
+    onBack: () -> Unit,
+    onOpenBackup: () -> Unit,
+    viewModel: SettingsViewModel = hiltViewModel()
+) {
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(viewModel) {
+        viewModel.events.collect { event ->
+            if (event is SettingsEvent.ShowMessage) snackbarHostState.showSnackbar(event.message)
+        }
+    }
+    Box(Modifier.fillMaxSize()) {
+        SettingsSecondaryPage(title = "存储与数据", onBack = onBack) {
             item {
-                SettingsGroup(title = "存储与数据", icon = Icons.Outlined.Storage) {
+                SettingsGroup(title = "本地存储", icon = Icons.Outlined.Storage) {
                     SettingsRow(
                         icon = Icons.AutoMirrored.Outlined.MenuBook,
                         title = "书籍存储",
-                        subtitle = state.bookStorageBytes?.let { "已占用 ${formatBytes(it)}" }
-                            ?: "统计中…"
+                        subtitle = state.bookStorageBytes?.let { "已占用 ${formatBytes(it)}" } ?: "统计中…"
                     )
                     SettingsRowDivider()
                     SettingsRow(
                         icon = Icons.Outlined.Image,
                         title = "封面缓存",
-                        subtitle = state.coverCacheBytes?.let { "已占用 ${formatBytes(it)}" }
-                            ?: "统计中…",
+                        subtitle = state.coverCacheBytes?.let { "已占用 ${formatBytes(it)}" } ?: "统计中…",
                         trailing = {
                             OutlinedButton(
                                 onClick = viewModel::clearCoverCache,
                                 shape = MoReadTokens.CapsuleShape,
                                 enabled = (state.coverCacheBytes ?: 0L) > 0L
-                            ) {
-                                Text("清理")
-                            }
+                            ) { Text("清理") }
                         }
                     )
                     SettingsRowDivider()
-                    SettingsRow(
-                        icon = Icons.Outlined.CloudSync,
-                        title = "数据备份",
-                        subtitle = "本地导入导出、WebDAV 与每日自动备份",
-                        onClick = onOpenBackup
-                    )
-                }
-            }
-
-            item {
-                SettingsGroup(title = "关于", icon = Icons.Outlined.Info) {
-                    AppUpdateCard()
-                    SettingsRowDivider()
-                    SettingsRow(
-                        icon = Icons.Outlined.BugReport,
-                        title = "API 调用日志",
-                        subtitle = "记录请求地址、状态与耗时；默认关闭，日志仅存本机",
-                        onClick = onOpenApiLog
-                    )
-                    SettingsRowDivider()
-                    AboutCard()
+                    SettingsRow(Icons.Outlined.CloudSync, "数据备份", subtitle = "本地、WebDAV 与自动备份", onClick = onOpenBackup)
                 }
             }
         }
-
-        if (state.isWorking) {
-            LinearProgressIndicator(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .align(Alignment.TopCenter)
-            )
-        }
-        SnackbarHost(
-            hostState = snackbarHostState,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(horizontal = 20.dp, vertical = 18.dp)
-        )
+        if (state.isWorking) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
+        SnackbarHost(snackbarHostState, Modifier.align(Alignment.BottomCenter).padding(20.dp))
     }
 }
 
+@Composable
+fun AboutSettingsScreen(
+    onBack: () -> Unit,
+    onOpenApiLog: () -> Unit
+) {
+    SettingsSecondaryPage(title = "关于与诊断", onBack = onBack) {
+        item {
+            SettingsGroup(title = "应用", icon = Icons.Outlined.Info) {
+                AppUpdateCard()
+                SettingsRowDivider()
+                SettingsRow(
+                    icon = Icons.Outlined.BugReport,
+                    title = "API 调用日志",
+                    subtitle = "查看请求地址、状态与耗时",
+                    onClick = onOpenApiLog
+                )
+                SettingsRowDivider()
+                AboutCard()
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsSecondaryPage(
+    title: String,
+    onBack: () -> Unit,
+    content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回")
+            }
+            Text(
+                title,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.padding(start = 4.dp)
+            )
+        }
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(top = 56.dp)
+                .navigationBarsPadding(),
+            contentPadding = PaddingValues(start = 20.dp, top = 8.dp, end = 20.dp, bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp),
+            content = content
+        )
+    }
+}
 /** 外观卡：主题模式三选段 + 强调色圆点色板 + 自定义取色。 */
 @Composable
 private fun AppearanceCard(
@@ -538,7 +605,7 @@ private fun AccentColorPickerDialog(
                     onColorChange = { preview = it }
                 )
                 Text(
-                    "过暗或过亮的颜色会被自动调整，以保证在当前底色上可读。",
+                    "太深或太浅的颜色会自动调整，保证在当前底色上看得清。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -616,7 +683,7 @@ private fun AboutCard() {
             Column {
                 Text("开源许可", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    "本项目以 GPL-3.0 许可开源，基于 Readium Kotlin Toolkit、Legado 章节规则等开源成果构建，完整清单见仓库内 THIRD_PARTY_NOTICES.md。",
+                    "本项目以 GPL-3.0 许可开源，基于 Readium Kotlin Toolkit、Legado 章节规则等开源成果构建，完整清单见开源仓库。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 2.dp)

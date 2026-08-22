@@ -13,6 +13,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.rememberSplineBasedDecay
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.magnifier
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -59,14 +60,13 @@ import com.mozhi.reader.feature.reader.engine.ReaderContentController
 import com.mozhi.reader.feature.reader.engine.RenderPage
 import com.mozhi.reader.feature.reader.engine.SelectionRect
 import com.mozhi.reader.feature.reader.engine.TextPage
-import com.mozhi.reader.feature.reader.engine.TextPos
 import com.mozhi.reader.feature.reader.engine.annotationGeometry
 import com.mozhi.reader.feature.reader.engine.dragSelectionHandle
 import com.mozhi.reader.feature.reader.engine.hitTextPos
 import com.mozhi.reader.feature.reader.engine.illustrationMarkers
-import com.mozhi.reader.feature.reader.engine.selectedText
 import com.mozhi.reader.feature.reader.engine.selectionBodyRange
 import com.mozhi.reader.feature.reader.engine.selectionRects
+import com.mozhi.reader.feature.reader.engine.textPosAtBodyOffset
 import com.mozhi.reader.feature.reader.engine.wordSelectionAt
 import com.mozhi.reader.feature.reader.render.PageBitmapRenderer
 import com.mozhi.reader.feature.reader.render.ReaderPageStyle
@@ -124,9 +124,13 @@ fun ReaderScrollPane(
     var viewport by remember { mutableStateOf(IntSize.Zero) }
     val holder = remember(controller) { ScrollPaneHolder(controller) }
     val selection = remember(controller) {
-        ScrollSelectionController(holder) {
-            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-        }
+        ScrollSelectionController(
+            holder = holder,
+            onSelectionStarted = {
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+            },
+            onSelectionChanged = { frameTick++ }
+        )
     }
 
     fun invalidate() {
@@ -331,6 +335,14 @@ fun ReaderScrollPane(
                 .onSizeChanged { size ->
                     if (holder.setViewport(size.width, size.height)) viewport = size
                 }
+                .magnifier(
+                    sourceCenter = { selection.magnifierCenter ?: Offset.Unspecified },
+                    magnifierCenter = {
+                        selection.magnifierCenter?.let { center ->
+                            Offset(center.x, center.y - 72.dp.toPx())
+                        } ?: Offset.Unspecified
+                    }
+                )
                 .pointerInput(enabled, holder, selection) {
                     if (!enabled) return@pointerInput
                     val slop = viewConfiguration.touchSlop
@@ -527,6 +539,12 @@ private data class ResolvedScrollPoint(
     val pageIndex: Int,
     val page: TextPage,
     val local: Offset
+)
+
+private data class VisibleScrollPage(
+    val pageIndex: Int,
+    val page: TextPage,
+    val origin: Offset
 )
 
 /**
@@ -783,6 +801,24 @@ private class ScrollPaneHolder(private val controller: ReaderContentController) 
         return null
     }
 
+    fun chapterBody(chapterIndex: Int): String? = controller.chapterBody(chapterIndex)
+
+    fun visiblePages(chapterIndex: Int): List<VisibleScrollPage> {
+        val currentStyle = style ?: return emptyList()
+        val block = visibleBlocks().firstOrNull { it.chapterIndex == chapterIndex } ?: return emptyList()
+        val strip = block.strip ?: return emptyList()
+        return strip.chapter.pages.mapIndexed { pageIndex, page ->
+            VisibleScrollPage(
+                pageIndex = pageIndex,
+                page = page,
+                origin = Offset(
+                    currentStyle.paddingLeft,
+                    contentTop + block.originY + strip.pageTops[pageIndex]
+                )
+            )
+        }
+    }
+
     /** 选区/绘制用：页的内容原点（视图坐标）；该页当前不可见时返回 null。 */
     fun pageOriginInView(chapterIndex: Int, pageIndex: Int): Offset? {
         val style = style ?: return null
@@ -950,29 +986,28 @@ private class ScrollPaneHolder(private val controller: ReaderContentController) 
     }
 }
 
-/**
- * 滚动模式的长按选词：几何仍按「页」算（选区限定在长按落点的排版页内，页界在滚动
- * 流里不可见，日常短选区无感），坐标经 [ScrollPaneHolder.pageOriginInView] 映射到视图系。
- */
+/** 滚动模式长按选词：用章节正文偏移保存范围，因此可跨多个排版页。 */
 private class ScrollSelectionController(
     private val holder: ScrollPaneHolder,
-    private val onSelectionStarted: () -> Unit
+    private val onSelectionStarted: () -> Unit,
+    private val onSelectionChanged: () -> Unit
 ) {
     data class ActiveSelection(
         val chapterIndex: Int,
-        val pageIndex: Int,
-        val page: TextPage,
-        val anchorStart: TextPos,
-        val anchorEnd: TextPos,
-        val start: TextPos,
-        val end: TextPos,
-        val rects: List<SelectionRect>,
+        val anchorStartOffset: Int,
+        val anchorEndOffset: Int,
+        val startOffset: Int,
+        val endOffset: Int,
         val dragging: Boolean
-    )
+    ) {
+        val bodyRange: IntRange get() = startOffset..endOffset
+    }
 
     private enum class Handle { START, END }
 
     var active by mutableStateOf<ActiveSelection?>(null)
+        private set
+    var magnifierCenter by mutableStateOf<Offset?>(null)
         private set
 
     private var draggedHandle: Handle? = null
@@ -982,106 +1017,144 @@ private class ScrollSelectionController(
     fun begin(position: Offset): Boolean {
         val hit = holder.resolve(position) ?: return false
         val pos = hit.page.hitTextPos(hit.local.x, hit.local.y, exact = true) ?: return false
-        val (start, end) = hit.page.wordSelectionAt(pos)
+        val word = hit.page.wordSelectionAt(pos)
+        val range = hit.page.selectionBodyRange(word.first, word.second)
         draggedHandle = null
         active = ActiveSelection(
             chapterIndex = hit.chapterIndex,
-            pageIndex = hit.pageIndex,
-            page = hit.page,
-            anchorStart = start,
-            anchorEnd = end,
-            start = start,
-            end = end,
-            rects = hit.page.selectionRects(start, end),
+            anchorStartOffset = range.first,
+            anchorEndOffset = range.last,
+            startOffset = range.first,
+            endOffset = range.last,
             dragging = true
         )
+        magnifierCenter = position
         onSelectionStarted()
+        onSelectionChanged()
         return true
     }
 
     fun grabHandle(position: Offset, radiusPx: Float): Boolean {
         val current = active ?: return false
-        val origin = holder.pageOriginInView(current.chapterIndex, current.pageIndex) ?: return false
-        val first = current.rects.firstOrNull() ?: return false
-        val last = current.rects.last()
-        val startCenter = Offset(origin.x + first.left, origin.y + first.bottom)
-        val endCenter = Offset(origin.x + last.right, origin.y + last.bottom)
-        val startDistance = (position - startCenter).getDistance()
-        val endDistance = (position - endCenter).getDistance()
+        val startCenter = endpointCenter(current.chapterIndex, current.startOffset, startSide = true)
+        val endCenter = endpointCenter(current.chapterIndex, current.endOffset, startSide = false)
+        val startDistance = startCenter?.let { (position - it).getDistance() } ?: Float.MAX_VALUE
+        val endDistance = endCenter?.let { (position - it).getDistance() } ?: Float.MAX_VALUE
         draggedHandle = when {
             startDistance > radiusPx && endDistance > radiusPx -> return false
             startDistance <= endDistance -> Handle.START
             else -> Handle.END
         }
+        magnifierCenter = position
         active = current.copy(dragging = true)
+        onSelectionChanged()
         return true
     }
 
     fun drag(position: Offset) {
+        magnifierCenter = position
         val current = active ?: return
-        val origin = holder.pageOriginInView(current.chapterIndex, current.pageIndex) ?: return
-        val local = Offset(position.x - origin.x, position.y - origin.y)
-        val hit = current.page.hitTextPos(local.x, local.y, exact = false) ?: return
+        val hit = holder.resolve(position) ?: return
+        if (hit.chapterIndex != current.chapterIndex) return
+        val pos = hit.page.hitTextPos(hit.local.x, hit.local.y, exact = false) ?: return
+        val hitRange = hit.page.selectionBodyRange(pos, pos)
         val handle = draggedHandle
-        val (start, end) = if (handle != null) {
-            val dragged = dragSelectionHandle(
-                start = current.start,
-                end = current.end,
-                hit = hit,
+        val next = if (handle != null) {
+            val moved = dragSelectionHandle(
+                start = current.startOffset,
+                end = current.endOffset,
+                hit = if (handle == Handle.START) hitRange.first else hitRange.last,
                 draggingStart = handle == Handle.START
             )
-            draggedHandle = if (dragged.draggingStart) Handle.START else Handle.END
-            dragged.start to dragged.end
+            draggedHandle = if (moved.draggingStart) Handle.START else Handle.END
+            current.copy(startOffset = moved.start, endOffset = moved.end)
         } else {
             when {
-                hit < current.anchorStart -> hit to current.anchorEnd
-                hit > current.anchorEnd -> current.anchorStart to hit
-                else -> current.anchorStart to current.anchorEnd
+                hitRange.first < current.anchorStartOffset -> current.copy(
+                    startOffset = hitRange.first,
+                    endOffset = current.anchorEndOffset
+                )
+                hitRange.last > current.anchorEndOffset -> current.copy(
+                    startOffset = current.anchorStartOffset,
+                    endOffset = hitRange.last
+                )
+                else -> current.copy(
+                    startOffset = current.anchorStartOffset,
+                    endOffset = current.anchorEndOffset
+                )
             }
         }
-        if (start == current.start && end == current.end) return
-        active = current.copy(
-            start = start,
-            end = end,
-            rects = current.page.selectionRects(start, end)
-        )
+        if (next.startOffset != current.startOffset || next.endOffset != current.endOffset) {
+            active = next
+            onSelectionChanged()
+        }
     }
 
     fun end() {
         draggedHandle = null
+        magnifierCenter = null
         active = active?.copy(dragging = false)
+        onSelectionChanged()
     }
 
     fun clear() {
         draggedHandle = null
+        magnifierCenter = null
         active = null
+        onSelectionChanged()
     }
 
     fun selectedText(): String {
         val current = active ?: return ""
-        return current.page.selectedText(current.start, current.end)
+        val body = holder.chapterBody(current.chapterIndex) ?: return ""
+        val start = current.startOffset.coerceIn(0, body.length)
+        val endExclusive = (current.endOffset + 1).coerceIn(start, body.length)
+        return body.substring(start, endExclusive).replace('\uFFFC'.toString(), "［图片］")
     }
 
-    fun bodyRange(): IntRange? {
-        val current = active ?: return null
-        return current.page.selectionBodyRange(current.start, current.end)
-    }
+    fun bodyRange(): IntRange? = active?.bodyRange
 
     fun drawHighlight(drawScope: DrawScope, palette: ReaderPalette) {
         val current = active ?: return
-        val origin = holder.pageOriginInView(current.chapterIndex, current.pageIndex) ?: return
+        val pages = holder.visiblePages(current.chapterIndex)
         val color = palette.accent.copy(alpha = if (palette.isDark) 0.18f else 0.30f)
-        for (rect in current.rects) {
-            drawScope.drawRect(
-                color = color,
-                topLeft = Offset(origin.x + rect.left, origin.y + rect.top),
-                size = Size(rect.right - rect.left, rect.bottom - rect.top)
+        pages.forEach { visible ->
+            visible.page.selectionRects(current.bodyRange).forEach { rect ->
+                drawScope.drawRect(
+                    color = color,
+                    topLeft = Offset(visible.origin.x + rect.left, visible.origin.y + rect.top),
+                    size = Size(rect.right - rect.left, rect.bottom - rect.top)
+                )
+            }
+        }
+        endpointGeometry(current.chapterIndex, current.startOffset, startSide = true)?.let { endpoint ->
+            drawHandle(drawScope, palette, endpoint.center.x, endpoint.top, endpoint.bottom)
+        }
+        endpointGeometry(current.chapterIndex, current.endOffset, startSide = false)?.let { endpoint ->
+            drawHandle(drawScope, palette, endpoint.center.x, endpoint.top, endpoint.bottom)
+        }
+    }
+
+    private data class Endpoint(val center: Offset, val top: Float, val bottom: Float)
+
+    private fun endpointCenter(chapterIndex: Int, offset: Int, startSide: Boolean): Offset? =
+        endpointGeometry(chapterIndex, offset, startSide)?.center
+
+    private fun endpointGeometry(chapterIndex: Int, offset: Int, startSide: Boolean): Endpoint? {
+        holder.visiblePages(chapterIndex).forEach { visible ->
+            val pageEnd = visible.page.chapterPosition + visible.page.charLength
+            if (offset !in visible.page.chapterPosition until pageEnd) return@forEach
+            val pos = visible.page.textPosAtBodyOffset(offset) ?: return@forEach
+            val line = visible.page.lines[pos.lineIndex]
+            val column = line.columns[pos.columnIndex]
+            val x = visible.origin.x + if (startSide) column.start else column.end
+            return Endpoint(
+                center = Offset(x, visible.origin.y + line.lineBottom),
+                top = visible.origin.y + line.lineTop,
+                bottom = visible.origin.y + line.lineBottom
             )
         }
-        val first = current.rects.firstOrNull() ?: return
-        val last = current.rects.last()
-        drawHandle(drawScope, palette, origin.x + first.left, origin.y + first.top, origin.y + first.bottom)
-        drawHandle(drawScope, palette, origin.x + last.right, origin.y + last.top, origin.y + last.bottom)
+        return null
     }
 
     private fun drawHandle(
@@ -1106,17 +1179,19 @@ private class ScrollSelectionController(
     }
 
     fun toolbarTop(current: ActiveSelection, density: Density): Int {
-        val origin = holder.pageOriginInView(current.chapterIndex, current.pageIndex) ?: return 0
+        val rects = holder.visiblePages(current.chapterIndex)
+            .flatMap { visible ->
+                visible.page.selectionRects(current.bodyRange).map { rect -> rect to visible.origin }
+            }
         val gap = with(density) { 12.dp.toPx() }
         val barHeight = with(density) { 48.dp.toPx() }
-        val first = current.rects.firstOrNull() ?: return 0
-        val above = origin.y + first.top - gap - barHeight
+        val first = rects.minByOrNull { (rect, origin) -> origin.y + rect.top } ?: return 0
+        val above = first.second.y + first.first.top - gap - barHeight
         if (above > with(density) { 72.dp.toPx() }) return above.toInt()
-        val last = current.rects.last()
-        return (origin.y + last.bottom + gap).toInt()
+        val last = rects.maxByOrNull { (rect, origin) -> origin.y + rect.bottom } ?: return 0
+        return (last.second.y + last.first.bottom + gap).toInt()
     }
 }
-
 private const val SCROLL_LONG_PRESS_TIMEOUT_MS = 600L
 private const val MIN_FLING_VELOCITY = 320f
 /** 点按左右分区时滚动一「屏」的比例，留一点重叠帮助接续。 */

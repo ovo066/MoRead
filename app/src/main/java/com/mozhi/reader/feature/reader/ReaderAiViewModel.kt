@@ -4,13 +4,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mozhi.reader.ai.agent.AgentEvent
 import com.mozhi.reader.ai.agent.AgentLoop
-import com.mozhi.reader.ai.agent.ReaderToolset
 import com.mozhi.reader.ai.chat.AiChatRepository
 import com.mozhi.reader.ai.client.AiClientException
 import com.mozhi.reader.ai.prompt.SelectionAiAction
 import com.mozhi.reader.ai.prompt.SelectionPrompts
-import com.mozhi.reader.ai.search.WebSearchSettingsStore
 import com.mozhi.reader.core.database.entity.MessageEntity
+import com.mozhi.reader.core.database.entity.ModelRole
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
@@ -44,9 +43,7 @@ data class ReaderAiUiState(
 @HiltViewModel
 class ReaderAiViewModel @Inject constructor(
     private val chatRepository: AiChatRepository,
-    private val agentLoop: AgentLoop,
-    private val readerToolset: ReaderToolset,
-    private val webSearchSettingsStore: WebSearchSettingsStore
+    private val agentLoop: AgentLoop
 ) : ViewModel() {
 
     private val mutableState = MutableStateFlow(ReaderAiUiState())
@@ -157,7 +154,6 @@ class ReaderAiViewModel @Inject constructor(
     }
 
     private fun stream(conversationId: Long) {
-        val bookId = startedRequest?.bookId
         streamJob?.cancel()
         streamJob = viewModelScope.launch {
             mutableState.value = mutableState.value.copy(
@@ -170,19 +166,11 @@ class ReaderAiViewModel @Inject constructor(
             streamBuffer.setLength(0)
             val ticker = launchStreamingTicker(::publishStreamingSnapshot)
             try {
-                val tools = bookId?.let { id ->
-                    val enabledTools = buildSet {
-                        add("get_reading_progress")
-                        add("search_book")
-                        add("read_book_section")
-                        if (webSearchSettingsStore.current().enabled) {
-                            add("web_search")
-                            add("web_scrape")
-                        }
-                    }
-                    readerToolset.forBook(id, enabledTools = enabledTools)
-                }.orEmpty()
-                agentLoop.run(conversationId, tools).collect { event ->
+                agentLoop.run(
+                    conversationId = conversationId,
+                    tools = emptyList(),
+                    modelRole = ModelRole.CHEAP
+                ).collect { event ->
                     when (event) {
                         is AgentEvent.Text -> {
                             streamBuffer.append(event.text)

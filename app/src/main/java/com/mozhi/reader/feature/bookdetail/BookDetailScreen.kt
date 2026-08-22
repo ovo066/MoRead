@@ -171,6 +171,7 @@ fun BookDetailScreen(
     var showAllNotes by remember { mutableStateOf(false) }
     var showAnnotations by remember { mutableStateOf(false) }
     var showGallery by remember { mutableStateOf(false) }
+    var showMoreInfo by remember { mutableStateOf(false) }
     var showNoteEditor by remember { mutableStateOf(false) }
     var editingNote by remember { mutableStateOf<NoteEntity?>(null) }
     var selectedIllustration by remember { mutableStateOf<IllustrationEntity?>(null) }
@@ -236,7 +237,10 @@ fun BookDetailScreen(
                 DetailHero(
                     book = book,
                     tags = state.selectedTags.map(BookTagEntity::name),
-                    onEditReadState = viewModel::setReadState
+                    description = state.description,
+                    onEditReadState = viewModel::setReadState,
+                    onListen = { onListen(book.id) },
+                    onContinueReading = { onContinueReading(book.id) }
                 )
             }
             item {
@@ -264,50 +268,13 @@ fun BookDetailScreen(
                     noteCount = state.notes.size,
                     annotationCount = state.annotations.size,
                     illustrationCount = state.illustrations.size,
+                    bookmarkCount = state.bookmarks.size,
                     onNotes = { showAllNotes = true },
                     onAnnotations = { showAnnotations = true },
                     onGallery = { showGallery = true },
+                    onBookmarks = { showBookmarks = true },
                     modifier = Modifier.padding(horizontal = 20.dp)
                 )
-            }
-            item {
-                AudiobookEntryCard(
-                    readyChapters = state.audiobookReadyChapters,
-                    totalChapters = state.chapters.size,
-                    totalMillis = state.audiobookTotalMillis,
-                    roleNames = state.audiobookRoleNames,
-                    onManage = { onOpenAudiobookRoles(book.id) },
-                    onContinue = {
-                        if (state.audiobookRoleNames.isEmpty()) onOpenAudiobookRoles(book.id)
-                        else onOpenAudiobookProduction(book.id)
-                    },
-                    onPlay = { onPlayAudiobook(book.id) },
-                    modifier = Modifier.padding(horizontal = 20.dp)
-                )
-            }
-            item {
-                FrostedSurface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp),
-                    shape = RoundedCornerShape(24.dp),
-                    shadowElevation = 6.dp
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            "阅读热力",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        ReadingHeatmap(
-                            durationsByEpochDay = state.durationsByEpochDay,
-                            todayEpochDay = LocalDate.now().toEpochDay(),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 12.dp)
-                        )
-                    }
-                }
             }
             item {
                 NotesSection(
@@ -322,51 +289,67 @@ fun BookDetailScreen(
                 )
             }
             item {
-                BookmarkEntryRow(
-                    count = state.bookmarks.size,
-                    onClick = { showBookmarks = true },
+                MoreBookDetailsEntry(
+                    onClick = { showMoreInfo = true },
                     modifier = Modifier.padding(horizontal = 20.dp)
                 )
-            }
-            item {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp)
-                        .navigationBarsPadding()
-                        .height(54.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+            }        }
+
+        if (showMoreInfo) {
+            ModalBottomSheet(
+                onDismissRequest = { showMoreInfo = false },
+                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+                containerColor = MaterialTheme.colorScheme.surface
+            ) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxHeight(0.82f),
+                    contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 32.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    OutlinedButton(
-                        onClick = { onListen(book.id) },
-                        shape = MoReadTokens.CapsuleShape,
-                        modifier = Modifier.weight(0.36f).fillMaxHeight()
-                    ) {
-                        Icon(Icons.Outlined.Headphones, contentDescription = null)
-                        Spacer(Modifier.width(6.dp))
-                        Text("听书")
-                    }
-                    Button(
-                        onClick = { onContinueReading(book.id) },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary
-                        ),
-                        shape = MoReadTokens.CapsuleShape,
-                        modifier = Modifier.weight(0.64f).fillMaxHeight()
-                    ) {
-                        Icon(Icons.Outlined.PlayArrow, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
+                    item {
                         Text(
-                            text = if (book.lastReadAt == 0L) "开始阅读" else "继续阅读",
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            "更多书籍信息",
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.SemiBold
                         )
+                    }
+                    item {
+                        AudiobookEntryCard(
+                            readyChapters = state.audiobookReadyChapters,
+                            totalChapters = state.chapters.size,
+                            totalMillis = state.audiobookTotalMillis,
+                            roleNames = state.audiobookRoleNames,
+                            onManage = { onOpenAudiobookRoles(book.id) },
+                            onContinue = {
+                                if (state.audiobookRoleNames.isEmpty()) onOpenAudiobookRoles(book.id)
+                                else onOpenAudiobookProduction(book.id)
+                            },
+                            onPlay = { onPlayAudiobook(book.id) }
+                        )
+                    }
+                    item {
+                        FrostedSurface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(24.dp),
+                            shadowElevation = 6.dp
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Text(
+                                    "阅读热力",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                ReadingHeatmap(
+                                    durationsByEpochDay = state.durationsByEpochDay,
+                                    todayEpochDay = LocalDate.now().toEpochDay(),
+                                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp)
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
-
         SnackbarHost(
             hostState = snackbarHostState,
             modifier = Modifier
@@ -1718,15 +1701,19 @@ private fun DetailTopBar(
 private fun DetailHero(
     book: BookEntity,
     tags: List<String>,
-    onEditReadState: (BookReadState?) -> Unit
+    description: String,
+    onEditReadState: (BookReadState?) -> Unit,
+    onListen: () -> Unit,
+    onContinueReading: () -> Unit
 ) {
+    var descriptionExpanded by remember(book.id, description) { mutableStateOf(false) }
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         HeroCover(
             book = book,
-            modifier = Modifier.size(width = 128.dp, height = 182.dp)
+            modifier = Modifier.size(width = 116.dp, height = 164.dp)
         )
         Text(
             text = book.title,
@@ -1734,28 +1721,89 @@ private fun DetailHero(
             textAlign = TextAlign.Center,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(top = 16.dp, start = 32.dp, end = 32.dp)
+            modifier = Modifier.padding(top = 14.dp, start = 24.dp, end = 24.dp)
         )
         Text(
             text = "${book.author.ifBlank { "未知作者" }} · ${book.totalChapters} 章",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 6.dp)
+            modifier = Modifier.padding(top = 5.dp)
         )
         FlowRow(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 12.dp, start = 24.dp, end = 24.dp),
+                .padding(top = 10.dp, start = 20.dp, end = 20.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             ReadStateChip(state = book.readState(), onSelect = onEditReadState)
             tags.forEach { tag -> TagChip(tag) }
         }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 16.dp, start = 20.dp, end = 20.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            OutlinedButton(
+                onClick = onListen,
+                shape = MoReadTokens.CapsuleShape,
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 13.dp),
+                modifier = Modifier.weight(0.42f).heightIn(min = 52.dp)
+            ) {
+                Icon(Icons.Outlined.Headphones, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(7.dp))
+                Text("听书", maxLines = 1)
+            }
+            Button(
+                onClick = onContinueReading,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
+                ),
+                shape = MoReadTokens.CapsuleShape,
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 13.dp),
+                modifier = Modifier.weight(0.58f).heightIn(min = 52.dp)
+            ) {
+                Icon(Icons.Outlined.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(7.dp))
+                Text(
+                    text = if (book.lastReadAt == 0L) "开始阅读" else "继续阅读",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+        if (description.isNotBlank()) {
+            FrostedSurface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 14.dp, start = 20.dp, end = 20.dp)
+                    .clickable { descriptionExpanded = !descriptionExpanded },
+                shape = RoundedCornerShape(20.dp),
+                shadowElevation = 3.dp
+            ) {
+                Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+                    Text("简介", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        text = description,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = if (descriptionExpanded) Int.MAX_VALUE else 4,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
+                    Text(
+                        text = if (descriptionExpanded) "收起" else "展开",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.align(Alignment.End).padding(top = 6.dp)
+                    )
+                }
+            }
+        }
     }
 }
-
-/** 阅读状态胶囊：点开就能手动改四态，和书架长按菜单是同一份写入。 */
 @Composable
 private fun ReadStateChip(state: BookReadState, onSelect: (BookReadState?) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
@@ -1970,13 +2018,39 @@ private fun RingRow(
 }
 
 @Composable
+private fun MoreBookDetailsEntry(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    FrostedSurface(
+        modifier = modifier.fillMaxWidth().clickable(onClick = onClick),
+        shape = RoundedCornerShape(22.dp),
+        shadowElevation = 4.dp
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(Icons.Outlined.ExpandMore, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                Text("更多书籍信息", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "有声书制作、阅读热力等低频内容",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Icon(Icons.Outlined.ChevronRight, contentDescription = null)
+        }
+    }
+}
+@Composable
 private fun ReadingAssetsEntry(
     noteCount: Int,
     annotationCount: Int,
     illustrationCount: Int,
+    bookmarkCount: Int,
     onNotes: () -> Unit,
     onAnnotations: () -> Unit,
     onGallery: () -> Unit,
+    onBookmarks: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     FrostedSurface(
@@ -1985,15 +2059,16 @@ private fun ReadingAssetsEntry(
         shadowElevation = 5.dp
     ) {
         Row(modifier = Modifier.padding(8.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            AssetEntryCell(Icons.Outlined.EditNote, "读书笔记", "$noteCount 条", onNotes, Modifier.weight(1f))
+            AssetEntryCell(Icons.Outlined.EditNote, "笔记", "$noteCount 条", onNotes, Modifier.weight(1f))
             AssetEntryCell(
                 Icons.Outlined.ChatBubbleOutline,
-                "段落批注",
+                "批注",
                 "$annotationCount 条",
                 onAnnotations,
                 Modifier.weight(1f)
             )
-            AssetEntryCell(Icons.Outlined.Image, "插图廊", "$illustrationCount 张", onGallery, Modifier.weight(1f))
+            AssetEntryCell(Icons.Outlined.Image, "插图", "$illustrationCount 张", onGallery, Modifier.weight(1f))
+            AssetEntryCell(Icons.Outlined.Bookmarks, "书签", "$bookmarkCount 个", onBookmarks, Modifier.weight(1f))
         }
     }
 }

@@ -87,7 +87,7 @@ fun UserMaskSettingsScreen(
         ) {
             item {
                 Text(
-                    "面具描述的是对话中的“你”。启用后，当前面具会随 AI 角色一起参与伴读；关闭时不注入任何用户人设。",
+                    "面具写的是对话里的「你」。开启后，角色会按这个身份称呼你、理解你。",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -269,11 +269,6 @@ private fun UserMaskEditorDialog(
                     minLines = 5,
                     maxLines = 10,
                     modifier = Modifier.fillMaxWidth()
-                )
-                Text(
-                    "AI 会把这段内容理解为用户身份，不会把它当成 AI 自己的人设。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         },

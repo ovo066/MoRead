@@ -214,13 +214,7 @@ class AudiobookRoleExtractor @Inject constructor(
 
     private companion object {
         val json = Json { ignoreUnknownKeys = true }
-        val SAFE_TOOL_NAMES = setOf(
-            "search_book",
-            "read_book_section",
-            "get_reading_progress",
-            "web_search",
-            "web_scrape"
-        )
+        val SAFE_TOOL_NAMES = setOf("search_book")
         val INVALID_ROLE_NAMES = setOf("旁白", "他", "她", "它", "我", "你", "null")
         val VALID_GENDERS = setOf("MALE", "FEMALE", "UNSPECIFIED")
         val ROLE_COLORS = listOf(

@@ -103,7 +103,7 @@ class ImportCoordinator @Inject constructor(
                     confirmTxt(
                         sessionId = session.id,
                         title = session.suggestedTitle,
-                        author = ""
+                        author = session.suggestedAuthor
                     )
                 } catch (error: Throwable) {
                     sessionStore.remove(session.id)
@@ -225,9 +225,11 @@ class ImportCoordinator @Inject constructor(
 
         val detected = encodingDetector.decode(bytes)
         val split = chapterSplitter.chooseBest(detected.text, ruleLoader.rules)
+        val metadata = TxtMetadataDetector.detect(displayName, detected.text)
         val session = sessionStore.create(
             sourceName = displayName,
-            suggestedTitle = displayName.substringBeforeLast('.').ifBlank { "未命名书籍" },
+            suggestedTitle = metadata.title,
+            suggestedAuthor = metadata.author,
             charsetName = detected.charsetName,
             text = detected.text,
             rules = ruleLoader.rules,

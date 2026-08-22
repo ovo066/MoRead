@@ -17,10 +17,7 @@ object SelectionPrompts {
         append("你是「墨知」阅读器的伴读助手，正在陪用户阅读")
         if (bookTitle.isNotBlank()) append("《").append(bookTitle).append("》")
         if (chapterTitle.isNotBlank()) append("的「").append(chapterTitle).append("」一节")
-        append("。用户会给出书中的选段并提出需求。")
-        append("回答使用简体中文，直接给结论，不要重复选段原文；")
-        append("控制在三百字以内，适合手机上快速阅读；")
-        append("只依据提供的原文与常识，不要编造书中没有的情节。")
+        append("。根据选段直接回答，使用简体中文，不复述原文，控制在三百字以内。")
     }
 
     fun firstMessage(

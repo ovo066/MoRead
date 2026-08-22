@@ -3,7 +3,6 @@ package com.mozhi.reader.ai.media
 import android.content.Context
 import com.mozhi.reader.ai.agent.AgentEvent
 import com.mozhi.reader.ai.agent.AgentLoop
-import com.mozhi.reader.ai.agent.ReaderToolset
 import com.mozhi.reader.ai.client.ChatMessage
 import com.mozhi.reader.ai.client.ChatRole
 import com.mozhi.reader.ai.client.AiClientFactory
@@ -56,7 +55,6 @@ class BookCoverService @Inject constructor(
     private val imagePromptComposer: ImagePromptComposer,
     private val libraryRepository: LibraryRepository,
     private val agentLoop: AgentLoop,
-    private val readerToolset: ReaderToolset,
     private val webSearchService: WebSearchService,
     private val webSearchSettingsStore: WebSearchSettingsStore
 ) {
@@ -161,7 +159,7 @@ class BookCoverService @Inject constructor(
                 ChatMessage(
                     ChatRole.SYSTEM,
                     """
-                    你是书籍版本与封面检索专家。使用书内检索和网络工具确认作品身份、作者、原文名、常见译名、系列名或副标题。
+                    你是书籍版本与封面检索专家。根据给定书名和作者生成精确检索词。
                     最终只输出 2 到 3 行图片搜索词，每行一个，不要解释、编号、Markdown 或 JSON。
                     每行必须指向这部具体作品，必须包含作品名或可靠别名，并包含作者（已知时）以及“书籍封面”或“book cover”。
                     禁止只搜索作者、人物、影视演员或泛题材；优先查询正式出版封面、原版封面和常见译本封面。
@@ -172,11 +170,7 @@ class BookCoverService @Inject constructor(
                     "为《${book.title}》（${book.author.ifBlank { "未知作者" }}）生成封面图片搜索词。"
                 )
             ),
-            tools = readerToolset.forBook(
-                bookId = bookId,
-                enabledTools = setOf("search_book", "read_book_section", "web_search", "web_scrape"),
-                spoilerProtectionEnabled = false
-            ),
+            tools = emptyList(),
             modelRole = ModelRole.CHEAP
         ).collect { event -> if (event is AgentEvent.Text) output.append(event.text) }
         return output.toString()
@@ -312,24 +306,23 @@ class BookCoverService @Inject constructor(
 
     private suspend fun composePromptWithAgent(bookId: Long): String {
         val book = libraryRepository.getBook(bookId) ?: error("书籍不存在")
+        val firstChapter = libraryRepository.getChapters(bookId).firstOrNull()
+        val excerpt = firstChapter?.let { libraryRepository.readChapterText(bookId, it) }
+            .orEmpty().replace(Regex("\\s+"), " ").take(1_200)
         val output = StringBuilder()
         agentLoop.runDetached(
             history = listOf(
                 ChatMessage(
                     ChatRole.SYSTEM,
                     """
-                    你是书籍封面艺术总监。先使用可用工具了解本书题材、核心人物、时代、地点和视觉意象；
-                    必要时可搜索网络核对公开书籍资料。最终只输出一段中文生图提示词，不要解释，不要 Markdown，
+                    你是书籍封面艺术总监。根据书籍信息与开篇摘要提炼题材、时代、地点和视觉意象；
+                    最终只输出一段中文生图提示词，不要解释，不要 Markdown，
                     包含主体、环境、构图、色彩、光线、媒介风格与应避开的剧透。封面不需要任何文字。
                     """.trimIndent()
                 ),
-                ChatMessage(ChatRole.USER, "请为《${book.title}》（${book.author.ifBlank { "未知作者" }}）设计封面。")
+                ChatMessage(ChatRole.USER, "请为《${book.title}》（${book.author.ifBlank { "未知作者" }}）设计封面。开篇摘要：${excerpt.ifBlank { "暂无" }}")
             ),
-            tools = readerToolset.forBook(
-                bookId = bookId,
-                enabledTools = setOf("search_book", "read_book_section", "web_search", "web_scrape"),
-                spoilerProtectionEnabled = false
-            ),
+            tools = emptyList(),
             modelRole = ModelRole.CHEAP
         ).collect { event -> if (event is AgentEvent.Text) output.append(event.text) }
         return output.toString().trim().removePrefix("```").removeSuffix("```").trim()

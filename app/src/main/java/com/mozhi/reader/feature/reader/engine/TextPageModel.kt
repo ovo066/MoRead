@@ -23,7 +23,22 @@ class TextColumn(
     val syntaxFontAssetId: String? = null,
     val syntaxBold: Boolean = false,
     val syntaxItalic: Boolean = false,
-    val syntaxStrikethrough: Boolean = false
+    val syntaxStrikethrough: Boolean = false,
+    val textSizeScale: Float = 1f,
+    val fontFilePath: String? = null,
+    val fontFamily: String? = null,
+    val baselineShiftPx: Float = 0f,
+    val opacity: Float = 1f,
+    val sourceLength: Int = charData.length,
+    val inlineMarkerKind: InlineMarkerKind? = null,
+    val inlineMarkerOffset: Int? = null
+)
+
+enum class InlineMarkerKind { ANNOTATION, ILLUSTRATION }
+
+data class InlineMarkerReservation(
+    val charOffset: Int,
+    val kind: InlineMarkerKind
 )
 
 /** Chapter-level source metadata loaded from the EPUB media sidecar. */
@@ -43,6 +58,61 @@ data class InlineImagePlacement(
     val altText: String
 )
 
+data class TextBlockDecoration(
+    val left: Float,
+    val top: Float,
+    val right: Float,
+    val bottom: Float,
+    val backgroundColorArgb: Int? = null,
+    val backgroundImagePath: String? = null,
+    val borderColorArgb: Int? = null,
+    val borderWidth: Float = 0f,
+    val borderTopColorArgb: Int? = null,
+    val borderRightColorArgb: Int? = null,
+    val borderBottomColorArgb: Int? = null,
+    val borderLeftColorArgb: Int? = null,
+    val borderTopWidth: Float = borderWidth,
+    val borderRightWidth: Float = borderWidth,
+    val borderBottomWidth: Float = borderWidth,
+    val borderLeftWidth: Float = borderWidth,
+    val borderRadius: Float = 0f,
+    val boxShadows: List<TextBoxShadow> = emptyList(),
+    val opacity: Float = 1f,
+    val drawTopEdge: Boolean = true,
+    val drawRightEdge: Boolean = true,
+    val drawBottomEdge: Boolean = true,
+    val drawLeftEdge: Boolean = true
+)
+
+data class TextBoxShadow(
+    val offsetX: Float,
+    val offsetY: Float,
+    val blurRadius: Float,
+    val spreadRadius: Float,
+    val colorArgb: Int,
+    val inset: Boolean
+)
+
+data class TextRubyPlacement(
+    val text: String,
+    val left: Float,
+    val right: Float,
+    val baseline: Float,
+    val textSizeScale: Float,
+    val fontFilePath: String? = null,
+    val fontFamily: String? = null,
+    val colorArgb: Int? = null,
+    val bold: Boolean = false,
+    val italic: Boolean = false,
+    val opacity: Float = 1f
+)
+
+data class TextRulePlacement(
+    val width: Float,
+    val height: Float,
+    val colorArgb: Int
+)
+
 class TextLine(
     val text: String,
     val columns: List<TextColumn>,
@@ -59,7 +129,13 @@ class TextLine(
     /** Extra width distributed to every cluster gap by justification, for diagnostics/tests. */
     val justifyGapExtra: Float = 0f,
     /** Non-null when the source paragraph token is replaced by an EPUB image block. */
-    val inlineImage: InlineImagePlacement? = null
+    val inlineImage: InlineImagePlacement? = null,
+    /** Synthetic horizontal separator; it carries no text offset. */
+    val rule: TextRulePlacement? = null,
+    /** CSS inline boxes such as badges, danmaku pills, and chat labels. */
+    var inlineDecorations: List<TextBlockDecoration> = emptyList(),
+    /** Ruby annotations drawn in a compact baseline above their source text. */
+    var rubyPlacements: List<TextRubyPlacement> = emptyList()
 )
 
 class TextPage(
@@ -69,6 +145,10 @@ class TextPage(
     val chapterPosition: Int,
     val charLength: Int,
     val height: Float,
+    val decorations: List<TextBlockDecoration> = emptyList(),
+    val backgroundColorArgb: Int? = null,
+    val backgroundImagePath: String? = null,
+    val backgroundOpacity: Float = 1f,
     /**
      * 本页最后一行之后已经应用、但被页切吞掉的纵向间隙（段距，或空行贡献的更大间隙）。
      * 滚动模式拼接条带时必须补回来，否则接缝会比页内段距紧。排版器写入，绘制不读。

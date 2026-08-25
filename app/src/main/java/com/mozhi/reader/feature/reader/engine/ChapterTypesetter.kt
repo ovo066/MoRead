@@ -3,6 +3,13 @@ package com.mozhi.reader.feature.reader.engine
 import com.mozhi.reader.core.datastore.ReaderSyntaxHighlighter
 import com.mozhi.reader.core.datastore.ReaderSyntaxRule
 import com.mozhi.reader.core.datastore.ReaderSyntaxStyleSpan
+import com.mozhi.reader.core.library.EpubComputedStyle
+import com.mozhi.reader.core.library.EpubFloat
+import com.mozhi.reader.core.library.EpubLayoutBlock
+import com.mozhi.reader.core.library.EpubLayoutBlockKind
+import com.mozhi.reader.core.library.EpubLayoutChapterBundle
+import com.mozhi.reader.core.library.EpubTextAlign
+import com.mozhi.reader.core.library.EpubVerticalAlign
 import kotlin.math.max
 import kotlin.math.min
 
@@ -27,7 +34,9 @@ data class TypesetSpec(
     val syntaxHighlightRules: List<ReaderSyntaxRule> = emptyList(),
     val indentCharCount: Float = 2f,
     val justifyContent: Boolean = true,
-    val bottomAlign: Boolean = true
+    val bottomAlign: Boolean = true,
+    val contentFontSizePx: Float = contentLineStep,
+    val titleFontSizePx: Float = titleLineStep
 )
 
 /**
@@ -54,8 +63,22 @@ class ChapterTypesetter(
         chapterIndex: Int,
         title: String,
         body: String,
-        inlineImages: List<InlineImageSource> = emptyList()
+        inlineImages: List<InlineImageSource> = emptyList(),
+        inlineMarkers: List<InlineMarkerReservation> = emptyList(),
+        epubLayout: EpubLayoutChapterBundle? = null
     ): TextChapter {
+        if (epubLayout != null && epubLayout.document.textLength == body.length &&
+            epubLayout.document.blocks.any { it.kind != EpubLayoutBlockKind.CONTAINER }
+        ) {
+            return EpubNativeTypesetter(spec, measure).typeset(
+                chapterIndex,
+                title,
+                body,
+                inlineImages,
+                inlineMarkers,
+                epubLayout
+            )
+        }
         val state = LayoutState()
         val syntax = SyntaxStyleMap(body, spec.syntaxHighlightRules)
         val imagesByOffset = inlineImages.associateBy(InlineImageSource::charOffset)
@@ -76,14 +99,14 @@ class ChapterTypesetter(
                 firstParagraph = false
                 state.addSpacing(spec.titleTopSpacing, atPageTop = true)
                 if (trimmedTitle.isNotEmpty() && paragraph.trim() == trimmedTitle) {
-                    layoutParagraph(state, paragraph, cursor, isTitle = true, synthetic = false, syntax = syntax)
+                    layoutParagraph(state, paragraph, cursor, isTitle = true, synthetic = false, syntax = syntax, inlineMarkers = inlineMarkers)
                     pendingGap = spec.titleBottomSpacing
                     cursor = end + 1
                     if (isLastParagraph) break
                     continue
                 }
                 if (trimmedTitle.isNotEmpty()) {
-                    layoutParagraph(state, trimmedTitle, cursor, isTitle = true, synthetic = true, syntax = syntax)
+                    layoutParagraph(state, trimmedTitle, cursor, isTitle = true, synthetic = true, syntax = syntax, inlineMarkers = emptyList())
                     pendingGap = spec.titleBottomSpacing
                 }
             }
@@ -99,7 +122,7 @@ class ChapterTypesetter(
                 }
                 paragraph.isNotEmpty() -> {
                     state.addSpacing(pendingGap)
-                    layoutParagraph(state, paragraph, cursor, isTitle = false, synthetic = false, syntax = syntax)
+                    layoutParagraph(state, paragraph, cursor, isTitle = false, synthetic = false, syntax = syntax, inlineMarkers = inlineMarkers)
                     pendingGap = spec.paragraphSpacing
                 }
                 // 空行只是分段信号：抬高待结算间隙，不再占一整行正文高度。
@@ -166,28 +189,27 @@ class ChapterTypesetter(
         bodyOffset: Int,
         isTitle: Boolean,
         synthetic: Boolean,
-        syntax: SyntaxStyleMap
+        syntax: SyntaxStyleMap,
+        inlineMarkers: List<InlineMarkerReservation>
     ) {
         val metrics = if (isTitle) titleMetrics else contentMetrics
         val lineStep = if (isTitle) spec.titleLineStep else spec.contentLineStep
         val indent = if (isTitle) 0f else indentWidth
-        val widths = measure.charWidths(text, isTitle)
-        val lineStarts = measure.breakLines(text, isTitle, spec.visibleWidth, indent)
+        val layoutText = if (synthetic) LayoutText.identity(text) else buildLayoutText(text, bodyOffset, inlineMarkers)
+        val widths = measure.charWidths(layoutText.text, isTitle)
+        val lineStarts = measure.breakLines(layoutText.text, isTitle, spec.visibleWidth, indent)
 
         for (lineIndex in lineStarts.indices) {
             val lineStart = lineStarts[lineIndex]
-            val lineEnd = if (lineIndex + 1 < lineStarts.size) lineStarts[lineIndex + 1] else text.length
+            val lineEnd = if (lineIndex + 1 < lineStarts.size) lineStarts[lineIndex + 1] else layoutText.text.length
             if (lineStart >= lineEnd) continue
             state.prepareForLine(metrics.textHeight)
 
-            val clusters = ArrayList<String>()
-            val clusterWidths = ArrayList<Float>()
-            clusterText(text, widths, lineStart, lineEnd, clusters, clusterWidths)
+            val clusters = layoutText.clusters(widths, lineStart, lineEnd, bodyOffset, synthetic)
             // StaticLayout keeps the trailing space of a broken line; it must not push
             // justification, so trailing whitespace is measured at zero width.
-            while (clusters.isNotEmpty() && clusters.last().isBlank()) {
+            while (clusters.isNotEmpty() && clusters.last().text.isBlank() && clusters.last().marker == null) {
                 clusters.removeAt(clusters.lastIndex)
-                clusterWidths.removeAt(clusterWidths.lastIndex)
             }
             if (clusters.isEmpty()) continue
 
@@ -196,10 +218,8 @@ class ChapterTypesetter(
             val justify = spec.justifyContent && !isTitle && !isLastLine
             val columns = placeClusters(
                 clusters = clusters,
-                widths = clusterWidths,
                 startX = startX,
                 justify = justify,
-                absoluteOffset = if (synthetic) -1 else bodyOffset + lineStart,
                 syntax = syntax
             )
 
@@ -207,7 +227,7 @@ class ChapterTypesetter(
             val lineBottom = lineTop + metrics.textHeight
             state.addLine(
                 TextLine(
-                    text = text.substring(lineStart, lineEnd),
+                    text = text.substring(layoutText.sourceBoundary[lineStart], layoutText.sourceBoundary[lineEnd]),
                     columns = columns.first,
                     lineTop = lineTop,
                     lineBase = lineBottom - metrics.descent,
@@ -215,8 +235,8 @@ class ChapterTypesetter(
                     startX = startX,
                     isTitle = isTitle,
                     isParagraphEnd = isLastLine,
-                    chapterPosition = if (synthetic) bodyOffset else bodyOffset + lineStart,
-                    charLength = if (synthetic) 0 else lineEnd - lineStart,
+                    chapterPosition = if (synthetic) bodyOffset else bodyOffset + layoutText.sourceBoundary[lineStart],
+                    charLength = if (synthetic) 0 else layoutText.sourceBoundary[lineEnd] - layoutText.sourceBoundary[lineStart],
                     justifyGapExtra = columns.second
                 ),
                 lineStep = lineStep
@@ -230,19 +250,17 @@ class ChapterTypesetter(
      * gap (pure CJK). Overflowing lines are compressed back inside the margin (`exceed`).
      */
     private fun placeClusters(
-        clusters: List<String>,
-        widths: List<Float>,
+        clusters: List<LayoutCluster>,
         startX: Float,
         justify: Boolean,
-        absoluteOffset: Int,
         syntax: SyntaxStyleMap
     ): Pair<List<TextColumn>, Float> {
-        val desired = widths.sum()
+        val desired = clusters.sumOf { it.width.toDouble() }.toFloat()
         val residual = spec.visibleWidth - startX - desired
         var spaceExtra = 0f
         var gapExtra = 0f
         if (justify && residual > 0f && clusters.size > 1 && residual <= spec.visibleWidth * MAX_JUSTIFY_FRACTION) {
-            val spaceCount = clusters.count { it == " " }
+            val spaceCount = clusters.count { it.text == " " && it.marker == null }
             if (spaceCount > 0) {
                 spaceExtra = residual / spaceCount
             } else {
@@ -252,21 +270,21 @@ class ChapterTypesetter(
 
         val columns = ArrayList<TextColumn>(clusters.size)
         var x = startX
-        var textOffset = absoluteOffset
         for (index in clusters.indices) {
-            var width = widths[index]
-            if (spaceExtra > 0f && clusters[index] == " " && index != clusters.lastIndex) {
+            val cluster = clusters[index]
+            var width = cluster.width
+            if (spaceExtra > 0f && cluster.text == " " && cluster.marker == null && index != clusters.lastIndex) {
                 width += spaceExtra
             }
             if (gapExtra > 0f && index != clusters.lastIndex) {
                 width += gapExtra
             }
-            val style = syntax.at(textOffset)
+            val style = cluster.sourceOffset.takeIf { it >= 0 }?.let(syntax::at)
             columns.add(
                 TextColumn(
                     start = x,
-                    end = x + widths[index],
-                    charData = clusters[index],
+                    end = x + cluster.width,
+                    charData = cluster.text,
                     syntaxColorArgb = style?.colorArgb,
                     syntaxBackgroundArgb = style?.backgroundArgb,
                     syntaxUnderline = style?.underline ?: false,
@@ -275,11 +293,13 @@ class ChapterTypesetter(
                     syntaxFontAssetId = style?.fontAssetId,
                     syntaxBold = style?.bold ?: false,
                     syntaxItalic = style?.italic ?: false,
-                    syntaxStrikethrough = style?.strikethrough ?: false
+                    syntaxStrikethrough = style?.strikethrough ?: false,
+                    sourceLength = cluster.sourceLength,
+                    inlineMarkerKind = cluster.marker?.kind,
+                    inlineMarkerOffset = cluster.marker?.charOffset
                 )
             )
             x += width
-            if (textOffset >= 0) textOffset += clusters[index].length
         }
 
         // Compression fallback for lines that still overrun the right margin.
@@ -301,12 +321,90 @@ class ChapterTypesetter(
                         syntaxFontAssetId = column.syntaxFontAssetId,
                         syntaxBold = column.syntaxBold,
                         syntaxItalic = column.syntaxItalic,
-                        syntaxStrikethrough = column.syntaxStrikethrough
+                        syntaxStrikethrough = column.syntaxStrikethrough,
+                        textSizeScale = column.textSizeScale,
+                        fontFilePath = column.fontFilePath,
+                        fontFamily = column.fontFamily,
+                        baselineShiftPx = column.baselineShiftPx,
+                        opacity = column.opacity,
+                        sourceLength = column.sourceLength,
+                        inlineMarkerKind = column.inlineMarkerKind,
+                        inlineMarkerOffset = column.inlineMarkerOffset
                     )
                 }
             }
         }
         return columns to gapExtra
+    }
+
+    private data class LayoutCluster(
+        val text: String,
+        val width: Float,
+        val sourceOffset: Int,
+        val sourceLength: Int,
+        val marker: InlineMarkerReservation?
+    )
+
+    private data class LayoutText(
+        val text: String,
+        val sourceBoundary: IntArray,
+        val markersByIndex: Map<Int, InlineMarkerReservation>
+    ) {
+        fun clusters(
+            widths: FloatArray,
+            from: Int,
+            until: Int,
+            bodyOffset: Int,
+            synthetic: Boolean
+        ): ArrayList<LayoutCluster> {
+            val result = ArrayList<LayoutCluster>()
+            var index = from
+            while (index < until) {
+                var end = index + 1
+                while (end < until && widths[end] == 0f && text[end].code !in ZERO_WIDTH_CODES_LOCAL) end++
+                val marker = markersByIndex[index]
+                val sourceStart = sourceBoundary[index]
+                val sourceEnd = sourceBoundary[end]
+                result += LayoutCluster(
+                    text = if (marker == null) text.substring(index, end) else "",
+                    width = widths[index],
+                    sourceOffset = if (synthetic || marker != null) -1 else bodyOffset + sourceStart,
+                    sourceLength = sourceEnd - sourceStart,
+                    marker = marker
+                )
+                index = end
+            }
+            return result
+        }
+
+        companion object {
+            fun identity(text: String) = LayoutText(text, IntArray(text.length + 1) { it }, emptyMap())
+        }
+    }
+
+    private fun buildLayoutText(
+        text: String,
+        bodyOffset: Int,
+        markers: List<InlineMarkerReservation>
+    ): LayoutText {
+        val byLocalOffset = markers
+            .filter { it.charOffset in (bodyOffset + 1)..(bodyOffset + text.length) }
+            .distinctBy { it.charOffset to it.kind }
+            .groupBy { it.charOffset - bodyOffset }
+        if (byLocalOffset.isEmpty()) return LayoutText.identity(text)
+        val builder = StringBuilder(text.length + byLocalOffset.size)
+        val boundaries = ArrayList<Int>(text.length + byLocalOffset.size + 1).apply { add(0) }
+        val markerMap = mutableMapOf<Int, InlineMarkerReservation>()
+        text.forEachIndexed { index, char ->
+            builder.append(char)
+            boundaries += index + 1
+            byLocalOffset[index + 1].orEmpty().sortedBy { it.kind.ordinal }.forEach { marker ->
+                markerMap[builder.length] = marker
+                builder.append(MARKER_PLACEHOLDER)
+                boundaries += index + 1
+            }
+        }
+        return LayoutText(builder.toString(), boundaries.toIntArray(), markerMap)
     }
 
     private inner class LayoutState {
@@ -387,6 +485,8 @@ class ChapterTypesetter(
         const val HEIGHT_EPSILON = 0.5f
         const val INLINE_IMAGE_CHAR = '\uFFFC'
         const val IMAGE_PLACEHOLDER = "［图片］"
+        const val MARKER_PLACEHOLDER = '\u3000'
+        val ZERO_WIDTH_CODES_LOCAL = intArrayOf(8203, 8204, 8205, 8288)
         const val MAX_IMAGE_HEIGHT_FRACTION = 0.72f
         const val MIN_IMAGE_ASPECT = 0.2f
         const val MAX_IMAGE_ASPECT = 5f

@@ -8,6 +8,7 @@ import androidx.room.Update
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.BookSourceType
 import com.mozhi.reader.core.database.entity.BookmarkEntity
+import com.mozhi.reader.core.database.entity.BookTocEntryEntity
 import com.mozhi.reader.core.database.entity.ChapterEntity
 import com.mozhi.reader.core.database.entity.ReadingDailyEntity
 import kotlinx.coroutines.flow.Flow
@@ -45,6 +46,17 @@ interface BookDao {
         """
     )
     suspend fun getBooksMissingCovers(sourceType: BookSourceType): List<BookEntity>
+
+    @Query(
+        """
+        SELECT * FROM books
+        WHERE sourceType = :sourceType
+          AND NOT EXISTS (
+              SELECT 1 FROM book_toc_entries WHERE book_toc_entries.bookId = books.id
+          )
+        """
+    )
+    suspend fun getBooksMissingToc(sourceType: BookSourceType): List<BookEntity>
 
     /**
      * 可重新抽取的封面：EPUB 书且用户没手动设过封面。清理封面缓存时只动这些，
@@ -177,6 +189,18 @@ interface BookDao {
 
     @Query("SELECT * FROM chapters WHERE bookId = :bookId ORDER BY chapterIndex")
     suspend fun getChapters(bookId: Long): List<ChapterEntity>
+
+    @Insert
+    suspend fun insertTocEntries(entries: List<BookTocEntryEntity>)
+
+    @Query("DELETE FROM book_toc_entries WHERE bookId = :bookId")
+    suspend fun deleteTocEntriesForBook(bookId: Long)
+
+    @Query("SELECT * FROM book_toc_entries WHERE bookId = :bookId ORDER BY orderIndex")
+    fun observeTocEntries(bookId: Long): Flow<List<BookTocEntryEntity>>
+
+    @Query("SELECT * FROM book_toc_entries WHERE bookId = :bookId ORDER BY orderIndex")
+    suspend fun getTocEntries(bookId: Long): List<BookTocEntryEntity>
 
     @Query("SELECT title FROM chapters WHERE bookId = :bookId AND chapterIndex = :chapterIndex")
     suspend fun getChapterTitle(bookId: Long, chapterIndex: Int): String?

@@ -1,5 +1,6 @@
 package com.mozhi.reader.feature.reader
 
+import com.mozhi.reader.core.library.QuoteChapter
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -23,7 +24,7 @@ class CompanionCitationParserTest {
 
     @Test
     fun parsesMarkedCitationWithoutChapter() {
-        val parsed = CompanionCitationParser.parse("""〔原文〕"这一段写得极好，值得反复读"""")
+        val parsed = CompanionCitationParser.parse("〔原文〕「这一段写得极好，值得反复读」")
 
         assertEquals(1, parsed.citations.size)
         assertNull(parsed.citations.first().chapterNumber)
@@ -46,16 +47,22 @@ class CompanionCitationParserTest {
         assertEquals(listOf(1, 9), parsed.citations.map { it.chapterNumber })
     }
 
-    /** 模型忘记加标记是常态；裸引号兜底，否则「跳到原文」会时有时无。 */
     @Test
-    fun fallsBackToBareQuotesWhenNoMarkerPresent() {
+    fun ignoresBareQuotesWithoutExplicitMarker() {
         val parsed = CompanionCitationParser.parse("原文里写的是「他终于回过头来看了一眼」。")
 
-        assertEquals(1, parsed.citations.size)
-        assertNull(parsed.citations.first().chapterNumber)
-        assertEquals("他终于回过头来看了一眼", parsed.citations.first().quote)
-        // 兜底不改写正文。
+        assertTrue(parsed.citations.isEmpty())
         assertTrue(parsed.displayText.contains("「他终于回过头来看了一眼」"))
+    }
+
+    @Test
+    fun ignoresMarkerWithNonCanonicalQuotes() {
+        val raw = "〔原文 第2章〕\"他终于回过头来看了一眼\""
+
+        val parsed = CompanionCitationParser.parse(raw)
+
+        assertTrue(parsed.citations.isEmpty())
+        assertEquals(raw, parsed.displayText)
     }
 
     /** 有显式标记时不再扫裸引号，避免把对话里的普通引号也当成引文。 */
@@ -112,5 +119,36 @@ class CompanionCitationParserTest {
         assertTrue(label.endsWith("…"))
 
         assertEquals("短一些的引文内容", CompanionCitationParser.label(CompanionCitation(null, "短一些的引文内容")))
+    }
+
+    @Test
+    fun verifierKeepsOnlyQuotesThatExistVerbatim() {
+        val citations = listOf(
+            CompanionCitation(2, "风从山谷里穿过来"),
+            CompanionCitation(1, "这句话并不存在于书中")
+        )
+        val chapters = listOf(
+            QuoteChapter(0, "第一章没有相关内容。"),
+            QuoteChapter(1, "清晨，风从山谷里穿过来，带着雪的味道。")
+        )
+
+        val located = CompanionCitationVerifier.locate(citations, chapters)
+
+        assertEquals(1, located.size)
+        assertEquals("风从山谷里穿过来", located.single().citation.quote)
+        assertEquals(2, located.single().citation.chapterNumber)
+        assertEquals(1, located.single().chapterIndex)
+    }
+
+    @Test
+    fun verifierRejectsParaphrasesAndPunctuationChanges() {
+        val chapters = listOf(QuoteChapter(0, "风从山谷里穿过来，带着雪的味道。"))
+
+        assertTrue(
+            CompanionCitationVerifier.locate(
+                listOf(CompanionCitation(1, "风从山谷里穿过来 带着雪的味道")),
+                chapters
+            ).isEmpty()
+        )
     }
 }

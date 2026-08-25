@@ -203,6 +203,7 @@ class AiClientFactory @Inject constructor(
         val apiKey = apiKeyStore.get(TtsSettingsStore.API_KEY_ALIAS)
             ?.takeIf(String::isNotBlank)
             ?: throw AiClientException.MissingKey("语音朗读 API")
+        val isGmiCloud = settings.aiIsGmiCloud
         val isMiniMax = settings.aiIsMiniMax
         val provider = AiProviderEntity(
             id = STANDALONE_ENTITY_ID,
@@ -219,8 +220,12 @@ class AiClientFactory @Inject constructor(
             providerId = STANDALONE_ENTITY_ID,
             modelName = settings.aiModel,
             type = AiModelType.TTS,
-            endpointPath = if (isMiniMax) "/t2a_v2" else "/audio/speech",
-            extraJson = settings.aiGroupId.takeIf(String::isNotBlank)
+            endpointPath = when {
+                isGmiCloud -> "/api/v1/ie/requestqueue/apikey/requests"
+                isMiniMax -> "/t2a_v2"
+                else -> "/audio/speech"
+            },
+            extraJson = settings.aiGroupId.takeIf { isMiniMax && it.isNotBlank() }
                 ?.let { """{"body":{"group_id":"$it"}}""" }
                 ?: "{}",
             createdAt = 0

@@ -5,6 +5,7 @@ import android.os.Build
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
+import java.io.File
 
 /**
  * Platform measurement for the typesetter. Line breaking is delegated to [StaticLayout] exactly
@@ -19,6 +20,9 @@ class AndroidTextMeasure(
     typeface: Typeface,
     letterSpacingEm: Float = 0f
 ) : TextMeasure {
+
+    private val styledPaints = HashMap<MeasuredTextStyle, TextPaint>()
+    private val typefaces = HashMap<String, Typeface?>()
 
     val contentPaint = TextPaint(TextPaint.ANTI_ALIAS_FLAG).apply {
         textSize = contentSizePx
@@ -72,6 +76,29 @@ class AndroidTextMeasure(
 
     override fun indentColumnWidth(): Float = indentWidth
 
+    override fun metrics(style: MeasuredTextStyle): LineMetrics = paintFor(style).lineMetrics()
+
+    override fun charWidths(text: String, style: MeasuredTextStyle): FloatArray {
+        val widths = FloatArray(text.length)
+        paintFor(style).getTextWidths(text, 0, text.length, widths)
+        return widths
+    }
+
+    private fun paintFor(style: MeasuredTextStyle): TextPaint = styledPaints.getOrPut(style) {
+        val base = if (style.isTitle) titlePaint else contentPaint
+        TextPaint(base).apply {
+            textSize = base.textSize * style.textSizeScale.coerceIn(MIN_TEXT_SCALE, MAX_TEXT_SCALE)
+            letterSpacing = base.letterSpacing + style.letterSpacingEm
+            val family = style.fontFilePath
+                ?.let { path -> typefaces.getOrPut(path) { runCatching { Typeface.createFromFile(File(path)) }.getOrNull() } }
+                ?: style.fontFamily.toSystemTypeface()
+                ?: base.typeface
+            val typefaceStyle = (if (style.bold) Typeface.BOLD else Typeface.NORMAL) or
+                (if (style.italic) Typeface.ITALIC else Typeface.NORMAL)
+            typeface = if (typefaceStyle == Typeface.NORMAL) family else Typeface.create(family, typefaceStyle)
+        }
+    }
+
     private fun TextPaint.lineMetrics(): LineMetrics {
         val metrics = fontMetrics
         return LineMetrics(
@@ -82,5 +109,15 @@ class AndroidTextMeasure(
 
     private companion object {
         const val INDENT_CHAR = "　"
+        const val MIN_TEXT_SCALE = 0.5f
+        const val MAX_TEXT_SCALE = 3f
     }
+}
+
+private fun String?.toSystemTypeface(): Typeface? = when {
+    this == null -> null
+    contains("mono", true) -> Typeface.MONOSPACE
+    contains("sans", true) || contains("黑体") -> Typeface.SANS_SERIF
+    contains("serif", true) || contains("宋体") || contains("明朝") -> Typeface.SERIF
+    else -> null
 }

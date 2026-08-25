@@ -661,4 +661,57 @@ object DatabaseMigrations {
             )
         }
     }
+
+    /**
+     * 伴读三期五列一次加齐（批次二/三才用到的列也在此落地，只跑一次 MigrationTest）：
+     * 思维链、角色音色与情绪、批注与讨论回复的媒体清单。
+     */
+    val Migration19To20 = object : Migration(19, 20) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            // 思维链可空：不支持 reasoning 的模型这一列恒为 NULL，界面据此整条不出现。
+            db.execSQL("ALTER TABLE `messages` ADD COLUMN `reasoningContent` TEXT")
+            db.execSQL("ALTER TABLE `personas` ADD COLUMN `voiceId` TEXT NOT NULL DEFAULT ''")
+            db.execSQL("ALTER TABLE `personas` ADD COLUMN `voiceEmotion` TEXT NOT NULL DEFAULT ''")
+            db.execSQL(
+                "ALTER TABLE `annotations` ADD COLUMN `mediaJson` TEXT NOT NULL DEFAULT '{}'"
+            )
+            db.execSQL(
+                "ALTER TABLE `annotation_replies` ADD COLUMN `mediaJson` TEXT NOT NULL DEFAULT '{}'"
+            )
+        }
+    }
+
+    /** Preserves the EPUB navigation tree independently from the linear reading-order chapters. */
+    val Migration20To21 = object : Migration(20, 21) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `book_toc_entries` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `bookId` INTEGER NOT NULL,
+                    `orderIndex` INTEGER NOT NULL,
+                    `title` TEXT NOT NULL,
+                    `href` TEXT NOT NULL,
+                    `depth` INTEGER NOT NULL,
+                    `parentOrderIndex` INTEGER,
+                    `chapterIndex` INTEGER,
+                    `hasChildren` INTEGER NOT NULL,
+                    FOREIGN KEY(`bookId`) REFERENCES `books`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_book_toc_entries_bookId` " +
+                    "ON `book_toc_entries` (`bookId`)"
+            )
+            db.execSQL(
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_book_toc_entries_bookId_orderIndex` " +
+                    "ON `book_toc_entries` (`bookId`, `orderIndex`)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_book_toc_entries_bookId_chapterIndex` " +
+                    "ON `book_toc_entries` (`bookId`, `chapterIndex`)"
+            )
+        }
+    }
 }

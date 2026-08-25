@@ -129,6 +129,12 @@ class OpenAiResponsesClient(
                             event.delta?.takeIf(String::isNotEmpty)
                                 ?.let { trySend(ChatDelta.Text(it)) }
                         }
+                        // 推理模型只回吐摘要（原始 reasoning 不外发），字段与正文同名 delta。
+                        "response.reasoning_summary_text.delta" -> {
+                            val event = decodeEvent(data) ?: return
+                            event.delta?.takeIf(String::isNotEmpty)
+                                ?.let { trySend(ChatDelta.Reasoning(it)) }
+                        }
                         "response.completed" -> {
                             val event = decodeEvent(data)
                             val calls = event?.response?.let(::extractToolCalls).orEmpty()

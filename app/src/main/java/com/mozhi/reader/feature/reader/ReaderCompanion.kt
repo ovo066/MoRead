@@ -18,25 +18,23 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CallSplit
-import androidx.compose.material.icons.outlined.Check
-import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.GraphicEq
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.outlined.VolumeUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -44,237 +42,100 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.mozhi.reader.ai.client.AiJson
 import com.mozhi.reader.ai.client.ToolCall
-import com.mozhi.reader.ai.embedding.BookEmbeddingProgress
-import com.mozhi.reader.ai.embedding.EmbeddingIndexStage
 import com.mozhi.reader.ai.media.AgentMediaResult
 import androidx.compose.ui.text.font.FontFamily
 import com.mozhi.reader.ui.components.ChatTextStyling
+import com.mozhi.reader.ui.components.PersonaAvatarImage
 import com.mozhi.reader.ui.components.rememberChatBubbleStyle
 import com.mozhi.reader.core.database.entity.MessageEntity
 import com.mozhi.reader.core.database.entity.PersonaChatAppearance
 import com.mozhi.reader.core.library.MessageAttachment
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.serialization.builtins.ListSerializer
 
 /**
- * 伴读聊天的共享组件与时间线模型：气泡、执行过程卡、插图/语音卡、索引进度卡。
+ * 伴读聊天的共享组件与时间线模型：气泡、媒体气泡、时间线构建。
  * 聊天界面本体在 CompanionChatScreen（全屏页，正向列表），列表条目模型在
- * CompanionChatList.kt；旧的阅读页弹层版聊天已随全屏页上线移除。
+ * CompanionChatList.kt，过程卡与场景头在 CompanionProcessCard.kt。
+ */
+
+/**
+ * agent 生成的插图/语音，按 **气泡** 而不是全宽大卡呈现——它是角色「发来的一张图」，
+ * 和它说的话是同一条消息流里的东西，不该长得像系统通知。
  */
 @Composable
-internal fun AgentExecutionCard(steps: List<AgentExecutionStep>, palette: ReaderPalette) {
-    Surface(
-        color = palette.glass,
-        shape = RoundedCornerShape(14.dp),
-        border = BorderStroke(1.dp, palette.glassBorder)
-    ) {
-        Column(modifier = Modifier.padding(horizontal = 11.dp, vertical = 9.dp)) {
-            Text(
-                text = "执行过程",
-                style = MaterialTheme.typography.labelMedium,
-                color = palette.muted,
-                fontWeight = FontWeight.Medium
-            )
-            steps.forEach { step ->
-                Row(
-                    modifier = Modifier.padding(top = 7.dp),
-                    verticalAlignment = Alignment.Top
-                ) {
-                    Box(
-                        modifier = Modifier.size(18.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        when (step.state) {
-                            AgentStepState.RUNNING -> CircularProgressIndicator(
-                                strokeWidth = 1.8.dp,
-                                color = palette.accent,
-                                modifier = Modifier.size(14.dp)
-                            )
-                            AgentStepState.SUCCEEDED -> Icon(
-                                Icons.Outlined.Check,
-                                contentDescription = null,
-                                tint = palette.accent,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            AgentStepState.FAILED -> Icon(
-                                Icons.Outlined.Close,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-                    }
-                    Column(modifier = Modifier.padding(start = 7.dp)) {
-                        Text(
-                            text = when (step.state) {
-                                AgentStepState.RUNNING -> "正在${step.displayName}…"
-                                AgentStepState.SUCCEEDED -> "${step.displayName} · 已完成"
-                                AgentStepState.FAILED -> "${step.displayName} · 未完成"
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (step.state == AgentStepState.FAILED) {
-                                MaterialTheme.colorScheme.error
-                            } else {
-                                palette.onBackground
-                            }
-                        )
-                        step.detail.takeIf { it.isNotBlank() && it != "已完成" }?.let { detail ->
-                            Text(
-                                text = detail,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = palette.muted,
-                                maxLines = 3,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.padding(top = 2.dp)
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-internal fun AgentMediaCard(
+internal fun CompanionMediaBubble(
     result: AgentMediaResult,
     palette: ReaderPalette,
     onOpenImage: (String, String?) -> Unit,
     onPlayAudio: (String) -> Unit
 ) {
-    Surface(
-        color = palette.accentContainer.copy(alpha = 0.42f),
-        shape = RoundedCornerShape(16.dp),
-        border = BorderStroke(1.dp, palette.glassBorder),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        if (result.mediaKind == "image") {
-            Column(
-                modifier = Modifier
-                    .clickable { onOpenImage(result.path, null) }
-                    .padding(9.dp)
-            ) {
-                // 固定高度：图片异步解码完成时卡片尺寸不变，滚动经过时不会跳一下。
-                AsyncImage(
-                    model = result.path,
-                    contentDescription = "Agent 生成的书籍插图",
-                    contentScale = ContentScale.Fit,
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
+        // 头像位留白：与文字气泡组左缘对齐，媒体不会自己突出来一块。
+        Box(modifier = Modifier.size(AVATAR_GUTTER))
+        Surface(
+            color = palette.accentContainer.copy(alpha = 0.42f),
+            shape = RoundedCornerShape(18.dp, 18.dp, 18.dp, 5.dp),
+            border = BorderStroke(1.dp, palette.glassBorder),
+            modifier = Modifier.fillMaxWidth(0.78f)
+        ) {
+            if (result.mediaKind == "image") {
+                Column(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .height(260.dp)
-                )
-                Text(
-                    text = result.message,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = palette.muted,
-                    modifier = Modifier.padding(horizontal = 3.dp, vertical = 6.dp)
-                )
-            }
-        } else {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onPlayAudio(result.path) }
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Surface(
-                    color = palette.accent,
-                    contentColor = palette.onAccent,
-                    shape = RoundedCornerShape(14.dp)
+                        .clickable { onOpenImage(result.path, null) }
+                        .padding(5.dp)
                 ) {
-                    Icon(
-                        Icons.Outlined.PlayArrow,
-                        contentDescription = "播放生成语音",
-                        modifier = Modifier.padding(10.dp)
+                    // 固定高度：图片异步解码完成时气泡尺寸不变，滚动经过时不会跳一下。
+                    AsyncImage(
+                        model = result.path,
+                        contentDescription = "角色生成的书籍插图",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(220.dp)
+                            .clip(RoundedCornerShape(14.dp))
                     )
+                    result.message.takeIf(String::isNotBlank)?.let { caption ->
+                        Text(
+                            text = caption,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = palette.muted,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 5.dp)
+                        )
+                    }
                 }
-                Column(modifier = Modifier.padding(start = 11.dp)) {
-                    Text("播放生成语音", style = MaterialTheme.typography.labelLarge)
-                    Text(result.message, style = MaterialTheme.typography.labelSmall, color = palette.muted)
+            } else {
+                Box(modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp)) {
+                    CompanionVoiceBubble(
+                        text = result.message.ifBlank { "角色发来一段语音" },
+                        clip = VoiceClipState(path = result.path),
+                        palette = palette,
+                        onPrepare = {},
+                        onRegenerate = {},
+                        onPlay = onPlayAudio
+                    )
                 }
             }
         }
     }
 }
 
-@Composable
-internal fun EmbeddingProgressCard(
-    progress: BookEmbeddingProgress,
-    palette: ReaderPalette,
-    onRetry: () -> Unit
-) {
-    val isProblem = progress.stage == EmbeddingIndexStage.BLOCKED ||
-        progress.stage == EmbeddingIndexStage.FAILED
-    Surface(
-        color = palette.glass,
-        shape = RoundedCornerShape(14.dp),
-        border = BorderStroke(
-            1.dp,
-            if (isProblem) MaterialTheme.colorScheme.error.copy(alpha = 0.45f) else palette.glassBorder
-        )
-    ) {
-        Column(modifier = Modifier.padding(horizontal = 11.dp, vertical = 9.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = when (progress.stage) {
-                            EmbeddingIndexStage.NOT_CONFIGURED -> "全文检索未配置"
-                            EmbeddingIndexStage.QUEUED -> "全文索引等待中"
-                            EmbeddingIndexStage.INDEXING -> "正在建立全文索引"
-                            EmbeddingIndexStage.READY -> "全文检索已就绪"
-                            EmbeddingIndexStage.BLOCKED -> "全文索引需要处理"
-                            EmbeddingIndexStage.FAILED -> "全文索引失败"
-                        },
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (isProblem) MaterialTheme.colorScheme.error else palette.onBackground,
-                        fontWeight = FontWeight.Medium
-                    )
-                    Text(
-                        text = buildString {
-                            if (progress.totalChapters > 0) {
-                                append("${progress.indexedChapters}/${progress.totalChapters} 章")
-                                if (progress.message.isNotBlank()) append(" · ")
-                            }
-                            append(progress.message)
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = palette.muted,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 2.dp)
-                    )
-                }
-                if (progress.stage != EmbeddingIndexStage.READY &&
-                    progress.stage != EmbeddingIndexStage.NOT_CONFIGURED
-                ) {
-                    TextButton(onClick = onRetry) { Text("重试", color = palette.accent) }
-                }
-            }
-            if (progress.stage == EmbeddingIndexStage.INDEXING ||
-                (progress.stage == EmbeddingIndexStage.QUEUED && progress.indexedChapters > 0)
-            ) {
-                LinearProgressIndicator(
-                    progress = { progress.fraction },
-                    color = palette.accent,
-                    trackColor = palette.glassBorder,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 7.dp)
-                )
-            }
-        }
-    }
-}
+/** AI 气泡左侧头像栏宽度：组首放头像，组内其余条目留同宽空白保持左缘对齐。 */
+internal val AVATAR_GUTTER = 32.dp
 
 internal sealed interface CompanionTimelineItem {
     val key: String
@@ -283,11 +144,13 @@ internal sealed interface CompanionTimelineItem {
         override val key: String = "message-${message.id}"
     }
 
-    data class Tools(
+    /** 一条 AI 消息的思维链与工具步骤；两者至少有一个非空时才产生。 */
+    data class Process(
         val sourceMessageId: Long,
-        val steps: List<AgentExecutionStep>
+        val steps: List<AgentExecutionStep>,
+        val reasoning: String?
     ) : CompanionTimelineItem {
-        override val key: String = "tools-$sourceMessageId"
+        override val key: String = "process-$sourceMessageId"
     }
 
     data class Media(
@@ -307,48 +170,52 @@ internal fun buildCompanionTimeline(messages: List<MessageEntity>): List<Compani
             when (message.role) {
                 "user" -> if (message.content.isNotBlank()) add(CompanionTimelineItem.Bubble(message))
                 "assistant" -> {
-                    if (message.content.isNotBlank()) add(CompanionTimelineItem.Bubble(message))
                     val calls = message.toolCallsJson?.let { json ->
                         runCatching {
                             AiJson.decodeFromString(ListSerializer(ToolCall.serializer()), json)
                         }.getOrNull()
                     }.orEmpty()
-                    if (calls.isNotEmpty()) {
+                    val steps = calls.map { call ->
+                        val result = toolResults[call.id]?.content
+                        val succeeded = result != null && result.isSuccessfulToolResult()
+                        AgentExecutionStep(
+                            callId = call.id,
+                            toolName = call.name,
+                            displayName = toolDisplayName(call.name),
+                            state = when {
+                                result == null -> AgentStepState.RUNNING
+                                succeeded -> AgentStepState.SUCCEEDED
+                                else -> AgentStepState.FAILED
+                            },
+                            detail = if (result != null && !succeeded) result.take(120) else "",
+                            arguments = call.arguments,
+                            resultPreview = result?.take(MAX_HISTORY_RESULT_PREVIEW).orEmpty()
+                        )
+                    }
+                    // 过程在前、发言在后：先「想了什么、查了什么」，再看它说了什么。
+                    if (steps.isNotEmpty() || !message.reasoningContent.isNullOrBlank()) {
                         add(
-                            CompanionTimelineItem.Tools(
+                            CompanionTimelineItem.Process(
                                 sourceMessageId = message.id,
-                                steps = calls.map { call ->
-                                    val result = toolResults[call.id]?.content
-                                    val succeeded = result != null && result.isSuccessfulToolResult()
-                                    AgentExecutionStep(
-                                        callId = call.id,
-                                        toolName = call.name,
-                                        displayName = toolDisplayName(call.name),
-                                        state = when {
-                                            result == null -> AgentStepState.RUNNING
-                                            succeeded -> AgentStepState.SUCCEEDED
-                                            else -> AgentStepState.FAILED
-                                        },
-                                        detail = if (result != null && !succeeded) {
-                                            result.take(120)
-                                        } else {
-                                            ""
-                                        }
-                                    )
-                                }
+                                steps = steps,
+                                reasoning = message.reasoningContent
                             )
                         )
-                        calls.forEach { call ->
-                            toolResults[call.id]?.content
-                                ?.let(AgentMediaResult::decode)
-                                ?.let { add(CompanionTimelineItem.Media(call.id, it)) }
-                        }
+                    }
+                    if (message.content.isNotBlank()) add(CompanionTimelineItem.Bubble(message))
+                    calls.forEach { call ->
+                        toolResults[call.id]?.content
+                            ?.let(AgentMediaResult::decode)
+                            ?.let { add(CompanionTimelineItem.Media(call.id, it)) }
                     }
                 }
             }
         }
     }
 }
+
+/** 历史侧的结果预览与 AgentLoop 实时事件同一上限，展开后看到的内容前后一致。 */
+private const val MAX_HISTORY_RESULT_PREVIEW = 600
 
 private fun String.isSuccessfulToolResult(): Boolean {
     val value = trimStart()
@@ -380,22 +247,34 @@ private fun toolDisplayName(name: String): String = when (name) {
     else -> "调用 $name"
 }
 
+/**
+ * 一个可见气泡。历史、开场白与流式副本共用它——差别全在 [entry] 里算好了：
+ * 组首显示头像、组尾带尖角与时间、只有落库消息才给操作行。
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-internal fun CompanionMessageBubble(
-    message: MessageEntity,
+internal fun CompanionChatBubble(
+    entry: ChatEntry.Bubble,
     palette: ReaderPalette,
-    canReroll: Boolean,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit,
-    onReroll: () -> Unit,
-    onBranch: () -> Unit,
+    personaName: String,
+    personaAvatarPath: String?,
     appearance: PersonaChatAppearance = PersonaChatAppearance.DEFAULT,
     fontFamily: FontFamily? = null,
-    onLocateCitation: (CompanionCitation) -> Unit = {}
+    locatedCitations: List<LocatedCompanionCitation> = emptyList(),
+    onLocateCitation: (LocatedCompanionCitation) -> Unit = {},
+    onEdit: () -> Unit = {},
+    onDelete: () -> Unit = {},
+    onReroll: () -> Unit = {},
+    onBranch: () -> Unit = {},
+    onSpeak: (String) -> Unit = {},
+    voiceClip: VoiceClipState? = null,
+    onPrepareVoice: () -> Unit = {},
+    onRegenerateVoice: () -> Unit = {},
+    onPlayVoice: (String) -> Unit = {}
 ) {
-    val fromUser = message.role == "user"
-    var showActions by remember(message.id) { mutableStateOf(false) }
+    val fromUser = entry.fromUser
+    val message = entry.message
+    var showActions by remember(entry.key) { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
     val style = chatBubbleStyleFor(appearance, fromUser, palette)
@@ -404,131 +283,245 @@ internal fun CompanionMessageBubble(
         horizontalArrangement = if (fromUser) Arrangement.End else Arrangement.Start,
         verticalAlignment = Alignment.Bottom
     ) {
+        if (!fromUser) {
+            // 组内非首条留同宽空白：几条连发的消息左缘对齐，看着才像一个人在说话。
+            Box(
+                modifier = Modifier.size(AVATAR_GUTTER),
+                contentAlignment = Alignment.BottomStart
+            ) {
+                if (entry.showAvatar) {
+                    PersonaAvatarImage(
+                        name = personaName,
+                        avatarPath = personaAvatarPath,
+                        modifier = Modifier.size(26.dp)
+                    )
+                }
+            }
+        }
         Column(
-            modifier = Modifier.fillMaxWidth(0.86f),
+            modifier = Modifier.fillMaxWidth(0.80f),
             horizontalAlignment = if (fromUser) Alignment.End else Alignment.Start
         ) {
             Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .combinedClickable(
-                        onClick = { showActions = !showActions },
-                        onLongClick = { showActions = true }
-                    ),
+                modifier = Modifier.combinedClickable(
+                    enabled = message != null,
+                    onClick = { showActions = !showActions },
+                    onLongClick = { showActions = true }
+                ),
                 color = style.container,
                 contentColor = style.content,
                 border = style.border,
-                shape = style.shape(fromUser)
+                shape = style.shape(fromUser, entry.isTail)
             ) {
                 ChatTextStyling(appearance, fontFamily) {
-                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-                    val attachments = remember(message.id) {
-                        MessageAttachment.decode(message.attachmentsJson)
-                    }
-                    if (attachments.isNotEmpty()) {
-                        Row(
-                            modifier = Modifier.padding(bottom = 6.dp),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            attachments.forEach { attachment ->
-                                if (attachment.type == MessageAttachment.TYPE_IMAGE) {
-                                    AsyncImage(
-                                        model = java.io.File(context.filesDir, attachment.path),
-                                        contentDescription = "图片附件",
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier
-                                            .size(86.dp)
-                                            .background(
-                                                palette.glass,
-                                                RoundedCornerShape(10.dp)
-                                            )
-                                    )
-                                } else {
-                                    Surface(
-                                        color = palette.glass,
-                                        shape = RoundedCornerShape(10.dp),
-                                        border = BorderStroke(1.dp, palette.glassBorder)
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Icon(
-                                                Icons.Outlined.Description,
-                                                contentDescription = null,
-                                                tint = palette.muted,
-                                                modifier = Modifier.size(14.dp)
-                                            )
-                                            Text(
-                                                attachment.name ?: "附件",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = palette.muted,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis,
-                                                modifier = Modifier.padding(start = 4.dp)
-                                            )
-                                        }
-                                    }
-                                }
-                            }
+                    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                        // 附件只挂在这条消息的第一个气泡上，多气泡时不会重复出现。
+                        if ((message != null && entry.showAvatar) || fromUser) {
+                            message?.let { BubbleAttachments(it, palette, context) }
                         }
-                    }
-                    if (fromUser) {
-                        Text(text = message.content, style = MaterialTheme.typography.bodyMedium)
-                    } else {
-                        // 引用标记是给程序看的，渲染前摘掉；引文本身留在正文里保持句子通顺。
-                        val parsed = remember(message.content) {
-                            CompanionCitationParser.parse(message.content)
-                        }
-                        AiRichText(content = parsed.displayText, palette = palette)
-                        if (parsed.citations.isNotEmpty()) {
-                            CitationChips(
-                                citations = parsed.citations,
-                                palette = palette,
-                                onClick = onLocateCitation
+                        BubbleBody(
+                            entry = entry,
+                            palette = palette,
+                            locatedCitations = locatedCitations,
+                            onLocateCitation = onLocateCitation,
+                            voiceClip = voiceClip,
+                            onPrepareVoice = onPrepareVoice,
+                            onRegenerateVoice = onRegenerateVoice,
+                            onPlayVoice = onPlayVoice
+                        )
+                        if (message?.editedAt != null && entry.isTail) {
+                            Text(
+                                "已编辑",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = style.content.copy(alpha = 0.65f),
+                                modifier = Modifier.padding(top = 3.dp)
                             )
                         }
                     }
-                    if (message.editedAt != null) {
-                        Text(
-                            "已编辑",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = style.content.copy(alpha = 0.65f),
-                            modifier = Modifier.padding(top = 3.dp)
-                        )
-                    }
-                }
                 }
             }
             AnimatedVisibility(visible = showActions, enter = fadeIn(), exit = fadeOut()) {
-                Row(
-                    modifier = Modifier.padding(top = 2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    BubbleActionIcon(Icons.Outlined.ContentCopy, "复制", palette) {
-                        showActions = false
-                        clipboard.setText(AnnotatedString(message.content))
+                BubbleActionBar(
+                    palette = palette,
+                    fromUser = fromUser,
+                    canReroll = entry.canReroll,
+                    onDismiss = { showActions = false },
+                    onCopy = {
+                        clipboard.setText(AnnotatedString(entry.part.text))
                         Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
-                    }
-                    BubbleActionIcon(Icons.Outlined.Edit, "编辑", palette) {
-                        showActions = false
-                        onEdit()
-                    }
-                    if (!fromUser && canReroll) {
-                        BubbleActionIcon(Icons.Outlined.Refresh, "重新生成", palette) {
-                            showActions = false
-                            onReroll()
-                        }
-                    }
-                    BubbleActionIcon(Icons.Outlined.CallSplit, "从这里开分支", palette) {
-                        showActions = false
-                        onBranch()
-                    }
-                    BubbleActionIcon(Icons.Outlined.Delete, "删除", palette) {
-                        showActions = false
-                        onDelete()
+                    },
+                    onSpeak = { onSpeak(entry.part.text) },
+                    onEdit = onEdit,
+                    onReroll = onReroll,
+                    onBranch = onBranch,
+                    onDelete = onDelete
+                )
+            }
+            entry.timestamp?.takeIf { !showActions }?.let { timestamp ->
+                val formatter = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
+                Text(
+                    text = formatter.format(Date(timestamp)),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.muted.copy(alpha = 0.55f),
+                    modifier = Modifier.padding(top = 2.dp, start = 4.dp, end = 4.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun BubbleBody(
+    entry: ChatEntry.Bubble,
+    palette: ReaderPalette,
+    locatedCitations: List<LocatedCompanionCitation>,
+    onLocateCitation: (LocatedCompanionCitation) -> Unit,
+    voiceClip: VoiceClipState?,
+    onPrepareVoice: () -> Unit,
+    onRegenerateVoice: () -> Unit,
+    onPlayVoice: (String) -> Unit
+) {
+    val text = entry.part.text
+    when {
+        entry.fromUser -> Text(text = text, style = MaterialTheme.typography.bodyMedium)
+        entry.part is CompanionBubblePart.Voice -> if (voiceClip?.failed == true) {
+            Text(text = text, style = MaterialTheme.typography.bodyMedium)
+        } else {
+            CompanionVoiceBubble(
+                text = text,
+                clip = voiceClip,
+                palette = palette,
+                onPrepare = onPrepareVoice,
+                onRegenerate = onRegenerateVoice,
+                onPlay = onPlayVoice
+            )
+        }
+        else -> {
+            // 引用标记是给程序看的，渲染前摘掉；引文本身留在正文里保持句子通顺。
+            val parsed = remember(text) { CompanionCitationParser.parse(text) }
+            if (entry.streaming) {
+                StreamingAiRichText(content = parsed.displayText, palette = palette)
+            } else {
+                AiRichText(content = parsed.displayText, palette = palette)
+            }
+            if (locatedCitations.isNotEmpty() && entry.isTail) {
+                CitationChips(
+                    citations = locatedCitations,
+                    palette = palette,
+                    onClick = onLocateCitation
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun BubbleAttachments(
+    message: MessageEntity,
+    palette: ReaderPalette,
+    context: android.content.Context
+) {
+    val attachments = remember(message.id) { MessageAttachment.decode(message.attachmentsJson) }
+    if (attachments.isEmpty()) return
+    Row(
+        modifier = Modifier.padding(bottom = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        attachments.forEach { attachment ->
+            if (attachment.type == MessageAttachment.TYPE_IMAGE) {
+                AsyncImage(
+                    model = java.io.File(context.filesDir, attachment.path),
+                    contentDescription = "图片附件",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(86.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(palette.glass, RoundedCornerShape(10.dp))
+                )
+            } else {
+                Surface(
+                    color = palette.glass,
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(1.dp, palette.glassBorder)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Outlined.Description,
+                            contentDescription = null,
+                            tint = palette.muted,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            attachment.name ?: "附件",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = palette.muted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(start = 4.dp)
+                        )
                     }
                 }
+            }
+        }
+    }
+}
+
+/** 气泡操作行：一枚浮出的玻璃胶囊，而不是五个散在气泡下的方钮。 */
+@Composable
+private fun BubbleActionBar(
+    palette: ReaderPalette,
+    fromUser: Boolean,
+    canReroll: Boolean,
+    onDismiss: () -> Unit,
+    onCopy: () -> Unit,
+    onSpeak: () -> Unit,
+    onEdit: () -> Unit,
+    onReroll: () -> Unit,
+    onBranch: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Surface(
+        color = palette.glassStrong,
+        shape = CircleShape,
+        border = BorderStroke(1.dp, palette.glassBorder),
+        shadowElevation = 3.dp,
+        modifier = Modifier.padding(top = 3.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            BubbleActionIcon(Icons.Outlined.ContentCopy, "复制", palette) {
+                onDismiss()
+                onCopy()
+            }
+            // 「朗读」是 AI 自主发语音之外的手动兜底：想听哪句，点哪句。
+            if (!fromUser) {
+                BubbleActionIcon(Icons.Outlined.VolumeUp, "朗读", palette) {
+                    onDismiss()
+                    onSpeak()
+                }
+            }
+            BubbleActionIcon(Icons.Outlined.Edit, "编辑", palette) {
+                onDismiss()
+                onEdit()
+            }
+            if (!fromUser && canReroll) {
+                BubbleActionIcon(Icons.Outlined.Refresh, "重新生成", palette) {
+                    onDismiss()
+                    onReroll()
+                }
+            }
+            BubbleActionIcon(Icons.Outlined.CallSplit, "从这里开分支", palette) {
+                onDismiss()
+                onBranch()
+            }
+            BubbleActionIcon(Icons.Outlined.Delete, "删除", palette) {
+                onDismiss()
+                onDelete()
             }
         }
     }
@@ -546,62 +539,18 @@ private fun BubbleActionIcon(
             icon,
             contentDescription = label,
             tint = palette.muted,
-            modifier = Modifier.size(17.dp)
+            modifier = Modifier.size(16.dp)
         )
     }
 }
 
-/** [streaming] 为 true 时按块级分段渲染，稳定段落不随新 token 重排。 */
-@Composable
-internal fun CompanionBubble(
-    text: String,
-    fromUser: Boolean,
-    palette: ReaderPalette,
-    streaming: Boolean = false,
-    appearance: PersonaChatAppearance = PersonaChatAppearance.DEFAULT,
-    fontFamily: FontFamily? = null
-) {
-    val style = chatBubbleStyleFor(appearance, fromUser, palette)
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = if (fromUser) Arrangement.End else Arrangement.Start
-    ) {
-        Surface(
-            modifier = Modifier.fillMaxWidth(0.86f),
-            color = style.container,
-            contentColor = style.content,
-            border = style.border,
-            shape = style.shape(fromUser)
-        ) {
-            ChatTextStyling(appearance, fontFamily) {
-            when {
-                fromUser -> Text(
-                    text = text,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
-                )
-                streaming -> StreamingAiRichText(
-                    content = text,
-                    palette = palette,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
-                )
-                else -> AiRichText(
-                    content = text,
-                    palette = palette,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
-                )
-            }
-            }
-        }
-    }
-}
 
 /** 「跳到原文」胶囊：一条引用一枚，点了退回阅读页并高亮那句话。 */
 @Composable
 private fun CitationChips(
-    citations: List<CompanionCitation>,
+    citations: List<LocatedCompanionCitation>,
     palette: ReaderPalette,
-    onClick: (CompanionCitation) -> Unit
+    onClick: (LocatedCompanionCitation) -> Unit
 ) {
     Column(
         modifier = Modifier.padding(top = 8.dp),
@@ -626,7 +575,7 @@ private fun CitationChips(
                         modifier = Modifier.size(13.dp)
                     )
                     Text(
-                        text = CompanionCitationParser.label(citation),
+                        text = CompanionCitationParser.label(citation.citation),
                         style = MaterialTheme.typography.labelSmall,
                         color = palette.muted,
                         maxLines = 1,

@@ -6,9 +6,12 @@ import com.mozhi.reader.core.database.entity.AiProviderEntity
 import java.io.ByteArrayOutputStream
 import java.util.Base64
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -42,6 +45,8 @@ class OpenAiMediaClient(
     private val base = normalizeBase(provider.baseUrl)
     private val mergedExtraJson = mergeExtraJson(provider.extraJson, model.extraJson)
     private val overrides = RequestOverrides.parse(mergedExtraJson)
+    private val isGmiRequestQueue = provider.baseUrl.contains("gmicloud.ai", ignoreCase = true) ||
+        model.endpointPath.contains("requestqueue", ignoreCase = true)
     private val isMiniMax = provider.adapter == AiProviderAdapter.MINIMAX ||
         provider.baseUrl.contains("minimax", ignoreCase = true) ||
         provider.baseUrl.contains("minimaxi", ignoreCase = true)
@@ -181,8 +186,8 @@ class OpenAiMediaClient(
     }
 
     /**
-     * OpenAI `/audio/speech` 与 MiniMax `/t2a_v2` 共用入口。参数为 null 时读取模型
-     * `extraJson.body` 的默认值；非 null 表示本次 Agent/用户调用显式覆盖。
+     * OpenAI `/audio/speech`、MiniMax `/t2a_v2` 与 GMI Request Queue 共用入口。
+     * 参数为 null 时读取模型 `extraJson.body` 的默认值；非 null 表示本次调用显式覆盖。
      */
     suspend fun synthesizeSpeech(
         text: String,
@@ -195,7 +200,9 @@ class OpenAiMediaClient(
         instruction: String? = null
     ): SynthesizedSpeech {
         require(text.isNotBlank()) { "朗读文本不能为空" }
-        return if (isMiniMax) {
+        return if (isGmiRequestQueue) {
+            synthesizeGmiCloud(text, voice, responseFormat, speed, volume, pitch, emotion, instruction)
+        } else if (isMiniMax) {
             synthesizeMiniMax(text, voice, responseFormat, speed, volume, pitch, emotion, instruction)
         } else {
             val fields = overrides.body.toMutableMap()
@@ -214,6 +221,218 @@ class OpenAiMediaClient(
                 ?.let { mapped -> fields[mapped.field] = JsonPrimitive(mapped.value) }
             val path = model.endpointPath.ifBlank { "/audio/speech" }
             executeBytes(httpClient, request(path, JsonObject(fields), accept = "*/*"))
+        }
+    }
+
+    private suspend fun synthesizeGmiCloud(
+        text: String,
+        voice: String?,
+        responseFormat: String?,
+        speed: Float?,
+        volume: Float?,
+        pitch: Int?,
+        emotion: String?,
+        instruction: String?
+    ): SynthesizedSpeech {
+        val defaults = overrides.body
+        val defaultPayload = defaults["payload"] as? JsonObject ?: JsonObject(emptyMap())
+        val performance = MiniMaxSpeechPerformanceMapper.map(emotion, instruction)
+        val format = responseFormat
+            ?: defaultPayload["format"]?.jsonPrimitive?.contentOrNull
+            ?: "mp3"
+        val payloadFields = defaultPayload.toMutableMap().apply {
+            put("text", JsonPrimitive(performance.applyToText(text)))
+            if (voice != null || "voice_id" !in this) {
+                put(
+                    "voice_id",
+                    JsonPrimitive(
+                        voice?.trim()?.takeIf(String::isNotEmpty)
+                            ?: "English_expressive_narrator"
+                    )
+                )
+            }
+            val baseSpeed = speed ?: get("speed")?.jsonPrimitive?.floatOrNull ?: 1f
+            val baseVolume = volume ?: get("vol")?.jsonPrimitive?.floatOrNull ?: 1f
+            val basePitch = pitch ?: get("pitch")?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+            put(
+                "speed",
+                JsonPrimitive((baseSpeed * performance.speedMultiplier).coerceIn(0.5f, 2f).toString())
+            )
+            put(
+                "vol",
+                JsonPrimitive((baseVolume * performance.volumeMultiplier).coerceIn(0f, 10f).toString())
+            )
+            put(
+                "pitch",
+                JsonPrimitive((basePitch + performance.pitchOffset).coerceIn(-12, 12).toString())
+            )
+            if (!emotion.isNullOrBlank() || !instruction.isNullOrBlank() || "emotion" !in this) {
+                EmotionDialectMapper.map(emotion, instruction, TtsEmotionDialect.GMI)
+                    ?.let { mapped -> put(mapped.field, JsonPrimitive(mapped.value)) }
+            }
+            put("format", JsonPrimitive(format))
+            if ("language_boost" !in this) put("language_boost", JsonPrimitive("auto"))
+            if ("audio_sample_rate" !in this) put("audio_sample_rate", JsonPrimitive("32000"))
+            if ("bitrate" !in this) put("bitrate", JsonPrimitive("128000"))
+            if ("channel" !in this) put("channel", JsonPrimitive("2"))
+        }
+        val fields = defaults.toMutableMap().apply {
+            put("model", JsonPrimitive(model.modelName))
+            put("payload", JsonObject(payloadFields))
+        }
+        val path = model.endpointPath.ifBlank { GMI_REQUEST_PATH }
+        var responseJson = parseGmiResponse(
+            execute(httpClient, request(path, JsonObject(fields)))
+        )
+        var requestId = gmiRequestId(responseJson)
+        repeat(GMI_MAX_POLL_ATTEMPTS) { attempt ->
+            val status = gmiStatus(responseJson)
+            if (status in GMI_FAILURE_STATES) {
+                throw AiClientException.Malformed(
+                    gmiErrorMessage(responseJson) ?: "GMI 语音合成失败"
+                )
+            }
+            gmiSpeechFrom(responseJson, format, requestId)?.let { return it }
+            if (status in GMI_SUCCESS_STATES) {
+                throw AiClientException.Malformed("GMI 任务已完成，但响应中没有音频")
+            }
+            if (requestId.isNullOrBlank()) {
+                throw AiClientException.Malformed("GMI 响应中没有任务 ID 或音频结果")
+            }
+            if (attempt > 0) delay(GMI_POLL_INTERVAL_MS)
+            responseJson = parseGmiResponse(execute(httpClient, gmiStatusRequest(path, requestId)))
+            requestId = gmiRequestId(responseJson) ?: requestId
+        }
+        throw AiClientException.Malformed("GMI 语音合成等待超时")
+    }
+
+    private fun parseGmiResponse(body: String): JsonElement = runCatching {
+        AiJson.parseToJsonElement(body)
+    }.getOrElse { throw AiClientException.Malformed("无法解析 GMI 语音响应") }
+
+    private fun gmiRequestId(element: JsonElement): String? {
+        val root = element as? JsonObject
+        listOf("request_id", "requestId", "id").forEach { key ->
+            (root?.get(key) as? JsonPrimitive)?.contentOrNull
+                ?.takeIf(String::isNotBlank)
+                ?.let { return it }
+        }
+        return findJsonString(element, setOf("request_id", "requestId"))
+    }
+
+    private fun gmiStatus(element: JsonElement): String =
+        findJsonString(element, setOf("status", "state"))?.trim()?.lowercase().orEmpty()
+
+    private fun gmiErrorMessage(element: JsonElement): String? =
+        findJsonString(element, setOf("message", "error_message", "errorMessage", "detail"))
+
+    private suspend fun gmiSpeechFrom(
+        element: JsonElement,
+        format: String,
+        requestId: String?
+    ): SynthesizedSpeech? {
+        val reference = findJsonString(
+            element,
+            setOf(
+                "audio_url", "audioUrl", "output_url", "outputUrl", "file_url", "fileUrl",
+                "url", "output", "result"
+            )
+        )
+        if (!reference.isNullOrBlank()) {
+            if (reference.startsWith("data:audio/", ignoreCase = true)) {
+                val comma = reference.indexOf(',')
+                if (comma > 0) {
+                    val mediaType = reference.substringAfter("data:").substringBefore(';')
+                    val bytes = decodeGmiAudio(reference.substring(comma + 1))
+                    return SynthesizedSpeech(bytes, mediaType, requestId)
+                }
+            }
+            if (reference.startsWith("https://", ignoreCase = true) ||
+                reference.startsWith("http://", ignoreCase = true)
+            ) {
+                return downloadSpeech(reference, format, requestId)
+            }
+        }
+        val encoded = findJsonString(
+            element,
+            setOf("audio_base64", "audioBase64", "base64", "audio")
+        )?.takeIf { value ->
+            !value.startsWith("http://", ignoreCase = true) &&
+                !value.startsWith("https://", ignoreCase = true)
+        } ?: return null
+        val bytes = decodeGmiAudio(encoded)
+        return SynthesizedSpeech(bytes, audioMediaType(format), requestId)
+    }
+
+    private fun findJsonString(element: JsonElement, keys: Set<String>): String? = when (element) {
+        is JsonObject -> {
+            keys.firstNotNullOfOrNull { key ->
+                (element[key] as? JsonPrimitive)?.contentOrNull?.takeIf(String::isNotBlank)
+            } ?: element.values.firstNotNullOfOrNull { child -> findJsonString(child, keys) }
+        }
+        is JsonArray -> element.firstNotNullOfOrNull { child -> findJsonString(child, keys) }
+        else -> null
+    }
+
+    private fun decodeGmiAudio(encoded: String): ByteArray {
+        val clean = encoded.filterNot(Char::isWhitespace)
+        require(clean.length <= MAX_AUDIO_BASE64_CHARS) { "生成语音超过 30 MB，已取消缓存" }
+        val bytes = runCatching { Base64.getDecoder().decode(clean) }
+            .getOrElse { throw AiClientException.Malformed("GMI 返回了无效的音频数据") }
+        if (bytes.isEmpty()) throw AiClientException.Empty()
+        require(bytes.size <= MAX_AUDIO_BYTES) { "生成语音超过 30 MB，已取消缓存" }
+        return bytes
+    }
+
+    private fun gmiStatusRequest(path: String, requestId: String): Request = Request.Builder()
+        .url("$base/${path.trimStart('/').trimEnd('/')}/$requestId")
+        .header("Authorization", "Bearer $apiKey")
+        .header("Accept", "application/json")
+        .apply { overrides.headers.forEach { (key, value) -> header(key, value) } }
+        .get()
+        .build()
+
+    private suspend fun downloadSpeech(
+        rawUrl: String,
+        format: String,
+        requestId: String?
+    ): SynthesizedSpeech = withContext(Dispatchers.IO) {
+        val url = rawUrl.toHttpUrlOrNull()
+            ?: throw AiClientException.Malformed("GMI 返回了无效的音频地址")
+        val isLocalHttp = url.scheme == "http" && url.host in LOCAL_IMAGE_HOSTS
+        require(url.isHttps || isLocalHttp) { "GMI 返回了不安全的音频地址" }
+        val baseUrl = base.toHttpUrlOrNull()
+        val sameOrigin = baseUrl != null && baseUrl.scheme == url.scheme &&
+            baseUrl.host == url.host && baseUrl.port == url.port
+        val request = Request.Builder()
+            .url(url)
+            .header("Accept", "audio/*")
+            .apply {
+                if (sameOrigin) {
+                    header("Authorization", "Bearer $apiKey")
+                    overrides.headers.forEach { (key, value) -> header(key, value) }
+                }
+            }
+            .get()
+            .build()
+        val response = try {
+            httpClient.newCall(request).execute()
+        } catch (error: Throwable) {
+            throw mapTransportError(error)
+        }
+        response.use {
+            if (!it.isSuccessful) throw httpError(it.code, "下载 GMI 语音失败")
+            val declaredLength = it.body.contentLength()
+            require(declaredLength < 0 || declaredLength <= MAX_AUDIO_BYTES) {
+                "生成语音超过 30 MB，已取消缓存"
+            }
+            val bytes = it.body.byteStream().use(::readAudioBytesLimited)
+            if (bytes.isEmpty()) throw AiClientException.Empty()
+            SynthesizedSpeech(
+                bytes = bytes,
+                mediaType = it.header("Content-Type") ?: audioMediaType(format),
+                generationId = requestId
+            )
         }
     }
 
@@ -434,7 +653,13 @@ class OpenAiMediaClient(
         const val MAX_IMAGE_BYTES = 30 * 1024 * 1024
         const val MAX_AUDIO_BYTES = 30 * 1024 * 1024
         const val MAX_AUDIO_ENCODED_CHARS = MAX_AUDIO_BYTES * 2 + 8
+        const val MAX_AUDIO_BASE64_CHARS = MAX_AUDIO_BYTES * 4 / 3 + 8
         const val MAX_IMAGE_BASE64_CHARS = MAX_IMAGE_BYTES * 4 / 3 + 8
+        const val GMI_REQUEST_PATH = "/api/v1/ie/requestqueue/apikey/requests"
+        const val GMI_POLL_INTERVAL_MS = 1_500L
+        const val GMI_MAX_POLL_ATTEMPTS = 80
+        val GMI_SUCCESS_STATES = setOf("success", "succeeded", "completed", "finished", "done")
+        val GMI_FAILURE_STATES = setOf("failed", "failure", "error", "cancelled", "canceled")
         val LOCAL_IMAGE_HOSTS = setOf("localhost", "127.0.0.1", "::1")
     }
 }

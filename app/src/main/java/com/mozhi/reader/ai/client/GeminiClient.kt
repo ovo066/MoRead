@@ -54,6 +54,8 @@ class GeminiClient(
     @Serializable
     internal data class Part(
         val text: String? = null,
+        /** true = 这段 text 是思维链摘要而不是回答正文（Gemini 2.5 起的 thought summary）。 */
+        val thought: Boolean? = null,
         @SerialName("inline_data") val inlineData: InlineData? = null,
         @SerialName("functionCall") val functionCall: FunctionCall? = null,
         @SerialName("functionResponse") val functionResponse: FunctionResponse? = null
@@ -134,8 +136,15 @@ class GeminiClient(
                         }.getOrNull() ?: return
                         val parts = chunk.candidates.firstOrNull()?.content?.parts.orEmpty()
                         parts.forEach { part ->
-                            part.text?.takeIf(String::isNotEmpty)
-                                ?.let { trySend(ChatDelta.Text(it)) }
+                            part.text?.takeIf(String::isNotEmpty)?.let { text ->
+                                trySend(
+                                    if (part.thought == true) {
+                                        ChatDelta.Reasoning(text)
+                                    } else {
+                                        ChatDelta.Text(text)
+                                    }
+                                )
+                            }
                             part.functionCall?.takeIf { it.name.isNotBlank() }?.let {
                                 pendingCalls.add(
                                     ToolCall(
@@ -171,6 +180,8 @@ class GeminiClient(
         val body = execute(plainClient, buildRequest(url, messages, emptyList(), options))
         val response = AiJson.decodeFromString(GenerateResponse.serializer(), body)
         return response.candidates.firstOrNull()?.content?.parts
+            // 思维链摘要不算回答：非流式调用（建议回复、批量总结）拿到的必须是干净正文。
+            ?.filter { it.thought != true }
             ?.mapNotNull { it.text }
             ?.joinToString("")
             ?.takeIf(String::isNotBlank)

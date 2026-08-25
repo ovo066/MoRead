@@ -290,9 +290,6 @@ fun MoReadApp(
                     }
                     ReadingAppearanceSettingsScreen(
                         onBack = navController::popBackStack,
-                        onOpenTtsSettings = { navController.navigate("tts-settings") },
-                        onOpenVoiceLibrary = { navController.navigate("tts-voices") },
-                        onOpenImageGenSettings = { navController.navigate("image-gen-settings") },
                         onOpenFontLibrary = { navController.navigate("font-library") },
                         onOpenImageLibrary = { navController.navigate("image-library") },
                         viewModel = hiltViewModel<SettingsViewModel>(settingsEntry)
@@ -308,6 +305,9 @@ fun MoReadApp(
                         onOpenWebSearch = { navController.navigate("web-search-settings") },
                         onOpenGlobalPresets = { navController.navigate("global-presets") },
                         onOpenUserMasks = { navController.navigate("user-masks") },
+                        onOpenTtsSettings = { navController.navigate("tts-settings") },
+                        onOpenVoiceLibrary = { navController.navigate("tts-voices") },
+                        onOpenImageGenSettings = { navController.navigate("image-gen-settings") },
                         viewModel = hiltViewModel<SettingsViewModel>(settingsEntry)
                     )
                 }
@@ -492,7 +492,6 @@ fun MoReadApp(
                     ListenPlayerScreen(
                         bookId = bookId,
                         onBack = navController::popBackStack,
-                        onOpenReader = { navController.navigate("reader/$it") },
                         onOpenVoiceLibrary = { navController.navigate("tts-voices") },
                         onOpenRoleAssignments = { navController.navigate("audiobook-roles/$it?source=listen") }
                     )

@@ -2,21 +2,26 @@ package com.mozhi.reader.feature.reader.render
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.BlurMaskFilter
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.util.LruCache
 import android.text.TextPaint
+import com.caverock.androidsvg.SVG
 import com.mozhi.reader.core.datastore.ReaderSyntaxFont
 import com.mozhi.reader.feature.reader.engine.TransientHighlightSpan
 import com.mozhi.reader.feature.reader.engine.ReaderAnnotationMark
 import com.mozhi.reader.feature.reader.engine.ReaderIllustrationMark
 import com.mozhi.reader.feature.reader.engine.RenderPage
+import com.mozhi.reader.feature.reader.engine.TextBlockDecoration
 import com.mozhi.reader.feature.reader.engine.annotationGeometry
-import com.mozhi.reader.feature.reader.engine.illustrationMarkers
+import com.mozhi.reader.feature.reader.engine.inlineMarkerLayout
+import java.io.File
 import java.util.Locale
 
 /**
@@ -54,6 +59,11 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
 
     private val syntaxPaints = HashMap<String, TextPaint>()
     private val syntaxBackgroundPaints = HashMap<Int, Paint>()
+    private val embeddedTypefaces = HashMap<String, Typeface?>()
+    private val epubDecorationPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val epubShadowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val epubBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    private val epubRulePaint = Paint(Paint.ANTI_ALIAS_FLAG)
     /** (style|colorTag) → Paint；样式实例随 pageStyle 重建，缓存不会跨主题存活。 */
     private val annotationInkPaints = HashMap<String, Paint>()
     private val transientHighlightPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -62,18 +72,26 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
     }
     private val annotationMarkerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = pageStyle.accentColor
+        style = Paint.Style.STROKE
+        strokeWidth = (pageStyle.tipSizePx * 0.11f).coerceAtLeast(1.5f)
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
     }
     private val annotationMarkerTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         textSize = pageStyle.tipSizePx * 0.82f
-        color = pageStyle.backgroundColor
+        color = pageStyle.accentColor
         textAlign = Paint.Align.CENTER
         typeface = Typeface.DEFAULT_BOLD
     }
     private val illustrationMarkerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = pageStyle.accentColor
+        style = Paint.Style.STROKE
+        strokeWidth = (pageStyle.tipSizePx * 0.11f).coerceAtLeast(1.5f)
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
     }
     private val illustrationGlyphPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = pageStyle.backgroundColor
+        color = pageStyle.accentColor
         style = Paint.Style.STROKE
         strokeWidth = (pageStyle.tipSizePx * 0.1f).coerceAtLeast(1.4f)
         strokeCap = Paint.Cap.ROUND
@@ -170,6 +188,8 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         clipBottom: Float = Float.POSITIVE_INFINITY
     ) {
         val markerRadius = (pageStyle.tipSizePx * 0.72f).coerceAtLeast(8f)
+        drawEpubPageBackground(canvas, page, clipTop, clipBottom)
+        drawEpubDecorations(canvas, page, clipTop, clipBottom)
         // 听书当前句底色画在批注高亮之下，两者重叠时批注色仍占主导。
         if (transientHighlight != null && transientHighlight.chapterIndex == page.chapterIndex) {
             val listenGeometry = page.page.annotationGeometry(
@@ -184,7 +204,7 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
                 ),
                 markerRadius = markerRadius,
                 markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.ANNOTATION_MARKER_GAP_RATIO,
-                maxRight = pageStyle.contentWidth + pageStyle.paddingRight * 0.9f
+                maxRight = pageStyle.contentWidth
             )
             listenGeometry.highlights.forEach { rect ->
                 if (rect.bottom < clipTop || rect.top > clipBottom) return@forEach
@@ -196,11 +216,12 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
                 )
             }
         }
-        val geometry = page.page.annotationGeometry(
+        val geometry = page.page.inlineMarkerLayout(
             annotations = annotations,
+            illustrations = illustrations,
             markerRadius = markerRadius,
             markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.ANNOTATION_MARKER_GAP_RATIO,
-            maxRight = pageStyle.contentWidth + pageStyle.paddingRight * 0.9f
+            maxRight = pageStyle.contentWidth
         )
         val markById = annotations.associateBy(ReaderAnnotationMark::id)
         // 荧光垫在正文之下；直线/波浪画在字形基线下沿，也一并先画（都在文字层之下不糊字形）
@@ -213,8 +234,22 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         val titlePaint = pageStyle.measure.titlePaint
         contentPaint.color = pageStyle.textColor
         titlePaint.color = pageStyle.textColor
-        for (line in page.page.lines) {
+        contentPaint.alpha = 255
+        titlePaint.alpha = 255
+        for ((lineIndex, line) in page.page.lines.withIndex()) {
             if (line.lineBottom < clipTop || line.lineTop > clipBottom) continue
+            val rule = line.rule
+            if (rule != null) {
+                epubRulePaint.color = rule.colorArgb
+                canvas.drawRect(
+                    line.startX,
+                    line.lineTop,
+                    line.startX + rule.width,
+                    line.lineTop + rule.height,
+                    epubRulePaint
+                )
+                continue
+            }
             val inlineImage = line.inlineImage
             if (inlineImage != null) {
                 drawInlineImage(
@@ -230,16 +265,42 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
                 )
                 continue
             }
+            line.inlineDecorations.forEach { decoration ->
+                drawEpubDecoration(canvas, decoration)
+            }
             val paint = if (line.isTitle) titlePaint else contentPaint
-            for (column in line.columns) {
+            line.rubyPlacements.forEach { ruby ->
+                val rubyPaint = syntaxPaint(
+                    base = paint,
+                    color = ruby.colorArgb ?: pageStyle.textColor,
+                    underline = false,
+                    title = line.isTitle,
+                    font = ReaderSyntaxFont.INHERIT,
+                    fontAssetId = null,
+                    bold = ruby.bold,
+                    italic = ruby.italic,
+                    strikethrough = false,
+                    textSizeScale = ruby.textSizeScale,
+                    fontFilePath = ruby.fontFilePath,
+                    fontFamily = ruby.fontFamily,
+                    opacity = ruby.opacity
+                )
+                val rubyX = ruby.left + (ruby.right - ruby.left - rubyPaint.measureText(ruby.text)) / 2f
+                canvas.drawText(ruby.text, rubyX, ruby.baseline, rubyPaint)
+            }
+            for ((columnIndex, column) in line.columns.withIndex()) {
+                if (column.inlineMarkerKind != null) continue
+                val columnStart = geometry.startFor(lineIndex, columnIndex, column)
+                val columnEnd = geometry.endFor(lineIndex, columnIndex, column)
                 column.syntaxBackgroundArgb?.let { color ->
-                    val backgroundPaint = syntaxBackgroundPaints.getOrPut(color) {
-                        Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color }
+                    val resolvedColor = color.withOpacity(column.opacity)
+                    val backgroundPaint = syntaxBackgroundPaints.getOrPut(resolvedColor) {
+                        Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = resolvedColor }
                     }
                     canvas.drawRect(
-                        column.start,
+                        columnStart,
                         line.lineTop,
-                        column.end,
+                        columnEnd,
                         line.lineBottom,
                         backgroundPaint
                     )
@@ -250,7 +311,11 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
                     column.syntaxFont != ReaderSyntaxFont.INHERIT ||
                     column.syntaxBold ||
                     column.syntaxItalic ||
-                    column.syntaxStrikethrough
+                    column.syntaxStrikethrough ||
+                    column.textSizeScale != 1f ||
+                    column.fontFilePath != null ||
+                    column.fontFamily != null ||
+                    column.opacity < 1f
                 ) {
                     syntaxPaint(
                         base = paint,
@@ -261,45 +326,86 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
                         fontAssetId = column.syntaxFontAssetId,
                         bold = column.syntaxBold,
                         italic = column.syntaxItalic,
-                        strikethrough = column.syntaxStrikethrough
+                        strikethrough = column.syntaxStrikethrough,
+                        textSizeScale = column.textSizeScale,
+                        fontFilePath = column.fontFilePath,
+                        fontFamily = column.fontFamily,
+                        opacity = column.opacity
                     )
                 } else {
                     paint
                 }
-                canvas.drawText(column.charData, column.start, line.lineBase, resolvedPaint)
+                canvas.drawText(
+                    column.charData,
+                    columnStart,
+                    line.lineBase + column.baselineShiftPx,
+                    resolvedPaint
+                )
             }
         }
         geometry.markers.forEach { marker ->
             if (marker.centerY + markerRadius < clipTop || marker.centerY - markerRadius > clipBottom) {
                 return@forEach
             }
-            canvas.drawCircle(marker.centerX, marker.centerY, markerRadius, annotationMarkerPaint)
-            val label = if (marker.annotationIds.size > 1) marker.annotationIds.size.toString() else "评"
+            when {
+                marker.annotationIds.isNotEmpty() -> drawAnnotationMarker(
+                    canvas,
+                    marker.centerX,
+                    marker.centerY,
+                    markerRadius,
+                    marker.annotationIds.size
+                )
+                marker.illustrationIds.isNotEmpty() -> drawIllustrationMarker(
+                    canvas,
+                    marker.centerX,
+                    marker.centerY,
+                    markerRadius
+                )
+            }
+        }
+    }
+
+    private fun drawAnnotationMarker(
+        canvas: Canvas,
+        centerX: Float,
+        centerY: Float,
+        radius: Float,
+        count: Int
+    ) {
+        val bubble = RectF(
+            centerX - radius * 0.78f,
+            centerY - radius * 0.62f,
+            centerX + radius * 0.78f,
+            centerY + radius * 0.48f
+        )
+        canvas.drawRoundRect(bubble, radius * 0.28f, radius * 0.28f, annotationMarkerPaint)
+        val tail = Path().apply {
+            moveTo(centerX - radius * 0.22f, bubble.bottom)
+            lineTo(centerX - radius * 0.34f, centerY + radius * 0.78f)
+            lineTo(centerX + radius * 0.05f, bubble.bottom)
+        }
+        canvas.drawPath(tail, annotationMarkerPaint)
+        if (count > 1) {
             canvas.drawText(
-                label,
-                marker.centerX,
-                marker.centerY - (annotationMarkerTextPaint.ascent() + annotationMarkerTextPaint.descent()) / 2f,
+                count.toString(),
+                centerX,
+                centerY - (annotationMarkerTextPaint.ascent() + annotationMarkerTextPaint.descent()) / 2f,
                 annotationMarkerTextPaint
             )
-        }
-        page.page.illustrationMarkers(
-            illustrations = illustrations,
-            markerRadius = markerRadius,
-            markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.ANNOTATION_MARKER_GAP_RATIO,
-            maxRight = pageStyle.contentWidth + pageStyle.paddingRight * 0.9f
-        ).forEach { marker ->
-            if (marker.centerY + markerRadius < clipTop || marker.centerY - markerRadius > clipBottom) {
-                return@forEach
-            }
-            drawIllustrationMarker(canvas, marker.centerX, marker.centerY, markerRadius)
+        } else {
+            val dotRadius = radius * 0.075f
+            val y = centerY - radius * 0.04f
+            canvas.drawCircle(centerX - radius * 0.25f, y, dotRadius, illustrationGlyphPaint)
+            canvas.drawCircle(centerX, y, dotRadius, illustrationGlyphPaint)
+            canvas.drawCircle(centerX + radius * 0.25f, y, dotRadius, illustrationGlyphPaint)
         }
     }
 
     /** 小图片符号：圆角相框 + 山景与太阳，保持位图渲染器不依赖 Compose 图标。 */
     private fun drawIllustrationMarker(canvas: Canvas, centerX: Float, centerY: Float, radius: Float) {
         val rect = RectF(centerX - radius, centerY - radius, centerX + radius, centerY + radius)
-        canvas.drawRoundRect(rect, radius * 0.38f, radius * 0.38f, illustrationMarkerPaint)
-        val inset = radius * 0.42f
+        canvas.drawRoundRect(rect, radius * 0.28f, radius * 0.28f, illustrationMarkerPaint)
+        val inset = radius * 0.26f
         val frame = RectF(rect.left + inset, rect.top + inset, rect.right - inset, rect.bottom - inset)
         canvas.drawRoundRect(frame, radius * 0.12f, radius * 0.12f, illustrationGlyphPaint)
         val mountain = Path().apply {
@@ -395,16 +501,29 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         fontAssetId: String?,
         bold: Boolean,
         italic: Boolean,
-        strikethrough: Boolean
+        strikethrough: Boolean,
+        textSizeScale: Float,
+        fontFilePath: String?,
+        fontFamily: String?,
+        opacity: Float
     ): TextPaint {
-        val key = "$title|$color|$underline|$font|$fontAssetId|$bold|$italic|$strikethrough"
+        val key = "$title|$color|$underline|$font|$fontAssetId|$bold|$italic|$strikethrough|" +
+            "$textSizeScale|$fontFilePath|$fontFamily|$opacity"
         return syntaxPaints.getOrPut(key) {
             TextPaint(base).apply {
-                this.color = color
+                this.color = color.withOpacity(opacity)
+                textSize = base.textSize * textSizeScale
                 isUnderlineText = underline
                 isStrikeThruText = strikethrough
                 val family = when (font) {
-                    ReaderSyntaxFont.INHERIT -> base.typeface
+                    ReaderSyntaxFont.INHERIT -> fontFilePath
+                        ?.let { path ->
+                            embeddedTypefaces.getOrPut(path) {
+                                runCatching { Typeface.createFromFile(File(path)) }.getOrNull()
+                            }
+                        }
+                        ?: fontFamily.toSystemTypeface()
+                        ?: base.typeface
                     ReaderSyntaxFont.SYSTEM -> Typeface.DEFAULT
                     ReaderSyntaxFont.SERIF -> Typeface.SERIF
                     ReaderSyntaxFont.SANS_SERIF -> Typeface.SANS_SERIF
@@ -419,6 +538,264 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
                 typeface = if (style == Typeface.NORMAL) family else Typeface.create(family, style)
             }
         }
+    }
+
+    private fun drawEpubPageBackground(
+        canvas: Canvas,
+        page: RenderPage.Laid,
+        clipTop: Float,
+        clipBottom: Float
+    ) {
+        if (page.page.backgroundColorArgb == null && page.page.backgroundImagePath == null) return
+        val destination = RectF(0f, 0f, pageStyle.contentWidth, pageStyle.contentHeight)
+        if (destination.bottom < clipTop || destination.top > clipBottom) return
+        page.page.backgroundColorArgb?.let { color ->
+            epubDecorationPaint.style = Paint.Style.FILL
+            epubDecorationPaint.color = color.withOpacity(page.page.backgroundOpacity)
+            canvas.drawRect(destination, epubDecorationPaint)
+        }
+        page.page.backgroundImagePath?.let { path ->
+            drawCoverImage(canvas, path, destination, page.page.backgroundOpacity)
+        }
+    }
+
+    private fun drawEpubDecorations(
+        canvas: Canvas,
+        page: RenderPage.Laid,
+        clipTop: Float,
+        clipBottom: Float
+    ) {
+        page.page.decorations.forEach { decoration ->
+            if (decoration.bottom < clipTop || decoration.top > clipBottom) return@forEach
+            drawEpubDecoration(canvas, decoration)
+        }
+    }
+
+    private fun drawEpubDecoration(canvas: Canvas, decoration: TextBlockDecoration) {
+        val rect = RectF(decoration.left, decoration.top, decoration.right, decoration.bottom)
+        if (rect.width() <= 0f || rect.height() <= 0f) return
+        val shape = decorationPath(decoration, rect)
+        drawDecorationShadows(canvas, decoration, rect, shape, inset = false)
+        decoration.backgroundColorArgb?.let { color ->
+            epubDecorationPaint.style = Paint.Style.FILL
+            epubDecorationPaint.color = color.withOpacity(decoration.opacity)
+            canvas.drawPath(shape, epubDecorationPaint)
+        }
+        decoration.backgroundImagePath?.let { path ->
+            drawCoverImage(canvas, path, rect, decoration.opacity, shape)
+        }
+        drawDecorationShadows(canvas, decoration, rect, shape, inset = true)
+        drawDecorationBorders(canvas, decoration, rect, shape)
+    }
+
+    private fun drawDecorationShadows(
+        canvas: Canvas,
+        decoration: TextBlockDecoration,
+        rect: RectF,
+        shape: Path,
+        inset: Boolean
+    ) {
+        decoration.boxShadows.asReversed().filter { it.inset == inset }.forEach { shadow ->
+            epubShadowPaint.color = shadow.colorArgb.withOpacity(decoration.opacity)
+            epubShadowPaint.maskFilter = shadow.blurRadius.takeIf { it > 0f }
+                ?.let { BlurMaskFilter(it, BlurMaskFilter.Blur.NORMAL) }
+            if (inset) {
+                epubShadowPaint.style = Paint.Style.STROKE
+                epubShadowPaint.strokeWidth = (
+                    shadow.blurRadius * 2f + shadow.spreadRadius * 2f
+                    ).coerceAtLeast(1f)
+                canvas.save()
+                canvas.clipPath(shape)
+                canvas.translate(shadow.offsetX, shadow.offsetY)
+                canvas.drawPath(shape, epubShadowPaint)
+                canvas.restore()
+            } else {
+                val shadowRect = RectF(rect).apply {
+                    inset(-shadow.spreadRadius, -shadow.spreadRadius)
+                    offset(shadow.offsetX, shadow.offsetY)
+                }
+                if (shadowRect.width() > 0f && shadowRect.height() > 0f) {
+                    val shadowDecoration = decoration.copy(
+                        borderRadius = (decoration.borderRadius + shadow.spreadRadius).coerceAtLeast(0f)
+                    )
+                    epubShadowPaint.style = Paint.Style.FILL
+                    canvas.save()
+                    canvas.clipOutPath(shape)
+                    canvas.drawPath(decorationPath(shadowDecoration, shadowRect), epubShadowPaint)
+                    canvas.restore()
+                }
+            }
+            epubShadowPaint.maskFilter = null
+        }
+    }
+
+    private fun decorationPath(decoration: TextBlockDecoration, rect: RectF): Path {
+        val topLeftRadius = if (decoration.drawTopEdge && decoration.drawLeftEdge) {
+            decoration.borderRadius
+        } else {
+            0f
+        }
+        val topRightRadius = if (decoration.drawTopEdge && decoration.drawRightEdge) {
+            decoration.borderRadius
+        } else {
+            0f
+        }
+        val bottomRightRadius = if (decoration.drawBottomEdge && decoration.drawRightEdge) {
+            decoration.borderRadius
+        } else {
+            0f
+        }
+        val bottomLeftRadius = if (decoration.drawBottomEdge && decoration.drawLeftEdge) {
+            decoration.borderRadius
+        } else {
+            0f
+        }
+        return Path().apply {
+            addRoundRect(
+                rect,
+                floatArrayOf(
+                    topLeftRadius, topLeftRadius,
+                    topRightRadius, topRightRadius,
+                    bottomRightRadius, bottomRightRadius,
+                    bottomLeftRadius, bottomLeftRadius
+                ),
+                Path.Direction.CW
+            )
+        }
+    }
+
+    private fun drawDecorationBorders(
+        canvas: Canvas,
+        decoration: TextBlockDecoration,
+        rect: RectF,
+        shape: Path
+    ) {
+        val fallbackColor = decoration.borderColorArgb ?: pageStyle.textColor
+        val widths = floatArrayOf(
+            decoration.borderTopWidth,
+            decoration.borderRightWidth,
+            decoration.borderBottomWidth,
+            decoration.borderLeftWidth
+        )
+        val colors = intArrayOf(
+            decoration.borderTopColorArgb ?: fallbackColor,
+            decoration.borderRightColorArgb ?: fallbackColor,
+            decoration.borderBottomColorArgb ?: fallbackColor,
+            decoration.borderLeftColorArgb ?: fallbackColor
+        )
+        val uniform = decoration.drawTopEdge && decoration.drawRightEdge &&
+            decoration.drawBottomEdge && decoration.drawLeftEdge &&
+            widths.all { kotlin.math.abs(it - widths[0]) < 0.01f } && colors.all { it == colors[0] }
+        if (uniform && widths[0] > 0f) {
+            epubBorderPaint.strokeWidth = widths[0]
+            epubBorderPaint.color = colors[0].withOpacity(decoration.opacity)
+            canvas.drawPath(shape, epubBorderPaint)
+            return
+        }
+
+        val topLeftRadius = if (decoration.drawTopEdge && decoration.drawLeftEdge) {
+            decoration.borderRadius
+        } else {
+            0f
+        }
+        val topRightRadius = if (decoration.drawTopEdge && decoration.drawRightEdge) {
+            decoration.borderRadius
+        } else {
+            0f
+        }
+        val bottomRightRadius = if (decoration.drawBottomEdge && decoration.drawRightEdge) {
+            decoration.borderRadius
+        } else {
+            0f
+        }
+        val bottomLeftRadius = if (decoration.drawBottomEdge && decoration.drawLeftEdge) {
+            decoration.borderRadius
+        } else {
+            0f
+        }
+        drawBorderLine(
+            canvas,
+            rect.left + topLeftRadius,
+            rect.top,
+            rect.right - topRightRadius,
+            rect.top,
+            widths[0].takeIf { decoration.drawTopEdge } ?: 0f,
+            colors[0],
+            decoration.opacity
+        )
+        drawBorderLine(
+            canvas,
+            rect.right,
+            rect.top + topRightRadius,
+            rect.right,
+            rect.bottom - bottomRightRadius,
+            widths[1].takeIf { decoration.drawRightEdge } ?: 0f,
+            colors[1],
+            decoration.opacity
+        )
+        drawBorderLine(
+            canvas,
+            rect.left + bottomLeftRadius,
+            rect.bottom,
+            rect.right - bottomRightRadius,
+            rect.bottom,
+            widths[2].takeIf { decoration.drawBottomEdge } ?: 0f,
+            colors[2],
+            decoration.opacity
+        )
+        drawBorderLine(
+            canvas,
+            rect.left,
+            rect.top + topLeftRadius,
+            rect.left,
+            rect.bottom - bottomLeftRadius,
+            widths[3].takeIf { decoration.drawLeftEdge } ?: 0f,
+            colors[3],
+            decoration.opacity
+        )
+    }
+
+    private fun drawBorderLine(
+        canvas: Canvas,
+        startX: Float,
+        startY: Float,
+        endX: Float,
+        endY: Float,
+        width: Float,
+        color: Int,
+        opacity: Float
+    ) {
+        if (width <= 0f) return
+        epubBorderPaint.strokeWidth = width
+        epubBorderPaint.color = color.withOpacity(opacity)
+        canvas.drawLine(startX, startY, endX, endY, epubBorderPaint)
+    }
+
+    private fun drawCoverImage(
+        canvas: Canvas,
+        path: String,
+        destination: RectF,
+        opacity: Float,
+        clipPath: Path? = null
+    ) {
+        val bitmap = loadImage(path, destination.width().toInt(), destination.height().toInt()) ?: return
+        val sourceAspect = bitmap.width.toFloat() / bitmap.height.coerceAtLeast(1)
+        val destinationAspect = destination.width() / destination.height().coerceAtLeast(1f)
+        val source = if (sourceAspect > destinationAspect) {
+            val width = (bitmap.height * destinationAspect).toInt().coerceAtLeast(1)
+            val left = (bitmap.width - width) / 2
+            Rect(left, 0, left + width, bitmap.height)
+        } else {
+            val height = (bitmap.width / destinationAspect).toInt().coerceAtLeast(1)
+            val top = (bitmap.height - height) / 2
+            Rect(0, top, bitmap.width, top + height)
+        }
+        canvas.save()
+        if (clipPath == null) canvas.clipRect(destination) else canvas.clipPath(clipPath)
+        imagePaint.alpha = (opacity.coerceIn(0f, 1f) * 255f).toInt()
+        canvas.drawBitmap(bitmap, source, destination, imagePaint)
+        imagePaint.alpha = 255
+        canvas.restore()
     }
 
     private fun drawInlineImage(
@@ -454,20 +831,28 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
     }
 
     private fun loadImage(path: String, targetWidth: Int, targetHeight: Int): Bitmap? {
-        imageCache.get(path)?.takeIf { !it.isRecycled }?.let { return it }
+        val cacheKey = if (path.endsWith(".svg", true)) {
+            "$path|${targetWidth.coerceAtLeast(1)}x${targetHeight.coerceAtLeast(1)}"
+        } else {
+            path
+        }
+        imageCache.get(cacheKey)?.takeIf { !it.isRecycled }?.let { return it }
         val bitmap = decodeImage(path, targetWidth, targetHeight) ?: return null
-        imageCache.put(path, bitmap)
+        imageCache.put(cacheKey, bitmap)
         return bitmap
     }
 
     /** 普通正文插图按目标尺寸采样，缓存由 renderer 生命周期托管。 */
     private fun decodeImage(path: String, targetWidth: Int, targetHeight: Int): Bitmap? {
+        if (path.endsWith(".svg", true)) return decodeSvg(path, targetWidth, targetHeight)
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         val readBounds = runCatching {
             BitmapFactory.decodeFile(path, bounds)
             true
         }.getOrDefault(false)
-        if (!readBounds || bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        if (!readBounds || bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+            return decodeSvg(path, targetWidth, targetHeight)
+        }
         var sample = 1
         val safeWidth = targetWidth.coerceAtLeast(1)
         val safeHeight = targetHeight.coerceAtLeast(1)
@@ -486,6 +871,42 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
             )
         }.getOrNull() ?: return null
         return bitmap
+    }
+
+    private fun decodeSvg(path: String, targetWidth: Int, targetHeight: Int): Bitmap? {
+        val svg = runCatching {
+            File(path).inputStream().buffered().use { input -> SVG.getFromInputStream(input) }
+        }.getOrNull() ?: return null
+        val viewBox = svg.documentViewBox
+        val intrinsicWidth = svg.documentWidth.takeIf { it.isFinite() && it > 0f }
+            ?: viewBox?.width()?.takeIf { it.isFinite() && it > 0f }
+            ?: targetWidth.coerceAtLeast(1).toFloat()
+        val intrinsicHeight = svg.documentHeight.takeIf { it.isFinite() && it > 0f }
+            ?: viewBox?.height()?.takeIf { it.isFinite() && it > 0f }
+            ?: targetHeight.coerceAtLeast(1).toFloat()
+        val requestedScale = kotlin.math.max(
+            targetWidth.coerceAtLeast(1) / intrinsicWidth,
+            targetHeight.coerceAtLeast(1) / intrinsicHeight
+        )
+        val dimensionScale = kotlin.math.min(
+            MAX_SVG_DIMENSION / intrinsicWidth,
+            MAX_SVG_DIMENSION / intrinsicHeight
+        )
+        val scale = kotlin.math.min(requestedScale, dimensionScale).coerceAtLeast(MIN_SVG_SCALE)
+        val pixelWidth = (intrinsicWidth * scale).toInt().coerceIn(1, MAX_SVG_DIMENSION)
+        val pixelHeight = (intrinsicHeight * scale).toInt().coerceIn(1, MAX_SVG_DIMENSION)
+        val bitmap = runCatching {
+            Bitmap.createBitmap(pixelWidth, pixelHeight, Bitmap.Config.ARGB_8888)
+        }.getOrNull() ?: return null
+        return runCatching {
+            svg.setDocumentWidth(pixelWidth.toFloat())
+            svg.setDocumentHeight(pixelHeight.toFloat())
+            svg.renderToCanvas(Canvas(bitmap))
+            bitmap
+        }.getOrElse {
+            bitmap.recycle()
+            null
+        }
     }
 
     fun release() {
@@ -574,6 +995,8 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
     private companion object {
         const val IMAGE_CACHE_KB = 32 * 1024
         const val IMAGE_CORNER_RADIUS = 12f
+        const val MAX_SVG_DIMENSION = 4096
+        const val MIN_SVG_SCALE = 0.01f
         const val ANNOTATION_HIGHLIGHT_RADIUS = 4f
         const val LISTEN_HIGHLIGHT_ID = -1L
     }
@@ -586,4 +1009,17 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         }
         return text.substring(0, end) + "…"
     }
+}
+
+private fun Int.withOpacity(opacity: Float): Int {
+    val alpha = (Color.alpha(this) * opacity.coerceIn(0f, 1f)).toInt().coerceIn(0, 255)
+    return Color.argb(alpha, Color.red(this), Color.green(this), Color.blue(this))
+}
+
+private fun String?.toSystemTypeface(): Typeface? = when {
+    this == null -> null
+    contains("mono", true) -> Typeface.MONOSPACE
+    contains("sans", true) || contains("黑体") -> Typeface.SANS_SERIF
+    contains("serif", true) || contains("宋体") || contains("明朝") -> Typeface.SERIF
+    else -> null
 }

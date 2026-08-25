@@ -27,11 +27,17 @@ data class ChatBubbleStyle(
     val border: BorderStroke?,
     val corner: Int
 ) {
-    /** 尖角朝向说话的一方，与常见 IM 一致。 */
-    fun shape(fromUser: Boolean) = if (fromUser) {
-        RoundedCornerShape(corner.dp, corner.dp, 5.dp, corner.dp)
-    } else {
-        RoundedCornerShape(corner.dp, corner.dp, corner.dp, 5.dp)
+    /**
+     * 尖角朝向说话的一方，与常见 IM 一致。
+     *
+     * [isTail] 为 false 时四角全圆：一个人连发几条时，只有最后一条带尖角，
+     * 中间几条圆着——这是 iMessage 的规则，也是让连发看起来像「一个人在说」
+     * 而不是「几个人各说一句」的关键。
+     */
+    fun shape(fromUser: Boolean, isTail: Boolean = true) = when {
+        !isTail -> RoundedCornerShape(corner.dp)
+        fromUser -> RoundedCornerShape(corner.dp, corner.dp, 5.dp, corner.dp)
+        else -> RoundedCornerShape(corner.dp, corner.dp, corner.dp, 5.dp)
     }
 }
 

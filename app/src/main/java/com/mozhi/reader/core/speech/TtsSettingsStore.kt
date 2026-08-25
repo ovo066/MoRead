@@ -16,21 +16,23 @@ import kotlinx.coroutines.flow.map
 enum class TtsEngineMode { SYSTEM, AI }
 enum class TtsSynthesisGranularity { SENTENCE, PARAGRAPH, CHAPTER }
 
-/** 独立 TTS API 的服务商预设：MiniMax 国内/海外域名不同，OpenAI 兼容走 /audio/speech。 */
-enum class TtsApiProvider { MINIMAX_CN, MINIMAX_INTL, OPENAI_COMPAT }
+/** 独立 TTS API 的服务商预设：MiniMax 直连、OpenAI 兼容与 GMI 请求队列。 */
+enum class TtsApiProvider { MINIMAX_CN, MINIMAX_INTL, OPENAI_COMPAT, GMI_CLOUD }
 
 fun TtsApiProvider.defaultBaseUrl(): String = when (this) {
     TtsApiProvider.MINIMAX_CN -> "https://api.minimaxi.com/v1"
     TtsApiProvider.MINIMAX_INTL -> "https://api.minimax.io/v1"
     TtsApiProvider.OPENAI_COMPAT -> "https://api.openai.com/v1"
+    TtsApiProvider.GMI_CLOUD -> "https://console.gmicloud.ai"
 }
 
 fun TtsApiProvider.defaultModel(): String = when (this) {
     TtsApiProvider.MINIMAX_CN, TtsApiProvider.MINIMAX_INTL -> "speech-2.8-hd"
     TtsApiProvider.OPENAI_COMPAT -> "gpt-4o-mini-tts"
+    TtsApiProvider.GMI_CLOUD -> "minimax-tts-speech-2.8-hd"
 }
 
-/** 语音朗读配置：引擎切换 + 双引擎各自的参数，替代散落在 extraJson 里的手写字段。 */
+/** 语音朗读配置：引擎切换 + 各云端协议参数，替代散落在 extraJson 里的手写字段。 */
 data class TtsSettings(
     val engineMode: TtsEngineMode = TtsEngineMode.AI,
     /** 系统 TTS 引擎包名；空 = 系统默认引擎（如用户设为 Multi TTS 即生效）。 */
@@ -46,7 +48,7 @@ data class TtsSettings(
     /** 以下为独立 TTS API 配置；填齐后优先于「模型分配」的 TTS 模型。 */
     val aiProvider: TtsApiProvider = TtsApiProvider.MINIMAX_CN,
     val aiBaseUrl: String = "",
-    /** MiniMax GroupId，可选；OpenAI 兼容服务忽略。 */
+    /** MiniMax GroupId，可选；OpenAI 兼容与 GMI 服务忽略。 */
     val aiGroupId: String = "",
     val aiModel: String = "",
     val allowAudioMixing: Boolean = false,
@@ -62,10 +64,18 @@ data class TtsSettings(
     /** Key 单独存 EncryptedSharedPreferences，可用性另行校验。 */
     val aiApiConfigured: Boolean get() = aiBaseUrl.isNotBlank() && aiModel.isNotBlank()
 
+    /** 是否按 GMI Request Queue 协议请求。 */
+    val aiIsGmiCloud: Boolean
+        get() = aiProvider == TtsApiProvider.GMI_CLOUD ||
+            aiBaseUrl.contains("gmicloud.ai", ignoreCase = true)
+
     /** 是否按 MiniMax t2a_v2 协议请求（自定义中转 URL 含 minimax 时也算）。 */
     val aiIsMiniMax: Boolean
-        get() = aiProvider != TtsApiProvider.OPENAI_COMPAT ||
-            aiBaseUrl.contains("minimax", ignoreCase = true)
+        get() = !aiIsGmiCloud && (
+            aiProvider == TtsApiProvider.MINIMAX_CN ||
+                aiProvider == TtsApiProvider.MINIMAX_INTL ||
+                aiBaseUrl.contains("minimax", ignoreCase = true)
+            )
 }
 
 @Singleton

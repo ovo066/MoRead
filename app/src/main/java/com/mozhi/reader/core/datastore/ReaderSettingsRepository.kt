@@ -846,14 +846,14 @@ class ReaderSettingsRepository @Inject constructor(
     }
 
     /**
-     * 伴读记忆的范围开关（Memory 2.0 第 5 节）。**默认全开**：记忆是陪伴感的地基，
-     * 且改动前的行为本就是跨书召回，默认关闭属于行为回退。偏好纯问答的用户关掉总开关即可。
+     * 伴读记忆的范围开关（Memory 2.0 第 5 节）。长期记忆默认开，跨书能力默认关；
+     * 用户主动开启后才允许跨书召回。
      */
     val companionMemorySettings: Flow<CompanionMemorySettings> = dataStore.data.map { preferences ->
         CompanionMemorySettings(
             longTermEnabled = preferences[Keys.CompanionLongTermMemory] ?: true,
-            crossBookEnabled = preferences[Keys.CompanionCrossBookMemory] ?: true,
-            crossBookChatSearchEnabled = preferences[Keys.CompanionCrossBookChatSearch] ?: true
+            crossBookEnabled = preferences[Keys.CompanionCrossBookMemory] ?: false,
+            crossBookChatSearchEnabled = preferences[Keys.CompanionCrossBookChatSearch] ?: false
         )
     }
 
@@ -890,6 +890,55 @@ class ReaderSettingsRepository @Inject constructor(
             it[Keys.LastAnnotationStyle] = style
             it[Keys.LastAnnotationColor] = colorTag
         }
+    }
+
+    /**
+     * 多气泡回复：AI 的输出按行拆成独立气泡，像真人分条发消息。默认关——
+     * 它会改变模型的输出风格（提示词要求短行），不该在用户不知情时生效。
+     */
+    val companionMultiBubbleEnabled: Flow<Boolean> =
+        dataStore.data.map { it[Keys.CompanionMultiBubble] ?: false }
+
+    suspend fun setCompanionMultiBubbleEnabled(value: Boolean) {
+        dataStore.edit { it[Keys.CompanionMultiBubble] = value }
+    }
+
+    /**
+     * agent 主动调用的总闸，见 [CompanionAutonomySettings]。全部默认关：
+     * 应用替用户花钱这件事必须他先点头。
+     */
+    val companionAutonomySettings: Flow<CompanionAutonomySettings> =
+        dataStore.data.map { preferences ->
+            CompanionAutonomySettings(
+                voiceRepliesEnabled = preferences[Keys.CompanionVoiceReplies] ?: false,
+                imageRepliesEnabled = preferences[Keys.CompanionImageReplies] ?: false,
+                proactiveAnnotationsEnabled =
+                    preferences[Keys.CompanionProactiveAnnotations] ?: false,
+                proactiveAnnotationVoiceEnabled =
+                    preferences[Keys.CompanionProactiveAnnotationVoice] ?: false,
+                proactiveAnnotationImageEnabled =
+                    preferences[Keys.CompanionProactiveAnnotationImage] ?: false
+            )
+        }
+
+    suspend fun setCompanionVoiceReplies(value: Boolean) {
+        dataStore.edit { it[Keys.CompanionVoiceReplies] = value }
+    }
+
+    suspend fun setCompanionImageReplies(value: Boolean) {
+        dataStore.edit { it[Keys.CompanionImageReplies] = value }
+    }
+
+    suspend fun setCompanionProactiveAnnotations(value: Boolean) {
+        dataStore.edit { it[Keys.CompanionProactiveAnnotations] = value }
+    }
+
+    suspend fun setCompanionProactiveAnnotationVoice(value: Boolean) {
+        dataStore.edit { it[Keys.CompanionProactiveAnnotationVoice] = value }
+    }
+
+    suspend fun setCompanionProactiveAnnotationImage(value: Boolean) {
+        dataStore.edit { it[Keys.CompanionProactiveAnnotationImage] = value }
     }
 
     private object Keys {
@@ -943,6 +992,15 @@ class ReaderSettingsRepository @Inject constructor(
         val CompanionCrossBookChatSearch = booleanPreferencesKey("companion_cross_book_chat_search")
         val LastAnnotationStyle = stringPreferencesKey("reader_annotation_last_style")
         val LastAnnotationColor = stringPreferencesKey("reader_annotation_last_color")
+        val CompanionMultiBubble = booleanPreferencesKey("companion_multi_bubble")
+        val CompanionVoiceReplies = booleanPreferencesKey("companion_voice_replies")
+        val CompanionImageReplies = booleanPreferencesKey("companion_image_replies")
+        val CompanionProactiveAnnotations =
+            booleanPreferencesKey("companion_proactive_annotations")
+        val CompanionProactiveAnnotationVoice =
+            booleanPreferencesKey("companion_proactive_annotation_voice")
+        val CompanionProactiveAnnotationImage =
+            booleanPreferencesKey("companion_proactive_annotation_image")
         val CustomThemes = stringPreferencesKey("reader_custom_themes")
         val ActiveCustomThemeId = longPreferencesKey("reader_active_custom_theme_id")
         val DayNightThemeAuto = booleanPreferencesKey("reader_theme_day_night_auto")

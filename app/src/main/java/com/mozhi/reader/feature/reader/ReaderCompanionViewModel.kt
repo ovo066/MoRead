@@ -14,9 +14,12 @@ import com.mozhi.reader.ai.client.AiClientException
 import com.mozhi.reader.ai.agent.MemoryScope
 import com.mozhi.reader.ai.memory.MemoryConsolidationScheduler
 import com.mozhi.reader.ai.embedding.BookEmbeddingProgress
+import com.mozhi.reader.ai.embedding.EmbeddingIndexStage
 import com.mozhi.reader.ai.embedding.EmbeddingProgressTracker
+import com.mozhi.reader.ai.media.AiMediaGenerationService
 import com.mozhi.reader.ai.persona.PersonaRepository
 import com.mozhi.reader.ai.prompt.CompanionContextBuilder
+import com.mozhi.reader.ai.prompt.ConversationShape
 import com.mozhi.reader.ai.search.WebSearchSettingsStore
 import com.mozhi.reader.core.database.entity.ConversationEntity
 import com.mozhi.reader.core.database.entity.MessageEntity
@@ -25,6 +28,8 @@ import com.mozhi.reader.core.database.entity.PersonaEntity
 import com.mozhi.reader.core.database.entity.chatAppearance
 import com.mozhi.reader.core.datastore.ReaderFontAsset
 import com.mozhi.reader.core.database.entity.enabledTools
+import com.mozhi.reader.core.datastore.CompanionAutonomySettings
+import com.mozhi.reader.core.datastore.ReaderSettings
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
 import com.mozhi.reader.core.di.ApplicationScope
 import com.mozhi.reader.core.datastore.UserMaskStore
@@ -34,9 +39,7 @@ import com.mozhi.reader.core.library.MessageAttachment
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
-import com.mozhi.reader.core.library.BookQuoteLocator
 import com.mozhi.reader.core.library.QuoteChapter
-import com.mozhi.reader.core.library.QuoteLocation
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.CoroutineScope
@@ -45,6 +48,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
@@ -60,7 +64,11 @@ data class AgentExecutionStep(
     val toolName: String,
     val displayName: String,
     val state: AgentStepState,
-    val detail: String = ""
+    val detail: String = "",
+    /** 模型给出的原始参数 JSON；界面用 ToolCallSummary 压成一行摘要。 */
+    val arguments: String = "{}",
+    /** 工具返回的结果预览（已截断），只在「过程」卡展开后显示。 */
+    val resultPreview: String = ""
 )
 
 /** 输入区待发送的附件（尚未落盘）；发送时经 AttachmentStore 压缩/保存。 */
@@ -68,6 +76,13 @@ data class PendingAttachment(
     val uri: Uri,
     val isImage: Boolean,
     val name: String
+)
+
+data class VoiceClipState(
+    val path: String? = null,
+    val loading: Boolean = false,
+    val missing: Boolean = false,
+    val failed: Boolean = false
 )
 
 /** 全屏聊天页顶栏与 sceneQuote 素材。 */
@@ -94,7 +109,11 @@ data class CompanionChatUiState(
     val conversationId: Long? = null,
     val conversations: List<ConversationEntity> = emptyList(),
     val messages: List<MessageEntity> = emptyList(),
+    /** 仅包含已在本书已读正文中实际命中的引用，按消息 id 索引。 */
+    val locatedCitations: Map<Long, List<LocatedCompanionCitation>> = emptyMap(),
     val streamingText: String? = null,
+    /** 本轮正在流的思维链；null = 该模型不产出 reasoning，界面整条不出现。 */
+    val streamingReasoning: String? = null,
     val isStreaming: Boolean = false,
     /** Status line while a tool runs, e.g. "正在检索书中原文…". */
     val toolStatus: String? = null,
@@ -110,6 +129,11 @@ data class CompanionChatUiState(
     val backgroundImagePath: String? = null,
     /** 共享字体库，供气泡按 [appearance] 的 fontId 取字体。 */
     val fontLibrary: List<ReaderFontAsset> = emptyList(),
+    /** 多气泡：AI 回复按行拆成独立气泡。 */
+    val multiBubbleEnabled: Boolean = false,
+    /** 「自主发语音」开关开着且当前角色已绑音色；两者缺一即为 false。 */
+    val voiceRepliesEnabled: Boolean = false,
+    val voiceClips: Map<String, VoiceClipState> = emptyMap(),
     val error: String? = null
 )
 
@@ -132,6 +156,7 @@ class ReaderCompanionViewModel @Inject constructor(
     private val attachmentStore: AttachmentStore,
     private val libraryRepository: LibraryRepository,
     private val suggestionService: ReplySuggestionService,
+    private val mediaService: AiMediaGenerationService,
     private val webSearchSettingsStore: WebSearchSettingsStore,
     private val userMaskStore: UserMaskStore,
     private val generationTracker: CompanionGenerationTracker,
@@ -154,15 +179,21 @@ class ReaderCompanionViewModel @Inject constructor(
      */
     private val streamBuffer = StringBuilder()
 
+    /** 思维链的真源，与 [streamBuffer] 同一纪律：只在节拍上发布快照，不逐 token 重组。 */
+    private val reasoningBuffer = StringBuilder()
+
     private data class SessionState(
         val conversationId: Long? = null,
         val conversations: List<ConversationEntity> = emptyList(),
         val messages: List<MessageEntity> = emptyList(),
+        val locatedCitations: Map<Long, List<LocatedCompanionCitation>> = emptyMap(),
         val streamingText: String? = null,
+        val streamingReasoning: String? = null,
         val isStreaming: Boolean = false,
         val toolStatus: String? = null,
         val executionSteps: List<AgentExecutionStep> = emptyList(),
         val suggestions: List<String> = emptyList(),
+        val voiceClips: Map<String, VoiceClipState> = emptyMap(),
         val error: String? = null
     )
 
@@ -200,13 +231,32 @@ class ReaderCompanionViewModel @Inject constructor(
             initialValue = CompanionChatContext()
         )
 
+    /** 界面用得到的开关：多气泡决定气泡怎么拆，语音决定语音气泡要不要合成。 */
+    private data class CompanionToggles(
+        val multiBubble: Boolean,
+        val autonomy: CompanionAutonomySettings
+    )
+
+    private val toggles = combine(
+        settingsRepository.companionMultiBubbleEnabled,
+        settingsRepository.companionAutonomySettings
+    ) { multiBubble, autonomy -> CompanionToggles(multiBubble, autonomy) }
+
     val uiState = combine(
         activePersona,
         session,
         embeddingProgress,
         settingsRepository.companionSpoilerProtectionEnabled,
-        settingsRepository.settings
-    ) { (personas, active), session, embedding, spoilerProtectionEnabled, readerSettings ->
+        settingsRepository.settings,
+        toggles
+    ) { values ->
+        @Suppress("UNCHECKED_CAST")
+        val (personas, active) = values[0] as Pair<List<PersonaEntity>, PersonaEntity?>
+        val session = values[1] as SessionState
+        val embedding = values[2] as BookEmbeddingProgress?
+        val spoilerProtectionEnabled = values[3] as Boolean
+        val readerSettings = values[4] as ReaderSettings
+        val toggles = values[5] as CompanionToggles
         val appearance = active?.chatAppearance() ?: PersonaChatAppearance.DEFAULT
         CompanionChatUiState(
             personas = personas,
@@ -214,7 +264,9 @@ class ReaderCompanionViewModel @Inject constructor(
             conversationId = session.conversationId,
             conversations = session.conversations,
             messages = session.messages,
+            locatedCitations = session.locatedCitations,
             streamingText = session.streamingText,
+            streamingReasoning = session.streamingReasoning,
             isStreaming = session.isStreaming,
             toolStatus = session.toolStatus,
             executionSteps = session.executionSteps,
@@ -226,6 +278,11 @@ class ReaderCompanionViewModel @Inject constructor(
                 .firstOrNull { it.id == appearance.backgroundImageId }
                 ?.filePath,
             fontLibrary = readerSettings.fontLibrary,
+            multiBubbleEnabled = toggles.multiBubble,
+            // 角色没绑音色就等于没有这项能力，界面也不该显示语音入口。
+            voiceRepliesEnabled = toggles.autonomy.voiceRepliesEnabled &&
+                active?.voiceId?.isNotBlank() == true,
+            voiceClips = session.voiceClips,
             error = session.error
         )
     }.stateIn(
@@ -274,8 +331,114 @@ class ReaderCompanionViewModel @Inject constructor(
         viewModelScope.launch { settingsRepository.setCompanionSpoilerProtectionEnabled(value) }
     }
 
+    fun setMultiBubbleEnabled(value: Boolean) {
+        viewModelScope.launch { settingsRepository.setCompanionMultiBubbleEnabled(value) }
+    }
+
+    /**
+     * 手动朗读某条气泡：AI 自主发语音之外的兜底入口。用当前角色绑定的音色合成，
+     * 命中缓存就直接播（同文本同音色永不重复计费）。
+     */
+    fun speak(text: String, onReady: (String) -> Unit) {
+        val book = bookId.value ?: return
+        val clean = text.trim().take(MAX_SPEAK_CHARS)
+        if (clean.isEmpty()) return
+        val persona = uiState.value.activePersona
+        viewModelScope.launch {
+            runCatching {
+                mediaService.synthesizeSpeech(
+                    bookId = book,
+                    text = clean,
+                    voiceId = persona?.voiceId?.takeIf(String::isNotBlank),
+                    emotion = persona?.voiceEmotion?.takeIf(String::isNotBlank)
+                )
+            }.onSuccess { onReady(it.path) }
+                .onFailure { error ->
+                    eventChannel.send(
+                        CompanionChatEvent.Message(error.userMessage())
+                    )
+                }
+        }
+    }
+
+    /** 历史语音先只查缓存；自主语音开启时才允许后台补合成。 */
+    fun prepareVoiceClip(key: String, text: String) {
+        if (session.value.voiceClips.containsKey(key)) return
+        loadVoiceClip(key, text, allowGenerate = uiState.value.voiceRepliesEnabled)
+    }
+
+    /** 用户点“重新合成”属于显式操作，不受自主语音开关约束。 */
+    fun regenerateVoiceClip(key: String, text: String) {
+        loadVoiceClip(key, text, allowGenerate = true)
+    }
+
+    private fun loadVoiceClip(key: String, text: String, allowGenerate: Boolean) {
+        val book = bookId.value ?: return
+        val persona = uiState.value.activePersona ?: return
+        if (persona.voiceId.isBlank()) {
+            session.value = session.value.copy(
+                voiceClips = session.value.voiceClips + (key to VoiceClipState(failed = true))
+            )
+            return
+        }
+        session.value = session.value.copy(
+            voiceClips = session.value.voiceClips + (key to VoiceClipState(loading = true))
+        )
+        viewModelScope.launch {
+            val cached = runCatching {
+                mediaService.peekCachedSpeech(
+                    bookId = book,
+                    text = text,
+                    voiceId = persona.voiceId,
+                    emotion = persona.voiceEmotion.takeIf(String::isNotBlank)
+                )
+            }.getOrNull()
+            val generated = if (cached == null && allowGenerate) {
+                runCatching {
+                    mediaService.synthesizeSpeech(
+                        bookId = book,
+                        text = text,
+                        voiceId = persona.voiceId,
+                        emotion = persona.voiceEmotion.takeIf(String::isNotBlank)
+                    )
+                }
+            } else {
+                null
+            }
+            val resolved = cached ?: generated?.getOrNull()
+            session.value = session.value.copy(
+                voiceClips = session.value.voiceClips + (
+                    key to when {
+                        resolved != null -> VoiceClipState(path = resolved.path)
+                        generated?.isFailure == true -> VoiceClipState(failed = true)
+                        else -> VoiceClipState(missing = true)
+                    }
+                )
+            )
+        }
+    }
+
+    /**
+     * 用户显式要一张插图。走 requiredTools 强制注册 generate_image——
+     * 这是用户点的按钮，不受「自主生图」开关约束（那个管的是 AI 自己决定的调用）。
+     */
+    fun requestIllustration(sceneQuote: String) {
+        sendWithRequiredTools(
+            text = "请为我当前读到的场景画一张插图：先确认我的阅读进度与场景，再调用 generate_image 生成并保存。",
+            sceneQuote = sceneQuote,
+            requiredTools = setOf("get_reading_progress", "generate_image")
+        )
+    }
+
     fun retryEmbedding() {
-        bookId.value?.let(embeddingProgressTracker::retry)
+        val book = bookId.value ?: return
+        viewModelScope.launch {
+            if (uiState.value.embeddingProgress?.stage == EmbeddingIndexStage.DISABLED) {
+                embeddingProgressTracker.enable(book)
+            } else {
+                embeddingProgressTracker.retry(book)
+            }
+        }
     }
 
     fun newConversation() {
@@ -464,9 +627,11 @@ class ReaderCompanionViewModel @Inject constructor(
         // 也可能是上一次进来时留下的后台生成：那时本 ViewModel 手里没有它的 Job。
         conversationId?.let(generationTracker::cancel)
         streamBuffer.setLength(0)
+        reasoningBuffer.setLength(0)
         session.value = session.value.copy(
             isStreaming = false,
             streamingText = null,
+            streamingReasoning = null,
             toolStatus = null
         )
         if (partial.isNotBlank() && conversationId != null) {
@@ -543,10 +708,12 @@ class ReaderCompanionViewModel @Inject constructor(
         streamJob?.cancel()
         suggestionJob?.cancel()
         streamBuffer.setLength(0)
+        reasoningBuffer.setLength(0)
         session.value = session.value.copy(
             conversationId = conversationId,
             messages = emptyList(),
             streamingText = null,
+            streamingReasoning = null,
             // 上一次离开时这轮生成可能还在后台跑；接着显示等待态，也别让用户再发一条。
             isStreaming = generationTracker.isActive(conversationId),
             toolStatus = null,
@@ -585,13 +752,70 @@ class ReaderCompanionViewModel @Inject constructor(
     private fun observeMessages(conversationId: Long) {
         messagesJob?.cancel()
         messagesJob = viewModelScope.launch {
-            chatRepository.observeMessages(conversationId).collect { messages ->
+            chatRepository.observeMessages(conversationId).collectLatest { messages ->
                 // 保留隐藏 tool 管道，界面会把它重建为可折叠执行时间线；system 仍不展示。
+                val visibleMessages = messages.filter { it.role != "system" }
                 session.value = session.value.copy(
-                    messages = messages.filter { it.role != "system" }
+                    messages = visibleMessages,
+                    locatedCitations = emptyMap()
                 )
+                val located = try {
+                    locateMessageCitations(visibleMessages)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    emptyMap()
+                }
+                if (session.value.conversationId == conversationId && session.value.messages == visibleMessages) {
+                    session.value = session.value.copy(locatedCitations = located)
+                }
             }
         }
+    }
+
+    private suspend fun locateMessageCitations(
+        messages: List<MessageEntity>
+    ): Map<Long, List<LocatedCompanionCitation>> {
+        val candidates = messages.mapNotNull { message ->
+            if (message.role != "assistant") return@mapNotNull null
+            CompanionCitationParser.parse(message.content).citations
+                .takeIf { it.isNotEmpty() }
+                ?.let { message.id to it }
+        }
+        if (candidates.isEmpty()) return emptyMap()
+
+        val currentBookId = bookId.value ?: return emptyMap()
+        val book = libraryRepository.getBook(currentBookId) ?: return emptyMap()
+        val chapters = libraryRepository.getChapters(currentBookId)
+            .filter { it.chapterIndex <= book.lastReadChapterIndex }
+        val requestedChapterIndexes = candidates
+            .flatMap { (_, citations) -> citations.mapNotNull { it.chapterNumber?.minus(1) } }
+            .toSet()
+        val (requestedChapters, remainingChapters) = chapters.partition {
+            it.chapterIndex in requestedChapterIndexes
+        }
+        val orderedChapters = requestedChapters + remainingChapters
+        var scannedChars = 0
+        val quoteChapters = buildList {
+            orderedChapters.forEach { chapter ->
+                val explicitlyRequested = chapter.chapterIndex in requestedChapterIndexes
+                if (!explicitlyRequested && scannedChars >= MAX_LOCATE_CHARS) return@forEach
+                val fullText = libraryRepository.readChapterText(currentBookId, chapter)
+                val readableText = if (chapter.chapterIndex == book.lastReadChapterIndex) {
+                    fullText.take(book.lastReadCharOffset.coerceIn(0, fullText.length))
+                } else {
+                    fullText
+                }
+                scannedChars += readableText.length
+                add(QuoteChapter(chapter.chapterIndex, readableText))
+            }
+        }
+
+        return candidates.mapNotNull { (messageId, citations) ->
+            CompanionCitationVerifier.locate(citations, quoteChapters)
+                .takeIf { it.isNotEmpty() }
+                ?.let { messageId to it }
+        }.toMap()
     }
 
     private fun stream(
@@ -610,12 +834,14 @@ class ReaderCompanionViewModel @Inject constructor(
             session.value = session.value.copy(
                 isStreaming = true,
                 streamingText = "",
+                streamingReasoning = null,
                 toolStatus = null,
                 executionSteps = emptyList(),
                 suggestions = emptyList(),
                 error = null
             )
             streamBuffer.setLength(0)
+            reasoningBuffer.setLength(0)
             val ticker = viewModelScope.launchStreamingTicker(::publishStreamingSnapshot)
             try {
                 val webSearchEnabled = webSearchSettingsStore.current().enabled
@@ -623,6 +849,10 @@ class ReaderCompanionViewModel @Inject constructor(
                     .companionSpoilerProtectionEnabled
                     .first()
                 val memorySettings = settingsRepository.companionMemorySettings.first()
+                val autonomy = settingsRepository.companionAutonomySettings.first()
+                val multiBubble = settingsRepository.companionMultiBubbleEnabled.first()
+                // 语音要「开关开着」且「这个角色真绑了音色」两个条件都成立才算有这项能力。
+                val voiceEnabled = autonomy.voiceRepliesEnabled && persona.voiceId.isNotBlank()
                 val enabledTools = CompanionToolRouter.select(
                     userText = memoryQuery ?: session.value.messages
                         .lastOrNull { it.role == "user" }
@@ -633,7 +863,15 @@ class ReaderCompanionViewModel @Inject constructor(
                     requiredTools = requiredTools,
                     webSearchEnabled = webSearchEnabled,
                     longTermMemoryEnabled = memorySettings.longTermEnabled && persona.memoryEnabled
-                )
+                ).let { selected ->
+                    // 自主生图关着就直接把工具摘掉：留一个用了会被拒的工具只会诱导模型去调。
+                    // 用户在扩展面板里显式点「生成插图」时走 requiredTools，不受此限。
+                    if (autonomy.imageRepliesEnabled || "generate_image" in requiredTools) {
+                        selected
+                    } else {
+                        selected - "generate_image"
+                    }
+                }
                 val tools = readerToolset.forBook(
                     bookId = book,
                     personaId = persona.id,
@@ -651,7 +889,11 @@ class ReaderCompanionViewModel @Inject constructor(
                     bookId = book,
                     scene = sceneQuote.takeIf(String::isNotBlank),
                     memoryQuery = memoryQuery,
-                    spoilerProtectionEnabled = spoilerProtectionEnabled
+                    spoilerProtectionEnabled = spoilerProtectionEnabled,
+                    conversationShape = ConversationShape(
+                        multiBubble = multiBubble,
+                        voiceEnabled = voiceEnabled
+                    )
                 )
                 agentLoop.run(conversationId, tools, systemPrompt).collect { event ->
                     when (event) {
@@ -662,8 +904,10 @@ class ReaderCompanionViewModel @Inject constructor(
                                 session.value = session.value.copy(toolStatus = null)
                             }
                         }
+                        is AgentEvent.Reasoning -> reasoningBuffer.append(event.text)
                         is AgentEvent.RoundCommitted -> {
                             streamBuffer.setLength(0)
+                            reasoningBuffer.setLength(0)
                             val messages = session.value.messages
                             session.value = session.value.copy(
                                 messages = if (messages.any { it.id == event.message.id }) {
@@ -671,7 +915,8 @@ class ReaderCompanionViewModel @Inject constructor(
                                 } else {
                                     messages + event.message
                                 },
-                                streamingText = ""
+                                streamingText = "",
+                                streamingReasoning = null
                             )
                         }
                         is AgentEvent.ToolRun -> session.value = session.value.copy(
@@ -681,7 +926,8 @@ class ReaderCompanionViewModel @Inject constructor(
                                 callId = event.callId,
                                 toolName = event.toolName,
                                 displayName = event.displayName,
-                                state = AgentStepState.RUNNING
+                                state = AgentStepState.RUNNING,
+                                arguments = event.arguments
                             )
                         )
                         is AgentEvent.ToolFinished -> session.value = session.value.copy(
@@ -694,7 +940,8 @@ class ReaderCompanionViewModel @Inject constructor(
                                         } else {
                                             AgentStepState.FAILED
                                         },
-                                        detail = event.detail
+                                        detail = event.detail,
+                                        resultPreview = event.resultPreview
                                     )
                                 } else {
                                     step
@@ -711,9 +958,11 @@ class ReaderCompanionViewModel @Inject constructor(
                 }
                 memoryScheduler.afterTurn(conversationId)
                 streamBuffer.setLength(0)
+                reasoningBuffer.setLength(0)
                 session.value = session.value.copy(
                     isStreaming = false,
                     streamingText = null,
+                    streamingReasoning = null,
                     toolStatus = null
                 )
                 refreshSuggestions(persona, conversationId)
@@ -724,6 +973,8 @@ class ReaderCompanionViewModel @Inject constructor(
                     isStreaming = false,
                     toolStatus = null,
                     streamingText = streamBuffer.toString().takeIf(String::isNotBlank),
+                    // 失败时思维链尤其有用：它常常说明模型卡在了哪一步。
+                    streamingReasoning = reasoningBuffer.toString().takeIf(String::isNotBlank),
                     error = error.userMessage()
                 )
             } finally {
@@ -735,58 +986,17 @@ class ReaderCompanionViewModel @Inject constructor(
         streamJob?.let { generationTracker.begin(conversationId, it) }
     }
 
-    /**
-     * 「跳到原文」：把引文在书里定位成 (章, 字符偏移)。
-     *
-     * 先只翻模型点名的那一章——命中率最高、代价最小；不中再退回扫描已读范围内的章节，
-     * 并对总字符数设上限：一本 200MB 的 TXT 全量载入内存只为找一句话是不划算的。
-     */
-    fun locate(citation: CompanionCitation) {
-        val book = bookId.value ?: return
+    /** 引用胶囊展示前已经完成定位，点击时只分发坐标，不再重复扫描正文。 */
+    fun locate(citation: LocatedCompanionCitation) {
         viewModelScope.launch {
-            val located = runCatching { resolveCitation(book, citation) }.getOrNull()
-            if (located == null) {
-                eventChannel.send(CompanionChatEvent.Message("这段原文没能在书中定位到"))
-            } else {
-                eventChannel.send(
-                    CompanionChatEvent.LocateInBook(
-                        chapterIndex = located.chapterIndex,
-                        startCharOffset = located.startCharOffset,
-                        endCharOffset = located.endCharOffset
-                    )
+            eventChannel.send(
+                CompanionChatEvent.LocateInBook(
+                    chapterIndex = citation.chapterIndex,
+                    startCharOffset = citation.startCharOffset,
+                    endCharOffset = citation.endCharOffset
                 )
-            }
+            )
         }
-    }
-
-    private suspend fun resolveCitation(
-        book: Long,
-        citation: CompanionCitation
-    ): QuoteLocation? {
-        val chapters = libraryRepository.getChapters(book)
-        val hintedIndex = citation.chapterNumber?.minus(1)
-        hintedIndex
-            ?.let { index -> chapters.firstOrNull { it.chapterIndex == index } }
-            ?.let { chapter ->
-                val body = libraryRepository.readChapterText(book, chapter)
-                BookQuoteLocator
-                    .locateBest(listOf(QuoteChapter(chapter.chapterIndex, body)), citation.quote)
-                    ?.let { return it }
-            }
-
-        val readableThrough = libraryRepository.getBook(book)?.lastReadChapterIndex ?: 0
-        var scanned = 0
-        val candidates = buildList {
-            chapters
-                .filter { it.chapterIndex <= readableThrough && it.chapterIndex != hintedIndex }
-                .forEach { chapter ->
-                    if (scanned >= MAX_LOCATE_CHARS) return@forEach
-                    val body = libraryRepository.readChapterText(book, chapter)
-                    scanned += body.length
-                    add(QuoteChapter(chapter.chapterIndex, body))
-                }
-        }
-        return BookQuoteLocator.locateBest(candidates, citation.quote, hintedIndex)
     }
 
     /** 节拍器回调：把缓冲区快照发布给 UI，仅在流式进行且内容变化时触发重组。 */
@@ -794,8 +1004,9 @@ class ReaderCompanionViewModel @Inject constructor(
         val current = session.value
         if (!current.isStreaming) return
         val text = streamBuffer.toString()
-        if (current.streamingText != text) {
-            session.value = current.copy(streamingText = text)
+        val reasoning = reasoningBuffer.toString().takeIf(String::isNotBlank)
+        if (current.streamingText != text || current.streamingReasoning != reasoning) {
+            session.value = current.copy(streamingText = text, streamingReasoning = reasoning)
         }
     }
 
@@ -817,5 +1028,7 @@ class ReaderCompanionViewModel @Inject constructor(
         const val CONVERSATION_TYPE = "COMPANION"
         /** 定位兜底扫描的字符上限：约 60 万字，足够覆盖绝大多数书的已读部分。 */
         const val MAX_LOCATE_CHARS = 600_000
+        /** 手动朗读单条气泡的字数上限：再长就不是「听一句」了。 */
+        const val MAX_SPEAK_CHARS = 2_000
     }
 }

@@ -234,7 +234,7 @@ class MemoryConsolidator @Inject constructor(
                     personaId,
                     vector,
                     NEIGHBOUR_TOP_K,
-                    null,
+                    bookId,
                     batch.maskId
                 ).map { it.get() }
             }.getOrDefault(emptyList())
@@ -322,8 +322,12 @@ class MemoryConsolidator @Inject constructor(
                 }
                 is MemoryOperation.Update -> {
                     val existing = box.get(operation.id)
-                    // 只改自己角色的记忆；模型给了别人的 id 一律忽略而不是跨角色改写。
-                    if (existing == null || existing.personaId != personaId) return@forEach
+                    // 只改当前角色、当前书、当前面具的记忆，避免相似内容跨书互相覆盖。
+                    if (existing == null ||
+                        existing.personaId != personaId ||
+                        existing.bookId != bookId ||
+                        existing.maskId != maskId
+                    ) return@forEach
                     existing.summary = operation.summary
                     existing.createdAt = now + written
                     // 被本批取代的旧条目改挂到本批，重跑同批时幂等检查才认得出它。
@@ -340,7 +344,11 @@ class MemoryConsolidator @Inject constructor(
                 }
                 is MemoryOperation.Delete -> {
                     val existing = box.get(operation.id)
-                    if (existing != null && existing.personaId == personaId) {
+                    if (existing != null &&
+                        existing.personaId == personaId &&
+                        existing.bookId == bookId &&
+                        existing.maskId == maskId
+                    ) {
                         deletions += operation.id
                     }
                 }

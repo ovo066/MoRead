@@ -40,7 +40,8 @@ class AnnotationRepository @Inject constructor(
         selectedText: String,
         note: String = "",
         colorTag: String = "",
-        style: AnnotationStyle = AnnotationStyle.HIGHLIGHT
+        style: AnnotationStyle = AnnotationStyle.HIGHLIGHT,
+        mediaJson: String = "{}"
     ): Long {
         require(chapterIndex >= 0) { "章节索引不合法" }
         require(startCharOffset in 0 until endCharOffset) { "批注选区为空" }
@@ -55,6 +56,7 @@ class AnnotationRepository @Inject constructor(
                 note = note,
                 colorTag = colorTag,
                 style = style.wire,
+                mediaJson = mediaJson,
                 createdAt = System.currentTimeMillis()
             )
         )
@@ -93,7 +95,8 @@ class AnnotationRepository @Inject constructor(
         annotationId: Long,
         personaId: Long?,
         contentMarkdown: String,
-        replyToId: Long? = null
+        replyToId: Long? = null,
+        mediaJson: String = "{}"
     ): Long {
         require(contentMarkdown.isNotBlank()) { "回复内容为空" }
         return annotationDao.insertReply(
@@ -102,6 +105,7 @@ class AnnotationRepository @Inject constructor(
                 personaId = personaId,
                 replyToId = replyToId,
                 contentMarkdown = contentMarkdown.trim(),
+                mediaJson = mediaJson,
                 createdAt = System.currentTimeMillis()
             )
         )

@@ -63,7 +63,7 @@ import com.mozhi.reader.feature.reader.engine.TextPage
 import com.mozhi.reader.feature.reader.engine.annotationGeometry
 import com.mozhi.reader.feature.reader.engine.dragSelectionHandle
 import com.mozhi.reader.feature.reader.engine.hitTextPos
-import com.mozhi.reader.feature.reader.engine.illustrationMarkers
+import com.mozhi.reader.feature.reader.engine.inlineMarkerLayout
 import com.mozhi.reader.feature.reader.engine.selectionBodyRange
 import com.mozhi.reader.feature.reader.engine.selectionRects
 import com.mozhi.reader.feature.reader.engine.textPosAtBodyOffset
@@ -832,14 +832,16 @@ private class ScrollPaneHolder(private val controller: ReaderContentController) 
         val currentStyle = style ?: return emptyList()
         val hit = resolve(position) ?: return emptyList()
         val markerRadius = (currentStyle.tipSizePx * 0.72f).coerceAtLeast(8f)
-        val geometry = hit.page.annotationGeometry(
-            annotations.filter { it.chapterIndex == hit.chapterIndex },
+        val geometry = hit.page.inlineMarkerLayout(
+            annotations = annotations.filter { it.chapterIndex == hit.chapterIndex },
+            illustrations = illustrations.filter { it.chapterIndex == hit.chapterIndex },
             markerRadius = markerRadius,
             markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.ANNOTATION_MARKER_GAP_RATIO,
-            maxRight = currentStyle.contentWidth + currentStyle.paddingRight * 0.9f
+            maxRight = currentStyle.contentWidth
         )
         val hitRadius = (currentStyle.tipSizePx * 1.35f).coerceAtLeast(18f)
         geometry.markers.firstOrNull { marker ->
+            if (marker.annotationIds.isEmpty()) return@firstOrNull false
             val dx = hit.local.x - marker.centerX
             val dy = hit.local.y - marker.centerY
             dx * dx + dy * dy <= hitRadius * hitRadius
@@ -856,14 +858,16 @@ private class ScrollPaneHolder(private val controller: ReaderContentController) 
         val currentStyle = style ?: return emptyList()
         val hit = resolve(position) ?: return emptyList()
         val markerRadius = (currentStyle.tipSizePx * 0.72f).coerceAtLeast(8f)
-        val markers = hit.page.illustrationMarkers(
-            illustrations.filter { it.chapterIndex == hit.chapterIndex },
-            markerRadius,
-            markerRadius * com.mozhi.reader.feature.reader.engine.ANNOTATION_MARKER_GAP_RATIO,
-            currentStyle.contentWidth + currentStyle.paddingRight * 0.9f
+        val markers = hit.page.inlineMarkerLayout(
+            annotations = annotations.filter { it.chapterIndex == hit.chapterIndex },
+            illustrations = illustrations.filter { it.chapterIndex == hit.chapterIndex },
+            markerRadius = markerRadius,
+            markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.ANNOTATION_MARKER_GAP_RATIO,
+            maxRight = currentStyle.contentWidth
         )
         val hitRadius = (currentStyle.tipSizePx * 1.35f).coerceAtLeast(18f)
-        return markers.firstOrNull { marker ->
+        return markers.markers.firstOrNull { marker ->
+            if (marker.illustrationIds.isEmpty()) return@firstOrNull false
             val dx = hit.local.x - marker.centerX
             val dy = hit.local.y - marker.centerY
             dx * dx + dy * dy <= hitRadius * hitRadius

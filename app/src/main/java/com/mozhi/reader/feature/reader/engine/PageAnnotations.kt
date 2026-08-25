@@ -54,14 +54,42 @@ data class IllustrationMarker(
     val centerY: Float
 )
 
+data class InlineMarker(
+    val lineIndex: Int,
+    val afterColumnIndex: Int,
+    val annotationIds: List<Long> = emptyList(),
+    val illustrationIds: List<Long> = emptyList(),
+    val centerX: Float,
+    val centerY: Float,
+    val occupiedWidth: Float
+)
+
+data class PageInlineMarkerLayout(
+    val highlights: List<AnnotationHighlightRect>,
+    val markers: List<InlineMarker>,
+    private val columnShifts: Map<Int, FloatArray>,
+    private val lineScales: Map<Int, Float>
+) {
+    fun shiftFor(lineIndex: Int, columnIndex: Int): Float =
+        columnShifts[lineIndex]?.getOrNull(columnIndex) ?: 0f
+
+    fun scaleFor(lineIndex: Int): Float = lineScales[lineIndex] ?: 1f
+
+    fun startFor(lineIndex: Int, columnIndex: Int, column: TextColumn): Float =
+        column.start + shiftFor(lineIndex, columnIndex)
+
+    fun endFor(lineIndex: Int, columnIndex: Int, column: TextColumn): Float =
+        startFor(lineIndex, columnIndex, column) + (column.end - column.start) * scaleFor(lineIndex)
+}
+
 data class PageAnnotationGeometry(
     val highlights: List<AnnotationHighlightRect>,
     val markers: List<AnnotationMarker>
 )
 
 /**
- * Maps chapter UTF-16 ranges to laid-out cluster rectangles and one comment marker per line.
- * 批注落在段尾时 marker 紧跟末字符；落在段中时移到该排文字的换行边缘，避免遮挡后文。
+ * Maps chapter UTF-16 ranges to laid-out cluster rectangles and inline comment markers.
+ * marker 始终紧跟划线末尾，并由 [inlineMarkerLayout] 为后续文字预留槽位。
  */
 fun TextPage.annotationGeometry(
     annotations: List<ReaderAnnotationMark>,
@@ -69,54 +97,15 @@ fun TextPage.annotationGeometry(
     markerGap: Float,
     maxRight: Float
 ): PageAnnotationGeometry {
-    if (annotations.isEmpty()) return PageAnnotationGeometry(emptyList(), emptyList())
-    val highlights = mutableListOf<AnnotationHighlightRect>()
-    val markerIdsByLine = linkedMapOf<Int, MutableList<Long>>()
-    val markerAnchorXByLine = mutableMapOf<Int, Float>()
-    annotations.forEach { annotation ->
-        if (annotation.endCharOffset <= annotation.startCharOffset) return@forEach
-        var lastVisibleLine = -1
-        var lastVisibleRight = 0f
-        var endsAtParagraphEnd = false
-        lines.forEachIndexed { lineIndex, line ->
-            if (line.charLength <= 0 || line.columns.isEmpty()) return@forEachIndexed
-            val lineStart = line.chapterPosition
-            val lineEnd = lineStart + line.charLength
-            val from = maxOf(annotation.startCharOffset, lineStart)
-            val to = minOf(annotation.endCharOffset, lineEnd)
-            if (from >= to) return@forEachIndexed
-            val left = line.xBoundaryAt(from, endBoundary = false)
-            val right = line.xBoundaryAt(to, endBoundary = true)
-            if (right > left) {
-                highlights += AnnotationHighlightRect(
-                    annotationId = annotation.id,
-                    left = left,
-                    top = line.lineTop,
-                    right = right,
-                    bottom = line.lineBottom
-                )
-                lastVisibleLine = lineIndex
-                lastVisibleRight = right
-                endsAtParagraphEnd = line.isParagraphEnd && annotation.endCharOffset == lineEnd
+    val layout = inlineMarkerLayout(annotations, emptyList(), markerRadius, markerGap, maxRight)
+    return PageAnnotationGeometry(
+        highlights = layout.highlights,
+        markers = layout.markers.mapNotNull { marker ->
+            marker.annotationIds.takeIf { it.isNotEmpty() }?.let {
+                AnnotationMarker(it, marker.centerX, marker.centerY)
             }
         }
-        if (annotation.hasComment && lastVisibleLine >= 0) {
-            markerIdsByLine.getOrPut(lastVisibleLine) { mutableListOf() }.add(annotation.id)
-            val line = lines[lastVisibleLine]
-            val anchorX = if (endsAtParagraphEnd) lastVisibleRight else line.columns.last().end
-            // 同行多批注共用一个带数字的 marker；只要有一条落在段中，就统一靠行尾。
-            markerAnchorXByLine[lastVisibleLine] =
-                maxOf(markerAnchorXByLine[lastVisibleLine] ?: 0f, anchorX)
-        }
-    }
-    val markers = markerIdsByLine.mapNotNull { (lineIndex, ids) ->
-        val line = lines.getOrNull(lineIndex) ?: return@mapNotNull null
-        val anchorX = markerAnchorXByLine[lineIndex] ?: line.columns.last().end
-        val centerX = (anchorX + markerGap + markerRadius)
-            .coerceAtMost(maxRight - markerRadius)
-        AnnotationMarker(ids.distinct(), centerX, (line.lineTop + line.lineBottom) / 2f)
-    }
-    return PageAnnotationGeometry(highlights, markers)
+    )
 }
 
 /**
@@ -129,45 +118,159 @@ fun TextPage.illustrationMarkers(
     markerGap: Float,
     maxRight: Float
 ): List<IllustrationMarker> {
-    if (illustrations.isEmpty()) return emptyList()
-    val idsByLine = linkedMapOf<Int, MutableList<Long>>()
-    val endXByLine = mutableMapOf<Int, Float>()
-    illustrations.forEach { illustration ->
-        val start = illustration.startCharOffset.coerceAtLeast(0)
-        val end = illustration.endCharOffset.coerceAtLeast(start + 1)
-        val lineIndex = lines.indexOfFirst { line ->
-            if (line.charLength <= 0 || line.columns.isEmpty()) return@indexOfFirst false
-            val lineStart = line.chapterPosition
-            val lineEnd = lineStart + line.charLength
-            end > lineStart && end <= lineEnd
+    return inlineMarkerLayout(emptyList(), illustrations, markerRadius, markerGap, maxRight)
+        .markers.mapNotNull { marker ->
+            marker.illustrationIds.takeIf { it.isNotEmpty() }?.let {
+                IllustrationMarker(it, marker.centerX, marker.centerY)
+            }
         }
-        if (lineIndex < 0) return@forEach
-        val line = lines[lineIndex]
-        val right = line.xBoundaryAt(end, endBoundary = true)
-        idsByLine.getOrPut(lineIndex) { mutableListOf() }.add(illustration.id)
-        endXByLine[lineIndex] = maxOf(endXByLine[lineIndex] ?: 0f, right)
-    }
-    return idsByLine.mapNotNull { (lineIndex, ids) ->
-        val line = lines.getOrNull(lineIndex) ?: return@mapNotNull null
-        val endX = endXByLine[lineIndex] ?: line.columns.last().end
-        IllustrationMarker(
-            illustrationIds = ids.distinct(),
-            centerX = (endX + markerGap + markerRadius).coerceAtMost(maxRight - markerRadius),
-            centerY = (line.lineTop + line.lineBottom) / 2f
-        )
-    }
 }
 
-private fun TextLine.xBoundaryAt(offset: Int, endBoundary: Boolean): Float {
+fun TextPage.inlineMarkerLayout(
+    annotations: List<ReaderAnnotationMark>,
+    illustrations: List<ReaderIllustrationMark>,
+    markerRadius: Float,
+    markerGap: Float,
+    maxRight: Float
+): PageInlineMarkerLayout {
+    val requests = linkedMapOf<MarkerKey, MutableList<Long>>()
+    annotations.forEach { annotation ->
+        if (annotation.endCharOffset <= annotation.startCharOffset) return@forEach
+        if (annotation.hasComment) {
+            markerAnchor(annotation.endCharOffset, InlineMarkerKind.ANNOTATION)?.let { anchor ->
+                requests.getOrPut(MarkerKey(anchor.lineIndex, anchor.columnIndex, MarkerKind.ANNOTATION)) {
+                    mutableListOf()
+                }.add(annotation.id)
+            }
+        }
+    }
+    illustrations.forEach { illustration ->
+        markerAnchor(
+            illustration.endCharOffset.coerceAtLeast(illustration.startCharOffset + 1),
+            InlineMarkerKind.ILLUSTRATION
+        )
+            ?.let { anchor ->
+                requests.getOrPut(MarkerKey(anchor.lineIndex, anchor.columnIndex, MarkerKind.ILLUSTRATION)) {
+                    mutableListOf()
+                }.add(illustration.id)
+            }
+    }
+
+    val shifts = mutableMapOf<Int, FloatArray>()
+    val scales = mutableMapOf<Int, Float>()
+    val markers = mutableListOf<InlineMarker>()
+    requests.entries
+        .sortedWith(compareBy({ it.key.lineIndex }, { it.key.columnIndex }, { it.key.kind.ordinal }))
+        .groupBy { it.key.lineIndex }
+        .forEach { (lineIndex, entries) ->
+            val line = lines[lineIndex]
+            entries.forEach { entry ->
+                val anchor = line.columns[entry.key.columnIndex]
+                val isReservedSlot = anchor.inlineMarkerKind?.ordinal == entry.key.kind.ordinal
+                val centerX = if (isReservedSlot) {
+                    (anchor.start + anchor.end) / 2f
+                } else {
+                    (anchor.end + markerGap + markerRadius).coerceAtMost(maxRight - markerRadius)
+                }
+                markers += InlineMarker(
+                    lineIndex = lineIndex,
+                    afterColumnIndex = entry.key.columnIndex,
+                    annotationIds = if (entry.key.kind == MarkerKind.ANNOTATION) entry.value.distinct() else emptyList(),
+                    illustrationIds = if (entry.key.kind == MarkerKind.ILLUSTRATION) entry.value.distinct() else emptyList(),
+                    centerX = centerX,
+                    centerY = (line.lineTop + line.lineBottom) / 2f,
+                    occupiedWidth = anchor.end - anchor.start
+                )
+            }
+            shifts[lineIndex] = FloatArray(line.columns.size)
+            scales[lineIndex] = 1f
+        }
+
+    val layout = PageInlineMarkerLayout(emptyList(), markers, shifts, scales)
+    val highlights = buildList {
+        annotations.forEach { annotation ->
+            if (annotation.endCharOffset <= annotation.startCharOffset) return@forEach
+            lines.forEachIndexed { lineIndex, line ->
+                if (line.charLength <= 0 || line.columns.isEmpty()) return@forEachIndexed
+                val lineStart = line.chapterPosition
+                val lineEnd = lineStart + line.charLength
+                val from = maxOf(annotation.startCharOffset, lineStart)
+                val to = minOf(annotation.endCharOffset, lineEnd)
+                if (from >= to) return@forEachIndexed
+                val left = line.xBoundaryAt(
+                    offset = from,
+                    endBoundary = false,
+                    lineIndex = lineIndex,
+                    layout = layout
+                )
+                val right = line.xBoundaryAt(
+                    offset = to,
+                    endBoundary = true,
+                    lineIndex = lineIndex,
+                    layout = layout
+                )
+                if (right > left) {
+                    add(AnnotationHighlightRect(annotation.id, left, line.lineTop, right, line.lineBottom))
+                }
+            }
+        }
+    }
+    return PageInlineMarkerLayout(highlights, markers, shifts, scales)
+}
+
+private enum class MarkerKind { ANNOTATION, ILLUSTRATION }
+
+private data class MarkerKey(
+    val lineIndex: Int,
+    val columnIndex: Int,
+    val kind: MarkerKind
+)
+
+private data class MarkerAnchor(val lineIndex: Int, val columnIndex: Int)
+
+private fun TextPage.markerAnchor(endOffset: Int, kind: InlineMarkerKind): MarkerAnchor? {
+    lines.forEachIndexed { lineIndex, line ->
+        line.columns.forEachIndexed { columnIndex, column ->
+            if (column.inlineMarkerOffset == endOffset && column.inlineMarkerKind == kind) {
+                return MarkerAnchor(lineIndex, columnIndex)
+            }
+        }
+    }
+    lines.forEachIndexed { lineIndex, line ->
+        if (line.charLength <= 0 || line.columns.isEmpty()) return@forEachIndexed
+        val lineStart = line.chapterPosition
+        val lineEnd = lineStart + line.charLength
+        if (endOffset <= lineStart || endOffset > lineEnd) return@forEachIndexed
+        var cursor = lineStart
+        line.columns.forEachIndexed { columnIndex, column ->
+            cursor += column.sourceLength
+            if (endOffset <= cursor) return MarkerAnchor(lineIndex, columnIndex)
+        }
+    }
+    return null
+}
+
+private fun TextLine.xBoundaryAt(
+    offset: Int,
+    endBoundary: Boolean,
+    lineIndex: Int,
+    layout: PageInlineMarkerLayout
+): Float {
     var cursor = chapterPosition
-    columns.forEach { column ->
-        val next = cursor + column.charData.length
+    columns.forEachIndexed { columnIndex, column ->
+        if (column.sourceLength == 0) return@forEachIndexed
+        val next = cursor + column.sourceLength
         when {
-            offset <= cursor -> return column.start
-            offset < next -> return if (endBoundary) column.end else column.start
-            offset == next -> return column.end
+            offset <= cursor -> return layout.startFor(lineIndex, columnIndex, column)
+            offset < next -> return if (endBoundary) {
+                layout.endFor(lineIndex, columnIndex, column)
+            } else {
+                layout.startFor(lineIndex, columnIndex, column)
+            }
+            offset == next && endBoundary -> return layout.endFor(lineIndex, columnIndex, column)
         }
         cursor = next
     }
-    return columns.lastOrNull()?.end ?: startX
+    val lastIndex = columns.indexOfLast { it.sourceLength > 0 }
+    return columns.getOrNull(lastIndex)?.let { layout.endFor(lineIndex, lastIndex, it) } ?: startX
 }

@@ -1,6 +1,6 @@
 package com.mozhi.reader.ai.client
 
-enum class TtsEmotionDialect { MINIMAX, OPENAI, MIMO, AZURE }
+enum class TtsEmotionDialect { MINIMAX, GMI, OPENAI, MIMO, AZURE }
 
 data class EmotionDialectValue(
     val field: String,
@@ -38,6 +38,10 @@ object EmotionDialectMapper {
             TtsEmotionDialect.MINIMAX -> EmotionDialectValue(
                 "emotion",
                 miniMax[normalized] ?: "neutral"
+            )
+            TtsEmotionDialect.GMI -> EmotionDialectValue(
+                "emotion",
+                miniMax[normalized] ?: "auto"
             )
             TtsEmotionDialect.OPENAI -> (freeform.ifBlank {
                 normalized.takeIf(String::isNotBlank)?.let { "请用${it}的语气朗读。" }.orEmpty()

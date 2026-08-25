@@ -140,7 +140,9 @@ class AgentLoopTest {
         val events = loop(dao).runWith(1, emptyList()) {
             AgentLoop.Streamer { _, _ -> flowOf(ChatDelta.Text("你"), ChatDelta.Text("好")) }
         }.toList()
-        assertEquals(listOf<AgentEvent>(AgentEvent.Text("你"), AgentEvent.Text("好")), events)
+        assertEquals(AgentEvent.Text("你"), events[0])
+        assertEquals(AgentEvent.Text("好"), events[1])
+        assertTrue(events[2] is AgentEvent.RoundCommitted)
         val persisted = dao.messages.last()
         assertEquals(ChatRole.ASSISTANT.wire, persisted.role)
         assertEquals("你好", persisted.content)
@@ -177,7 +179,9 @@ class AgentLoopTest {
                     "echo_tool",
                     "查询测试",
                     succeeded = true,
-                    detail = "已完成"
+                    detail = "已完成",
+                    // 「过程」卡展开后要能看到工具到底返回了什么，成功时也给预览。
+                    resultPreview = "已读到第 3 章"
                 )
             )
         )

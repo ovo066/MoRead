@@ -25,6 +25,7 @@ import com.mozhi.reader.core.database.entity.AudiobookSegmentEntity
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.BookTagEntity
 import com.mozhi.reader.core.database.entity.BookTagRefEntity
+import com.mozhi.reader.core.database.entity.BookTocEntryEntity
 import com.mozhi.reader.core.database.entity.BookmarkEntity
 import com.mozhi.reader.core.database.entity.ChapterEntity
 import com.mozhi.reader.core.database.entity.ConversationEntity
@@ -61,9 +62,10 @@ import com.mozhi.reader.core.database.entity.TtsVoiceEntity
         TtsVoiceEntity::class,
         AudiobookRoleEntity::class,
         AudiobookSegmentEntity::class,
-        AudiobookChapterEntity::class
+        AudiobookChapterEntity::class,
+        BookTocEntryEntity::class
     ],
-    version = 19,
+    version = 21,
     exportSchema = true
 )
 @TypeConverters(DatabaseConverters::class)

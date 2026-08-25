@@ -87,6 +87,29 @@ class ChapterTypesetterTest {
     }
 
     @Test
+    fun `inline marker occupies one column and wraps following text`() {
+        val body = "天地玄黄宇宙洪荒日月"
+        val chapter = ChapterTypesetter(spec.copy(justifyContent = false), FakeMeasure()).typeset(
+            chapterIndex = 0,
+            title = "",
+            body = body,
+            inlineMarkers = listOf(InlineMarkerReservation(2, InlineMarkerKind.ANNOTATION))
+        )
+        val lines = chapter.pages.flatMap(TextPage::lines)
+        val first = lines.first()
+        val marker = first.columns.single { it.inlineMarkerKind == InlineMarkerKind.ANNOTATION }
+
+        assertEquals(7, first.charLength)
+        assertEquals(2, marker.inlineMarkerOffset)
+        assertEquals(0, marker.sourceLength)
+        assertEquals(10f, marker.end - marker.start, 0.01f)
+        assertEquals("荒", lines[1].columns.first().charData)
+        assertTrue(lines.flatMap(TextLine::columns).filter { it.sourceLength > 0 }.all {
+            it.end - it.start == 10f
+        })
+    }
+
+    @Test
     fun `synthetic title carries no body offsets`() {
         val chapter = typeset("第一章 缘起", cjkParagraph)
         val titleLines = chapter.pages.first().lines.filter(TextLine::isTitle)

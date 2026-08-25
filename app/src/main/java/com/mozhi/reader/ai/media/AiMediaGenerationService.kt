@@ -41,6 +41,44 @@ data class AgentMediaResult(
 
 data class CachedSpeech(val path: String, val mediaType: String?, val cacheHit: Boolean)
 
+internal object SpeechCacheKey {
+    fun build(
+        providerId: Long,
+        providerBaseUrl: String,
+        providerExtraJson: String,
+        modelId: Long,
+        modelName: String,
+        modelExtraJson: String,
+        text: String,
+        voiceId: String?,
+        speed: Float?,
+        volume: Float?,
+        pitch: Int?,
+        format: String?,
+        emotion: String?,
+        instruction: String?
+    ): String = MessageDigest.getInstance("SHA-256")
+        .digest(
+            listOf(
+                providerId,
+                providerBaseUrl,
+                providerExtraJson,
+                modelId,
+                modelName,
+                modelExtraJson,
+                text,
+                voiceId.orEmpty(),
+                speed,
+                volume,
+                pitch,
+                format.orEmpty(),
+                emotion.orEmpty(),
+                instruction.orEmpty()
+            ).joinToString("\u0000").toByteArray()
+        )
+        .joinToString("") { "%02x".format(it) }
+}
+
 /** Agent 与划线菜单共用的媒体落盘服务。 */
 @Singleton
 class AiMediaGenerationService @Inject constructor(
@@ -116,23 +154,16 @@ class AiMediaGenerationService @Inject constructor(
         val cleanText = text.trim().take(MAX_SPEECH_CHARS)
         require(cleanText.isNotEmpty()) { "朗读文本不能为空" }
         val resolved = clientFactory.mediaForRole(ModelRole.TTS)
-        val key = sha256(
-            listOf(
-                resolved.provider.id,
-                resolved.provider.baseUrl,
-                resolved.provider.extraJson,
-                resolved.model.id,
-                resolved.model.modelName,
-                resolved.model.extraJson,
-                cleanText,
-                voiceId.orEmpty(),
-                speed,
-                volume,
-                pitch,
-                format.orEmpty(),
-                emotion.orEmpty(),
-                instruction.orEmpty()
-            ).joinToString("\u0000")
+        val key = speechCacheKey(
+            resolved = resolved,
+            text = cleanText,
+            voiceId = voiceId,
+            speed = speed,
+            volume = volume,
+            pitch = pitch,
+            format = format,
+            emotion = emotion,
+            instruction = instruction
         )
         // 注册表 key 包含书籍：缓存目录按书隔离，不能把另一本文本相同的音频路径直接返回。
         return sharedSpeechGenerations.await("$bookId:$key") {
@@ -173,6 +204,67 @@ class AiMediaGenerationService @Inject constructor(
         }
     }
 
+    /** 只查本地语音缓存，不触发网络请求，也不刷新文件的淘汰时间。 */
+    suspend fun peekCachedSpeech(
+        bookId: Long,
+        text: String,
+        voiceId: String? = null,
+        speed: Float? = null,
+        volume: Float? = null,
+        pitch: Int? = null,
+        format: String? = null,
+        emotion: String? = null,
+        instruction: String? = null
+    ): CachedSpeech? {
+        val cleanText = text.trim().take(MAX_SPEECH_CHARS)
+        if (cleanText.isEmpty()) return null
+        val resolved = clientFactory.mediaForRole(ModelRole.TTS)
+        val key = speechCacheKey(
+            resolved = resolved,
+            text = cleanText,
+            voiceId = voiceId,
+            speed = speed,
+            volume = volume,
+            pitch = pitch,
+            format = format,
+            emotion = emotion,
+            instruction = instruction
+        )
+        return withContext(Dispatchers.IO) {
+            speechCache.directoryFor(bookId)
+                .listFiles()
+                ?.firstOrNull { it.nameWithoutExtension == key }
+                ?.let { CachedSpeech(it.absolutePath, mediaTypeForExtension(it.extension), true) }
+        }
+    }
+
+    private fun speechCacheKey(
+        resolved: com.mozhi.reader.ai.client.ResolvedMediaClient,
+        text: String,
+        voiceId: String?,
+        speed: Float?,
+        volume: Float?,
+        pitch: Int?,
+        format: String?,
+        emotion: String?,
+        instruction: String?
+    ): String = SpeechCacheKey.build(
+        providerId = resolved.provider.id,
+        providerBaseUrl = resolved.provider.baseUrl,
+        providerExtraJson = resolved.provider.extraJson,
+        modelId = resolved.model.id,
+        modelName = resolved.model.modelName,
+        modelExtraJson = resolved.model.extraJson,
+        text = text,
+        voiceId = voiceId,
+        speed = speed,
+        volume = volume,
+        pitch = pitch,
+        format = format,
+        emotion = emotion,
+        instruction = instruction
+    )
+
     private fun imageExtension(mediaType: String?, bytes: ByteArray): String = when {
         mediaType?.contains("png", true) == true -> "png"
         mediaType?.contains("webp", true) == true -> "webp"
@@ -193,10 +285,6 @@ class AiMediaGenerationService @Inject constructor(
         "aac" -> "audio/aac"
         else -> "audio/mpeg"
     }
-
-    private fun sha256(value: String): String = MessageDigest.getInstance("SHA-256")
-        .digest(value.toByteArray())
-        .joinToString("") { "%02x".format(it) }
 
     private companion object {
         const val MAX_PROMPT_CHARS = 8_000

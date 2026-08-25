@@ -1,5 +1,6 @@
 package com.mozhi.reader.feature.reader.engine
 
+import com.mozhi.reader.core.library.EpubLayoutChapterBundle
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -54,7 +55,8 @@ sealed interface RenderPage {
 class ReaderContentController(
     private val scope: CoroutineScope,
     private val bodyLoader: suspend (chapterIndex: Int) -> String?,
-    private val listener: Listener
+    private val listener: Listener,
+    private val layoutLoader: suspend (chapterIndex: Int) -> EpubLayoutChapterBundle? = { null }
 ) {
     interface Listener {
         /** -1: only the previous page changed; 1: only the next; 0: everything. */
@@ -72,6 +74,8 @@ class ReaderContentController(
 
     private var chapters: List<ChapterMeta> = emptyList()
     private var inlineImagesByChapter: Map<Int, List<InlineImageSource>> = emptyMap()
+    private var inlineMarkersByChapter: Map<Int, List<InlineMarkerReservation>> = emptyMap()
+    private val layoutBundles = mutableMapOf<Int, EpubLayoutChapterBundle>()
     private var cumulativeChars: LongArray = LongArray(0)
     private var totalChars: Long = 0
 
@@ -95,30 +99,24 @@ class ReaderContentController(
     fun setInlineImages(images: Map<Int, List<InlineImageSource>>) {
         if (images == inlineImagesByChapter) return
         inlineImagesByChapter = images
-        if (typesetter == null) return
-        val slots = listOfNotNull(curSlot, nextSlot, prevSlot)
-        if (slots.isEmpty()) return
-        environmentVersion++
-        val version = environmentVersion
-        slots.forEach { it.chapter = null }
-        relayoutJob?.cancel()
-        val registered = slots.filter { loadingIndices.add(it.index) }
-        relayoutJob = scope.launch {
-            try {
-                for (slot in slots) {
-                    val laid = typesetChapter(slot.index, slot.body) ?: continue
-                    if (version != environmentVersion) return@launch
-                    slot.chapter = laid
-                    notifySlotChanged(slot.index)
-                }
-            } finally {
-                registered.forEach { loadingIndices.remove(it.index) }
-            }
-        }
+        relayoutVisibleSlots()
+    }
+
+    fun setInlineMarkers(markers: Map<Int, List<InlineMarkerReservation>>) {
+        if (markers == inlineMarkersByChapter) return
+        inlineMarkersByChapter = markers
+        relayoutVisibleSlots()
+    }
+
+    /** Drops missing/stale EPUB sidecars and re-typesets the visible chapter window in place. */
+    fun invalidateEpubLayouts() {
+        layoutBundles.clear()
+        relayoutVisibleSlots()
     }
 
     fun setChapters(list: List<ChapterMeta>) {
         chapters = list
+        layoutBundles.clear()
         cumulativeChars = LongArray(list.size + 1)
         for (i in list.indices) {
             cumulativeChars[i + 1] = cumulativeChars[i] + list[i].charCount
@@ -132,12 +130,17 @@ class ReaderContentController(
      */
     fun updateEnvironment(spec: TypesetSpec, measure: TextMeasure) {
         typesetter = ChapterTypesetter(spec, measure)
+        relayoutVisibleSlots(openPositionWhenEmpty = true)
+    }
+
+    private fun relayoutVisibleSlots(openPositionWhenEmpty: Boolean = false) {
+        if (typesetter == null) return
         environmentVersion++
         val version = environmentVersion
         val slots = listOfNotNull(curSlot, nextSlot, prevSlot)
         slots.forEach { it.chapter = null }
         if (slots.isEmpty()) {
-            openPosition(chapterIndex, charOffset)
+            if (openPositionWhenEmpty) openPosition(chapterIndex, charOffset)
             return
         }
         relayoutJob?.cancel()
@@ -387,12 +390,16 @@ class ReaderContentController(
         val typesetter = typesetter ?: return null
         val title = chapters.getOrNull(index)?.title.orEmpty()
         return layoutMutex.withLock {
+            val epubLayout = layoutBundles[index]
+                ?: runCatching { layoutLoader(index) }.getOrNull()?.also { layoutBundles[index] = it }
             withContext(Dispatchers.Default) {
                 typesetter.typeset(
                     chapterIndex = index,
                     title = title,
                     body = body,
-                    inlineImages = inlineImagesByChapter[index].orEmpty()
+                    inlineImages = inlineImagesByChapter[index].orEmpty(),
+                    inlineMarkers = inlineMarkersByChapter[index].orEmpty(),
+                    epubLayout = epubLayout
                 )
             }
         }

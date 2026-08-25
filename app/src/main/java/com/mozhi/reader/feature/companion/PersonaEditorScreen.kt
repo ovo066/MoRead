@@ -68,6 +68,7 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.mozhi.reader.core.database.entity.PersonaLoreEntry
+import com.mozhi.reader.core.database.entity.TtsVoiceEntity
 import com.mozhi.reader.ui.components.PersonaAvatarImage
 import com.mozhi.reader.ui.components.DashedAddRow
 import com.mozhi.reader.ui.components.FrostedSurface
@@ -93,6 +94,7 @@ fun PersonaEditorScreen(
     var dialogsExpanded by rememberSaveable { mutableStateOf(false) }
     var worldBookExpanded by rememberSaveable { mutableStateOf(false) }
     var appearanceExpanded by rememberSaveable { mutableStateOf(false) }
+    var voiceExpanded by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(viewModel) {
         viewModel.events.collect { event ->
@@ -269,6 +271,27 @@ fun PersonaEditorScreen(
                         )
                     }
                 }
+                item {
+                    ExpandableEditorSection(
+                        title = "声音",
+                        summary = state.voices.firstOrNull { it.voiceId == state.voiceId }?.displayName
+                            ?: "未绑定音色",
+                        expanded = voiceExpanded,
+                        onToggle = { voiceExpanded = !voiceExpanded }
+                    )
+                }
+                if (voiceExpanded) {
+                    item {
+                        PersonaVoiceCard(
+                            state = state,
+                            onSearch = viewModel::setVoiceSearch,
+                            onGender = viewModel::setVoiceGender,
+                            onSelect = viewModel::setVoice,
+                            onEmotion = viewModel::setVoiceEmotion,
+                            onPreview = viewModel::previewVoice
+                        )
+                    }
+                }
                 item { SectionLabel(title = "工具权限") }
                 item { ToolsCard(state = state, onToggle = viewModel::toggleTool) }
                 if (!state.isNew) {
@@ -310,6 +333,101 @@ fun PersonaEditorScreen(
                 TextButton(onClick = { confirmDelete = false }) { Text("取消") }
             }
         )
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PersonaVoiceCard(
+    state: PersonaEditorState,
+    onSearch: (String) -> Unit,
+    onGender: (String?) -> Unit,
+    onSelect: (String) -> Unit,
+    onEmotion: (String) -> Unit,
+    onPreview: (TtsVoiceEntity) -> Unit
+) {
+    val voices = state.voices.filter { voice ->
+        (state.voiceGender == null || voice.gender == state.voiceGender) &&
+            (state.voiceSearch.isBlank() || listOf(voice.displayName, voice.voiceId, voice.tags)
+                .any { it.contains(state.voiceSearch.trim(), ignoreCase = true) })
+    }
+    FrostedSurface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp),
+        shape = RoundedCornerShape(22.dp),
+        shadowElevation = 4.dp
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(
+                "绑定后，开启“自主发语音”时角色可把标记为语音的句子合成为声音。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            OutlinedTextField(
+                value = state.voiceSearch,
+                onValueChange = onSearch,
+                label = { Text("搜索音色") },
+                leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(null to "全部", "FEMALE" to "女声", "MALE" to "男声").forEach { (value, label) ->
+                    FilterChip(
+                        selected = state.voiceGender == value,
+                        onClick = { onGender(value) },
+                        label = { Text(label) }
+                    )
+                }
+            }
+            Surface(
+                onClick = { onSelect("") },
+                shape = RoundedCornerShape(14.dp),
+                color = if (state.voiceId.isBlank()) MaterialTheme.colorScheme.primaryContainer
+                else MaterialTheme.colorScheme.surfaceVariant
+            ) {
+                Text("不绑定音色", modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
+            }
+            voices.take(12).forEach { voice ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelect(voice.voiceId) }
+                        .padding(vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            voice.displayName,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (voice.voiceId == state.voiceId) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            listOf(voice.gender, voice.tags).filter(String::isNotBlank).joinToString(" · "),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    IconButton(onClick = { onPreview(voice) }) {
+                        if (state.previewingVoiceId == voice.id) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Outlined.RecordVoiceOver, contentDescription = "试听")
+                        }
+                    }
+                }
+            }
+            OutlinedTextField(
+                value = state.voiceEmotion,
+                onValueChange = onEmotion,
+                label = { Text("语音情绪或风格") },
+                supportingText = { Text("例如：温柔、克制、兴奋；留空使用服务商默认") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
     }
 }
 

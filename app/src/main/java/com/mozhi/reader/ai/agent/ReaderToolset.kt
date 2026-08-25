@@ -10,6 +10,7 @@ import com.mozhi.reader.core.database.entity.AnnotationColors
 import com.mozhi.reader.core.database.entity.AnnotationStyle
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.ModelRole
+import com.mozhi.reader.core.datastore.BookEmbeddingSettingsStore
 import com.mozhi.reader.core.library.AnnotationRepository
 import com.mozhi.reader.core.library.BookQuoteLocator
 import com.mozhi.reader.core.library.QuoteChapter
@@ -61,6 +62,7 @@ class ReaderToolset @Inject constructor(
     private val clientFactory: dagger.Lazy<AiClientFactory>,
     private val vectorStore: dagger.Lazy<BoxStore>,
     private val embeddingScheduler: BookEmbeddingScheduler,
+    private val embeddingSettingsStore: BookEmbeddingSettingsStore,
     private val webSearchService: WebSearchService
 ) {
     fun forBook(
@@ -107,6 +109,7 @@ class ReaderToolset @Inject constructor(
                     embedQuery = embedQuery,
                     store = { vectorStore.get() },
                     requestIndex = { embeddingScheduler.enqueueForBook(bookId) },
+                    indexingEnabled = { embeddingSettingsStore.isEnabled(bookId) },
                     spoilerProtectionEnabled = spoilerProtectionEnabled
                 )
             )
@@ -850,6 +853,7 @@ internal class SearchBookTool(
     private val loadChapter: suspend (Int) -> ChapterDocument? = { null },
     private val loadChaptersThrough: suspend (Int) -> List<ChapterDocument> = { emptyList() },
     private val requestIndex: () -> Unit = {},
+    private val indexingEnabled: suspend () -> Boolean = { true },
     private val spoilerProtectionEnabled: Boolean = true
 ) : AgentTool {
 
@@ -889,14 +893,16 @@ internal class SearchBookTool(
             (book.totalChapters - 1).coerceAtLeast(0)
         }
         var vectorFailure: String? = null
-
-        // 懒索引：这本书还没有任何切片时按需排队单书 embedding，本轮先走词法降级
         val hasIndex = runCatching {
             VectorQueries.chaptersWithChunks(store(), bookId).isNotEmpty()
         }.getOrDefault(false)
-        if (!hasIndex) requestIndex()
+        // 升级兼容：旧版本已生成的单书索引继续可用，并在 UI 中视为已启用。
+        val allowVectorIndex = hasIndex || indexingEnabled()
+        if (allowVectorIndex && !hasIndex) requestIndex()
 
-        val vectorResults = try {
+        val vectorResults = if (!allowVectorIndex || !hasIndex) {
+            emptyList()
+        } else try {
             val vector = embedQuery(query)
             val candidates = VectorQueries.searchChunks(
                 store(),
@@ -949,6 +955,9 @@ internal class SearchBookTool(
         }
 
         if (combined.isEmpty()) {
+            if (!allowVectorIndex) {
+                return "本书未启用 AI 索引；已使用本地关键词检索，但${searchRangeLabel(maxChapterIndex)}没有找到与「$query」相关的原文。"
+            }
             if (vectorFailure != null) {
                 return "向量检索不可用：$vectorFailure；已自动尝试本地关键词检索，但${searchRangeLabel(maxChapterIndex)}没有找到与「$query」相关的原文。"
             }
@@ -970,7 +979,9 @@ internal class SearchBookTool(
                     "以下片段来自整本书（第 1 至 ${maxChapterIndex + 1} 章）：\n"
                 }
             )
-            if (vectorFailure != null) {
+            if (!allowVectorIndex) {
+                append("（本书未启用 AI 索引，本次为本地关键词检索结果。）\n")
+            } else if (vectorFailure != null) {
                 append("（向量服务当前不可用，已自动切换到本地关键词检索。）\n")
             } else if (!hasIndex) {
                 append("（本书向量索引正在后台建立，本次为本地关键词检索结果。）\n")

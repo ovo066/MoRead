@@ -148,6 +148,35 @@ data class ChapterEntity(
     val textByteLength: Int = 0
 )
 
+/** EPUB navigation tree entry. Kept separate from spine chapters because a section may have no body. */
+@Entity(
+    tableName = "book_toc_entries",
+    foreignKeys = [
+        ForeignKey(
+            entity = BookEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["bookId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [
+        Index("bookId"),
+        Index(value = ["bookId", "orderIndex"], unique = true),
+        Index(value = ["bookId", "chapterIndex"])
+    ]
+)
+data class BookTocEntryEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val bookId: Long,
+    val orderIndex: Int,
+    val title: String,
+    val href: String,
+    val depth: Int,
+    val parentOrderIndex: Int?,
+    val chapterIndex: Int?,
+    val hasChildren: Boolean
+)
+
 @Entity(
     tableName = "bookmarks",
     foreignKeys = [
@@ -307,6 +336,11 @@ data class MessageEntity(
     val editedAt: Long? = null,
     /** 附件清单 JSON（[MessageAttachment] 数组）；null = 无附件。文件在 filesDir/attachments。 */
     val attachmentsJson: String? = null,
+    /**
+     * 模型的思维链原文；null = 该模型不产出 reasoning（界面据此整条不出现，
+     * 而不是显示一个空的「思考」条）。只用于本地展示，永不回传给模型。
+     */
+    val reasoningContent: String? = null,
     /**
      * 发送时生效的用户面具 id；0 = 未启用面具（本人）。记忆固化据此区分本人偏好与
      * 面具内经历，面具删除后此列悬空留存（同 personaId 不设 FK 的惯例）。

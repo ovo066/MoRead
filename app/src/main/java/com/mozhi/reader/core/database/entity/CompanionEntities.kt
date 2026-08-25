@@ -56,6 +56,15 @@ data class PersonaEntity(
     /** 聊天外观 JSON（见 [PersonaChatAppearance]）；空对象 = 跟随阅读主题。 */
     @ColumnInfo(defaultValue = "'{}'")
     val chatAppearanceJson: String = "{}",
+    /**
+     * 角色声音：音色库（tts_voices.voiceId）里的一个 id；空 = 该角色不发语音，
+     * 提示词里也不会告诉模型可以发语音（不给它兑现不了的能力）。
+     */
+    @ColumnInfo(defaultValue = "''")
+    val voiceId: String = "",
+    /** 语音情绪/风格指令；MiniMax 映射 voice_setting.emotion，OpenAI 映射 instructions。 */
+    @ColumnInfo(defaultValue = "''")
+    val voiceEmotion: String = "",
     /** 内置模板角色标记：仅记录出身，可改可删，删了不自动复活。 */
     val isBuiltIn: Boolean = false,
     val createdAt: Long
@@ -142,6 +151,9 @@ data class AnnotationEntity(
     /** 划线样式（见 [AnnotationStyle]），存 wire 值。 */
     @ColumnInfo(defaultValue = "'HIGHLIGHT'")
     val style: String = AnnotationStyle.HIGHLIGHT.wire,
+    /** 随批注附带的语音/插图清单 JSON（见 AnnotationMedia）；'{}' = 纯文字批注。 */
+    @ColumnInfo(defaultValue = "'{}'")
+    val mediaJson: String = "{}",
     val createdAt: Long
 )
 
@@ -205,6 +217,9 @@ data class AnnotationReplyEntity(
     /** 可选：针对楼内某条回复；null = 直接回复楼主层。 */
     val replyToId: Long? = null,
     val contentMarkdown: String,
+    /** 随回复附带的语音/插图清单 JSON（见 AnnotationMedia）；'{}' = 纯文字回复。 */
+    @ColumnInfo(defaultValue = "'{}'")
+    val mediaJson: String = "{}",
     val createdAt: Long
 )
 

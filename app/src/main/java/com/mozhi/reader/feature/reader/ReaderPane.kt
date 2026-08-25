@@ -88,7 +88,7 @@ import com.mozhi.reader.feature.reader.engine.TextPos
 import com.mozhi.reader.feature.reader.engine.annotationGeometry
 import com.mozhi.reader.feature.reader.engine.dragSelectionHandle
 import com.mozhi.reader.feature.reader.engine.hitTextPos
-import com.mozhi.reader.feature.reader.engine.illustrationMarkers
+import com.mozhi.reader.feature.reader.engine.inlineMarkerLayout
 import com.mozhi.reader.feature.reader.engine.selectionBodyRange
 import com.mozhi.reader.feature.reader.engine.selectionRects
 import com.mozhi.reader.feature.reader.engine.textPosAtBodyOffset
@@ -935,14 +935,16 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
         val local = toContentLocal(position) ?: return emptyList()
         // 与 PageBitmapRenderer.drawBody 的 marker 参数保持一致，否则点击热区和画出的圆点对不上
         val markerRadius = (currentStyle.tipSizePx * 0.72f).coerceAtLeast(8f)
-        val geometry = page.page.annotationGeometry(
-            annotations.filter { it.chapterIndex == page.chapterIndex },
+        val geometry = page.page.inlineMarkerLayout(
+            annotations = annotations.filter { it.chapterIndex == page.chapterIndex },
+            illustrations = illustrations.filter { it.chapterIndex == page.chapterIndex },
             markerRadius = markerRadius,
             markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.ANNOTATION_MARKER_GAP_RATIO,
-            maxRight = currentStyle.contentWidth + currentStyle.paddingRight * 0.9f
+            maxRight = currentStyle.contentWidth
         )
         val hitRadius = (currentStyle.tipSizePx * 1.35f).coerceAtLeast(18f)
         geometry.markers.firstOrNull { marker ->
+            if (marker.annotationIds.isEmpty()) return@firstOrNull false
             val dx = local.x - marker.centerX
             val dy = local.y - marker.centerY
             dx * dx + dy * dy <= hitRadius * hitRadius
@@ -961,14 +963,16 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
         val page = controller.curPage() as? RenderPage.Laid ?: return emptyList()
         val local = toContentLocal(position) ?: return emptyList()
         val markerRadius = (currentStyle.tipSizePx * 0.72f).coerceAtLeast(8f)
-        val markers = page.page.illustrationMarkers(
-            illustrations.filter { it.chapterIndex == page.chapterIndex },
-            markerRadius,
-            markerRadius * com.mozhi.reader.feature.reader.engine.ANNOTATION_MARKER_GAP_RATIO,
-            currentStyle.contentWidth + currentStyle.paddingRight * 0.9f
+        val markers = page.page.inlineMarkerLayout(
+            annotations = annotations.filter { it.chapterIndex == page.chapterIndex },
+            illustrations = illustrations.filter { it.chapterIndex == page.chapterIndex },
+            markerRadius = markerRadius,
+            markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.ANNOTATION_MARKER_GAP_RATIO,
+            maxRight = currentStyle.contentWidth
         )
         val hitRadius = (currentStyle.tipSizePx * 1.35f).coerceAtLeast(18f)
-        return markers.firstOrNull { marker ->
+        return markers.markers.firstOrNull { marker ->
+            if (marker.illustrationIds.isEmpty()) return@firstOrNull false
             val dx = local.x - marker.centerX
             val dy = local.y - marker.centerY
             dx * dx + dy * dy <= hitRadius * hitRadius

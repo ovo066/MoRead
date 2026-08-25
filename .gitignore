@@ -31,6 +31,7 @@ DECISIONS.md
 DEVELOPMENT_PLAN.md
 design/
 docs/CODE_MAP.md
+docs/COMPANION_PHASE3_HANDOFF.md
 .firecrawl/
 
 # 构建产物与发布材料（APK 一律通过 GitHub Release 分发）
@@ -40,3 +41,4 @@ dist/
 # 发布签名：密钥与口令永不入库
 keys/
 keystore.properties
+.gradle-build/

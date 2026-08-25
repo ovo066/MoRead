@@ -9,6 +9,7 @@ import com.mozhi.reader.ai.provider.AiProviderRepository
 import com.mozhi.reader.core.database.entity.AiModelEntity
 import com.mozhi.reader.core.database.entity.AiProviderEntity
 import com.mozhi.reader.core.database.entity.ModelRole
+import com.mozhi.reader.core.datastore.CompanionAutonomySettings
 import com.mozhi.reader.core.datastore.CompanionMemorySettings
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
 import com.mozhi.reader.core.datastore.ShelfLayout
@@ -45,6 +46,10 @@ data class SettingsUiState(
     val suggestionRepliesEnabled: Boolean = true,
     val memory: CompanionMemorySettings = CompanionMemorySettings(),
     val showAiAnnotations: Boolean = true,
+    /** 多气泡回复；默认关。 */
+    val multiBubbleEnabled: Boolean = false,
+    /** agent 主动调用开关矩阵；全部默认关。 */
+    val autonomy: CompanionAutonomySettings = CompanionAutonomySettings(),
     val isWorking: Boolean = false,
     /** 封面缓存占用字节数；null = 还没统计。 */
     val coverCacheBytes: Long? = null,
@@ -73,16 +78,28 @@ class SettingsViewModel @Inject constructor(
         val shelfLayout: ShelfLayout,
         val suggestionRepliesEnabled: Boolean,
         val showAiAnnotations: Boolean,
-        val memory: CompanionMemorySettings
+        val memory: CompanionMemorySettings,
+        val multiBubbleEnabled: Boolean,
+        val autonomy: CompanionAutonomySettings
     )
 
     private val appPrefs = combine(
         readerSettingsRepository.settings.map { it.shelfLayout },
         readerSettingsRepository.suggestionRepliesEnabled,
         readerSettingsRepository.showAiAnnotations,
-        readerSettingsRepository.companionMemorySettings
-    ) { layout, suggestions, aiAnnotations, memory ->
-        AppPrefs(layout, suggestions, aiAnnotations, memory)
+        readerSettingsRepository.companionMemorySettings,
+        readerSettingsRepository.companionMultiBubbleEnabled,
+        readerSettingsRepository.companionAutonomySettings
+    ) { values ->
+        @Suppress("UNCHECKED_CAST")
+        AppPrefs(
+            shelfLayout = values[0] as ShelfLayout,
+            suggestionRepliesEnabled = values[1] as Boolean,
+            showAiAnnotations = values[2] as Boolean,
+            memory = values[3] as CompanionMemorySettings,
+            multiBubbleEnabled = values[4] as Boolean,
+            autonomy = values[5] as CompanionAutonomySettings
+        )
     }
 
     private data class AiConfig(
@@ -118,6 +135,8 @@ class SettingsViewModel @Inject constructor(
             suggestionRepliesEnabled = prefs.suggestionRepliesEnabled,
             showAiAnnotations = prefs.showAiAnnotations,
             memory = prefs.memory,
+            multiBubbleEnabled = prefs.multiBubbleEnabled,
+            autonomy = prefs.autonomy,
             isWorking = isWorking,
             coverCacheBytes = usage?.coverBytes,
             bookStorageBytes = usage?.bookBytes
@@ -148,11 +167,11 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun retryEmbedding() {
-        embeddingProgressTracker.retryAll()
+        viewModelScope.launch { embeddingProgressTracker.retryAll() }
     }
 
     fun rebuildEmbedding() {
-        embeddingProgressTracker.rebuildAll()
+        viewModelScope.launch { embeddingProgressTracker.rebuildAll() }
     }
 
     fun setThemeMode(mode: ThemeMode) {
@@ -189,6 +208,34 @@ class SettingsViewModel @Inject constructor(
 
     fun setShowAiAnnotations(enabled: Boolean) {
         viewModelScope.launch { readerSettingsRepository.setShowAiAnnotations(enabled) }
+    }
+
+    fun setMultiBubble(enabled: Boolean) {
+        viewModelScope.launch { readerSettingsRepository.setCompanionMultiBubbleEnabled(enabled) }
+    }
+
+    fun setVoiceReplies(enabled: Boolean) {
+        viewModelScope.launch { readerSettingsRepository.setCompanionVoiceReplies(enabled) }
+    }
+
+    fun setImageReplies(enabled: Boolean) {
+        viewModelScope.launch { readerSettingsRepository.setCompanionImageReplies(enabled) }
+    }
+
+    fun setProactiveAnnotations(enabled: Boolean) {
+        viewModelScope.launch { readerSettingsRepository.setCompanionProactiveAnnotations(enabled) }
+    }
+
+    fun setProactiveAnnotationVoice(enabled: Boolean) {
+        viewModelScope.launch {
+            readerSettingsRepository.setCompanionProactiveAnnotationVoice(enabled)
+        }
+    }
+
+    fun setProactiveAnnotationImage(enabled: Boolean) {
+        viewModelScope.launch {
+            readerSettingsRepository.setCompanionProactiveAnnotationImage(enabled)
+        }
     }
 
     fun refreshStorageUsage() {

@@ -24,6 +24,7 @@ import com.mozhi.reader.ai.embedding.BookEmbeddingScheduler
 import com.mozhi.reader.ai.embedding.BookEmbeddingPipeline
 import com.mozhi.reader.ai.embedding.EmbedOutcome
 import com.mozhi.reader.core.library.LibraryRepository
+import com.mozhi.reader.core.datastore.BookEmbeddingSettingsStore
 import com.mozhi.reader.core.vector.VectorQueries
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
@@ -40,6 +41,7 @@ import io.objectbox.BoxStore
 interface BookEmbeddingEntryPoint {
     fun libraryRepository(): LibraryRepository
     fun embeddingPipeline(): BookEmbeddingPipeline
+    fun embeddingSettingsStore(): BookEmbeddingSettingsStore
     fun vectorStore(): BoxStore
 }
 
@@ -47,16 +49,15 @@ interface BookEmbeddingEntryPoint {
 class WorkBookEmbeddingScheduler @Inject constructor(
     @ApplicationContext private val context: Context
 ) : BookEmbeddingScheduler {
-    override fun enqueue(resetBookIndex: Boolean) =
-        BookEmbeddingWorker.enqueue(context, resetBookIndex)
+    override fun enqueueForBook(bookId: Long, resetBookIndex: Boolean) =
+        BookEmbeddingWorker.enqueueForBook(context, bookId, resetBookIndex)
 
-    override fun enqueueForBook(bookId: Long) =
-        BookEmbeddingWorker.enqueueForBook(context, bookId)
+    override fun cancelForBook(bookId: Long) =
+        BookEmbeddingWorker.cancelForBook(context, bookId)
 }
 
 /**
- * 全库向量索引扫描任务：逐书跑 [BookEmbeddingPipeline]，导入完成、模型分配与版本级
- * 启动兜底时排队。
+ * 单书向量索引任务。每本书独立排队、取消和重建，不再隐式扫描整个书库。
  *
  * 幂等靠管线的按章续跑；未配置 embedding 等 Skipped 情形直接成功收工——
  * 「待处理」的标记就是切片本身的缺失，下次触发自然补上。网络类失败退避重试。
@@ -76,49 +77,26 @@ class BookEmbeddingWorker(
     }
 
     override suspend fun doWork(): Result {
-        val targetBookId = inputData.getLong(INPUT_BOOK_ID, ALL_BOOKS)
-        val books = entryPoint.libraryRepository().getBooks()
-            .let { all ->
-                if (targetBookId == ALL_BOOKS) all else all.filter { it.id == targetBookId }
-            }
-        if (books.isEmpty()) return successResult()
+        val targetBookId = inputData.getLong(INPUT_BOOK_ID, INVALID_BOOK_ID)
+        if (targetBookId == INVALID_BOOK_ID) return Result.failure()
+        if (!entryPoint.embeddingSettingsStore().isEnabled(targetBookId)) {
+            VectorQueries.removeChunksForBook(entryPoint.vectorStore(), targetBookId)
+            return Result.success()
+        }
+        val book = entryPoint.libraryRepository().getBook(targetBookId) ?: return Result.success()
 
         // 不同 embedding 模型的坐标系不可混用。模型分配变化后先清书籍切片，随后本轮
         // 从第 1 章完整重建；先清后建即使进程中途退出也只会暂时缺索引，不会错误召回。
         if (inputData.getBoolean(INPUT_RESET_INDEX, false)) {
-            books.forEach { book ->
-                VectorQueries.removeChunksForBook(entryPoint.vectorStore(), book.id)
-            }
+            VectorQueries.removeChunksForBook(entryPoint.vectorStore(), book.id)
         }
 
         val pipeline = entryPoint.embeddingPipeline()
-        books.forEachIndexed { index, book ->
-            runCatching {
-                setForeground(
-                    createForegroundInfo("《${book.title}》（${index + 1}/${books.size}）")
-                )
-            }
-            when (val outcome = pipeline.embedBook(book.id)) {
-                is EmbedOutcome.Completed -> Unit
-                // 配置类问题对每本书都一样，整轮收工等配置变化。
-                is EmbedOutcome.Skipped -> return successResult()
-                is EmbedOutcome.Failed -> return Result.retry()
-            }
+        runCatching { setForeground(createForegroundInfo("《${book.title}》")) }
+        return when (pipeline.embedBook(book.id)) {
+            is EmbedOutcome.Completed, is EmbedOutcome.Skipped -> Result.success()
+            is EmbedOutcome.Failed -> Result.retry()
         }
-        return successResult()
-    }
-
-    /** 启动补扫只需成功尝试一次；以后由导入完成与 embedding 模型分配精确触发。 */
-    private fun successResult(): Result {
-        if (inputData.getBoolean(INPUT_STARTUP_SCAN, false)) {
-            applicationContext.getSharedPreferences(
-                MAINTENANCE_PREFERENCES,
-                Context.MODE_PRIVATE
-            ).edit()
-                .putInt(PREFERENCE_STARTUP_SCAN_VERSION, STARTUP_SCAN_VERSION)
-                .apply()
-        }
-        return Result.success()
     }
 
     override suspend fun getForegroundInfo(): ForegroundInfo =
@@ -173,27 +151,23 @@ class BookEmbeddingWorker(
     }
 
     companion object {
-        private const val UNIQUE_WORK_NAME = "book-embedding"
-        private const val INPUT_STARTUP_SCAN = "startup-scan"
         private const val INPUT_RESET_INDEX = "reset-index"
         private const val INPUT_BOOK_ID = "book-id"
-        private const val ALL_BOOKS = -1L
-        private const val MAINTENANCE_PREFERENCES = "app-maintenance"
-        private const val PREFERENCE_STARTUP_SCAN_VERSION = "embedding-startup-scan-version"
-        private const val STARTUP_SCAN_VERSION = 1
+        private const val INVALID_BOOK_ID = -1L
         private const val NOTIFICATION_CHANNEL_ID = "ai_index"
         private const val NOTIFICATION_ID = 4_200
 
-        /**
-         * APPEND_OR_REPLACE：扫描进行中再有触发时排到其后补扫，
-         * 不像 KEEP 那样把新触发静默丢掉。现仅由设置页手动重建/重试调用。
-         */
-        fun enqueue(context: Context, resetBookIndex: Boolean = false) {
+        fun enqueueForBook(context: Context, bookId: Long, resetBookIndex: Boolean = false) {
             WorkManager.getInstance(context).enqueueUniqueWork(
-                UNIQUE_WORK_NAME,
-                ExistingWorkPolicy.APPEND_OR_REPLACE,
+                workName(bookId),
+                if (resetBookIndex) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP,
                 OneTimeWorkRequestBuilder<BookEmbeddingWorker>()
-                    .setInputData(workDataOf(INPUT_RESET_INDEX to resetBookIndex))
+                    .setInputData(
+                        workDataOf(
+                            INPUT_BOOK_ID to bookId,
+                            INPUT_RESET_INDEX to resetBookIndex
+                        )
+                    )
                     .setConstraints(
                         Constraints.Builder()
                             .setRequiredNetworkType(NetworkType.CONNECTED)
@@ -204,21 +178,10 @@ class BookEmbeddingWorker(
             )
         }
 
-        /** 按需单书索引：KEEP 幂等，同一本书重复触发只保留一份排队。 */
-        fun enqueueForBook(context: Context, bookId: Long) {
-            WorkManager.getInstance(context).enqueueUniqueWork(
-                "embed-book-$bookId",
-                ExistingWorkPolicy.KEEP,
-                OneTimeWorkRequestBuilder<BookEmbeddingWorker>()
-                    .setInputData(workDataOf(INPUT_BOOK_ID to bookId))
-                    .setConstraints(
-                        Constraints.Builder()
-                            .setRequiredNetworkType(NetworkType.CONNECTED)
-                            .build()
-                    )
-                    .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
-                    .build()
-            )
+        fun cancelForBook(context: Context, bookId: Long) {
+            WorkManager.getInstance(context).cancelUniqueWork(workName(bookId))
         }
+
+        private fun workName(bookId: Long) = "embed-book-$bookId"
     }
 }

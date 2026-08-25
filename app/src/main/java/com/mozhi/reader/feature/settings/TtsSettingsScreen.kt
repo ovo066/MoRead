@@ -226,6 +226,7 @@ fun TtsSettingsScreen(
                                     TtsApiProvider.MINIMAX_CN -> "MiniMax 国内：https://api.minimaxi.com/v1"
                                     TtsApiProvider.MINIMAX_INTL -> "MiniMax 海外：https://api.minimax.io/v1"
                                     TtsApiProvider.OPENAI_COMPAT -> "OpenAI 官方或任意兼容中转"
+                                    TtsApiProvider.GMI_CLOUD -> "GMI Cloud，或兼容其 Request Queue 协议的地址"
                                 }
                             )
                         },
@@ -253,7 +254,10 @@ fun TtsSettingsScreen(
                         },
                         modifier = Modifier.fillMaxWidth()
                     )
-                    if (settings.aiProvider != TtsApiProvider.OPENAI_COMPAT) {
+                    if (
+                        settings.aiProvider == TtsApiProvider.MINIMAX_CN ||
+                        settings.aiProvider == TtsApiProvider.MINIMAX_INTL
+                    ) {
                         OutlinedTextField(
                             value = settings.aiGroupId,
                             onValueChange = viewModel::setAiGroupId,
@@ -269,10 +273,10 @@ fun TtsSettingsScreen(
                         label = { Text("模型") },
                         supportingText = {
                             Text(
-                                if (settings.aiProvider == TtsApiProvider.OPENAI_COMPAT) {
-                                    "如 gpt-4o-mini-tts / tts-1"
-                                } else {
-                                    if ("turbo" in settings.aiModel.lowercase()) {
+                                when (settings.aiProvider) {
+                                    TtsApiProvider.OPENAI_COMPAT -> "如 gpt-4o-mini-tts / tts-1"
+                                    TtsApiProvider.GMI_CLOUD -> "如 minimax-tts-speech-2.8-hd"
+                                    else -> if ("turbo" in settings.aiModel.lowercase()) {
                                         "Turbo 更偏速度；有声书表演推荐 speech-2.8-hd"
                                     } else {
                                         "有声书推荐 speech-2.8-hd；低延迟可用 speech-2.8-turbo"
@@ -287,7 +291,9 @@ fun TtsSettingsScreen(
                         value = settings.aiVoiceId,
                         onValueChange = viewModel::setAiVoice,
                         label = { Text("音色 ID（可选）") },
-                        supportingText = { Text("OpenAI 如 alloy / nova；MiniMax 可填系统或克隆音色 ID") },
+                        supportingText = {
+                            Text("OpenAI 如 alloy / nova；MiniMax 与 GMI 可填系统或克隆音色 ID")
+                        },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -298,14 +304,14 @@ fun TtsSettingsScreen(
                         onChange = viewModel::setAiSpeed
                     )
                     LabeledSlider(
-                        label = "音量（MiniMax）",
+                        label = "音量（MiniMax / GMI）",
                         value = settings.aiVolume,
                         range = 0.5f..2f,
                         onChange = viewModel::setAiVolume
                     )
                     Column {
                         Text(
-                            "音调（MiniMax）：${settings.aiPitch}",
+                            "音调（MiniMax / GMI）：${settings.aiPitch}",
                             style = MaterialTheme.typography.bodySmall
                         )
                         Slider(
@@ -316,7 +322,11 @@ fun TtsSettingsScreen(
                         )
                     }
                     Text(
-                        "OpenAI 不支持音量与音调。",
+                        if (settings.aiProvider == TtsApiProvider.GMI_CLOUD) {
+                            "GMI 请求会自动等待任务完成并下载音频，默认情绪为 auto。"
+                        } else {
+                            "OpenAI 不支持音量与音调。"
+                        },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -384,4 +394,5 @@ private fun TtsApiProvider.label(): String = when (this) {
     TtsApiProvider.MINIMAX_CN -> "MiniMax（国内）"
     TtsApiProvider.MINIMAX_INTL -> "MiniMax（海外）"
     TtsApiProvider.OPENAI_COMPAT -> "OpenAI 兼容"
+    TtsApiProvider.GMI_CLOUD -> "GMI Cloud（自定义 TTS）"
 }

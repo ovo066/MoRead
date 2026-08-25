@@ -18,4 +18,7 @@ interface BookImportGateway {
     suspend fun importDirectly(uri: Uri): Long
 
     suspend fun backfillMissingCovers()
+
+    /** Rebuilds hierarchical EPUB navigation for books imported before it was persisted. */
+    suspend fun backfillMissingEpubToc()
 }

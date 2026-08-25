@@ -4,6 +4,8 @@ import android.net.Uri
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.mozhi.reader.ai.embedding.BookEmbeddingProgress
+import com.mozhi.reader.ai.embedding.EmbeddingProgressTracker
 import com.mozhi.reader.core.database.entity.AnnotationEntity
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.BookReadState
@@ -66,6 +68,7 @@ data class BookDetailUiState(
     val audiobookReadyChapters: Int = 0,
     val audiobookTotalMillis: Long = 0,
     val audiobookRoleNames: List<String> = emptyList(),
+    val embeddingProgress: BookEmbeddingProgress? = null,
     val description: String = "",
     val isLoading: Boolean = true,
     val isWorking: Boolean = false
@@ -99,6 +102,7 @@ class BookDetailViewModel @Inject constructor(
     private val noteExporter: NoteExporter,
     private val shelfRepository: ShelfOrganizationRepository,
     private val audiobookRepository: AudiobookRepository,
+    private val embeddingProgressTracker: EmbeddingProgressTracker,
     personaDao: com.mozhi.reader.core.database.dao.PersonaDao
 ) : ViewModel() {
     private val bookId: Long = when (val value: Any? = savedStateHandle["bookId"]) {
@@ -164,7 +168,8 @@ class BookDetailViewModel @Inject constructor(
         val settings: com.mozhi.reader.core.datastore.ReaderSettings,
         val shelf: com.mozhi.reader.core.library.ShelfOrganizationSnapshot,
         val audiobookChapters: List<com.mozhi.reader.core.database.entity.AudiobookChapterEntity>,
-        val audiobookRoles: List<com.mozhi.reader.core.database.entity.AudiobookRoleEntity>
+        val audiobookRoles: List<com.mozhi.reader.core.database.entity.AudiobookRoleEntity>,
+        val embeddingProgress: BookEmbeddingProgress
     )
 
     private val bookDescription = libraryRepository.observeChapters(bookId).mapLatest { chapters ->
@@ -179,9 +184,10 @@ class BookDetailViewModel @Inject constructor(
         settingsRepository.settings,
         shelfRepository.snapshot,
         audiobookRepository.observeChapters(bookId),
-        audiobookRepository.observeRoles(bookId)
-    ) { settings, shelf, audiobookChapters, audiobookRoles ->
-        DetailExtras(settings, shelf, audiobookChapters, audiobookRoles)
+        audiobookRepository.observeRoles(bookId),
+        embeddingProgressTracker.observeBook(bookId)
+    ) { settings, shelf, audiobookChapters, audiobookRoles, embeddingProgress ->
+        DetailExtras(settings, shelf, audiobookChapters, audiobookRoles, embeddingProgress)
     }
 
     init {
@@ -220,6 +226,7 @@ class BookDetailViewModel @Inject constructor(
                 .filter { it.state == "READY" }
                 .sumOf { it.totalMillis },
             audiobookRoleNames = extras.audiobookRoles.map { it.name },
+            embeddingProgress = extras.embeddingProgress,
             description = description,
             isLoading = false,
             isWorking = isWorking
@@ -232,6 +239,37 @@ class BookDetailViewModel @Inject constructor(
 
     fun deleteBookmark(bookmarkId: Long) {
         viewModelScope.launch { libraryRepository.deleteBookmark(bookmarkId) }
+    }
+
+    fun setBookIndexEnabled(enabled: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                if (enabled) embeddingProgressTracker.enable(bookId)
+                else embeddingProgressTracker.disable(bookId)
+            }.onSuccess {
+                eventChannel.send(
+                    BookDetailEvent.ShowMessage(
+                        if (enabled) "已为本书开启 AI 索引" else "已停用并删除本书 AI 索引"
+                    )
+                )
+            }.onFailure { error ->
+                eventChannel.send(BookDetailEvent.ShowMessage(error.message ?: "索引设置失败"))
+            }
+        }
+    }
+
+    fun retryBookIndex() {
+        embeddingProgressTracker.retry(bookId)
+    }
+
+    fun rebuildBookIndex() {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { embeddingProgressTracker.rebuild(bookId) }
+                .onSuccess { eventChannel.send(BookDetailEvent.ShowMessage("已加入本书索引重建队列")) }
+                .onFailure { error ->
+                    eventChannel.send(BookDetailEvent.ShowMessage(error.message ?: "索引重建失败"))
+                }
+        }
     }
 
     fun createNote(title: String, content: String) {

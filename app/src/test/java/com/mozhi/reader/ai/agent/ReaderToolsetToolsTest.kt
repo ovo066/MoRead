@@ -97,6 +97,7 @@ class ReaderToolsetToolsTest {
 
     @Test
     fun searchBookFallsBackToLocalChineseKeywordSearchWhenEmbeddingFails() = runTest {
+        store.boxFor(BookChunk::class.java).put(chunk(chapterIndex = 0, text = "已有索引占位"))
         val tool = SearchBookTool(
             bookId = 1,
             getBook = { book(lastReadChapterIndex = 3) },
@@ -140,6 +141,7 @@ class ReaderToolsetToolsTest {
 
     @Test
     fun searchBookSurfacesEmbeddingFailureAsReadableText() = runTest {
+        store.boxFor(BookChunk::class.java).put(chunk(chapterIndex = 0, text = "已有索引占位"))
         val tool = SearchBookTool(
             bookId = 1,
             getBook = { book(lastReadChapterIndex = 3) },
@@ -168,6 +170,34 @@ class ReaderToolsetToolsTest {
 
         // 每次调用都可请求（Worker 侧 KEEP 幂等），关键是无索引时确实发出了请求
         assertEquals(2, requested)
+    }
+
+    @Test
+    fun searchBookDoesNotUseOrScheduleVectorIndexWhenBookIndexingIsDisabled() = runTest {
+        var embedded = 0
+        var requested = 0
+        val tool = SearchBookTool(
+            bookId = 99,
+            getBook = { book(lastReadChapterIndex = 3) },
+            chapterTitle = { "章题$it" },
+            embedQuery = {
+                embedded++
+                vector(1f, 0f)
+            },
+            store = { store },
+            loadChaptersThrough = {
+                listOf(ChapterDocument(1, "追查", "张小敬在西市追查狼卫。"))
+            },
+            requestIndex = { requested++ },
+            indexingEnabled = { false }
+        )
+
+        val result = tool.execute(buildJsonObject { put("query", "张小敬追查狼卫") })
+
+        assertEquals(0, embedded)
+        assertEquals(0, requested)
+        assertTrue(result, result.contains("本书未启用 AI 索引"))
+        assertTrue(result, result.contains("西市追查狼卫"))
     }
 
     @Test

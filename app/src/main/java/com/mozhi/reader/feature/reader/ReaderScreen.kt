@@ -89,6 +89,8 @@ import com.mozhi.reader.core.datastore.activeThemeSlot
 import com.mozhi.reader.core.datastore.resolveThemeSlot
 import com.mozhi.reader.feature.reader.engine.ReaderAnnotationMark
 import com.mozhi.reader.feature.reader.engine.ReaderIllustrationMark
+import com.mozhi.reader.feature.reader.engine.InlineMarkerKind
+import com.mozhi.reader.feature.reader.engine.InlineMarkerReservation
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 
@@ -104,7 +106,7 @@ private data class AnnotationThreadKey(
     val endCharOffset: Int
 )
 
-private data class TextEditDraft(
+internal data class TextEditDraft(
     val chapterIndex: Int,
     val range: IntRange,
     val originalText: String
@@ -310,6 +312,17 @@ fun ReaderScreen(
                 endCharOffset = start + illustration.sourceText.length.coerceAtLeast(1)
             )
         }
+    }
+    LaunchedEffect(annotationMarks, illustrationMarks) {
+        val reservations = buildList {
+            annotationMarks.filter { it.hasComment }.forEach {
+                add(it.chapterIndex to InlineMarkerReservation(it.endCharOffset, InlineMarkerKind.ANNOTATION))
+            }
+            illustrationMarks.forEach {
+                add(it.chapterIndex to InlineMarkerReservation(it.endCharOffset, InlineMarkerKind.ILLUSTRATION))
+            }
+        }.distinct().groupBy({ it.first }, { it.second })
+        viewModel.contentController.setInlineMarkers(reservations)
     }
     val threadAnnotations = annotationThread?.let { key ->
         state.annotations.filter {
@@ -659,84 +672,28 @@ fun ReaderScreen(
             }
         )
 
-        selectionMediaState.status?.let { status ->
-            Surface(
-                shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
-                color = palette.glassStrong,
-                contentColor = palette.onBackground,
-                shadowElevation = 8.dp,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(
-                        start = 20.dp,
-                        end = 20.dp,
-                        bottom = if (chromeVisible && !detailsVisible) 154.dp else 26.dp
-                    )
-            ) {
-                Row(
-                    modifier = Modifier.padding(start = 14.dp, end = 6.dp, top = 7.dp, bottom = 7.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (selectionMediaState.isWorking) {
-                        CircularProgressIndicator(
-                            strokeWidth = 2.dp,
-                            color = palette.accent,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                    Text(
-                        status,
-                        style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(start = if (selectionMediaState.isWorking) 9.dp else 0.dp)
-                    )
-                    TextButton(
-                        onClick = if (selectionMediaState.isPlaying) {
-                            selectionMediaViewModel::stopAudio
-                        } else {
-                            selectionMediaViewModel::cancelOperation
-                        }
-                    ) {
-                        Text(if (selectionMediaState.isPlaying) "停止" else "取消", color = palette.accent)
-                    }
-                }
-            }
-        }
+        ReaderSelectionMediaStatus(
+            state = selectionMediaState,
+            palette = palette,
+            bottomPadding = if (chromeVisible && !detailsVisible) 154.dp else 26.dp,
+            onStop = selectionMediaViewModel::stopAudio,
+            onCancel = selectionMediaViewModel::cancelOperation
+        )
 
-        // 即划即改浮条：点浮条外任意处收起；翻页/跳章由 LaunchedEffect 收起
-        inkFloater?.let { floater ->
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clickable(
-                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                        indication = null
-                    ) { inkFloater = null }
-            )
-            val floaterAnnotation = state.annotations.firstOrNull { it.id == floater.annotationId }
-            if (floaterAnnotation != null) {
-                Surface(
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .offset { androidx.compose.ui.unit.IntOffset(0, floater.topPx) },
-                    shape = androidx.compose.foundation.shape.RoundedCornerShape(17.dp),
-                    color = palette.glassStrong,
-                    contentColor = palette.onBackground,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, palette.glassBorder),
-                    shadowElevation = 8.dp
-                ) {
-                    AnnotationStylePanel(
-                        selectedStyle = AnnotationStyle.fromWire(floaterAnnotation.style),
-                        selectedColor = AnnotationColors.normalize(floaterAnnotation.colorTag),
-                        palette = palette,
-                        onChange = { style, color ->
-                            viewModel.updateAnnotationStyle(floater.annotationId, style, color)
-                        }
-                    )
+        val activeInkFloater = inkFloater
+        ReaderAnnotationInkOverlay(
+            annotation = activeInkFloater?.let { floater ->
+                state.annotations.firstOrNull { it.id == floater.annotationId }
+            },
+            topPx = activeInkFloater?.topPx,
+            palette = palette,
+            onDismiss = { inkFloater = null },
+            onChange = { style, color ->
+                activeInkFloater?.let { floater ->
+                    viewModel.updateAnnotationStyle(floater.annotationId, style, color)
                 }
             }
-        }
+        )
 
         SnackbarHost(
             hostState = snackbarHostState,
@@ -756,6 +713,7 @@ fun ReaderScreen(
         ) {
             ContentsSheet(
                 chapters = state.chapters,
+                tocEntries = state.tocEntries,
                 currentChapterIndex = state.currentChapterIndex,
                 palette = palette,
                 onChapterClick = { index ->
@@ -766,7 +724,7 @@ fun ReaderScreen(
         }
         ReaderSheet.BOOKMARKS -> ModalBottomSheet(
             onDismissRequest = { activeSheet = null },
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false),
             containerColor = palette.glassStrong,
             contentColor = palette.onBackground,
             scrimColor = palette.scrim
@@ -902,6 +860,11 @@ fun ReaderScreen(
                         activeSheet = null
                         searchViewModel.clear()
                         viewModel.goToPosition(hit.chapterIndex, hit.charOffset)
+                        locateHighlight = com.mozhi.reader.feature.reader.engine.TransientHighlightSpan(
+                            chapterIndex = hit.chapterIndex,
+                            startCharOffset = hit.charOffset,
+                            endCharOffset = hit.charOffset + hit.matchLength
+                        )
                     }
                 )
             }
@@ -930,25 +893,14 @@ fun ReaderScreen(
         )
     }
 
-    // 参数已迁到「设置 › 语音朗读」；这里只确认朗读范围，直接按配置开读
-    ttsDraft?.let { text ->
-        AlertDialog(
-            onDismissRequest = { ttsDraft = null },
-            title = { Text("朗读当前页") },
-            text = {
-                Text("将朗读当前页正文（约 ${text.length} 字）。引擎与音色可在「设置 › 语音朗读」调整。")
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    selectionMediaViewModel.speak(bookId = bookId, selection = text)
-                    ttsDraft = null
-                }) { Text("开始朗读") }
-            },
-            dismissButton = {
-                TextButton(onClick = { ttsDraft = null }) { Text("取消") }
-            }
-        )
-    }
+    ReaderSpeechConfirmDialog(
+        text = ttsDraft,
+        onDismiss = { ttsDraft = null },
+        onConfirm = { text ->
+            selectionMediaViewModel.speak(bookId = bookId, selection = text)
+            ttsDraft = null
+        }
+    )
 
     if (annotationThread != null) {
         val discussionViewModel: AnnotationDiscussionViewModel = hiltViewModel()
@@ -971,7 +923,9 @@ fun ReaderScreen(
                 streaming = discussionState.streaming,
                 error = discussionState.error,
                 personas = companionState.personas,
+                illustrations = state.illustrations,
                 palette = palette,
+                onPlayAudio = selectionMediaViewModel::playCachedSpeech,
                 onSend = { target, text, respondPersonaId ->
                     discussionViewModel.sendUserReply(bookId, target, text, respondPersonaId)
                 },
@@ -987,141 +941,21 @@ fun ReaderScreen(
         }
     }
 
-    selectionMediaState.imagePath?.let { imagePath ->
-        var editablePrompt by remember(imagePath) {
-            mutableStateOf(selectionMediaState.imagePrompt.orEmpty())
-        }
-        var improvement by remember(imagePath) { mutableStateOf("") }
-        val imageGeneration = selectionMediaState.imageGeneration
-        AlertDialog(
-            onDismissRequest = selectionMediaViewModel::dismissImage,
-            title = { Text("选段插图") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    AsyncImage(
-                        model = imagePath,
-                        contentDescription = "根据选段生成的插图",
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 460.dp)
-                    )
-                    if (imageGeneration != null) {
-                        OutlinedTextField(
-                            value = editablePrompt,
-                            onValueChange = { editablePrompt = it.take(8_000) },
-                            label = { Text("生图提示词（可编辑）") },
-                            minLines = 3,
-                            maxLines = 6,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        OutlinedTextField(
-                            value = improvement,
-                            onValueChange = { improvement = it.take(2_000) },
-                            label = { Text("告诉 AI 如何改进（可选）") },
-                            minLines = 2,
-                            maxLines = 4,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        selectionMediaState.status?.let { status ->
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (selectionMediaState.isWorking) {
-                                    CircularProgressIndicator(
-                                        strokeWidth = 2.dp,
-                                        color = palette.accent,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
-                                Text(
-                                    status,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(start = if (selectionMediaState.isWorking) 8.dp else 0.dp)
-                                )
-                            }
-                        }
-                    } else {
-                        selectionMediaState.imagePrompt?.let { prompt ->
-                            Text(
-                                prompt,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 4,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        }
-                    }
-                    Text(
-                        "图片已保存到本机应用目录。",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            },
-            confirmButton = {
-                if (imageGeneration != null) {
-                    Row {
-                        TextButton(
-                            enabled = !selectionMediaState.isWorking,
-                            onClick = {
-                                selectionMediaViewModel.rerollImage(imageGeneration.basePrompt)
-                            }
-                        ) { Text("直接重绘") }
-                        TextButton(
-                            enabled = !selectionMediaState.isWorking && editablePrompt.isNotBlank(),
-                            onClick = {
-                                selectionMediaViewModel.rerollImage(editablePrompt, improvement)
-                                improvement = ""
-                            }
-                        ) { Text("按提示词重绘") }
-                    }
-                } else {
-                    TextButton(onClick = selectionMediaViewModel::dismissImage) { Text("完成") }
-                }
-            },
-            dismissButton = {
-                if (imageGeneration != null) {
-                    TextButton(onClick = selectionMediaViewModel::dismissImage) { Text("完成") }
-                }
-            }
-        )
-    }
+    ReaderGeneratedImageDialog(
+        state = selectionMediaState,
+        palette = palette,
+        onDismiss = selectionMediaViewModel::dismissImage,
+        onReroll = selectionMediaViewModel::rerollImage
+    )
 
-    textEditDraft?.let { draft ->
-        var editedText by remember(draft) { mutableStateOf(draft.originalText) }
-        AlertDialog(
-            onDismissRequest = { textEditDraft = null },
-            title = { Text("编辑选中文本") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        "保存后会更新本书本地正文。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    OutlinedTextField(
-                        value = editedText,
-                        onValueChange = { editedText = it.take(20_000) },
-                        label = { Text("正文") },
-                        minLines = 4,
-                        maxLines = 10,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = editedText != draft.originalText,
-                    onClick = {
-                        viewModel.editSelectedText(draft.chapterIndex, draft.range, editedText)
-                        textEditDraft = null
-                    }
-                ) { Text("保存") }
-            },
-            dismissButton = {
-                TextButton(onClick = { textEditDraft = null }) { Text("取消") }
-            }
-        )
-    }
+    ReaderTextEditDialog(
+        draft = textEditDraft,
+        onDismiss = { textEditDraft = null },
+        onSave = { draft, editedText ->
+            viewModel.editSelectedText(draft.chapterIndex, draft.range, editedText)
+            textEditDraft = null
+        }
+    )
 
     aiRequest?.let { request ->
         LaunchedEffect(request) { aiViewModel.start(request) }
@@ -1151,269 +985,19 @@ fun ReaderScreen(
         }
     }
 
-    pendingFont?.let { font ->
-        AlertDialog(
-            onDismissRequest = {
-                viewModel.cancelCustomFontImport(font)
-                pendingFont = null
-            },
-            title = { Text("确认导入字体") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        "已从 ${font.originalFileName} 识别字体名称，可在保存前修改。",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    OutlinedTextField(
-                        value = pendingFontName,
-                        onValueChange = { pendingFontName = it.take(48) },
-                        label = { Text("字体名称") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = pendingFontName.isNotBlank(),
-                    onClick = {
-                        viewModel.confirmCustomFont(font, pendingFontName)
-                        pendingFont = null
-                    }
-                ) { Text("导入并应用") }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = {
-                        viewModel.cancelCustomFontImport(font)
-                        pendingFont = null
-                    }
-                ) { Text("取消") }
-            }
-        )
-    }
-}
-
-@Composable
-private fun ContentsSheet(
-    chapters: List<ChapterEntity>,
-    currentChapterIndex: Int,
-    palette: ReaderPalette,
-    onChapterClick: (Int) -> Unit
-) {
-    // 打开即定位到当前章附近；配合 skipPartiallyExpanded 与满高布局，无需再上滑。
-    val listState = androidx.compose.foundation.lazy.rememberLazyListState(
-        initialFirstVisibleItemIndex = (currentChapterIndex - 2).coerceAtLeast(0)
+    ReaderFontImportDialog(
+        font = pendingFont,
+        name = pendingFontName,
+        onNameChange = { pendingFontName = it },
+        onDismiss = { font ->
+            viewModel.cancelCustomFontImport(font)
+            pendingFont = null
+        },
+        onConfirm = { font, name ->
+            viewModel.confirmCustomFont(font, name)
+            pendingFont = null
+        }
     )
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
-    Column(modifier = Modifier.fillMaxHeight()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 20.dp, end = 16.dp, top = 2.dp, bottom = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "目录",
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = palette.onBackground
-                )
-                Text(
-                    text = "共 ${chapters.size} 章 · 读到第 ${currentChapterIndex + 1} 章",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = palette.muted,
-                    modifier = Modifier.padding(top = 2.dp)
-                )
-            }
-            Surface(
-                onClick = {
-                    scope.launch {
-                        listState.animateScrollToItem((currentChapterIndex - 2).coerceAtLeast(0))
-                    }
-                },
-                shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
-                color = palette.glass,
-                contentColor = palette.accent,
-                border = androidx.compose.foundation.BorderStroke(1.dp, palette.glassBorder)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 11.dp, vertical = 7.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        Icons.Outlined.MyLocation,
-                        contentDescription = null,
-                        tint = palette.accent,
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Text(
-                        text = "定位",
-                        style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.padding(start = 4.dp)
-                    )
-                }
-            }
-        }
-        LazyColumn(
-            state = listState,
-            modifier = Modifier
-                .weight(1f)
-                .navigationBarsPadding()
-                .blockSheetDrag(listState),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                start = 10.dp,
-                end = 10.dp,
-                bottom = 18.dp
-            )
-        ) {
-            items(chapters, key = ChapterEntity::id) { chapter ->
-                val current = chapter.chapterIndex == currentChapterIndex
-                Surface(
-                    onClick = { onChapterClick(chapter.chapterIndex) },
-                    shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
-                    color = if (current) {
-                        palette.accentContainer.copy(alpha = 0.6f)
-                    } else {
-                        Color.Transparent
-                    },
-                    contentColor = palette.onBackground,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 1.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 11.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = (chapter.chapterIndex + 1).toString().padStart(3, '0'),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (current) palette.accent else palette.muted,
-                            modifier = Modifier.padding(end = 12.dp)
-                        )
-                        Text(
-                            text = chapter.title,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal,
-                            color = if (current) palette.accent else palette.onBackground,
-                            maxLines = 1,
-                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
-                        )
-                        if (current) {
-                            Icon(
-                                Icons.Outlined.Check,
-                                contentDescription = "当前章节",
-                                tint = palette.accent,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun BookmarksSheet(
-    bookmarks: List<BookmarkEntity>,
-    palette: ReaderPalette,
-    onBookmarkClick: (BookmarkEntity) -> Unit,
-    onDeleteBookmark: (Long) -> Unit
-) {
-    Column(modifier = Modifier.fillMaxHeight()) {
-        Column(modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 10.dp)) {
-            Text(
-                text = "书签",
-                style = MaterialTheme.typography.headlineSmall,
-                color = palette.onBackground
-            )
-            Text(
-                text = "共 ${bookmarks.size} 条",
-                style = MaterialTheme.typography.labelSmall,
-                color = palette.muted,
-                modifier = Modifier.padding(top = 2.dp)
-            )
-        }
-        if (bookmarks.isEmpty()) {
-            Text(
-                text = "还没有书签，阅读页右上角菜单即可添加。",
-                color = palette.muted,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-            )
-        } else {
-            val listState = androidx.compose.foundation.lazy.rememberLazyListState()
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .weight(1f)
-                    .navigationBarsPadding()
-                    .blockSheetDrag(listState),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                    start = 10.dp,
-                    end = 10.dp,
-                    bottom = 18.dp
-                )
-            ) {
-                items(bookmarks, key = BookmarkEntity::id) { bookmark ->
-                    Surface(
-                        onClick = { onBookmarkClick(bookmark) },
-                        shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
-                        color = Color.Transparent,
-                        contentColor = palette.onBackground,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 1.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(start = 12.dp, end = 2.dp, top = 8.dp, bottom = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = bookmark.label,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = palette.onBackground,
-                                    maxLines = 1,
-                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    text = bookmark.excerpt.ifBlank { "点击返回该位置" },
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = palette.muted,
-                                    maxLines = 2,
-                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                                    modifier = Modifier.padding(top = 2.dp)
-                                )
-                            }
-                            IconButton(onClick = { onDeleteBookmark(bookmark.id) }) {
-                                Icon(
-                                    Icons.Outlined.Delete,
-                                    contentDescription = "删除书签",
-                                    tint = palette.muted
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ReaderError(message: String, onBack: () -> Unit, modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier.padding(32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Text("无法打开书籍", style = MaterialTheme.typography.titleLarge)
-        Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        TextButton(onClick = onBack) { Text("返回书架") }
-    }
 }
 
 private tailrec fun Context.findComponentActivity(): ComponentActivity? = when (this) {

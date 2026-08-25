@@ -78,8 +78,7 @@ class ClaudeClient(
                             "error" -> close(
                                 AiClientException.Http(200, extractErrorMessage(data))
                             )
-                            else -> accumulator.onEvent(type, data)
-                                ?.let { trySend(ChatDelta.Text(it)) }
+                            else -> accumulator.onEvent(type, data)?.let { trySend(it) }
                         }
                     }
 
@@ -352,6 +351,7 @@ internal class ClaudeStreamAccumulator {
         internal data class Delta(
             val type: String? = null,
             val text: String? = null,
+            val thinking: String? = null,
             @kotlinx.serialization.SerialName("partial_json") val partialJson: String? = null
         )
     }
@@ -360,8 +360,8 @@ internal class ClaudeStreamAccumulator {
 
     private val toolSlots = LinkedHashMap<Int, ToolSlot>()
 
-    /** Feeds one SSE event; returns the text delta to emit, if any. */
-    fun onEvent(type: String?, data: String): String? {
+    /** Feeds one SSE event; returns the delta to emit (text or thinking), if any. */
+    fun onEvent(type: String?, data: String): ChatDelta? {
         when (type) {
             "content_block_start" -> {
                 val start = decode(BlockStart.serializer(), data) ?: return null
@@ -374,7 +374,13 @@ internal class ClaudeStreamAccumulator {
                 val event = decode(BlockDelta.serializer(), data) ?: return null
                 val delta = event.delta ?: return null
                 when (delta.type) {
-                    "text_delta" -> return delta.text?.takeIf(String::isNotEmpty)
+                    "text_delta" -> return delta.text
+                        ?.takeIf(String::isNotEmpty)
+                        ?.let(ChatDelta::Text)
+                    // 扩展思考：签名块（signature_delta）不是给人看的，只有 thinking 文本上屏。
+                    "thinking_delta" -> return delta.thinking
+                        ?.takeIf(String::isNotEmpty)
+                        ?.let(ChatDelta::Reasoning)
                     "input_json_delta" -> delta.partialJson?.let {
                         toolSlots[event.index]?.json?.append(it)
                     }

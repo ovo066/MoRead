@@ -1,15 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 白底黑线翻书标；几何整体落在自适应图标 66dp 安全区内。 -->
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <path
-        android:fillColor="#00000000"
-        android:strokeColor="#FF0F0F0F"
-        android:strokeWidth="7"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"
-        android:pathData="M30,40 C39,48 47,53 52.5,54.5 M78,40 C69,48 61,53 55.5,54.5 M32,55 C40,62 47,66.5 52.5,67.5 M76,55 C68,62 61,66.5 55.5,67.5" />
-</vector>
+<!-- 用户提供的图标：从白色画布自动去边，并缩放到 adaptive icon 的 66dp 安全区。 -->
+<bitmap xmlns:android="http://schemas.android.com/apk/res/android"
+    android:src="@drawable/launcher_artwork"
+    android:gravity="center"
+    android:filter="true"
+    android:antialias="true" />

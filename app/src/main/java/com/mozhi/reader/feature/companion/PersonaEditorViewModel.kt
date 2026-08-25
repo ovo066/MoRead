@@ -2,6 +2,7 @@ package com.mozhi.reader.feature.companion
 
 import android.content.Context
 import android.net.Uri
+import android.media.MediaPlayer
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -24,6 +25,9 @@ import com.mozhi.reader.core.datastore.ReaderFontAsset
 import com.mozhi.reader.core.datastore.ReaderImageAsset
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
 import com.mozhi.reader.ai.memory.PersonaMemoryRepository
+import com.mozhi.reader.ai.media.AiMediaGenerationService
+import com.mozhi.reader.core.database.entity.TtsVoiceEntity
+import com.mozhi.reader.core.speech.TtsVoiceRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -67,6 +71,12 @@ data class PersonaEditorState(
     /** 已沉淀的记忆条数；只作展示，管理入口在二级页。 */
     val memoryCount: Long = 0,
     val appearance: PersonaChatAppearance = PersonaChatAppearance.DEFAULT,
+    val voiceId: String = "",
+    val voiceEmotion: String = "",
+    val voices: List<TtsVoiceEntity> = emptyList(),
+    val voiceSearch: String = "",
+    val voiceGender: String? = null,
+    val previewingVoiceId: Long? = null,
     /** 共享图片库与字体库，聊天外观直接复用，不再单开一套资产管理。 */
     val imageLibrary: List<ReaderImageAsset> = emptyList(),
     val fontLibrary: List<ReaderFontAsset> = emptyList(),
@@ -91,7 +101,9 @@ class PersonaEditorViewModel @Inject constructor(
     private val personaRepository: PersonaRepository,
     private val avatarStore: PersonaAvatarStore,
     private val memoryRepository: PersonaMemoryRepository,
-    private val settingsRepository: ReaderSettingsRepository
+    private val settingsRepository: ReaderSettingsRepository,
+    voiceRepository: TtsVoiceRepository,
+    private val mediaService: AiMediaGenerationService
 ) : ViewModel() {
 
     private val personaId: Long = savedStateHandle.get<String>("personaId")?.toLongOrNull() ?: 0L
@@ -104,6 +116,7 @@ class PersonaEditorViewModel @Inject constructor(
 
     /** 落库前的头像路径基线：换头像后旧的临时文件按它判定是否可删。 */
     private var persistedAvatarPath: String? = null
+    private var voicePlayer: MediaPlayer? = null
 
     init {
         viewModelScope.launch {
@@ -125,6 +138,8 @@ class PersonaEditorViewModel @Inject constructor(
                         avatarPath = persona.avatarPath,
                         memoryEnabled = persona.memoryEnabled,
                         appearance = persona.chatAppearance(),
+                        voiceId = persona.voiceId,
+                        voiceEmotion = persona.voiceEmotion,
                         isBuiltIn = persona.isBuiltIn,
                         chatModelId = persona.chatModelId,
                         loading = false
@@ -146,6 +161,11 @@ class PersonaEditorViewModel @Inject constructor(
                 }
             }
         }
+        viewModelScope.launch {
+            voiceRepository.voices.collect { voices ->
+                mutableState.update { it.copy(voices = voices) }
+            }
+        }
     }
 
     fun setMemoryEnabled(value: Boolean) = mutableState.update { it.copy(memoryEnabled = value) }
@@ -162,6 +182,46 @@ class PersonaEditorViewModel @Inject constructor(
     fun setSpeakingStyle(value: String) = mutableState.update { it.copy(speakingStyle = value) }
     fun setGreeting(value: String) = mutableState.update { it.copy(greeting = value) }
     fun setRoleplay(value: Boolean) = mutableState.update { it.copy(isRoleplay = value) }
+    fun setVoice(value: String) = mutableState.update { it.copy(voiceId = value) }
+    fun setVoiceEmotion(value: String) = mutableState.update { it.copy(voiceEmotion = value) }
+    fun setVoiceSearch(value: String) = mutableState.update { it.copy(voiceSearch = value) }
+    fun setVoiceGender(value: String?) = mutableState.update { it.copy(voiceGender = value) }
+
+    fun previewVoice(voice: TtsVoiceEntity) {
+        voicePlayer?.release()
+        voicePlayer = null
+        viewModelScope.launch {
+            mutableState.update { it.copy(previewingVoiceId = voice.id) }
+            runCatching {
+                mediaService.synthesizeSpeech(
+                    bookId = 0,
+                    text = "你好，我会陪你一起读完这本书。",
+                    voiceId = voice.voiceId,
+                    emotion = mutableState.value.voiceEmotion.takeIf(String::isNotBlank)
+                )
+            }.onSuccess { speech ->
+                voicePlayer = MediaPlayer().apply {
+                    setDataSource(speech.path)
+                    setOnPreparedListener { it.start() }
+                    setOnCompletionListener {
+                        it.release()
+                        voicePlayer = null
+                        mutableState.update { state -> state.copy(previewingVoiceId = null) }
+                    }
+                    setOnErrorListener { player, _, _ ->
+                        player.release()
+                        voicePlayer = null
+                        mutableState.update { state -> state.copy(previewingVoiceId = null) }
+                        true
+                    }
+                    prepareAsync()
+                }
+            }.onFailure { error ->
+                mutableState.update { it.copy(previewingVoiceId = null) }
+                eventChannel.send(PersonaEditorEvent.Message(error.message ?: "试听失败"))
+            }
+        }
+    }
 
     /** 世界书总开关：关掉后所有条目都不注入，条目本身保留。 */
     fun setWorldBookEnabled(value: Boolean) =
@@ -333,6 +393,8 @@ class PersonaEditorViewModel @Inject constructor(
                         chatModelId = state.chatModelId,
                         memoryEnabled = state.memoryEnabled,
                         chatAppearanceJson = PersonaChatAppearanceCodec.encode(state.appearance),
+                        voiceId = state.voiceId,
+                        voiceEmotion = state.voiceEmotion.trim(),
                         isBuiltIn = state.isBuiltIn,
                         createdAt = 0 // repository 负责保留/生成
                     )
@@ -353,6 +415,10 @@ class PersonaEditorViewModel @Inject constructor(
                 .onSuccess { eventChannel.send(PersonaEditorEvent.Deleted) }
                 .onFailure { eventChannel.send(PersonaEditorEvent.Message("删除失败")) }
         }
+    }
+
+    override fun onCleared() {
+        voicePlayer?.release()
     }
 
     private companion object {

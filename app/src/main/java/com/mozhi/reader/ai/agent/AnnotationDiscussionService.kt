@@ -93,6 +93,8 @@ class AnnotationDiscussionService @Inject constructor(
                         emit(Event.Text(event.text))
                     }
                     is AgentEvent.RoundCommitted -> Unit
+                    // 讨论串是段落里的一条短发言，不该被一大段思维链压住。
+                    is AgentEvent.Reasoning -> Unit
                     is AgentEvent.ToolRun -> emit(Event.ToolActivity(event.displayName))
                     is AgentEvent.ToolFinished -> Unit
                 }

@@ -178,6 +178,8 @@ class ReaderAiViewModel @Inject constructor(
                                 mutableState.value = mutableState.value.copy(toolStatus = null)
                             }
                         }
+                        // 选词面板是「问一句答一句」的轻量场景，思维链留给伴读聊天页呈现。
+                        is AgentEvent.Reasoning -> Unit
                         is AgentEvent.RoundCommitted -> {
                             streamBuffer.setLength(0)
                             val messages = mutableState.value.messages
@@ -198,7 +200,8 @@ class ReaderAiViewModel @Inject constructor(
                                 callId = event.callId,
                                 toolName = event.toolName,
                                 displayName = event.displayName,
-                                state = AgentStepState.RUNNING
+                                state = AgentStepState.RUNNING,
+                                arguments = event.arguments
                             )
                         )
                         is AgentEvent.ToolFinished -> mutableState.value = mutableState.value.copy(

@@ -74,7 +74,9 @@ class ReaderPageStyle(
         titleBottomSpacing = lineStep * titleBottomSpacingLines,
         syntaxHighlightRules = syntaxHighlightRules,
         indentCharCount = firstLineIndentEm,
-        justifyContent = textJustification
+        justifyContent = textJustification,
+        contentFontSizePx = contentSizePx,
+        titleFontSizePx = titleSizePx
     )
 
     val measure: AndroidTextMeasure = AndroidTextMeasure(

@@ -31,14 +31,14 @@ class PageAnnotationsTest {
         assertEquals(3, geometry.highlights.size)
         assertEquals(1, geometry.markers.size)
         assertEquals(listOf(1L, 2L), geometry.markers.single().annotationIds)
-        // 两条批注都在段中结束，marker 放到该排文字的换行边缘（x=40）之后。
-        assertEquals(40f + 4f + 8f, geometry.markers.single().centerX)
+        // 两条批注都在第二字后结束，marker 紧跟划线末尾（x=20）。
+        assertEquals(20f + 4f + 8f, geometry.markers.single().centerX)
         assertEquals((24f + 46f) / 2f, geometry.markers.single().centerY)
         assertTrue(geometry.highlights.all { it.right > it.left })
     }
 
     @Test
-    fun markerMovesToLineEndWhenAnnotationStopsMidParagraph() {
+    fun markerStaysAtUnderlineEndWhenAnnotationStopsMidParagraph() {
         val first = line("天地玄黄", chapterPosition = 0, top = 0f)
         val page = TextPage(
             index = 0,
@@ -57,7 +57,7 @@ class PageAnnotationsTest {
             maxRight = 200f
         )
 
-        assertEquals(40f + 4f + 8f, geometry.markers.single().centerX)
+        assertEquals(20f + 4f + 8f, geometry.markers.single().centerX)
     }
 
     @Test
@@ -87,7 +87,7 @@ class PageAnnotationsTest {
     }
 
     @Test
-    fun markerClampsInsidePageEdge() {
+    fun markerFallbackStaysInsidePageEdge() {
         val first = line("天地玄黄", chapterPosition = 0, top = 0f)
         val page = TextPage(
             index = 0,
@@ -96,7 +96,7 @@ class PageAnnotationsTest {
             charLength = 4,
             height = 30f
         )
-        // 批注直到行尾（右边界 x=40），maxRight 只有 44 → clamp 到 44-8
+        // 排版占位尚未就绪时仍有兜底，marker 不越过右边界。
         val marks = listOf(ReaderAnnotationMark(1, 0, 0, 4, hasComment = true))
 
         val geometry = page.annotationGeometry(
@@ -106,7 +106,7 @@ class PageAnnotationsTest {
             maxRight = 44f
         )
 
-        assertEquals(44f - 8f, geometry.markers.single().centerX)
+        assertTrue(geometry.markers.single().centerX + 8f <= 44f)
     }
 
     @Test
@@ -132,6 +132,56 @@ class PageAnnotationsTest {
         assertEquals(1, markers.size)
         assertEquals(listOf(8L, 9L), markers.single().illustrationIds)
         assertEquals(20f + 4f + 8f, markers.single().centerX)
+    }
+
+    @Test
+    fun inlineMarkerUsesReservedCharacterSlot() {
+        val markerColumn = TextColumn(
+            start = 20f,
+            end = 30f,
+            charData = "",
+            sourceLength = 0,
+            inlineMarkerKind = InlineMarkerKind.ANNOTATION,
+            inlineMarkerOffset = 2
+        )
+        val page = TextPage(
+            index = 0,
+            lines = listOf(
+                TextLine(
+                    text = "天地玄黄",
+                    columns = listOf(
+                        TextColumn(0f, 10f, "天"),
+                        TextColumn(10f, 20f, "地"),
+                        markerColumn,
+                        TextColumn(30f, 40f, "玄"),
+                        TextColumn(40f, 50f, "黄")
+                    ),
+                    lineTop = 0f,
+                    lineBase = 18f,
+                    lineBottom = 22f,
+                    startX = 0f,
+                    isTitle = false,
+                    isParagraphEnd = false,
+                    chapterPosition = 0,
+                    charLength = 4
+                )
+            ),
+            chapterPosition = 0,
+            charLength = 4,
+            height = 30f
+        )
+
+        val layout = page.inlineMarkerLayout(
+            annotations = listOf(ReaderAnnotationMark(1, 0, 0, 2, hasComment = true)),
+            illustrations = emptyList(),
+            markerRadius = 8f,
+            markerGap = 4f,
+            maxRight = 200f
+        )
+
+        assertEquals(1, layout.markers.size)
+        assertEquals(25f, layout.markers.single().centerX)
+        assertEquals(30f, page.lines.single().columns[3].start)
     }
 
     private fun line(

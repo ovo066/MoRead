@@ -22,6 +22,7 @@ import okhttp3.ResponseBody.Companion.toResponseBody
 import okio.Buffer
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -151,6 +152,63 @@ class OpenAiMediaClientTest {
     }
 
     @Test
+    fun gmiSpeechSubmitsQueueRequestPollsAndDownloadsAudio() = runBlocking {
+        val paths = mutableListOf<String>()
+        var submittedBody = ""
+        val expected = byteArrayOf(4, 5, 6)
+        val client = fakeClient { request ->
+            paths += request.url.encodedPath
+            when {
+                request.method == "POST" -> {
+                    submittedBody = Buffer().also { request.body?.writeTo(it) }.readUtf8()
+                    """{"id":"req-1","status":"queued"}"""
+                        .toByteArray() to "application/json"
+                }
+                request.url.host == "cdn.example.test" -> expected to "audio/mpeg"
+                else -> """{"id":"req-1","status":"success","outcome":{"media_urls":[{"id":"0","url":"https://cdn.example.test/result.mp3"}]}}"""
+                    .toByteArray() to "application/json"
+            }
+        }
+        val media = OpenAiMediaClient(
+            provider = provider(AiProviderAdapter.CUSTOM).copy(
+                baseUrl = "https://console.gmicloud.ai"
+            ),
+            model = model(AiModelType.TTS).copy(
+                modelName = "minimax-tts-speech-2.8-hd",
+                endpointPath = "/api/v1/ie/requestqueue/apikey/requests"
+            ),
+            apiKey = "secret",
+            httpClient = client
+        )
+
+        val result = media.synthesizeSpeech(
+            text = "你好",
+            voice = "English_expressive_narrator",
+            speed = 1f,
+            volume = 1f,
+            pitch = 0
+        )
+
+        val request = Json.parseToJsonElement(submittedBody).jsonObject
+        val payload = request.getValue("payload").jsonObject
+        assertEquals("minimax-tts-speech-2.8-hd", request.getValue("model").jsonPrimitive.content)
+        assertEquals("你好", payload.getValue("text").jsonPrimitive.content)
+        assertEquals("English_expressive_narrator", payload.getValue("voice_id").jsonPrimitive.content)
+        assertEquals("auto", payload.getValue("emotion").jsonPrimitive.content)
+        assertEquals(
+            listOf(
+                "/api/v1/ie/requestqueue/apikey/requests",
+                "/api/v1/ie/requestqueue/apikey/requests/req-1",
+                "/result.mp3"
+            ),
+            paths
+        )
+        assertArrayEquals(expected, result.bytes)
+        assertEquals("audio/mpeg", result.mediaType)
+        assertEquals("req-1", result.generationId)
+    }
+
+    @Test
     fun miniMaxSpeechUsesVoiceIdSpeedAndDecodesHexAudio() = runBlocking {
         var capturedPath = ""
         var capturedGroupId: String? = null
@@ -187,8 +245,34 @@ class OpenAiMediaClientTest {
         assertTrue(capturedBody.contains("\"speed\":1.25"))
         assertTrue(capturedBody.contains("\"vol\":2.0"))
         assertTrue(capturedBody.contains("\"pitch\":-2"))
+        assertFalse(capturedBody.contains("\"emotion\""))
         assertArrayEquals(expected, result.bytes)
         assertEquals("audio/mpeg", result.mediaType)
+    }
+
+    @Test
+    fun miniMaxSpeechPreservesConfiguredEmotionWhenCallDoesNotOverrideIt() = runBlocking {
+        var capturedBody = ""
+        val client = fakeClient { request ->
+            capturedBody = Buffer().also { request.body?.writeTo(it) }.readUtf8()
+            """{"data":{"audio":"01"},"base_resp":{"status_code":0}}"""
+                .toByteArray() to "application/json"
+        }
+        val media = OpenAiMediaClient(
+            provider = provider(AiProviderAdapter.MINIMAX),
+            model = model(
+                AiModelType.TTS,
+                extraJson = """{"body":{"voice_setting":{"emotion":"happy"}}}"""
+            ),
+            apiKey = "secret",
+            httpClient = client
+        )
+
+        media.synthesizeSpeech(text = "你好")
+
+        val payload = Json.parseToJsonElement(capturedBody).jsonObject
+        val voiceSetting = payload.getValue("voice_setting").jsonObject
+        assertEquals("happy", voiceSetting.getValue("emotion").jsonPrimitive.contentOrNull)
     }
 
     @Test

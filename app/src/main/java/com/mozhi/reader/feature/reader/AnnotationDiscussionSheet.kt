@@ -72,7 +72,9 @@ import com.mozhi.reader.core.database.entity.AnnotationColors
 import com.mozhi.reader.core.database.entity.AnnotationEntity
 import com.mozhi.reader.core.database.entity.AnnotationReplyEntity
 import com.mozhi.reader.core.database.entity.AnnotationStyle
+import com.mozhi.reader.core.database.entity.IllustrationEntity
 import com.mozhi.reader.core.database.entity.PersonaEntity
+import com.mozhi.reader.core.library.AnnotationMedia
 import com.mozhi.reader.feature.reader.render.AnnotationInk
 import com.mozhi.reader.ui.components.PersonaAvatarImage
 import com.mozhi.reader.ui.components.NoteStyleColorPalette
@@ -353,7 +355,9 @@ internal fun AnnotationDiscussionSheet(
     streaming: DiscussionStreaming?,
     error: String?,
     personas: List<PersonaEntity>,
+    illustrations: List<IllustrationEntity>,
     palette: ReaderPalette,
+    onPlayAudio: (String) -> Unit,
     onSend: (target: AnnotationEntity, text: String, respondPersonaId: Long?) -> Unit,
     onUpdateStyle: (annotationId: Long, style: AnnotationStyle, colorTag: String) -> Unit,
     onDeleteAnnotation: (Long) -> Unit,
@@ -449,6 +453,8 @@ internal fun AnnotationDiscussionSheet(
                         annotation = annotation,
                         personas = personas,
                         palette = palette,
+                        illustrations = illustrations,
+                        onPlayAudio = onPlayAudio,
                         timeText = timeFormat.format(Date(annotation.createdAt)),
                         onUpdateStyle = onUpdateStyle,
                         onCopy = {
@@ -463,6 +469,8 @@ internal fun AnnotationDiscussionSheet(
                         reply = reply,
                         personas = personas,
                         palette = palette,
+                        illustrations = illustrations,
+                        onPlayAudio = onPlayAudio,
                         timeText = timeFormat.format(Date(reply.createdAt)),
                         onCopy = { clipboard.setText(AnnotatedString(reply.contentMarkdown)) },
                         onDelete = { onDeleteReply(reply.id) }
@@ -617,6 +625,8 @@ private fun AnnotationOpenerBlock(
     annotation: AnnotationEntity,
     personas: List<PersonaEntity>,
     palette: ReaderPalette,
+    illustrations: List<IllustrationEntity>,
+    onPlayAudio: (String) -> Unit,
     timeText: String,
     onUpdateStyle: (Long, AnnotationStyle, String) -> Unit,
     onCopy: () -> Unit,
@@ -705,6 +715,13 @@ private fun AnnotationOpenerBlock(
                     modifier = Modifier.padding(top = 6.dp)
                 )
             }
+            AnnotationMediaContent(
+                media = AnnotationMedia.decode(annotation.mediaJson),
+                text = annotation.note,
+                illustrations = illustrations,
+                palette = palette,
+                onPlayAudio = onPlayAudio
+            )
             if (stylePanelOpen && annotation.personaId == null) {
                 AnnotationStylePanel(
                     selectedStyle = AnnotationStyle.fromWire(annotation.style),
@@ -724,6 +741,8 @@ private fun ReplyRow(
     reply: AnnotationReplyEntity,
     personas: List<PersonaEntity>,
     palette: ReaderPalette,
+    illustrations: List<IllustrationEntity>,
+    onPlayAudio: (String) -> Unit,
     timeText: String,
     onCopy: () -> Unit,
     onDelete: () -> Unit
@@ -766,6 +785,13 @@ private fun ReplyRow(
                 palette = palette,
                 modifier = Modifier.padding(top = 2.dp)
             )
+            AnnotationMediaContent(
+                media = AnnotationMedia.decode(reply.mediaJson),
+                text = reply.contentMarkdown,
+                illustrations = illustrations,
+                palette = palette,
+                onPlayAudio = onPlayAudio
+            )
         }
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
             DropdownMenuItem(
@@ -781,6 +807,41 @@ private fun ReplyRow(
                     menuOpen = false
                     onDelete()
                 }
+            )
+        }
+    }
+}
+
+@Composable
+private fun AnnotationMediaContent(
+    media: AnnotationMedia,
+    text: String,
+    illustrations: List<IllustrationEntity>,
+    palette: ReaderPalette,
+    onPlayAudio: (String) -> Unit
+) {
+    if (media.isEmpty) return
+    media.audioPath?.takeIf(String::isNotBlank)?.let { path ->
+        CompanionVoiceBubble(
+            text = text,
+            clip = VoiceClipState(path = path),
+            palette = palette,
+            onPrepare = {},
+            onRegenerate = {},
+            onPlay = onPlayAudio
+        )
+    }
+    media.illustrationId?.let { id ->
+        illustrations.firstOrNull { it.id == id }?.let { illustration ->
+            coil3.compose.AsyncImage(
+                model = illustration.imagePath,
+                contentDescription = "批注配图",
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 220.dp)
+                    .padding(top = 6.dp)
+                    .clip(RoundedCornerShape(12.dp))
             )
         }
     }

@@ -1,5 +1,12 @@
 package com.mozhi.reader.feature.reader.engine
 
+import com.mozhi.reader.core.library.EpubComputedStyle
+import com.mozhi.reader.core.library.EpubElementRef
+import com.mozhi.reader.core.library.EpubLayoutBlock
+import com.mozhi.reader.core.library.EpubLayoutBlockKind
+import com.mozhi.reader.core.library.EpubLayoutChapter
+import com.mozhi.reader.core.library.EpubLayoutChapterBundle
+import com.mozhi.reader.core.library.EpubTextAlign
 import kotlinx.coroutines.job
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -172,5 +179,64 @@ class ReaderContentControllerTest {
         coroutineContext.job.children.forEach { it.join() }
         assertEquals(2, controller.chapterIndex)
         assertTrue(kotlin.math.abs(controller.bookProgress() - 0.5f) < 0.05f)
+    }
+
+    @Test
+    fun `invalidating epub layouts reloads styles after an initial plain text fallback`() = runTest {
+        val body = "居中标题"
+        var availableLayout: EpubLayoutChapterBundle? = null
+        var layoutLoads = 0
+        val listener = RecordingListener()
+        val controller = ReaderContentController(
+            scope = this,
+            bodyLoader = { body },
+            listener = listener,
+            layoutLoader = {
+                layoutLoads++
+                availableLayout
+            }
+        )
+        controller.setChapters(listOf(ChapterMeta(0, "", body.length)))
+        controller.updateEnvironment(spec(), FakeMeasure())
+        controller.openPosition(0, 0)
+        advanceUntilIdle()
+        coroutineContext.job.children.forEach { it.join() }
+
+        val plainPage = controller.curPage() as RenderPage.Laid
+        val plainStart = plainPage.page.lines.single().startX
+        assertTrue(plainPage.page.decorations.isEmpty())
+
+        availableLayout = EpubLayoutChapterBundle(
+            document = EpubLayoutChapter(
+                chapterIndex = 0,
+                href = "chapter.xhtml",
+                blocks = listOf(
+                    EpubLayoutBlock(
+                        orderIndex = 0,
+                        kind = EpubLayoutBlockKind.HEADING,
+                        textStart = 0,
+                        textEnd = body.length,
+                        element = EpubElementRef("h1"),
+                        style = EpubComputedStyle(
+                            textAlign = EpubTextAlign.CENTER,
+                            fontWeight = 700,
+                            backgroundColorArgb = 0xFFEEDDCC.toInt()
+                        )
+                    )
+                ),
+                textLength = body.length
+            ),
+            resourcePaths = emptyMap(),
+            fontPaths = emptyMap()
+        )
+        controller.invalidateEpubLayouts()
+        advanceUntilIdle()
+        coroutineContext.job.children.forEach { it.join() }
+
+        val styledPage = controller.curPage() as RenderPage.Laid
+        assertTrue(layoutLoads >= 2)
+        assertTrue(styledPage.page.lines.single().startX > plainStart)
+        assertTrue(styledPage.page.decorations.isNotEmpty())
+        assertTrue(styledPage.page.lines.single().columns.all { it.syntaxBold })
     }
 }

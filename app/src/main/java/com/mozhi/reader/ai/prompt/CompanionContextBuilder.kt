@@ -28,6 +28,20 @@ data class BookProgress(
 )
 
 /**
+ * 本轮对话的呈现形态，决定要不要告诉模型「输出会被逐行拆成气泡」以及「可以发语音」。
+ *
+ * 纪律：能力关着就**一个字都不写**。告诉模型可以发语音、结果应用不给合成，
+ * 只会让它输出永远兑现不了的标记（与「工具关了就不注册」同一条）。
+ */
+data class ConversationShape(
+    val multiBubble: Boolean = false,
+    /** 语音开关已开 **且** 当前角色绑定了音色，两者缺一都是 false。 */
+    val voiceEnabled: Boolean = false
+) {
+    val active: Boolean get() = multiBubble || voiceEnabled
+}
+
+/**
  * 伴读上下文构建器（DEVELOPMENT_PLAN §4.5）：每次请求前组装系统提示词——
  * 人设 → 书籍进度 → 防剧透边界 → 主动记忆 → 场景原文，
  * 按「字符数/2 ≈ token」做预算控制，超限先弃记忆、再截场景，人设与防剧透永不裁。
@@ -52,6 +66,7 @@ class CompanionContextBuilder @Inject constructor(
         scene: String? = null,
         memoryQuery: String? = null,
         spoilerProtectionEnabled: Boolean = true,
+        conversationShape: ConversationShape = ConversationShape(),
         budgetChars: Int = DEFAULT_BUDGET_CHARS
     ): String {
         val progress = bookId?.let { id ->
@@ -96,6 +111,7 @@ class CompanionContextBuilder @Inject constructor(
                 ?.userProfile
                 .orEmpty(),
             spoilerProtectionEnabled = spoilerProtectionEnabled,
+            conversationShape = conversationShape,
             // 关键词触发的世界书条目拿「场景原文 + 用户最新输入」当命中材料。
             loreTrigger = listOfNotNull(scene, memoryQuery).joinToString("\n"),
             budgetChars = budgetChars
@@ -142,6 +158,7 @@ class CompanionContextBuilder @Inject constructor(
             memories: List<String>,
             userProfile: String = "",
                 spoilerProtectionEnabled: Boolean = true,
+            conversationShape: ConversationShape = ConversationShape(),
             loreTrigger: String = "",
             budgetChars: Int = DEFAULT_BUDGET_CHARS
         ): String {
@@ -151,9 +168,20 @@ class CompanionContextBuilder @Inject constructor(
                 userProfileBlock(userProfile),
                 userMaskBlock(userMask),
                 progressBlock(progress),
-                spoilerBlock(progress, spoilerProtectionEnabled)
+                spoilerBlock(progress, spoilerProtectionEnabled),
+                // 形态说明和人设同属「怎么说话」，永不参与预算裁剪——
+                // 裁掉它模型就会写回长段落，用户看到的是开关时灵时不灵。
+                conversationShapeBlock(conversationShape, progress)
             )
-            val closing = "回答使用简体中文。"
+            val closing = buildString {
+                append("回答使用简体中文。")
+                if (progress != null) {
+                    append("\n如需逐字引用书中原文，只能使用格式")
+                    append("〔原文 第N章〕「逐字引文」；")
+                    append("仅可标记从当前场景或书籍工具结果中逐字复制、确认存在的内容，")
+                    append("转述、概括、角色对白示例和普通强调不得使用此标记。")
+                }
+            }
             var memoryBlock = memoryBlock(memories)
             var sceneBlock = sceneBlock(scene, SCENE_MAX_CHARS)
 
@@ -261,6 +289,31 @@ class CompanionContextBuilder @Inject constructor(
             spoilerProtectionEnabled: Boolean
         ): String? = progress?.takeIf { spoilerProtectionEnabled }?.let {
             "【防剧透铁律】仅讨论用户已读至第 ${it.currentChapterIndex + 1} 章的内容，不得透露或暗示后续情节。"
+        }
+
+        /**
+         * 输出形态说明。两项能力各自独立成句：只开语音时不该逼模型分行，
+         * 只开多气泡时也不该让它以为可以发语音。
+         */
+        private fun conversationShapeBlock(
+            shape: ConversationShape,
+            progress: BookProgress?
+        ): String? {
+            if (!shape.active) return null
+            return buildString {
+                append("【对话形态】你正在和用户共读")
+                append(progress?.title?.let { "《$it》" } ?: "这本书")
+                append("，像真人在聊天窗口里说话。")
+                if (shape.multiBubble) {
+                    append("\n- 你的输出会按行拆成独立气泡：一行 = 一个气泡，每行 1~3 句，不要写大段落。")
+                    append("\n- 需要整段呈现的内容（长篇分析、列表、表格、代码），用 [整段] 和 [/整段] 各占一行包起来，")
+                    append("其间的换行不会拆泡，你照常分行写就行。")
+                }
+                if (shape.voiceEnabled) {
+                    append("\n- 想用语音说的那一行，在行首加 [语音]，它会合成为语音消息。")
+                    append("整段回复最多两行这样标记，情绪浓、适合说出口的短句才用，分析和罗列一律用文字。")
+                }
+            }
         }
 
         private fun memoryBlock(memories: List<String>): String? =

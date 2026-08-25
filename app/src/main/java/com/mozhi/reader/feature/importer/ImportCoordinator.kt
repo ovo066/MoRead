@@ -5,6 +5,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.util.Log
 import android.util.Base64
 import android.util.Size
 import com.mozhi.reader.core.database.entity.BookEntity
@@ -12,9 +13,12 @@ import com.mozhi.reader.core.database.entity.BookSourceType
 import com.mozhi.reader.core.importer.BookImportGateway
 import com.mozhi.reader.core.importer.PreparedImport
 import com.mozhi.reader.core.library.BookImageInput
+import com.mozhi.reader.core.library.BookLayoutStore
 import com.mozhi.reader.core.library.BookMediaStore
-import com.mozhi.reader.core.library.ChapterDraft
 import com.mozhi.reader.core.library.ChapterTextInput
+import com.mozhi.reader.core.library.EpubLayoutChapterInput
+import com.mozhi.reader.core.library.EpubLayoutPackage
+import com.mozhi.reader.core.library.EpubResourcePath
 import com.mozhi.reader.core.library.LegacyLocatorConverter
 import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.readium.ReadiumServices
@@ -40,6 +44,9 @@ class ImportCoordinator @Inject constructor(
     private val chapterSplitter: TxtChapterSplitter,
     private val epubGenerator: EpubGenerator,
     private val textExtractor: EpubTextExtractor,
+    private val layoutParser: EpubLayoutDocumentParser,
+    private val packageInspector: EpubPackageInspector,
+    private val layoutStore: BookLayoutStore,
     private val mediaStore: BookMediaStore,
     private val sessionStore: ImportSessionStore,
     private val readium: ReadiumServices,
@@ -67,6 +74,21 @@ class ImportCoordinator @Inject constructor(
             }
         }
         runCatching { marker.writeText("completed") }
+    }
+
+    override suspend fun backfillMissingEpubToc(): Unit = withContext(Dispatchers.IO) {
+        libraryRepository.getEpubBooksMissingToc().forEach { book ->
+            val epubFile = File(book.epubPath).takeIf(File::isFile) ?: return@forEach
+            runCatching {
+                val publication = readium.open(epubFile)
+                try {
+                    val structure = publication.toImportStructure()
+                    libraryRepository.replaceBookToc(book.id, structure.tocEntries)
+                } finally {
+                    publication.close()
+                }
+            }
+        }
     }
 
     override suspend fun prepare(uri: Uri): PreparedImport = withContext(Dispatchers.IO) {
@@ -251,22 +273,8 @@ class ImportCoordinator @Inject constructor(
             val publication = readium.open(target)
             try {
                 coverFile = savePublicationCover(publication, bookKey)
-                val titleByHref = flatten(publication.tableOfContents)
-                    .mapNotNull { link ->
-                        link.title?.let { link.href.toString().withoutFragment() to it }
-                    }
-                    .toMap()
-                val chapters = publication.readingOrder.mapIndexed { index, link ->
-                    val href = link.href.toString()
-                    ChapterDraft(
-                        index = index,
-                        title = titleByHref[href.withoutFragment()]
-                            ?: link.title
-                            ?: "第 ${index + 1} 章",
-                        href = href,
-                        charCount = 0
-                    )
-                }
+                val structure = publication.toImportStructure()
+                val chapters = structure.chapters
                 require(chapters.isNotEmpty()) { "EPUB 中没有可阅读内容" }
 
                 // 元数据常是垃圾（WPS/Calibre 会写 Unknown / WPS_1532705572），先清洗再入库。
@@ -288,16 +296,24 @@ class ImportCoordinator @Inject constructor(
                         importedAt = System.currentTimeMillis(),
                         totalChapters = chapters.size
                     ),
-                    chapters = chapters
+                    chapters = chapters,
+                    tocEntries = structure.tocEntries
                 )
                 insertedBookId = bookId
-                val spine = extractSpine(publication)
+                val layoutPackage = packageInspector.inspect(target)
+                val spine = extractSpine(publication, layoutPackage, target)
+                require(spine.layouts.size == chapters.size) {
+                    "EPUB 精排数据不完整：${spine.layouts.size}/${chapters.size} 章"
+                }
                 libraryRepository.materializeBookText(
                     bookId = bookId,
                     chapters = spine.chapters,
                     markReady = false
                 )
                 mediaStore.replace(bookId, spine.images)
+                if (layoutPackage != null && spine.layouts.isNotEmpty()) {
+                    layoutStore.replace(bookId, target, layoutPackage, spine.layouts)
+                }
                 libraryRepository.markTextReady(bookId)
                 // 向量索引改为按需触发，见 BookEmbeddingScheduler.enqueueForBook
                 return bookId
@@ -312,7 +328,8 @@ class ImportCoordinator @Inject constructor(
                 coverFile?.delete()
                 target.delete()
             }
-            throw IllegalStateException("EPUB 解析失败或文件已损坏", error)
+            Log.e(TAG, "EPUB import failed: $displayName", error)
+            throw IllegalStateException("EPUB 解析失败：${error.userFacingCause()}", error)
         }
     }
 
@@ -329,13 +346,26 @@ class ImportCoordinator @Inject constructor(
         try {
             // Version flips only after positions are migrated: a reader polling textVersion must
             // never open the book in the window where offsets are still the un-migrated defaults.
-            val spine = extractSpine(publication)
+            val layoutPackage = if (book.sourceType == BookSourceType.EPUB) {
+                packageInspector.inspect(epubFile)
+            } else {
+                null
+            }
+            val spine = extractSpine(publication, layoutPackage, epubFile)
+            if (book.sourceType == BookSourceType.EPUB) {
+                require(spine.layouts.size == spine.chapters.size) {
+                    "EPUB 精排数据不完整：${spine.layouts.size}/${spine.chapters.size} 章"
+                }
+            }
             libraryRepository.materializeBookText(
                 bookId = book.id,
                 chapters = spine.chapters,
                 markReady = false
             )
             mediaStore.replace(book.id, spine.images)
+            if (layoutPackage != null && spine.layouts.isNotEmpty()) {
+                layoutStore.replace(book.id, epubFile, layoutPackage, spine.layouts)
+            }
             // v0 没有正文字符轨，需要从旧 Readium locator 迁移；v1→v2 只补图片 sidecar，
             // 「［图片］」token 长度不变，必须保留已有的阅读/批注字符坐标。
             if (book.textVersion < 1) {
@@ -382,14 +412,37 @@ class ImportCoordinator @Inject constructor(
     }
 
     /** Reads every spine resource and reduces it to text plus UTF-16 anchored inline images. */
-    private suspend fun extractSpine(publication: Publication): ExtractedSpine {
+    private suspend fun extractSpine(
+        publication: Publication,
+        layoutPackage: EpubLayoutPackage? = null,
+        epubFile: File? = null
+    ): ExtractedSpine {
         val chapters = ArrayList<ChapterTextInput>(publication.readingOrder.size)
         val images = ArrayList<BookImageInput>()
+        val layouts = ArrayList<EpubLayoutChapterInput>(publication.readingOrder.size)
         val resourceCache = mutableMapOf<String, ByteArray?>()
+        val stylesheets = if (layoutPackage != null && epubFile != null) {
+            packageInspector.readStylesheets(epubFile, layoutPackage)
+        } else {
+            emptyMap()
+        }
+        val knownSpineHrefs = layoutPackage?.spine?.mapNotNull { it.href }.orEmpty()
+        val indexedSpineHrefs = layoutPackage?.spine
+            ?.filter { it.linear && it.href != null }
+            ?.mapNotNull { it.href }
+            ?.takeIf { it.size == publication.readingOrder.size }
+            ?: layoutPackage?.spine
+                ?.mapNotNull { it.href }
+                ?.takeIf { it.size == publication.readingOrder.size }
         publication.readingOrder.forEachIndexed { index, link ->
             val bytes = publication.get(link)?.use { resource -> resource.read().getOrNull() }
+            val readiumHref = link.href.toString()
+            val chapterHref = EpubResourcePath.matchKnown(readiumHref, knownSpineHrefs)
+                ?: indexedSpineHrefs?.getOrNull(index)
+                ?: EpubResourcePath.normalize(readiumHref)
+                ?: readiumHref
             val extracted = bytes?.let {
-                textExtractor.extractWithImages(it, link.href.toString())
+                textExtractor.extractWithImages(it, chapterHref)
             } ?: ExtractedEpubText("", emptyList())
             // 正文始终保留同长度的「［图片］」token。资源缺失时它直接作为降级文本，
             // 资源可用时 sidecar 在同一 UTF-16 偏移把该行替换为真实图片。
@@ -397,7 +450,7 @@ class ImportCoordinator @Inject constructor(
                 val imageBytes = if (resourceCache.containsKey(reference.href)) {
                     resourceCache[reference.href]
                 } else {
-                    readImageResource(publication, reference.href)
+                    readImageResource(publication, reference.href, layoutPackage)
                         ?.takeIf { it.size <= MAX_INLINE_IMAGE_BYTES }
                         .also { resourceCache[reference.href] = it }
                 }
@@ -412,15 +465,37 @@ class ImportCoordinator @Inject constructor(
                 }
             }
             chapters += ChapterTextInput(index = index, body = extracted.text)
+            if (layoutPackage != null) {
+                requireNotNull(bytes) { "无法读取 EPUB 第 ${index + 1} 章：$chapterHref" }
+                val document = try {
+                    layoutParser.parse(
+                        bytes = bytes,
+                        chapterIndex = index,
+                        href = chapterHref,
+                        expectedText = extracted.text,
+                        stylesheets = stylesheets
+                    )
+                } catch (error: Throwable) {
+                    throw IllegalStateException(
+                        "EPUB 第 ${index + 1} 章精排解析失败：$chapterHref",
+                        error
+                    )
+                }
+                layouts += EpubLayoutChapterInput(index, chapterHref, document)
+            }
         }
-        return ExtractedSpine(chapters, images)
+        return ExtractedSpine(chapters, images, layouts)
     }
 
     /** Kept for text-only migration callers and tests. */
     suspend fun extractSpineText(publication: Publication): List<ChapterTextInput> =
         extractSpine(publication).chapters
 
-    private suspend fun readImageResource(publication: Publication, href: String): ByteArray? {
+    private suspend fun readImageResource(
+        publication: Publication,
+        href: String,
+        layoutPackage: EpubLayoutPackage?
+    ): ByteArray? {
         if (href.startsWith("data:", ignoreCase = true)) {
             val comma = href.indexOf(',')
             if (comma <= 0 || !href.substring(0, comma).contains(";base64", ignoreCase = true)) {
@@ -432,19 +507,29 @@ class ImportCoordinator @Inject constructor(
                 .getOrNull()
                 ?.takeIf { it.size <= MAX_INLINE_IMAGE_BYTES }
         }
-        val resourceHref = Href(href) ?: return null
-        return publication.get(Link(href = resourceHref))?.use { resource ->
-            val length = resource.length().getOrNull()
-            if (length != null && length > MAX_INLINE_IMAGE_BYTES) return@use null
-            resource.read(0L..MAX_INLINE_IMAGE_BYTES.toLong())
-                .getOrNull()
-                ?.takeIf { it.size <= MAX_INLINE_IMAGE_BYTES }
+        val candidates = if (layoutPackage == null) {
+            listOfNotNull(EpubResourcePath.normalize(href))
+        } else {
+            EpubResourcePath.packageAliases(href, layoutPackage.packageDocumentPath)
         }
+        candidates.forEach { candidate ->
+            val resourceHref = Href(candidate) ?: return@forEach
+            val bytes = publication.get(Link(href = resourceHref))?.use { resource ->
+                val length = resource.length().getOrNull()
+                if (length != null && length > MAX_INLINE_IMAGE_BYTES) return@use null
+                resource.read(0L..MAX_INLINE_IMAGE_BYTES.toLong())
+                    .getOrNull()
+                    ?.takeIf { it.size <= MAX_INLINE_IMAGE_BYTES }
+            }
+            if (bytes != null) return bytes
+        }
+        return null
     }
 
     private data class ExtractedSpine(
         val chapters: List<ChapterTextInput>,
-        val images: List<BookImageInput>
+        val images: List<BookImageInput>,
+        val layouts: List<EpubLayoutChapterInput>
     )
 
     private suspend fun savePublicationCover(publication: Publication, bookKey: String): File? {
@@ -474,12 +559,18 @@ class ImportCoordinator @Inject constructor(
         }
     }
 
-    private fun flatten(links: List<Link>): List<Link> = buildList {
-        links.forEach { link ->
-            add(link)
-            addAll(flatten(link.children))
-        }
-    }
+    private fun Publication.toImportStructure(): EpubImportStructure = buildEpubImportStructure(
+        readingOrder = readingOrder.map { link ->
+            EpubReadingOrderItem(title = link.title, href = link.href.toString())
+        },
+        tableOfContents = tableOfContents.map { it.toNavigationNode() }
+    )
+
+    private fun Link.toNavigationNode(): EpubNavigationNode = EpubNavigationNode(
+        title = title,
+        href = href.toString(),
+        children = children.map { it.toNavigationNode() }
+    )
 
     private fun booksDirectory(): File = File(context.filesDir, "books").apply { mkdirs() }
 
@@ -531,9 +622,8 @@ class ImportCoordinator @Inject constructor(
         }
     }
 
-    private fun String.withoutFragment(): String = substringBefore('#')
-
     private companion object {
+        const val TAG = "ImportCoordinator"
         const val MAX_TXT_BYTES = 200 * 1024 * 1024
         const val MAX_INLINE_IMAGE_BYTES = 30 * 1024 * 1024
         const val MAX_INLINE_IMAGE_BASE64_CHARS = MAX_INLINE_IMAGE_BYTES * 4 / 3 + 8
@@ -543,4 +633,11 @@ class ImportCoordinator @Inject constructor(
         const val COVER_JPEG_QUALITY = 90
         const val COVER_BACKFILL_MARKER = ".epub-cover-backfill-v1"
     }
+}
+
+private fun Throwable.userFacingCause(): String {
+    val deepest = generateSequence(this) { it.cause }.last()
+    return deepest.message?.trim()?.takeIf(String::isNotEmpty)
+        ?: deepest.javaClass.simpleName.takeIf(String::isNotEmpty)
+        ?: "文件内容不受支持"
 }

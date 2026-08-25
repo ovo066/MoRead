@@ -105,6 +105,7 @@ class ListenEngine @Inject constructor(
         val start: Int,
         val end: Int,
         val text: String,
+        val isChapterTitle: Boolean = false,
         val engineMode: TtsEngineMode? = null,
         val voiceId: String? = null,
         val emotion: String? = null,
@@ -297,14 +298,16 @@ class ListenEngine @Inject constructor(
 
     fun nextChapter() {
         val current = mutableState.value ?: return
-        if (current.chapterIndex + 1 < current.chapterCount) {
-            seekTo(current.chapterIndex + 1, 0)
+        val baseChapter = pendingSeek?.chapterIndex ?: current.chapterIndex
+        if (baseChapter + 1 < current.chapterCount) {
+            seekTo(baseChapter + 1, 0)
         }
     }
 
     fun prevChapter() {
         val current = mutableState.value ?: return
-        seekTo((current.chapterIndex - 1).coerceAtLeast(0), 0)
+        val baseChapter = pendingSeek?.chapterIndex ?: current.chapterIndex
+        seekTo((baseChapter - 1).coerceAtLeast(0), 0)
     }
 
     // ---- 会话主循环 ----
@@ -381,6 +384,7 @@ class ListenEngine @Inject constructor(
             } else {
                 buildQueue(body, spans, offset, rules)
             }
+            queue = prependChapterTitle(queue, chapter.title, offset)
 
             inner@ while (coroutineContext.isActive) {
                 pendingSeek?.let { seek ->
@@ -395,6 +399,7 @@ class ListenEngine @Inject constructor(
                     } else {
                         buildQueue(body, spans, seek.charOffset, rules)
                     }
+                    queue = prependChapterTitle(queue, chapter.title, seek.charOffset)
                 }
                 if (queue.isEmpty()) {
                     if (onChapterCompleted()) return
@@ -602,6 +607,16 @@ class ListenEngine @Inject constructor(
         return result
     }
 
+    private fun prependChapterTitle(
+        queue: List<Utterance>,
+        chapterTitle: String,
+        fromOffset: Int
+    ): List<Utterance> {
+        val title = chapterTitle.trim()
+        if (fromOffset > 0 || title.isEmpty()) return queue
+        return listOf(Utterance(start = 0, end = 0, text = title, isChapterTitle = true)) + queue
+    }
+
     private fun publishSentence(
         book: com.mozhi.reader.core.database.entity.BookEntity,
         chapters: List<ChapterEntity>,
@@ -627,11 +642,15 @@ class ListenEngine @Inject constructor(
             chapterCount = chapters.size,
             sentenceStart = utterance.start,
             sentenceEnd = utterance.end,
-            previousText = textAt(spanIndex - 1),
-            currentText = body.substring(utterance.start, utterance.end)
-                .replace('\uFFFC', ' ')
-                .trim(),
-            nextText = textAt(spanIndex + 1),
+            previousText = if (utterance.isChapterTitle) "" else textAt(spanIndex - 1),
+            currentText = if (utterance.isChapterTitle) {
+                utterance.text
+            } else {
+                body.substring(utterance.start, utterance.end)
+                    .replace('\uFFFC', ' ')
+                    .trim()
+            },
+            nextText = if (utterance.isChapterTitle) textAt(0) else textAt(spanIndex + 1),
             chapterProgress = if (body.isEmpty()) 0f else utterance.start.toFloat() / body.length,
             isPlaying = playing,
             engineMode = utterance.engineMode ?: mutableState.value?.engineMode ?: TtsEngineMode.AI,

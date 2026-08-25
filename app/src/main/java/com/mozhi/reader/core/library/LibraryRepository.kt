@@ -8,6 +8,7 @@ import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.BookReadState
 import com.mozhi.reader.core.database.entity.BookSourceType
 import com.mozhi.reader.core.database.entity.BookmarkEntity
+import com.mozhi.reader.core.database.entity.BookTocEntryEntity
 import com.mozhi.reader.core.database.entity.ChapterEntity
 import com.mozhi.reader.core.database.entity.ReadingDailyEntity
 import com.mozhi.reader.core.datastore.ReaderTextReplacementRule
@@ -30,6 +31,16 @@ data class ChapterDraft(
     val charCount: Int
 )
 
+data class BookTocEntryDraft(
+    val orderIndex: Int,
+    val title: String,
+    val href: String,
+    val depth: Int,
+    val parentOrderIndex: Int?,
+    val chapterIndex: Int?,
+    val hasChildren: Boolean
+)
+
 /** A complete chapter replacement used by reader-side editing and chapter re-recognition. */
 data class EditableChapterDraft(
     val index: Int,
@@ -46,6 +57,7 @@ class LibraryRepository @Inject constructor(
     private val textStore: BookTextStore,
     private val textWriter: BookTextWriter,
     private val mediaStore: BookMediaStore,
+    private val layoutStore: BookLayoutStore,
     private val vectorStore: dagger.Lazy<BoxStore>
 ) {
     fun observeBooks(): Flow<List<BookEntity>> = bookDao.observeBooks()
@@ -56,6 +68,9 @@ class LibraryRepository @Inject constructor(
 
     fun observeChapters(bookId: Long): Flow<List<ChapterEntity>> =
         bookDao.observeChapters(bookId)
+
+    fun observeTocEntries(bookId: Long): Flow<List<BookTocEntryEntity>> =
+        bookDao.observeTocEntries(bookId)
 
     fun observeBookmarks(bookId: Long): Flow<List<BookmarkEntity>> =
         bookDao.observeBookmarks(bookId)
@@ -70,6 +85,9 @@ class LibraryRepository @Inject constructor(
 
     suspend fun getEpubBooksMissingCovers(): List<BookEntity> =
         bookDao.getBooksMissingCovers(BookSourceType.EPUB)
+
+    suspend fun getEpubBooksMissingToc(): List<BookEntity> =
+        bookDao.getBooksMissingToc(BookSourceType.EPUB)
 
     suspend fun updateBookCover(bookId: Long, coverPath: String) {
         bookDao.updateBookCover(bookId, coverPath)
@@ -141,10 +159,17 @@ class LibraryRepository @Inject constructor(
 
     suspend fun getChapters(bookId: Long): List<ChapterEntity> = bookDao.getChapters(bookId)
 
+    suspend fun getTocEntries(bookId: Long): List<BookTocEntryEntity> =
+        bookDao.getTocEntries(bookId)
+
     suspend fun getChapterTitle(bookId: Long, chapterIndex: Int): String? =
         bookDao.getChapterTitle(bookId, chapterIndex)
 
-    suspend fun insertBook(book: BookEntity, chapters: List<ChapterDraft>): Long =
+    suspend fun insertBook(
+        book: BookEntity,
+        chapters: List<ChapterDraft>,
+        tocEntries: List<BookTocEntryDraft> = chapters.toFlatTocEntries()
+    ): Long =
         database.withTransaction {
             val bookId = bookDao.insertBook(book)
             bookDao.insertChapters(
@@ -158,8 +183,20 @@ class LibraryRepository @Inject constructor(
                     )
                 }
             )
+            if (tocEntries.isNotEmpty()) {
+                bookDao.insertTocEntries(tocEntries.map { it.toEntity(bookId) })
+            }
             bookId
         }
+
+    suspend fun replaceBookToc(bookId: Long, entries: List<BookTocEntryDraft>) {
+        database.withTransaction {
+            bookDao.deleteTocEntriesForBook(bookId)
+            if (entries.isNotEmpty()) {
+                bookDao.insertTocEntries(entries.map { it.toEntity(bookId) })
+            }
+        }
+    }
 
     suspend fun saveProgress(
         bookId: Long,
@@ -296,6 +333,20 @@ class LibraryRepository @Inject constructor(
                     )
                 }
             )
+            bookDao.deleteTocEntriesForBook(bookId)
+            bookDao.insertTocEntries(
+                normalized.map { chapter ->
+                    BookTocEntryDraft(
+                        orderIndex = chapter.index,
+                        title = chapter.title,
+                        href = chapter.href,
+                        depth = 0,
+                        parentOrderIndex = null,
+                        chapterIndex = chapter.index,
+                        hasChildren = false
+                    ).toEntity(bookId)
+                }
+            )
             bookDao.updateBook(
                 book.copy(
                     totalChapters = normalized.size,
@@ -415,6 +466,7 @@ class LibraryRepository @Inject constructor(
         runCatching { VectorQueries.removeChunksForBook(vectorStore.get(), book.id) }
         textStore.delete(book.id)
         mediaStore.delete(book.id)
+        layoutStore.delete(book.id)
         File(context.filesDir, "illustrations/${book.id}").deleteRecursively()
         File(context.cacheDir, "agent-speech/${book.id}").deleteRecursively()
         File(book.epubPath).takeIf { it.isFile && it.isInsideAppStorage() }?.delete()
@@ -439,7 +491,7 @@ class LibraryRepository @Inject constructor(
     }
 
     companion object {
-        const val CURRENT_TEXT_VERSION = 2
+        const val CURRENT_TEXT_VERSION = 4
         const val TAG_SEPARATOR = ","
         private const val MIN_READING_DURATION_MS = 1_000L
     }
@@ -450,3 +502,26 @@ class LibraryRepository @Inject constructor(
         val lastReadAt: Long
     )
 }
+
+private fun List<ChapterDraft>.toFlatTocEntries(): List<BookTocEntryDraft> = map { chapter ->
+    BookTocEntryDraft(
+        orderIndex = chapter.index,
+        title = chapter.title,
+        href = chapter.href,
+        depth = 0,
+        parentOrderIndex = null,
+        chapterIndex = chapter.index,
+        hasChildren = false
+    )
+}
+
+private fun BookTocEntryDraft.toEntity(bookId: Long): BookTocEntryEntity = BookTocEntryEntity(
+    bookId = bookId,
+    orderIndex = orderIndex,
+    title = title,
+    href = href,
+    depth = depth,
+    parentOrderIndex = parentOrderIndex,
+    chapterIndex = chapterIndex,
+    hasChildren = hasChildren
+)

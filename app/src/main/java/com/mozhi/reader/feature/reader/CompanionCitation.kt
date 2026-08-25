@@ -1,5 +1,8 @@
 package com.mozhi.reader.feature.reader
 
+import com.mozhi.reader.core.library.BookQuoteLocator
+import com.mozhi.reader.core.library.QuoteChapter
+
 /**
  * 一条可跳回正文的引用。
  *
@@ -9,6 +12,14 @@ package com.mozhi.reader.feature.reader
 data class CompanionCitation(
     val chapterNumber: Int?,
     val quote: String
+)
+
+/** 已确认能在正文中定位的引用；UI 只为这种引用展示跳转入口。 */
+data class LocatedCompanionCitation(
+    val citation: CompanionCitation,
+    val chapterIndex: Int,
+    val startCharOffset: Int,
+    val endCharOffset: Int
 )
 
 /** 一条消息拆出的展示文本与引用列表。 */
@@ -21,9 +32,8 @@ data class ParsedCompanionMessage(
 /**
  * 从伴读回复里解析「引用了哪段原文」。
  *
- * 主路径是提示词里约定的显式标记 `〔原文 第N章〕「逐字引文」`——工具返回的原文本来就带
- * 章节号，模型只需照抄。兜底再扫裸引号里的长句：模型忘记加标记是常态，
- * 为此让「跳到原文」时有时无，用户只会觉得这个功能坏了。
+ * 只识别提示词约定的显式标记 `〔原文 第N章〕「逐字引文」`。普通引号可能只是强调、
+ * 对话或书名，不能据此推断为原文引用。
  *
  * 纯函数，不碰书籍数据；能不能真的定位到由 [com.mozhi.reader.core.library.BookQuoteLocator] 决定。
  */
@@ -36,11 +46,8 @@ object CompanionCitationParser {
     const val MAX_CITATIONS = 6
 
     private val MARKED = Regex(
-        """〔\s*原文\s*(?:第\s*(\d{1,4})\s*章)?\s*〕\s*[「“"]([^」“”"]{2,400})[」”"]"""
+        """〔\s*原文\s*(?:第\s*(\d{1,4})\s*章)?\s*〕\s*「([^」]{2,400})」"""
     )
-
-    /** 裸引号兜底：「…」『…』“…”，只认足够长的。 */
-    private val BARE_QUOTE = Regex("""[「『“]([^」』“”]{6,400})[」』”]""")
 
     fun parse(raw: String): ParsedCompanionMessage {
         if (raw.isBlank()) return ParsedCompanionMessage(raw, emptyList())
@@ -54,15 +61,6 @@ object CompanionCitationParser {
                 citations += CompanionCitation(chapter, quote)
             }
             "「$quote」"
-        }
-
-        if (citations.isEmpty()) {
-            BARE_QUOTE.findAll(display).forEach { match ->
-                val quote = match.groupValues[1].trim()
-                if (quote.length >= MIN_QUOTE_CHARS) {
-                    citations += CompanionCitation(null, quote)
-                }
-            }
         }
 
         return ParsedCompanionMessage(
@@ -81,4 +79,29 @@ object CompanionCitationParser {
     }
 
     private const val LABEL_QUOTE_CHARS = 14
+}
+
+/** 把格式正确的候选引用再次与真实正文核对，未命中的候选不会进入 UI。 */
+object CompanionCitationVerifier {
+    fun locate(
+        citations: List<CompanionCitation>,
+        chapters: List<QuoteChapter>
+    ): List<LocatedCompanionCitation> = citations.mapNotNull { citation ->
+        val preferredChapterIndex = citation.chapterNumber?.minus(1)
+        val location = BookQuoteLocator.locateAll(chapters, citation.quote.trim()).let { matches ->
+            if (preferredChapterIndex == null) {
+                matches.firstOrNull()
+            } else {
+                matches.minByOrNull { kotlin.math.abs(it.chapterIndex - preferredChapterIndex) }
+            }
+        }
+        location?.let {
+            LocatedCompanionCitation(
+                citation = citation.copy(chapterNumber = it.chapterIndex + 1),
+                chapterIndex = it.chapterIndex,
+                startCharOffset = it.startCharOffset,
+                endCharOffset = it.endCharOffset
+            )
+        }
+    }
 }

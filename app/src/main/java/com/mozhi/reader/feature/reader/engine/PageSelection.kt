@@ -24,7 +24,7 @@ data class SelectionRect(
 
 /** The nearest selectable cluster to (x, y), or null when the page has no text there. */
 fun TextPage.hitTextPos(x: Float, y: Float, exact: Boolean = false): TextPos? {
-    val selectable = lines.withIndex().filter { it.value.columns.isNotEmpty() }
+    val selectable = lines.withIndex().filter { line -> line.value.columns.any { it.sourceLength > 0 } }
     if (selectable.isEmpty()) return null
     val line = selectable.firstOrNull { y >= it.value.lineTop && y <= it.value.lineBottom }
         ?: if (exact) return null else selectable.minByOrNull {
@@ -33,10 +33,10 @@ fun TextPage.hitTextPos(x: Float, y: Float, exact: Boolean = false): TextPos? {
         }
     line ?: return null
     val columns = line.value.columns
-    if (exact && (x < columns.first().start || x > columns.last().end)) return null
-    val columnIndex = columns.indices.firstOrNull { index ->
-        x < columns[index].end || index == columns.lastIndex
-    } ?: columns.lastIndex
+    val selectableColumns = columns.indices.filter { columns[it].sourceLength > 0 }
+    if (exact && (x < columns[selectableColumns.first()].start || x > columns[selectableColumns.last()].end)) return null
+    val columnIndex = selectableColumns.firstOrNull { index -> x < columns[index].end }
+        ?: selectableColumns.last()
     return TextPos(line.index, columnIndex)
 }
 
@@ -53,7 +53,7 @@ fun TextPage.wordSelectionAt(pos: TextPos, locale: Locale = Locale.CHINESE): Pai
     var acc = 0
     for (i in line.columns.indices) {
         charStarts[i] = acc
-        acc += line.columns[i].charData.length
+        acc += line.columns[i].sourceLength
     }
     val charIndex = charStarts[pos.columnIndex.coerceIn(line.columns.indices)]
     val text = line.columns.joinToString("") { it.charData }
@@ -108,7 +108,7 @@ fun TextPage.charOffsetOf(pos: TextPos): Int {
     if (line.columns.isEmpty()) return line.chapterPosition
     var offset = line.chapterPosition
     for (index in 0 until pos.columnIndex.coerceIn(0, line.columns.size)) {
-        offset += line.columns[index].charData.length
+        offset += line.columns[index].sourceLength
     }
     return offset
 }
@@ -118,7 +118,7 @@ fun TextPage.selectionBodyRange(start: TextPos, end: TextPos): IntRange {
     val (from, to) = if (start <= end) start to end else end to start
     val startOffset = charOffsetOf(from)
     val endLine = lines.getOrNull(to.lineIndex)
-    val endColumnLength = endLine?.columns?.getOrNull(to.columnIndex)?.charData?.length ?: 0
+    val endColumnLength = endLine?.columns?.getOrNull(to.columnIndex)?.sourceLength ?: 0
     return startOffset until (charOffsetOf(to) + endColumnLength)
 }
 
@@ -146,7 +146,8 @@ fun TextPage.textPosAtBodyOffset(bodyOffset: Int): TextPos? {
         val line = indexedLine.value
         var offset = line.chapterPosition
         line.columns.forEachIndexed { columnIndex, column ->
-            val end = offset + column.charData.length
+            if (column.sourceLength == 0) return@forEachIndexed
+            val end = offset + column.sourceLength
             if (bodyOffset < end) return TextPos(indexedLine.index, columnIndex)
             offset = end
         }

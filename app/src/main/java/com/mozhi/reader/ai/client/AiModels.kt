@@ -72,6 +72,13 @@ sealed interface ChatPart {
 sealed interface ChatDelta {
     data class Text(val text: String) : ChatDelta
 
+    /**
+     * 模型的思维链增量（OpenAI `reasoning_content`/`reasoning`、Claude `thinking_delta`、
+     * Gemini `part.thought`、Responses `reasoning_summary_text.delta`）。
+     * 只用于本地展示，永不作为历史回传——各方言都不接受自己吐出的 reasoning 再喂回去。
+     */
+    data class Reasoning(val text: String) : ChatDelta
+
     /** Terminal event: the assistant wants these tools run; arguments are fully assembled. */
     data class ToolCalls(val calls: List<ToolCall>) : ChatDelta
 }
@@ -158,8 +165,17 @@ internal data class ChatCompletionChunk(
     data class Delta(
         val role: String? = null,
         val content: String? = null,
+        /** DeepSeek / Qwen / SiliconFlow 的思维链字段。 */
+        @SerialName("reasoning_content") val reasoningContent: String? = null,
+        /** OpenRouter 把同一份东西放在 `reasoning` 下。 */
+        val reasoning: String? = null,
         @SerialName("tool_calls") val toolCalls: List<WireToolCall>? = null
-    )
+    ) {
+        /** 两种拼写取先到的那个；都为空表示这一帧没有思维链。 */
+        val reasoningText: String?
+            get() = reasoningContent?.takeIf(String::isNotEmpty)
+                ?: reasoning?.takeIf(String::isNotEmpty)
+    }
 }
 
 /**

@@ -59,7 +59,7 @@ class StreamParsingTest {
             )
         )
         assertEquals(
-            "你好",
+            ChatDelta.Text("你好"),
             accumulator.onEvent(
                 "content_block_delta",
                 """{"index":0,"delta":{"type":"text_delta","text":"你好"}}"""
@@ -84,15 +84,74 @@ class StreamParsingTest {
     }
 
     @Test
-    fun `claude thinking deltas are consumed silently`() {
+    fun `claude thinking deltas surface as reasoning, signatures do not`() {
         val accumulator = ClaudeStreamAccumulator()
+        assertEquals(
+            ChatDelta.Reasoning("先看看进度…"),
+            accumulator.onEvent(
+                "content_block_delta",
+                """{"index":0,"delta":{"type":"thinking_delta","thinking":"先看看进度…"}}"""
+            )
+        )
+        // 签名块是给 API 校验用的，不是给人读的，绝不能上屏。
         assertNull(
             accumulator.onEvent(
                 "content_block_delta",
-                """{"index":0,"delta":{"type":"thinking_delta","thinking":"…"}}"""
+                """{"index":0,"delta":{"type":"signature_delta","signature":"abc"}}"""
             )
         )
         assertTrue(accumulator.finish().isEmpty())
+    }
+
+    // ---- OpenAI-compatible reasoning fields ----
+
+    @Test
+    fun `openai chunk exposes both reasoning spellings and prefers reasoning_content`() {
+        fun reasoningOf(json: String): String? = AiJson
+            .decodeFromString(ChatCompletionChunk.serializer(), json)
+            .choices
+            .first()
+            .delta
+            .reasoningText
+
+        // DeepSeek / Qwen
+        assertEquals(
+            "在想…",
+            reasoningOf("""{"choices":[{"delta":{"reasoning_content":"在想…"}}]}""")
+        )
+        // OpenRouter
+        assertEquals(
+            "在想…",
+            reasoningOf("""{"choices":[{"delta":{"reasoning":"在想…"}}]}""")
+        )
+        assertEquals(
+            "标准字段优先",
+            reasoningOf(
+                """{"choices":[{"delta":{"reasoning_content":"标准字段优先","reasoning":"备用"}}]}"""
+            )
+        )
+        // 普通正文帧不该被误判成思维链。
+        assertNull(reasoningOf("""{"choices":[{"delta":{"content":"你好"}}]}"""))
+        assertNull(reasoningOf("""{"choices":[{"delta":{"reasoning_content":""}}]}"""))
+    }
+
+    // ---- Gemini thought parts ----
+
+    @Test
+    fun `gemini marks thought parts apart from answer parts`() {
+        val response = AiJson.decodeFromString(
+            GeminiClient.GenerateResponse.serializer(),
+            """
+            {"candidates":[{"content":{"parts":[
+                {"text":"先回忆一下前文","thought":true},
+                {"text":"他其实早就知道了"}
+            ]}}]}
+            """.trimIndent()
+        )
+        val parts = response.candidates.first().content!!.parts
+        assertEquals(true, parts[0].thought)
+        assertNull(parts[1].thought)
+        assertEquals("他其实早就知道了", parts[1].text)
     }
 
     // ---- OpenAI Responses completed payload ----

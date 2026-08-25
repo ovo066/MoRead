@@ -58,7 +58,7 @@ fun ReaderAiSheet(
     var input by remember { mutableStateOf("") }
     val timeline = remember(state.messages) { buildCompanionTimeline(state.messages) }
     val liveExecutionSteps = remember(timeline, state.executionSteps) {
-        val historicalCallIds = timeline.filterIsInstance<CompanionTimelineItem.Tools>()
+        val historicalCallIds = timeline.filterIsInstance<CompanionTimelineItem.Process>()
             .flatMap { it.steps }
             .mapTo(hashSetOf()) { it.callId }
         state.executionSteps.filterNot { it.callId in historicalCallIds }
@@ -125,9 +125,12 @@ fun ReaderAiSheet(
                             onCopy = { onCopy(item.message.content) }
                         )
                     }
-                    is CompanionTimelineItem.Tools -> AgentExecutionCard(
+                    is CompanionTimelineItem.Process -> CompanionProcessCard(
                         steps = item.steps,
-                        palette = palette
+                        reasoning = item.reasoning,
+                        palette = palette,
+                        isLive = false,
+                        stateKey = item.key
                     )
                     is CompanionTimelineItem.Media -> Unit
                 }
@@ -144,7 +147,13 @@ fun ReaderAiSheet(
             }
             if (liveExecutionSteps.isNotEmpty()) {
                 item(key = "live-tool-timeline") {
-                    AgentExecutionCard(steps = liveExecutionSteps, palette = palette)
+                    CompanionProcessCard(
+                        steps = liveExecutionSteps,
+                        reasoning = null,
+                        palette = palette,
+                        isLive = true,
+                        stateKey = "selection-live"
+                    )
                 }
             } else {
                 state.toolStatus?.let { status ->

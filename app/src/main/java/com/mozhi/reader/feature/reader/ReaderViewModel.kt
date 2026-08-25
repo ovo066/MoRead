@@ -4,12 +4,14 @@ import android.net.Uri
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.mozhi.reader.ai.companion.ProactiveAnnotationService
 import com.mozhi.reader.core.database.entity.AnnotationColors
 import com.mozhi.reader.core.database.entity.AnnotationEntity
 import com.mozhi.reader.core.database.entity.AnnotationStyle
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.BookSourceType
 import com.mozhi.reader.core.database.entity.BookmarkEntity
+import com.mozhi.reader.core.database.entity.BookTocEntryEntity
 import com.mozhi.reader.core.database.entity.ChapterEntity
 import com.mozhi.reader.core.database.entity.IllustrationEntity
 import com.mozhi.reader.core.database.entity.ReadingDailyEntity
@@ -27,6 +29,7 @@ import com.mozhi.reader.core.library.EditableChapterDraft
 import com.mozhi.reader.core.datastore.ReaderTheme
 import com.mozhi.reader.core.library.AnnotationRepository
 import com.mozhi.reader.core.library.BookMediaStore
+import com.mozhi.reader.core.library.BookLayoutStore
 import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.library.IllustrationRepository
 import com.mozhi.reader.feature.importer.TxtChapterSplitter
@@ -53,6 +56,7 @@ import kotlinx.coroutines.launch
 data class ReaderUiState(
     val book: BookEntity? = null,
     val chapters: List<ChapterEntity> = emptyList(),
+    val tocEntries: List<BookTocEntryEntity> = emptyList(),
     val bookmarks: List<BookmarkEntity> = emptyList(),
     val annotations: List<AnnotationEntity> = emptyList(),
     val illustrations: List<IllustrationEntity> = emptyList(),
@@ -107,12 +111,14 @@ class ReaderViewModel @Inject constructor(
     private val annotationRepository: AnnotationRepository,
     private val illustrationRepository: IllustrationRepository,
     private val mediaStore: BookMediaStore,
+    private val layoutStore: BookLayoutStore,
     private val settingsRepository: ReaderSettingsRepository,
     private val fontImporter: ReaderFontImporter,
     private val imageImporter: ReaderImageImporter,
     private val chapterSplitter: TxtChapterSplitter,
     private val tocRuleLoader: TxtTocRuleLoader,
-    private val textReplacementRuleAgent: TextReplacementRuleAgent
+    private val textReplacementRuleAgent: TextReplacementRuleAgent,
+    private val proactiveAnnotationService: ProactiveAnnotationService
 ) : ViewModel(), ReaderContentController.Listener {
     private val bookId: Long = when (val value: Any? = savedStateHandle["bookId"]) {
         is Long -> value
@@ -132,13 +138,15 @@ class ReaderViewModel @Inject constructor(
     val contentController = ReaderContentController(
         scope = viewModelScope,
         bodyLoader = ::loadChapterBody,
-        listener = this
+        listener = this,
+        layoutLoader = { chapterIndex -> layoutStore.readChapter(bookId, chapterIndex) }
     )
 
     private var chapterEntities: List<ChapterEntity> = emptyList()
     private var contentHook: ((Int) -> Unit)? = null
     private var progressSaveJob: Job? = null
     private var readingResumedAt: Long? = null
+    private var previousPosition: ReaderPositionSnapshot? = null
 
     /** Guards against overwriting stored progress from a session that never opened a position. */
     private var hasOpenedPosition = false
@@ -147,6 +155,11 @@ class ReaderViewModel @Inject constructor(
         viewModelScope.launch {
             libraryRepository.observeBookmarks(bookId).collect { bookmarks ->
                 mutableState.update { it.copy(bookmarks = bookmarks) }
+            }
+        }
+        viewModelScope.launch {
+            libraryRepository.observeTocEntries(bookId).collect { entries ->
+                mutableState.update { it.copy(tocEntries = entries) }
             }
         }
         viewModelScope.launch {
@@ -246,13 +259,28 @@ class ReaderViewModel @Inject constructor(
                 charOffset = resolved.lastReadCharOffset
             )
             contentController.setInlineImages(imagesAsync.await())
-            if (resolved.textVersion < LibraryRepository.CURRENT_TEXT_VERSION) {
-                // v1 正文可立即阅读；后台补齐 EPUB 图片 sidecar 后原位重排，不要求用户重开书。
+            if (resolved.sourceType == BookSourceType.EPUB ||
+                resolved.textVersion < LibraryRepository.CURRENT_TEXT_VERSION
+            ) {
                 viewModelScope.launch {
-                    val upgraded = libraryRepository.observeBook(bookId).first { observed ->
-                        observed == null || observed.textVersion >= LibraryRepository.CURRENT_TEXT_VERSION
+                    val chapterTextLengths = chapters
+                        .sortedBy(ChapterEntity::chapterIndex)
+                        .map(ChapterEntity::charCount)
+                    val layoutReady = resolved.sourceType != BookSourceType.EPUB ||
+                        layoutStore.hasCurrentLayout(bookId, chapterTextLengths)
+                    if (resolved.textVersion >= LibraryRepository.CURRENT_TEXT_VERSION && layoutReady) {
+                        if (resolved.sourceType == BookSourceType.EPUB) {
+                            // The first layout read can race a just-finished import/repair. Even when
+                            // the sidecar is complete now, reload the visible window so a transient
+                            // plain-text fallback cannot remain on screen for the whole session.
+                            contentController.invalidateEpubLayouts()
+                        }
+                        return@launch
                     }
-                    if (upgraded != null) contentController.setInlineImages(loadInlineImages())
+                    if (awaitMaterializedAssets(resolved.sourceType, chapterTextLengths)) {
+                        contentController.setInlineImages(loadInlineImages())
+                        contentController.invalidateEpubLayouts()
+                    }
                 }
             }
         }
@@ -282,6 +310,20 @@ class ReaderViewModel @Inject constructor(
         return false
     }
 
+    private suspend fun awaitMaterializedAssets(
+        sourceType: BookSourceType,
+        expectedTextLengths: List<Int>
+    ): Boolean {
+        while (true) {
+            val book = libraryRepository.getBook(bookId) ?: return false
+            val textReady = book.textVersion >= LibraryRepository.CURRENT_TEXT_VERSION
+            val layoutReady = sourceType != BookSourceType.EPUB ||
+                layoutStore.hasCurrentLayout(bookId, expectedTextLengths)
+            if (textReady && layoutReady) return true
+            delay(TEXT_WAIT_INTERVAL_MS)
+        }
+    }
+
     private suspend fun loadChapterBody(chapterIndex: Int): String? {
         val chapter = chapterEntities.getOrNull(chapterIndex) ?: return null
         return libraryRepository.readChapterText(bookId, chapter)
@@ -304,6 +346,20 @@ class ReaderViewModel @Inject constructor(
         pageCount: Int,
         bookProgress: Float
     ) {
+        val previous = previousPosition
+        previousPosition = ReaderPositionSnapshot(chapterIndex, pageIndex, pageCount)
+        if (
+            previous != null &&
+            chapterIndex > previous.chapterIndex &&
+            previous.pageCount > 0 &&
+            previous.pageIndex >= previous.pageCount - 1
+        ) {
+            viewModelScope.launch {
+                runCatching {
+                    proactiveAnnotationService.generateForCompletedChapter(bookId, previous.chapterIndex)
+                }
+            }
+        }
         mutableState.update {
             it.copy(
                 currentChapterIndex = chapterIndex,
@@ -875,6 +931,12 @@ class ReaderViewModel @Inject constructor(
         const val TEXT_WAIT_INTERVAL_MS = 1500L
     }
 }
+
+private data class ReaderPositionSnapshot(
+    val chapterIndex: Int,
+    val pageIndex: Int,
+    val pageCount: Int
+)
 
 private fun List<ReadingDailyEntity>.toReaderStatistics(): ReaderStatistics {
     val today = LocalDate.now().toEpochDay()

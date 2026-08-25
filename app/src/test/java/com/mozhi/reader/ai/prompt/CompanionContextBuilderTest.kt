@@ -72,6 +72,8 @@ class CompanionContextBuilderTest {
         assertTrue(prompt.contains("《长安十二时辰》"))
         assertTrue(prompt.contains("当前读到第 12 章「午正」"))
         assertTrue(prompt.contains("【防剧透铁律】仅讨论用户已读至第 12 章的内容"))
+        assertTrue(prompt.contains("〔原文 第N章〕「逐字引文」"))
+        assertTrue(prompt.contains("转述、概括、角色对白示例和普通强调不得使用此标记"))
     }
 
     @Test
@@ -289,6 +291,69 @@ class CompanionContextBuilderTest {
         )
 
         assertTrue(prompt.contains(profile))
+        assertFalse(prompt.contains("【长期记忆】"))
+    }
+
+    // ---- 对话形态：能力关着就一个字都不写 ----
+
+    @Test
+    fun defaultShapeAddsNoConversationBlock() {
+        val prompt = CompanionContextBuilder.assemble(
+            persona = null,
+            progress = progress,
+            scene = null,
+            memories = emptyList()
+        )
+
+        assertFalse(prompt.contains("【对话形态】"))
+    }
+
+    @Test
+    fun multiBubbleAloneNeverMentionsVoice() {
+        val prompt = CompanionContextBuilder.assemble(
+            persona = null,
+            progress = progress,
+            scene = null,
+            memories = emptyList(),
+            conversationShape = ConversationShape(multiBubble = true)
+        )
+
+        assertTrue(prompt.contains("【对话形态】"))
+        assertTrue(prompt.contains("一行 = 一个气泡"))
+        // 不拆分的长内容靠模型自己圈标记，而不是逼它把列表写成一行。
+        assertTrue(prompt.contains("[整段]"))
+        assertTrue(prompt.contains("《长安十二时辰》"))
+        // 语音关着还教模型打 [语音]，只会让它输出永远兑现不了的标记。
+        assertFalse(prompt.contains("[语音]"))
+    }
+
+    @Test
+    fun voiceAloneNeverForcesLineSplitting() {
+        val prompt = CompanionContextBuilder.assemble(
+            persona = null,
+            progress = progress,
+            scene = null,
+            memories = emptyList(),
+            conversationShape = ConversationShape(voiceEnabled = true)
+        )
+
+        assertTrue(prompt.contains("[语音]"))
+        assertFalse(prompt.contains("一行 = 一个气泡"))
+    }
+
+    /** 形态说明与人设同级：预算再紧也不能裁，否则开关会时灵时不灵。 */
+    @Test
+    fun conversationShapeSurvivesBudgetPressure() {
+        val prompt = CompanionContextBuilder.assemble(
+            persona = null,
+            progress = progress,
+            scene = "景".repeat(3_000),
+            memories = List(5) { "记忆${it}".padEnd(200, '忆') },
+            conversationShape = ConversationShape(multiBubble = true, voiceEnabled = true),
+            budgetChars = 800
+        )
+
+        assertTrue(prompt.contains("【对话形态】"))
         assertFalse(prompt.contains("【长期记忆】"))
     }
 }

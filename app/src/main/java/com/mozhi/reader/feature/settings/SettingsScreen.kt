@@ -33,6 +33,7 @@ import androidx.compose.material.icons.outlined.Brush
 import androidx.compose.material.icons.outlined.LibraryMusic
 import androidx.compose.material.icons.outlined.BugReport
 import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.CloudSync
 import androidx.compose.material.icons.outlined.Colorize
@@ -150,7 +151,7 @@ fun SettingsScreen(
                     SettingsRow(
                         icon = Icons.Outlined.Psychology,
                         title = "伴读与联网",
-                        subtitle = "记忆、建议回复、搜索与提示词预设",
+                        subtitle = "记忆、多气泡、主动行为与联网",
                         onClick = onOpenAi
                     )
                 }
@@ -192,6 +193,9 @@ fun AiAndCompanionSettingsScreen(
     onOpenWebSearch: () -> Unit,
     onOpenGlobalPresets: () -> Unit,
     onOpenUserMasks: () -> Unit,
+    onOpenTtsSettings: () -> Unit,
+    onOpenVoiceLibrary: () -> Unit,
+    onOpenImageGenSettings: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -220,6 +224,78 @@ fun AiAndCompanionSettingsScreen(
                     subtitle = "阅读页显示角色划线与评论标记",
                     checked = state.showAiAnnotations,
                     onCheckedChange = viewModel::setShowAiAnnotations
+                )
+                SettingsRowDivider()
+                SettingsSwitchRow(
+                    icon = Icons.Outlined.ChatBubbleOutline,
+                    title = "多气泡回复",
+                    subtitle = "让角色像真人一样分条发消息",
+                    checked = state.multiBubbleEnabled,
+                    onCheckedChange = viewModel::setMultiBubble
+                )
+            }
+        }
+        item {
+            SettingsGroup(title = "语音与图像", icon = Icons.Outlined.GraphicEq) {
+                SettingsRow(Icons.Outlined.RecordVoiceOver, "朗读引擎与音色", subtitle = "系统 TTS 或云端 AI 语音", onClick = onOpenTtsSettings)
+                SettingsRowDivider()
+                SettingsRow(Icons.Outlined.LibraryMusic, "音色库", subtitle = "管理听书与有声书音色", onClick = onOpenVoiceLibrary)
+                SettingsRowDivider()
+                SettingsRow(Icons.Outlined.Brush, "生图 API", subtitle = "管理插图与封面生成服务", onClick = onOpenImageGenSettings)
+            }
+        }
+        item {
+            // 这一组专收「应用替用户掏钱」的行为：每一项都默认关，副标题写清代价。
+            SettingsGroup(title = "AI 主动行为", icon = Icons.Outlined.Bolt) {
+                SettingsBlock {
+                    Text(
+                        "以下都是伴读自己决定发起的调用，会消耗你的 API 额度。" +
+                            "默认全部关闭，需要哪项再开哪项。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                SettingsRowDivider()
+                SettingsSwitchRow(
+                    icon = Icons.Outlined.GraphicEq,
+                    title = "自主发语音",
+                    subtitle = "角色可选择某句以语音发出，每段都会调用一次 TTS",
+                    checked = state.autonomy.voiceRepliesEnabled,
+                    onCheckedChange = viewModel::setVoiceReplies
+                )
+                SettingsRowDivider()
+                SettingsSwitchRow(
+                    icon = Icons.Outlined.Brush,
+                    title = "自主生图",
+                    subtitle = "角色可主动生成插图，单张成本高于一次对话",
+                    checked = state.autonomy.imageRepliesEnabled,
+                    onCheckedChange = viewModel::setImageReplies
+                )
+                SettingsRowDivider()
+                SettingsSwitchRow(
+                    icon = Icons.Outlined.BorderColor,
+                    title = "随读段评",
+                    subtitle = "读完一章后自动留下不超过 2 条批注（每日上限 10 条）",
+                    checked = state.autonomy.proactiveAnnotationsEnabled,
+                    onCheckedChange = viewModel::setProactiveAnnotations
+                )
+                SettingsRowDivider()
+                SettingsSwitchRow(
+                    icon = Icons.Outlined.RecordVoiceOver,
+                    title = "段评附语音",
+                    subtitle = "批注可带一段语音，每日上限 3 条",
+                    checked = state.autonomy.proactiveAnnotationVoiceEnabled,
+                    enabled = state.autonomy.proactiveAnnotationsEnabled,
+                    onCheckedChange = viewModel::setProactiveAnnotationVoice
+                )
+                SettingsRowDivider()
+                SettingsSwitchRow(
+                    icon = Icons.Outlined.Image,
+                    title = "段评附插图",
+                    subtitle = "批注可带一张插图，每日上限 3 张",
+                    checked = state.autonomy.proactiveAnnotationImageEnabled,
+                    enabled = state.autonomy.proactiveAnnotationsEnabled,
+                    onCheckedChange = viewModel::setProactiveAnnotationImage
                 )
             }
         }
@@ -258,9 +334,6 @@ fun AiAndCompanionSettingsScreen(
 @Composable
 fun ReadingAppearanceSettingsScreen(
     onBack: () -> Unit,
-    onOpenTtsSettings: () -> Unit,
-    onOpenVoiceLibrary: () -> Unit,
-    onOpenImageGenSettings: () -> Unit,
     onOpenFontLibrary: () -> Unit,
     onOpenImageLibrary: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel()
@@ -279,15 +352,6 @@ fun ReadingAppearanceSettingsScreen(
                 SettingsRow(Icons.Outlined.FontDownload, "字体库", subtitle = "阅读字体与语法样式字体", onClick = onOpenFontLibrary)
                 SettingsRowDivider()
                 SettingsRow(Icons.Outlined.PhotoLibrary, "图片库", subtitle = "阅读背景与书籍封面素材", onClick = onOpenImageLibrary)
-            }
-        }
-        item {
-            SettingsGroup(title = "语音与图像", icon = Icons.Outlined.GraphicEq) {
-                SettingsRow(Icons.Outlined.RecordVoiceOver, "朗读引擎与音色", subtitle = "系统 TTS 或云端 AI 语音", onClick = onOpenTtsSettings)
-                SettingsRowDivider()
-                SettingsRow(Icons.Outlined.LibraryMusic, "音色库", subtitle = "管理听书与有声书音色", onClick = onOpenVoiceLibrary)
-                SettingsRowDivider()
-                SettingsRow(Icons.Outlined.Brush, "生图 API", subtitle = "管理插图与封面生成服务", onClick = onOpenImageGenSettings)
             }
         }
         item {
@@ -639,7 +703,7 @@ private fun AboutCard() {
                 Column(modifier = Modifier.weight(1f)) {
                     Text("墨知 MoRead", style = MaterialTheme.typography.titleSmall)
                     Text(
-                        "版本 ${BuildConfig.VERSION_NAME}",
+                        "版本 ${BuildConfig.VERSION_NAME}（构建 ${BuildConfig.VERSION_CODE}）",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

@@ -799,6 +799,155 @@ class MigrationTest {
         }
     }
 
+    /** v20：伴读三期五列一次加齐；老消息/老角色/老批注/老回复全部拿到默认值且原内容不动。 */
+    @Test
+    fun migrate19To20AddsReasoningVoiceAndMediaColumns() {
+        helper.createDatabase(DB_NAME, 19).use { db ->
+            db.execSQL(
+                """
+                INSERT INTO books (
+                    id, title, author, coverPath, epubPath, sourceType, importedAt,
+                    totalChapters, lastReadLocator, lastReadChapterIndex, lastReadCharOffset,
+                    lastReadAt, textVersion, tags, metadataEdited, manualReadState, pinnedAt, groupId
+                ) VALUES (
+                    1, '旧书', '作者', NULL, '/data/books/old.epub', 'EPUB', 1000,
+                    1, NULL, 0, 0, 0, 1, '', 0, NULL, 0, NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                INSERT INTO conversations (
+                    id, bookId, personaId, title, type, parentConversationId,
+                    branchedFromMessageId, memoryConsolidatedThroughMessageId,
+                    rollingSummary, summarizedThroughMessageId, createdAt, updatedAt
+                ) VALUES (1, 1, 1, '旧会话', 'COMPANION', NULL, NULL, 0, '', 0, 1000, 1000)
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                INSERT INTO messages (id, conversationId, role, content, createdAt, maskId)
+                VALUES (1, 1, 'assistant', '旧回复', 1000, 0)
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                INSERT INTO personas (
+                    id, name, avatarPath, subtitle, personality, speakingStyle, greeting,
+                    exampleDialogsJson, isRoleplay, enabledToolsJson, worldBookJson,
+                    worldBookEnabled, chatModelId, userProfile, memoryEnabled,
+                    chatAppearanceJson, isBuiltIn, createdAt
+                ) VALUES (
+                    1, '老角色', NULL, '', '人设', '', '', '[]', 1, '[]', '[]', 1, NULL,
+                    '', 1, '{}', 0, 1
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                INSERT INTO annotations (
+                    id, bookId, personaId, chapterIndex, startCharOffset, endCharOffset,
+                    selectedText, note, colorTag, style, createdAt
+                ) VALUES (1, 1, 1, 0, 10, 20, '选中的原文', '旧批注', 'amber', 'WAVY', 1000)
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                INSERT INTO annotation_replies (
+                    id, annotationId, personaId, replyToId, contentMarkdown, createdAt
+                ) VALUES (1, 1, NULL, NULL, '旧回复层', 2000)
+                """.trimIndent()
+            )
+        }
+
+        val db = helper.runMigrationsAndValidate(
+            DB_NAME,
+            20,
+            true,
+            DatabaseMigrations.Migration19To20
+        )
+
+        // 思维链是可空列：老消息必须是 NULL 而不是空串，界面据此判断「整条不出现」。
+        db.query("SELECT reasoningContent, content FROM messages WHERE id = 1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue(cursor.isNull(0))
+            assertEquals("旧回复", cursor.getString(1))
+        }
+        db.query("SELECT voiceId, voiceEmotion, name FROM personas WHERE id = 1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            // 空音色 = 老角色迁移后不会突然开始发语音（付费调用不得静默生效）。
+            assertEquals("", cursor.getString(0))
+            assertEquals("", cursor.getString(1))
+            assertEquals("老角色", cursor.getString(2))
+        }
+        db.query("SELECT mediaJson, note, style FROM annotations WHERE id = 1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("{}", cursor.getString(0))
+            assertEquals("旧批注", cursor.getString(1))
+            assertEquals("WAVY", cursor.getString(2))
+        }
+        db.query(
+            "SELECT mediaJson, contentMarkdown FROM annotation_replies WHERE id = 1"
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("{}", cursor.getString(0))
+            assertEquals("旧回复层", cursor.getString(1))
+        }
+    }
+
+    @Test
+    fun migrate20To21CreatesHierarchicalTocTable() {
+        helper.createDatabase(DB_NAME, 20).use { db ->
+            db.execSQL(
+                """
+                INSERT INTO books (
+                    id, title, author, coverPath, epubPath, sourceType, importedAt,
+                    totalChapters, lastReadLocator, lastReadChapterIndex, lastReadCharOffset,
+                    lastReadAt, textVersion, tags, metadataEdited, manualReadState, pinnedAt, groupId
+                ) VALUES (
+                    1, '旧 EPUB', '作者', NULL, '/data/books/old.epub', 'EPUB', 1000,
+                    1, NULL, 0, 0, 0, 2, '', 0, NULL, 0, NULL
+                )
+                """.trimIndent()
+            )
+        }
+
+        val db = helper.runMigrationsAndValidate(
+            DB_NAME,
+            21,
+            true,
+            DatabaseMigrations.Migration20To21
+        )
+        db.execSQL(
+            """
+            INSERT INTO book_toc_entries (
+                bookId, orderIndex, title, href, depth, parentOrderIndex, chapterIndex, hasChildren
+            ) VALUES
+                (1, 0, '卷一', 'Text/part.xhtml', 0, NULL, 0, 1),
+                (1, 1, '第一章', 'Text/chapter.xhtml', 1, 0, 0, 0)
+            """.trimIndent()
+        )
+        db.query(
+            """
+            SELECT title, depth, parentOrderIndex, chapterIndex, hasChildren
+            FROM book_toc_entries
+            WHERE bookId = 1
+            ORDER BY orderIndex
+            """.trimIndent()
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("卷一", cursor.getString(0))
+            assertEquals(0, cursor.getInt(1))
+            assertTrue(cursor.isNull(2))
+            assertEquals(0, cursor.getInt(3))
+            assertEquals(1, cursor.getInt(4))
+            assertTrue(cursor.moveToNext())
+            assertEquals("第一章", cursor.getString(0))
+            assertEquals(1, cursor.getInt(1))
+            assertEquals(0, cursor.getInt(2))
+        }
+    }
+
     private companion object {
         const val DB_NAME = "migration-test.db"
     }

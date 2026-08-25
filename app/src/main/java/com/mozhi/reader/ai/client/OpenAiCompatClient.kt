@@ -74,6 +74,7 @@ class OpenAiCompatClient(
                             AiJson.decodeFromString(ChatCompletionChunk.serializer(), data)
                         }.getOrNull() ?: return
                         val choice = chunk.choices.firstOrNull() ?: return
+                        choice.delta.reasoningText?.let { trySend(ChatDelta.Reasoning(it)) }
                         choice.delta.content
                             ?.takeIf(String::isNotEmpty)
                             ?.let { trySend(ChatDelta.Text(it)) }

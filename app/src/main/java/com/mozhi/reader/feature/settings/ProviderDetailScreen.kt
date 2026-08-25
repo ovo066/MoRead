@@ -46,6 +46,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -804,49 +805,86 @@ private fun ModelCatalogPickDialog(
     onConfirm: (List<CatalogModel>) -> Unit
 ) {
     val selected = remember(pick) { mutableStateOf(setOf<String>()) }
+    var query by rememberSaveable(pick.provider.id) { mutableStateOf("") }
+    val normalizedQuery = query.trim()
+    val visibleModels = remember(pick.models, normalizedQuery) {
+        if (normalizedQuery.isEmpty()) {
+            pick.models
+        } else {
+            pick.models.filter { model ->
+                model.modelName.contains(normalizedQuery, ignoreCase = true) ||
+                    model.endpointPath.contains(normalizedQuery, ignoreCase = true) ||
+                    model.type.label().contains(normalizedQuery, ignoreCase = true)
+            }
+        }
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("${pick.provider.name} · ${pick.models.size} 个模型") },
         text = {
-            LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
-                items(pick.models, key = CatalogModel::key) { model ->
-                    val added = model.key in pick.alreadyAdded
-                    val checked = added || model.key in selected.value
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable(enabled = !added) {
-                                selected.value = if (model.key in selected.value) {
-                                    selected.value - model.key
-                                } else {
-                                    selected.value + model.key
+            Column {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp),
+                    singleLine = true,
+                    label = { Text("搜索模型") },
+                    placeholder = { Text("名称或类型") }
+                )
+                LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
+                    if (visibleModels.isEmpty()) {
+                        item {
+                            Text(
+                                text = "没有匹配的模型",
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 24.dp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                    items(visibleModels, key = CatalogModel::key) { model ->
+                        val added = model.key in pick.alreadyAdded
+                        val checked = added || model.key in selected.value
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable(enabled = !added) {
+                                    selected.value = if (model.key in selected.value) {
+                                        selected.value - model.key
+                                    } else {
+                                        selected.value + model.key
+                                    }
                                 }
+                                .padding(vertical = 2.dp)
+                        ) {
+                            Checkbox(
+                                checked = checked,
+                                onCheckedChange = null,
+                                enabled = !added
+                            )
+                            Column(modifier = Modifier.padding(start = 4.dp)) {
+                                Text(
+                                    text = model.modelName,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = if (added) {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface
+                                    },
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = model.type.label(),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
-                            .padding(vertical = 2.dp)
-                    ) {
-                        Checkbox(
-                            checked = checked,
-                            onCheckedChange = null,
-                            enabled = !added
-                        )
-                        Column(modifier = Modifier.padding(start = 4.dp)) {
-                            Text(
-                                text = model.modelName,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = if (added) {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                } else {
-                                    MaterialTheme.colorScheme.onSurface
-                                },
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text = model.type.label(),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
                         }
                     }
                 }

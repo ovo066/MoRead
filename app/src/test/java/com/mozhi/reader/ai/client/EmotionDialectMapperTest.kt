@@ -23,6 +23,8 @@ class EmotionDialectMapperTest {
     @Test
     fun `未知情绪安全降级`() {
         assertEquals("neutral", EmotionDialectMapper.map("复杂", null, TtsEmotionDialect.MINIMAX)?.value)
+        assertEquals("auto", EmotionDialectMapper.map("复杂", null, TtsEmotionDialect.GMI)?.value)
+        assertEquals("auto", EmotionDialectMapper.map(null, null, TtsEmotionDialect.GMI)?.value)
         assertEquals("general", EmotionDialectMapper.map("复杂", null, TtsEmotionDialect.AZURE)?.value)
     }
 

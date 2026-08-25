@@ -31,6 +31,12 @@ sealed interface AgentEvent {
     data class Text(val text: String) : AgentEvent
 
     /**
+     * 思维链增量。只上屏与落库，永不回传给模型——各方言都不接受自己吐出的 reasoning
+     * 再作为历史喂回去。不产出 reasoning 的模型永远不会发出这个事件。
+     */
+    data class Reasoning(val text: String) : AgentEvent
+
+    /**
      * 当前工具轮次的文字已持久化；UI 应在此刻将实时气泡交接给消息列表。
      * 显式轮次边界避免同一段文字同时以「已落库 + 流式」渲染两次。
      */
@@ -40,7 +46,9 @@ sealed interface AgentEvent {
     data class ToolRun(
         val callId: String,
         val toolName: String,
-        val displayName: String
+        val displayName: String,
+        /** 模型给出的原始参数 JSON，供界面压成一行摘要（如「检索：主角的身世」）。 */
+        val arguments: String = "{}"
     ) : AgentEvent
 
     /** 工具执行结束；只给界面安全的状态摘要，不暴露整段检索原文。 */
@@ -49,7 +57,12 @@ sealed interface AgentEvent {
         val toolName: String,
         val displayName: String,
         val succeeded: Boolean,
-        val detail: String
+        val detail: String,
+        /**
+         * 结果预览，成功时也给。仅用于「过程」卡展开后本地显示，
+         * 已在 AgentLoop 内按上限截断，且从不写日志。
+         */
+        val resultPreview: String = ""
     ) : AgentEvent
 }
 
@@ -129,6 +142,7 @@ class AgentLoop @Inject constructor(
                         text.append(delta.text)
                         emit(AgentEvent.Text(delta.text))
                     }
+                    is ChatDelta.Reasoning -> emit(AgentEvent.Reasoning(delta.text))
                     is ChatDelta.ToolCalls -> requested = delta.calls
                 }
             }
@@ -143,7 +157,7 @@ class AgentLoop @Inject constructor(
             for (call in requested) {
                 val tool = byName[call.name]
                 val displayName = tool?.displayName ?: "调用 ${call.name}"
-                emit(AgentEvent.ToolRun(call.id, call.name, displayName))
+                emit(AgentEvent.ToolRun(call.id, call.name, displayName, call.arguments))
                 val result = if (tool == null) {
                     "未知工具：${call.name}"
                 } else {
@@ -162,7 +176,8 @@ class AgentLoop @Inject constructor(
                         toolName = call.name,
                         displayName = displayName,
                         succeeded = succeeded,
-                        detail = if (succeeded) "已完成" else result.take(MAX_TOOL_STATUS_CHARS)
+                        detail = if (succeeded) "已完成" else result.take(MAX_TOOL_STATUS_CHARS),
+                        resultPreview = result.take(MAX_TOOL_PREVIEW_CHARS)
                     )
                 )
                 working.add(ChatMessage(ChatRole.TOOL, result, toolCallId = call.id))
@@ -216,12 +231,18 @@ class AgentLoop @Inject constructor(
 
         repeat(MAX_ROUNDS) { round ->
             val text = StringBuilder()
+            // 思维链按轮累积：它属于「这一条回复是怎么想出来的」，跟着该轮的 assistant 消息落库。
+            val reasoning = StringBuilder()
             var requested: List<ToolCall> = emptyList()
             streamer.stream(history, specs).collect { delta ->
                 when (delta) {
                     is ChatDelta.Text -> {
                         text.append(delta.text)
                         emit(AgentEvent.Text(delta.text))
+                    }
+                    is ChatDelta.Reasoning -> {
+                        reasoning.append(delta.text)
+                        emit(AgentEvent.Reasoning(delta.text))
                     }
                     is ChatDelta.ToolCalls -> requested = delta.calls
                 }
@@ -230,12 +251,26 @@ class AgentLoop @Inject constructor(
             if (requested.isEmpty()) {
                 val reply = text.toString()
                 if (reply.isBlank() && !producedText) throw AiClientException.Empty()
-                if (reply.isNotBlank()) persistAssistant(conversationId, reply, toolCalls = emptyList())
+                if (reply.isNotBlank()) {
+                    persistAssistant(
+                        conversationId = conversationId,
+                        content = reply,
+                        toolCalls = emptyList(),
+                        reasoning = reasoning.toString()
+                    )?.let { message ->
+                        emit(AgentEvent.RoundCommitted(message))
+                    }
+                }
                 return@flow
             }
 
             if (text.isNotBlank()) producedText = true
-            val committedMessage = persistAssistant(conversationId, text.toString(), requested)
+            val committedMessage = persistAssistant(
+                conversationId = conversationId,
+                content = text.toString(),
+                toolCalls = requested,
+                reasoning = reasoning.toString()
+            )
             if (committedMessage != null) {
                 emit(AgentEvent.RoundCommitted(committedMessage))
             }
@@ -248,7 +283,8 @@ class AgentLoop @Inject constructor(
                     AgentEvent.ToolRun(
                         callId = call.id,
                         toolName = call.name,
-                        displayName = displayName
+                        displayName = displayName,
+                        arguments = call.arguments
                     )
                 )
                 val result = if (tool == null) {
@@ -269,7 +305,8 @@ class AgentLoop @Inject constructor(
                         toolName = call.name,
                         displayName = displayName,
                         succeeded = succeeded,
-                        detail = if (succeeded) "已完成" else result.take(MAX_TOOL_STATUS_CHARS)
+                        detail = if (succeeded) "已完成" else result.take(MAX_TOOL_STATUS_CHARS),
+                        resultPreview = result.take(MAX_TOOL_PREVIEW_CHARS)
                     )
                 )
                 val toolCompletedAt = System.currentTimeMillis()
@@ -289,7 +326,9 @@ class AgentLoop @Inject constructor(
             if (round == MAX_ROUNDS - 1) {
                 val notice = "（已达到单轮工具调用上限，回复基于目前掌握的信息）"
                 emit(AgentEvent.Text(notice))
-                persistAssistant(conversationId, notice, emptyList())
+                persistAssistant(conversationId, notice, emptyList())?.let { message ->
+                    emit(AgentEvent.RoundCommitted(message))
+                }
             }
         }
     }
@@ -297,7 +336,8 @@ class AgentLoop @Inject constructor(
     private suspend fun persistAssistant(
         conversationId: Long,
         content: String,
-        toolCalls: List<ToolCall>
+        toolCalls: List<ToolCall>,
+        reasoning: String = ""
     ): MessageEntity? {
         if (content.isBlank() && toolCalls.isEmpty()) return null
         val now = System.currentTimeMillis()
@@ -307,6 +347,8 @@ class AgentLoop @Inject constructor(
             content = content,
             toolCallsJson = toolCalls.takeIf { it.isNotEmpty() }
                 ?.let { AiJson.encodeToString(ListSerializer(ToolCall.serializer()), it) },
+            // 空串存 null：界面据「是否为 null」决定整条思维链条要不要出现。
+            reasoningContent = reasoning.takeIf(String::isNotBlank)?.take(MAX_REASONING_CHARS),
             createdAt = now
         )
         val messageId = chatDao.insertMessage(message)
@@ -379,6 +421,10 @@ class AgentLoop @Inject constructor(
         const val DETACHED_MAX_ROUNDS = 3
         const val WINDOW_MESSAGES = 20
         const val MAX_TOOL_STATUS_CHARS = 120
+        /** 「过程」卡展开后显示的结果预览上限；只进内存与界面，不进日志。 */
+        const val MAX_TOOL_PREVIEW_CHARS = 600
+        /** 思维链落库上限：它只服务展示，没必要为一次长推理撑大消息表。 */
+        const val MAX_REASONING_CHARS = 20_000
     }
 }
 

@@ -25,6 +25,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -80,6 +83,7 @@ import coil3.compose.AsyncImage
 import com.mozhi.reader.ai.listen.ListenEngine
 import com.mozhi.reader.ai.listen.ListenPlaybackMode
 import com.mozhi.reader.core.database.entity.BookEntity
+import com.mozhi.reader.core.database.entity.ChapterEntity
 import com.mozhi.reader.core.library.AudiobookChapterState
 import com.mozhi.reader.core.library.AudiobookRepository
 import com.mozhi.reader.core.library.LibraryRepository
@@ -115,6 +119,11 @@ class ListenPlayerViewModel @Inject constructor(
         SharingStarted.WhileSubscribed(5_000),
         null
     )
+    val chapters = libraryRepository.observeChapters(bookId).stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        emptyList()
+    )
 
     init {
         viewModelScope.launch {
@@ -147,6 +156,7 @@ class ListenPlayerViewModel @Inject constructor(
     fun nextSegment() = engine.nextSentence()
     fun previousChapter() = engine.prevChapter()
     fun nextChapter() = engine.nextChapter()
+    fun selectChapter(chapterIndex: Int) = engine.seekTo(chapterIndex, 0)
     fun seek(fraction: Float) = engine.seekToChapterFraction(fraction)
     fun setSleepTimer(plan: SleepTimerPlan?) = engine.setSleepTimer(plan)
 }
@@ -163,7 +173,6 @@ class ListenPlayerViewModel @Inject constructor(
 fun ListenPlayerScreen(
     bookId: Long,
     onBack: () -> Unit,
-    onOpenReader: (Long) -> Unit,
     onOpenVoiceLibrary: () -> Unit,
     onOpenRoleAssignments: (Long) -> Unit,
     viewModel: ListenPlayerViewModel = hiltViewModel(),
@@ -172,10 +181,12 @@ fun ListenPlayerScreen(
     val listenState by viewModel.listenState.collectAsStateWithLifecycle()
     val sleepTimer by viewModel.sleepTimer.collectAsStateWithLifecycle()
     val book by viewModel.book.collectAsStateWithLifecycle()
+    val chapters by viewModel.chapters.collectAsStateWithLifecycle()
     val tuningState by tuningViewModel.uiState.collectAsStateWithLifecycle()
     val current = listenState?.takeIf { it.bookId == bookId }
     var showTimer by remember { mutableStateOf(false) }
     var showSpeed by remember { mutableStateOf(false) }
+    var showChapters by remember { mutableStateOf(false) }
     var sliderValue by remember { mutableFloatStateOf(0f) }
     var dragging by remember { mutableStateOf(false) }
     LaunchedEffect(current?.chapterProgress, dragging) {
@@ -218,7 +229,7 @@ fun ListenPlayerScreen(
                     .padding(horizontal = 22.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // ── 顶栏：收起 + 右侧「看正文」胶囊，其余都在下面的胶囊里
+                // ── 顶栏：收起 + 目录；避免与左上角返回正文的入口重复。
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -227,8 +238,8 @@ fun ListenPlayerScreen(
                     Spacer(Modifier.weight(1f))
                     GlassPill(
                         icon = Icons.AutoMirrored.Outlined.MenuBook,
-                        label = "看正文",
-                        onClick = { onOpenReader(bookId) }
+                        label = "目录",
+                        onClick = { showChapters = true }
                     )
                 }
 
@@ -426,6 +437,126 @@ fun ListenPlayerScreen(
             )
         }
     }
+    if (showChapters) {
+        ModalBottomSheet(
+            onDismissRequest = { showChapters = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+        ) {
+            ListenChapterSheet(
+                chapters = chapters,
+                currentChapterIndex = current?.chapterIndex,
+                onChapterClick = { chapterIndex ->
+                    viewModel.selectChapter(chapterIndex)
+                    showChapters = false
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun ListenChapterSheet(
+    chapters: List<ChapterEntity>,
+    currentChapterIndex: Int?,
+    onChapterClick: (Int) -> Unit
+) {
+    val rows = remember(chapters) {
+        groupListenChapters(chapters).flatMapIndexed { groupIndex, group ->
+            listOf(ListenChapterRow.Volume(groupIndex, group.title, group.headerChapterIndex)) +
+                group.chapters.map(ListenChapterRow::Chapter)
+        }
+    }
+    val listState = rememberLazyListState()
+    LaunchedEffect(rows, currentChapterIndex) {
+        val currentRow = rows.indexOfFirst { row ->
+            when (row) {
+                is ListenChapterRow.Volume -> row.headerChapterIndex == currentChapterIndex
+                is ListenChapterRow.Chapter -> row.item.chapter.chapterIndex == currentChapterIndex
+            }
+        }
+        if (currentRow >= 0) listState.scrollToItem(currentRow)
+    }
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxWidth().navigationBarsPadding(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+            start = 18.dp,
+            end = 18.dp,
+            bottom = 24.dp
+        )
+    ) {
+        items(rows, key = { row -> row.key }) { row ->
+            when (row) {
+                is ListenChapterRow.Volume -> Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (row.headerChapterIndex == currentChapterIndex) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainer
+                    },
+                    modifier = Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 6.dp)
+                ) {
+                    Text(
+                        text = row.title,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                    )
+                }
+                is ListenChapterRow.Chapter -> Row(
+                    modifier = Modifier.fillMaxWidth().padding(start = 18.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        Modifier
+                            .size(2.dp, 34.dp)
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.28f), CircleShape)
+                    )
+                    Spacer(Modifier.size(8.dp))
+                    Surface(
+                        onClick = { onChapterClick(row.item.chapter.chapterIndex) },
+                        shape = RoundedCornerShape(14.dp),
+                        color = if (row.item.chapter.chapterIndex == currentChapterIndex) {
+                            MaterialTheme.colorScheme.primaryContainer
+                        } else {
+                            Color.Transparent
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(
+                            text = row.item.displayTitle.ifBlank { "第 ${row.item.chapter.chapterIndex + 1} 章" },
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = if (row.item.chapter.chapterIndex == currentChapterIndex) {
+                                FontWeight.SemiBold
+                            } else {
+                                FontWeight.Normal
+                            },
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private sealed interface ListenChapterRow {
+    val key: String
+
+    data class Volume(
+        val index: Int,
+        val title: String,
+        val headerChapterIndex: Int?
+    ) : ListenChapterRow {
+        override val key: String = "volume:$index:$title"
+    }
+
+    data class Chapter(val item: ListenChapterItem) : ListenChapterRow {
+        override val key: String = "chapter:${item.chapter.id}:${item.chapter.chapterIndex}"
+    }
 }
 
 @Composable
@@ -451,7 +582,7 @@ private fun ListenSpeedSheet(
                 fontWeight = FontWeight.SemiBold
             )
             Text(
-                "系统旁白与 AI 对白分别保存速度，切换后只调整对应声部。",
+                "普通听书默认是稳定旁白；多角色成品会使用分角色音色、情绪和表演指令，表现力更强。",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

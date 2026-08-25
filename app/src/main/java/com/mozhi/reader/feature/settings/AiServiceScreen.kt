@@ -379,6 +379,7 @@ private fun EmbeddingLibraryStatusCard(
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
                 text = when (progress.stage) {
+                    EmbeddingIndexStage.DISABLED -> "按书籍管理 AI 索引"
                     EmbeddingIndexStage.NOT_CONFIGURED -> "全文索引未配置"
                     EmbeddingIndexStage.QUEUED -> "全文索引等待中"
                     EmbeddingIndexStage.INDEXING -> "正在生成全文索引"
@@ -396,10 +397,11 @@ private fun EmbeddingLibraryStatusCard(
             Text(
                 text = buildString {
                     progress.modelName?.let { append(it).append(" · ") }
+                    append("已选 ${progress.enabledBooks}/${progress.totalBooks} 本")
                     if (progress.totalChapters > 0) {
-                        append("${progress.indexedChapters}/${progress.totalChapters} 章 · ")
+                        append(" · ${progress.indexedChapters}/${progress.totalChapters} 章")
                     }
-                    append(progress.message)
+                    if (progress.message.isNotBlank()) append(" · ").append(progress.message)
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -417,15 +419,17 @@ private fun EmbeddingLibraryStatusCard(
                         .padding(top = 10.dp)
                 )
             }
-            if (progress.stage != EmbeddingIndexStage.NOT_CONFIGURED) {
+            if (progress.stage != EmbeddingIndexStage.NOT_CONFIGURED &&
+                progress.stage != EmbeddingIndexStage.DISABLED
+            ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 8.dp),
                     horizontalArrangement = Arrangement.End
                 ) {
-                    TextButton(onClick = onRetry) { Text("继续 / 重试") }
-                    TextButton(onClick = onRebuild) { Text("完整重建") }
+                    TextButton(onClick = onRetry) { Text("重试已选") }
+                    TextButton(onClick = onRebuild) { Text("重建已选") }
                 }
             }
         }

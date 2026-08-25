@@ -7,7 +7,9 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import androidx.work.workDataOf
+import com.mozhi.reader.core.database.entity.BookEntity
+import com.mozhi.reader.core.database.entity.BookSourceType
+import com.mozhi.reader.core.library.BookLayoutStore
 import com.mozhi.reader.core.library.LibraryRepository
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
@@ -20,13 +22,14 @@ import java.util.concurrent.TimeUnit
 interface BookTextMaterializeEntryPoint {
     fun importCoordinator(): ImportCoordinator
     fun libraryRepository(): LibraryRepository
+    fun bookLayoutStore(): BookLayoutStore
 }
 
 /**
- * Backfills plain text for books imported before it was stored.
+ * Backfills plain text and repairs missing or stale native EPUB layout sidecars.
  *
- * Idempotent: a book is only touched while its `textVersion` is behind, and that flag is raised in
- * the same transaction that records the byte ranges, so an interrupted run simply redoes the book.
+ * Idempotent: complete books are skipped after checking both text and native-layout state, while an
+ * interrupted run simply rematerializes the affected book on the next attempt.
  */
 class BookTextMaterializeWorker(
     appContext: Context,
@@ -43,7 +46,21 @@ class BookTextMaterializeWorker(
     override suspend fun doWork(): Result {
         val repository = entryPoint.libraryRepository()
         val coordinator = entryPoint.importCoordinator()
-        val pending = repository.booksNeedingText()
+        val layoutStore = entryPoint.bookLayoutStore()
+        val pending = ArrayList<BookEntity>()
+        for (book in repository.getBooks()) {
+            val chapterLengths = if (book.sourceType == BookSourceType.EPUB) {
+                repository.getChapters(book.id)
+                    .sortedBy { it.chapterIndex }
+                    .map { it.charCount }
+            } else {
+                emptyList()
+            }
+            val needsRepair = book.textVersion < LibraryRepository.CURRENT_TEXT_VERSION ||
+                book.sourceType == BookSourceType.EPUB &&
+                !layoutStore.hasCurrentLayout(book.id, chapterLengths)
+            if (needsRepair) pending += book
+        }
         if (pending.isEmpty()) return successResult()
 
         var failed = false
@@ -58,37 +75,16 @@ class BookTextMaterializeWorker(
         return successResult()
     }
 
-    private fun successResult(): Result {
-        if (inputData.getBoolean(INPUT_STARTUP_SCAN, false)) {
-            applicationContext.getSharedPreferences(
-                MAINTENANCE_PREFERENCES,
-                Context.MODE_PRIVATE
-            ).edit()
-                .putInt(PREFERENCE_STARTUP_SCAN_VERSION, LibraryRepository.CURRENT_TEXT_VERSION)
-                .apply()
-        }
-        return Result.success()
-    }
+    private fun successResult(): Result = Result.success()
 
     companion object {
         private const val UNIQUE_WORK_NAME = "book-text-materialize"
-        private const val INPUT_STARTUP_SCAN = "startup-scan"
-        private const val MAINTENANCE_PREFERENCES = "app-maintenance"
-        private const val PREFERENCE_STARTUP_SCAN_VERSION = "text-startup-scan-version"
 
         fun enqueueStartup(context: Context) {
-            val targetVersion = LibraryRepository.CURRENT_TEXT_VERSION
-            val completedVersion = context.getSharedPreferences(
-                MAINTENANCE_PREFERENCES,
-                Context.MODE_PRIVATE
-            ).getInt(PREFERENCE_STARTUP_SCAN_VERSION, 0)
-            if (completedVersion >= targetVersion) return
-
             WorkManager.getInstance(context).enqueueUniqueWork(
                 UNIQUE_WORK_NAME,
                 ExistingWorkPolicy.KEEP,
                 OneTimeWorkRequestBuilder<BookTextMaterializeWorker>()
-                    .setInputData(workDataOf(INPUT_STARTUP_SCAN to true))
                     .setInitialDelay(3, TimeUnit.SECONDS)
                     .setConstraints(
                         Constraints.Builder()

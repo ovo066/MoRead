@@ -144,7 +144,7 @@ class BackupArchiveManager @Inject constructor(
         const val CURRENT_FORMAT_VERSION = 1
         // 必须与 MoReadDatabase 的 version 同步升：低于实际库版本会让本机刚导出的备份
         // 在 validate() 里被判成「来自更新版本」而无法恢复。
-        const val CURRENT_DATABASE_VERSION = 19
+        const val CURRENT_DATABASE_VERSION = 21
         const val PENDING_RESTORE_NAME = "pending-restore.moread.zip"
         val MANAGED_FILE_DIRECTORIES = listOf(
             "books",

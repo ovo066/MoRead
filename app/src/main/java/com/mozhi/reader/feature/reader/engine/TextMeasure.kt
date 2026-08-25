@@ -32,7 +32,30 @@ interface TextMeasure {
 
     /** Width of one ideographic space (U+3000) at content size, the unit of paragraph indent. */
     fun indentColumnWidth(): Float
+
+    fun metrics(style: MeasuredTextStyle): LineMetrics {
+        val base = metrics(style.isTitle)
+        return LineMetrics(
+            textHeight = base.textHeight * style.textSizeScale,
+            descent = base.descent * style.textSizeScale
+        )
+    }
+
+    fun charWidths(text: String, style: MeasuredTextStyle): FloatArray =
+        charWidths(text, style.isTitle).also { widths ->
+            for (index in widths.indices) widths[index] *= style.textSizeScale
+        }
 }
+
+data class MeasuredTextStyle(
+    val isTitle: Boolean,
+    val textSizeScale: Float = 1f,
+    val fontFilePath: String? = null,
+    val fontFamily: String? = null,
+    val bold: Boolean = false,
+    val italic: Boolean = false,
+    val letterSpacingEm: Float = 0f
+)
 
 data class LineMetrics(
     val textHeight: Float,

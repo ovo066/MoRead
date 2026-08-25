@@ -2,6 +2,7 @@ package com.mozhi.reader.ai.embedding
 
 import com.mozhi.reader.core.database.dao.AiProviderDao
 import com.mozhi.reader.core.database.entity.ModelRole
+import com.mozhi.reader.core.datastore.BookEmbeddingSettingsStore
 import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.vector.VectorQueries
 import io.objectbox.BoxStore
@@ -13,10 +14,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 
 /** 用户可见的书籍向量索引阶段。 */
 enum class EmbeddingIndexStage {
+    DISABLED,
     NOT_CONFIGURED,
     QUEUED,
     INDEXING,
@@ -27,7 +30,7 @@ enum class EmbeddingIndexStage {
 
 data class BookEmbeddingProgress(
     val bookId: Long,
-    val stage: EmbeddingIndexStage = EmbeddingIndexStage.QUEUED,
+    val stage: EmbeddingIndexStage = EmbeddingIndexStage.DISABLED,
     val indexedChapters: Int = 0,
     val totalChapters: Int = 0,
     val modelName: String? = null,
@@ -40,9 +43,11 @@ data class BookEmbeddingProgress(
 }
 
 data class LibraryEmbeddingProgress(
-    val stage: EmbeddingIndexStage = EmbeddingIndexStage.NOT_CONFIGURED,
+    val stage: EmbeddingIndexStage = EmbeddingIndexStage.DISABLED,
     val indexedChapters: Int = 0,
     val totalChapters: Int = 0,
+    val enabledBooks: Int = 0,
+    val totalBooks: Int = 0,
     val modelName: String? = null,
     val activeBookTitle: String? = null,
     val message: String = ""
@@ -64,7 +69,8 @@ class EmbeddingProgressTracker @Inject constructor(
     private val libraryRepository: LibraryRepository,
     private val providerDao: AiProviderDao,
     private val vectorStore: dagger.Lazy<BoxStore>,
-    private val scheduler: BookEmbeddingScheduler
+    private val scheduler: BookEmbeddingScheduler,
+    private val settingsStore: BookEmbeddingSettingsStore
 ) {
     private data class RuntimeProgress(
         val stage: EmbeddingIndexStage,
@@ -81,8 +87,9 @@ class EmbeddingProgressTracker @Inject constructor(
         libraryRepository.observeChapters(bookId),
         providerDao.observeAssignments(),
         providerDao.observeModels(),
-        runtime
-    ) { book, chapters, assignments, models, running ->
+        combine(runtime, settingsStore.enabledBookIds) { running, enabled -> running to enabled }
+    ) { book, chapters, assignments, models, runtimeAndEnabled ->
+        val (running, enabledBookIds) = runtimeAndEnabled
         val modelId = assignments.firstOrNull { it.role == ModelRole.EMBEDDING }?.modelId
         val model = models.firstOrNull { it.id == modelId }
         val total = chapters.count { it.charCount > 0 }
@@ -90,8 +97,18 @@ class EmbeddingProgressTracker @Inject constructor(
             VectorQueries.chaptersWithChunks(vectorStore.get(), bookId).size
         }.getOrDefault(0).coerceAtMost(total.coerceAtLeast(0))
         val current = running[bookId]
+        val enabled = bookId in enabledBookIds || indexed > 0
 
         when {
+            !enabled -> BookEmbeddingProgress(
+                bookId = bookId,
+                stage = EmbeddingIndexStage.DISABLED,
+                indexedChapters = 0,
+                totalChapters = total,
+                modelName = model?.modelName,
+                message = "本书未启用 AI 索引"
+            )
+
             model == null -> BookEmbeddingProgress(
                 bookId = bookId,
                 stage = EmbeddingIndexStage.NOT_CONFIGURED,
@@ -146,23 +163,35 @@ class EmbeddingProgressTracker @Inject constructor(
         libraryRepository.observeBooks(),
         providerDao.observeAssignments(),
         providerDao.observeModels(),
-        runtime
-    ) { books, assignments, models, running ->
+        combine(runtime, settingsStore.enabledBookIds) { running, enabled -> running to enabled }
+    ) { books, assignments, models, runtimeAndEnabled ->
+        val (running, enabledBookIds) = runtimeAndEnabled
         val modelId = assignments.firstOrNull { it.role == ModelRole.EMBEDDING }?.modelId
         val model = models.firstOrNull { it.id == modelId }
-        val total = books.filter { it.textVersion >= LibraryRepository.CURRENT_TEXT_VERSION }
+        val indexedByBook = books.associate { book ->
+            book.id to runCatching {
+                VectorQueries.chaptersWithChunks(vectorStore.get(), book.id).size
+            }.getOrDefault(0)
+        }
+        // 已有索引来自旧版本时自动纳入“已选书籍”，用户可在书籍详情关闭并清理。
+        val selectedBooks = books.filter { book ->
+            book.id in enabledBookIds || indexedByBook.getValue(book.id) > 0
+        }
+        val total = selectedBooks.filter { it.textVersion >= LibraryRepository.CURRENT_TEXT_VERSION }
             .sumOf { it.totalChapters }
-        val indexed = books.sumOf { book ->
-            runCatching { VectorQueries.chaptersWithChunks(vectorStore.get(), book.id).size }
-                .getOrDefault(0)
+        val indexed = selectedBooks.sumOf { book ->
+            indexedByBook.getValue(book.id)
         }.coerceAtMost(total.coerceAtLeast(0))
         val active = running.entries.firstOrNull {
-            it.value.stage == EmbeddingIndexStage.INDEXING
+            it.key in enabledBookIds && it.value.stage == EmbeddingIndexStage.INDEXING
         }?.value
-        val problem = running.values.firstOrNull {
-            it.stage == EmbeddingIndexStage.FAILED || it.stage == EmbeddingIndexStage.BLOCKED
-        }
+        val problem = running.entries.firstOrNull { (bookId, value) ->
+            bookId in enabledBookIds &&
+                (value.stage == EmbeddingIndexStage.FAILED ||
+                    value.stage == EmbeddingIndexStage.BLOCKED)
+        }?.value
         val stage = when {
+            selectedBooks.isEmpty() -> EmbeddingIndexStage.DISABLED
             model == null -> EmbeddingIndexStage.NOT_CONFIGURED
             active != null -> EmbeddingIndexStage.INDEXING
             problem != null -> problem.stage
@@ -173,13 +202,16 @@ class EmbeddingProgressTracker @Inject constructor(
             stage = stage,
             indexedChapters = if (stage == EmbeddingIndexStage.READY) total else indexed,
             totalChapters = total,
+            enabledBooks = selectedBooks.size,
+            totalBooks = books.size,
             modelName = model?.modelName,
             activeBookTitle = active?.bookTitle,
             message = when {
+                selectedBooks.isEmpty() -> "请在书籍详情中选择需要语义检索的书"
                 model == null -> "尚未分配 Embedding 模型"
                 active != null -> active.message
                 problem != null -> problem.message
-                total > 0 && indexed >= total -> "全部书籍索引已就绪"
+                total > 0 && indexed >= total -> "已选书籍索引均已就绪"
                 indexed > 0 -> "索引已部分完成，等待后台继续"
                 else -> "等待建立全文索引"
             }
@@ -231,10 +263,29 @@ class EmbeddingProgressTracker @Inject constructor(
     /** 用户点「重试」时立即进入排队态，而不是等 Worker 真正启动后才有反馈。 */
     fun retry(bookId: Long) {
         markQueued(bookId, message = "已加入索引队列")
-        scheduler.enqueue()
+        scheduler.enqueueForBook(bookId)
     }
 
-    fun retryAll() {
+    suspend fun enable(bookId: Long) {
+        settingsStore.setEnabled(bookId, true)
+        retry(bookId)
+    }
+
+    suspend fun disable(bookId: Long) {
+        settingsStore.setEnabled(bookId, false)
+        scheduler.cancelForBook(bookId)
+        VectorQueries.removeChunksForBook(vectorStore.get(), bookId)
+        clear(bookId)
+    }
+
+    suspend fun rebuild(bookId: Long) {
+        settingsStore.setEnabled(bookId, true)
+        markQueued(bookId, message = "已加入重建队列")
+        scheduler.enqueueForBook(bookId, resetBookIndex = true)
+    }
+
+    suspend fun retryAll() {
+        val enabledBookIds = selectedBookIds()
         runtime.update { current ->
             current.mapValues { (_, value) ->
                 if (value.stage == EmbeddingIndexStage.FAILED ||
@@ -246,12 +297,25 @@ class EmbeddingProgressTracker @Inject constructor(
                 }
             }
         }
-        scheduler.enqueue()
+        enabledBookIds.forEach(scheduler::enqueueForBook)
     }
 
-    fun rebuildAll() {
-        runtime.value = emptyMap()
-        scheduler.enqueue(resetBookIndex = true)
+    suspend fun rebuildAll() {
+        val enabledBookIds = selectedBookIds()
+        enabledBookIds.forEach { bookId ->
+            markQueued(bookId, message = "已加入重建队列")
+            scheduler.enqueueForBook(bookId, resetBookIndex = true)
+        }
+    }
+
+    private suspend fun selectedBookIds(): Set<Long> {
+        val explicit = settingsStore.enabledBookIds.first()
+        return libraryRepository.getBooks().mapNotNullTo(linkedSetOf()) { book ->
+            val hasLegacyIndex = runCatching {
+                VectorQueries.chaptersWithChunks(vectorStore.get(), book.id).isNotEmpty()
+            }.getOrDefault(false)
+            book.id.takeIf { it in explicit || hasLegacyIndex }
+        }
     }
 
     private fun update(

@@ -150,6 +150,7 @@ class BookshelfViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             runCatching { importGateway.backfillMissingCovers() }
+            runCatching { importGateway.backfillMissingEpubToc() }
         }
     }
 

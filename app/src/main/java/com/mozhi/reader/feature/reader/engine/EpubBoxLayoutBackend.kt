@@ -4,20 +4,29 @@ import com.mozhi.reader.core.datastore.ReaderSyntaxFont
 import com.mozhi.reader.core.datastore.ReaderSyntaxHighlighter
 import com.mozhi.reader.core.datastore.ReaderSyntaxRule
 import com.mozhi.reader.core.datastore.ReaderSyntaxStyleSpan
+import com.mozhi.reader.core.datastore.PublisherStyleMode
+import com.mozhi.reader.core.library.EpubBackgroundSizeMode
 import com.mozhi.reader.core.library.EpubComputedStyle
 import com.mozhi.reader.core.library.EpubFloat
 import com.mozhi.reader.core.library.EpubLayoutBlock
 import com.mozhi.reader.core.library.EpubLayoutBlockKind
 import com.mozhi.reader.core.library.EpubLayoutChapterBundle
+import com.mozhi.reader.core.library.EpubLayoutMode
 import com.mozhi.reader.core.library.EpubTextAlign
 import com.mozhi.reader.core.library.EpubVerticalAlign
 import kotlin.math.max
 import kotlin.math.min
 
-internal class EpubNativeTypesetter(
+internal class EpubBoxLayoutBackend(
     private val spec: TypesetSpec,
-    private val measure: TextMeasure
+    private val measure: TextMeasure,
+    private val cancellationCheck: () -> Unit
 ) {
+    private var publisherBodyLineHeight = DEFAULT_PUBLISHER_LINE_HEIGHT
+    private var dominantBodyFontFamily: String? = null
+    private var immersivePage = false
+    private var firstPageHidesReaderHeader = false
+
     fun typeset(
         chapterIndex: Int,
         title: String,
@@ -26,21 +35,68 @@ internal class EpubNativeTypesetter(
         inlineMarkers: List<InlineMarkerReservation>,
         bundle: EpubLayoutChapterBundle
     ): TextChapter {
+        cancellationCheck()
         val document = bundle.document
+        immersivePage = document.immersivePage
+        publisherBodyLineHeight = document.bodyStyle.lineHeightEm
+            ?.coerceIn(MIN_PUBLISHER_LINE_HEIGHT, MAX_PUBLISHER_LINE_HEIGHT)
+            ?: DEFAULT_PUBLISHER_LINE_HEIGHT
+        dominantBodyFontFamily = document.blocks
+            .asSequence()
+            .filter { it.kind != EpubLayoutBlockKind.HEADING && it.textEnd > it.textStart }
+            .flatMap { block ->
+                (block.spans.ifEmpty {
+                    listOf(com.mozhi.reader.core.library.EpubLayoutSpan(block.textStart, block.textEnd, style = block.style))
+                }).asSequence()
+            }
+            .mapNotNull { span -> span.style.fontFamily?.lowercase()?.let { it to (span.textEnd - span.textStart) } }
+            .groupBy({ it.first }, { it.second })
+            .maxByOrNull { (_, lengths) -> lengths.sum() }
+            ?.key
+        val layoutBlocks = document.blocks.map { block ->
+            block.copy(
+                style = effectiveStyle(block.style),
+                spans = block.spans.map { span -> span.copy(style = effectiveStyle(span.style)) }
+            )
+        }
         val state = LayoutState()
         val syntax = SyntaxStyleMap(body, spec.syntaxHighlightRules)
         val imagesByOffset = inlineImages.associateBy(InlineImageSource::charOffset)
-        val containers = document.blocks.filter { it.kind == EpubLayoutBlockKind.CONTAINER }
-        val contentBlocks = document.blocks
+        val containers = layoutBlocks.filter { it.kind == EpubLayoutBlockKind.CONTAINER }
+        val contentBlocks = layoutBlocks
             .asSequence()
             .filter { it.kind != EpubLayoutBlockKind.CONTAINER && !it.style.hidden }
             .sortedWith(compareBy(EpubLayoutBlock::textStart, EpubLayoutBlock::orderIndex))
             .toList()
+        // 不能把所有 h1 都当章首：“制作说明/校对说明”也是 h1，但仍是普通正文页。
+        // 只认语义明确的 chapter/title/heading 标记；封面和卷首页由 immersivePage 单独识别。
+        firstPageHidesReaderHeader = contentBlocks.take(4).any { block ->
+            block.kind == EpubLayoutBlockKind.HEADING &&
+                (block.element.id.orEmpty() + " " + block.element.classes.joinToString(" "))
+                    .lowercase()
+                    .let { marker ->
+                        marker.contains("chapter") || marker.contains("title") || marker.contains("heading")
+                    }
+        }
+        val containersByStart = containers
+            .asSequence()
+            .filterNot { it.style.hidden }
+            .sortedWith(compareBy<EpubLayoutBlock> { it.textStart }.thenByDescending { it.textEnd })
+            .toList()
+        val activeContainers = ArrayList<EpubLayoutBlock>()
+        var nextContainer = 0
         val contexts = contentBlocks.map { block ->
+            cancellationCheck()
+            while (nextContainer < containersByStart.size &&
+                containersByStart[nextContainer].textStart <= block.textStart
+            ) {
+                activeContainers += containersByStart[nextContainer++]
+            }
+            activeContainers.removeAll { it.textEnd < block.textEnd }
             BlockContext(
                 block = block,
-                parents = containers
-                    .filter { it.textStart <= block.textStart && it.textEnd >= block.textEnd && !it.style.hidden }
+                parents = activeContainers
+                    .filter { it.textStart <= block.textStart && it.textEnd >= block.textEnd }
                     .sortedWith(
                         compareByDescending<EpubLayoutBlock> { it.textEnd - it.textStart }
                             .thenBy { it.orderIndex }
@@ -48,75 +104,147 @@ internal class EpubNativeTypesetter(
             )
         }
 
+        var consumedThrough = -1
         contexts.forEachIndexed { blockIndex, context ->
+            cancellationCheck()
+            if (blockIndex <= consumedThrough) return@forEachIndexed
             val block = context.block
+            val galleryParent = context.parents.lastOrNull { parent ->
+                parent.style.layoutMode != EpubLayoutMode.FLOW
+            }
+            val galleryContexts = if (
+                block.kind == EpubLayoutBlockKind.IMAGE && galleryParent != null
+            ) {
+                contexts.drop(blockIndex).takeWhile { candidate ->
+                    candidate.block.kind == EpubLayoutBlockKind.IMAGE &&
+                        candidate.parents.any { it.orderIndex == galleryParent.orderIndex }
+                }.takeIf { it.size > 1 }
+            } else {
+                null
+            }
+            val trailingContext = galleryContexts?.lastOrNull() ?: context
+            val trailingBlock = trailingContext.block
             val openingContainers = context.parents.filter { it.textStart == block.textStart }
-            val closingContainers = context.parents.filter { it.textEnd == block.textEnd }.asReversed()
-            val geometry = resolveGeometry(context.parents.map(EpubLayoutBlock::style) + block.style)
-            if (block.style.breakBefore) state.closePage(force = false)
+            val closingContainers = trailingContext.parents
+                .filter { it.textEnd == trailingBlock.textEnd }
+                .asReversed()
+            val parentStyles = context.parents.map(EpubLayoutBlock::style)
+            val styleStack = parentStyles + block.style
+            val imageContainerHeight = explicitImageContainerHeight(context.parents, block)
+            val autoFloatStyle = styleStack.lastOrNull { style ->
+                style.float != EpubFloat.NONE && style.widthEm == null && style.widthFraction == null
+            }
+            val intrinsicFloatWidth = autoFloatStyle?.let { floatStyle ->
+                val safeStart = block.textStart.coerceIn(0, body.length)
+                val text = body.substring(safeStart, block.textEnd.coerceIn(safeStart, body.length))
+                measure.charWidths(text, block.kind == EpubLayoutBlockKind.HEADING).sum() +
+                    floatStyle.paddingLeftEm.toPx() + floatStyle.paddingRightEm.toPx() +
+                    floatStyle.borderLeftPx() + floatStyle.borderRightPx()
+            }
+            val geometry = resolveGeometry(styleStack, intrinsicFloatWidth)
+            val textBackgroundArgb = styleStack.asReversed()
+                .firstNotNullOfOrNull { style -> style.backgroundColorArgb?.let(::mappedBackground) }
+                ?.let { color -> EpubThemeColors.composite(color, spec.themeBackgroundArgb) }
+                ?: spec.themeBackgroundArgb
+            if (block.style.breakBefore || openingContainers.any { it.style.breakBefore }) {
+                state.closePage(force = false)
+            }
 
             openingContainers.filter { it.style.avoidBreakInside }.forEach { container ->
                 val endIndex = contexts.indexOfLast { it.block.textEnd <= container.textEnd }
                 if (endIndex >= blockIndex) {
                     state.keepTogether(
-                        estimateRangeAdvance(
-                            contexts = contexts,
-                            startIndex = blockIndex,
-                            endIndex = endIndex,
-                            body = body,
-                            inlineMarkers = inlineMarkers,
-                            syntax = syntax,
-                            bundle = bundle,
-                            imagesByOffset = imagesByOffset
+                        min(
+                            estimateRangeAdvance(
+                                contexts = contexts,
+                                startIndex = blockIndex,
+                                endIndex = endIndex,
+                                body = body,
+                                inlineMarkers = inlineMarkers,
+                                syntax = syntax,
+                                bundle = bundle,
+                                imagesByOffset = imagesByOffset
+                            ),
+                            spec.contentLineStep * MIN_BLOCK_START_LINES
                         )
                     )
                 }
             }
             if (block.style.avoidBreakInside) {
                 state.keepTogether(
-                    blockLeadingAdvance(block) +
-                        estimateBlockAdvance(body, block, geometry, inlineMarkers, syntax, bundle, imagesByOffset) +
-                        blockTrailingAdvance(block)
+                    min(
+                        blockLeadingAdvance(block) +
+                            estimateBlockAdvance(
+                                body, block, geometry, imageContainerHeight,
+                                inlineMarkers, syntax, bundle, imagesByOffset
+                            ) + blockTrailingAdvance(block),
+                        spec.contentLineStep * MIN_BLOCK_START_LINES
+                    )
+                )
+            }
+            if (block.kind == EpubLayoutBlockKind.HEADING || block.style.avoidBreakAfter) {
+                // Keep a heading with at least one following body line. Estimating the whole next
+                // block would make long paragraphs exceed a page and disable the rule entirely.
+                state.keepTogether(
+                    blockLeadingAdvance(block) + spec.titleLineStep +
+                        blockTrailingAdvance(block) + spec.contentLineStep
                 )
             }
 
             openingContainers.forEach { container ->
-                state.addSpacing(container.style.marginTopEm.toPx())
+                state.addSpacing(container.style.marginTopEm.toPx(), collapse = true)
                 state.addSpacing(container.style.borderTopPx() + container.style.paddingTopEm.toPx(), keepAtPageTop = true)
             }
-            state.addSpacing(block.style.marginTopEm?.toPx() ?: defaultTopGap(block))
+            state.addSpacing(blockTopGap(block), collapse = true)
             state.addSpacing(block.style.borderTopPx() + block.style.paddingTopEm.toPx(), keepAtPageTop = true)
 
-            when (block.kind) {
-                EpubLayoutBlockKind.IMAGE, EpubLayoutBlockKind.SEPARATOR -> {
+            when {
+                galleryContexts != null && galleryParent != null -> {
+                    layoutImageGallery(
+                        state = state,
+                        blocks = galleryContexts.map(BlockContext::block),
+                        sources = imagesByOffset,
+                        geometry = geometry,
+                        galleryStyle = galleryParent.style
+                    )
+                    consumedThrough = blockIndex + galleryContexts.lastIndex
+                }
+                block.kind == EpubLayoutBlockKind.IMAGE ||
+                    block.kind == EpubLayoutBlockKind.SEPARATOR -> {
                     val source = imagesByOffset[block.textStart]
                     if (source != null) {
-                        layoutImage(state, source, block, geometry)
+                        layoutImage(state, source, block, geometry, imageContainerHeight)
                     } else if (block.textEnd > block.textStart) {
-                        layoutTextBlock(state, body, block, geometry, inlineMarkers, syntax, bundle)
+                        layoutTextBlock(
+                            state, body, block, geometry, inlineMarkers, syntax, bundle, textBackgroundArgb
+                        )
                     } else {
                         layoutRule(state, block, geometry)
                     }
                 }
-                EpubLayoutBlockKind.PARAGRAPH,
-                EpubLayoutBlockKind.HEADING,
-                EpubLayoutBlockKind.QUOTE,
-                EpubLayoutBlockKind.LIST_ITEM ->
-                    layoutTextBlock(state, body, block, geometry, inlineMarkers, syntax, bundle)
-                EpubLayoutBlockKind.CONTAINER -> Unit
+                block.kind == EpubLayoutBlockKind.PARAGRAPH ||
+                    block.kind == EpubLayoutBlockKind.HEADING ||
+                    block.kind == EpubLayoutBlockKind.QUOTE ||
+                    block.kind == EpubLayoutBlockKind.LIST_ITEM ->
+                    layoutTextBlock(
+                        state, body, block, geometry, inlineMarkers, syntax, bundle, textBackgroundArgb
+                    )
+                else -> Unit
             }
 
-            state.addSpacing(block.style.paddingBottomEm.toPx() + block.style.borderBottomPx())
-            state.addSpacing(block.style.marginBottomEm?.toPx() ?: defaultBottomGap(block))
+            state.addSpacing(
+                trailingBlock.style.paddingBottomEm.toPx() + trailingBlock.style.borderBottomPx()
+            )
+            state.addSpacing(blockBottomGap(trailingBlock), collapse = true)
             closingContainers.forEach { container ->
                 state.addSpacing(container.style.paddingBottomEm.toPx() + container.style.borderBottomPx())
-                state.addSpacing(container.style.marginBottomEm.toPx())
+                state.addSpacing(container.style.marginBottomEm.toPx(), collapse = true)
             }
-            if (block.style.breakAfter) state.closePage(force = false)
+            if (trailingBlock.style.breakAfter) state.closePage(force = false)
         }
 
         state.closePage(force = true)
-        val pages = decoratePages(state.pages, bundle, containers)
+        val pages = decoratePages(state.pages, bundle, containers, contentBlocks)
         return TextChapter(chapterIndex, title, pages, body.length)
     }
 
@@ -127,7 +255,8 @@ internal class EpubNativeTypesetter(
         geometry: BlockGeometry,
         inlineMarkers: List<InlineMarkerReservation>,
         syntax: SyntaxStyleMap,
-        bundle: EpubLayoutChapterBundle
+        bundle: EpubLayoutChapterBundle,
+        actualBackgroundArgb: Int = spec.themeBackgroundArgb
     ) {
         val start = block.textStart.coerceIn(0, body.length)
         val end = block.textEnd.coerceIn(start, body.length)
@@ -135,12 +264,24 @@ internal class EpubNativeTypesetter(
         val text = body.substring(start, end)
         val isTitle = block.kind == EpubLayoutBlockKind.HEADING
         val layoutText = buildLayoutText(text, start, inlineMarkers)
-        val clusters = styledClusters(layoutText, start, block, isTitle, syntax, bundle)
+        val clusters = styledClusters(
+            layoutText, start, block, isTitle, syntax, bundle, actualBackgroundArgb
+        )
         val indent = if (isTitle) 0f else (block.style.textIndentEm ?: spec.indentCharCount) * measure.indentColumnWidth()
         val lines = wrap(clusters, geometry.width, indent)
+        val lineMetrics = lines.map { line -> resolveLineMetrics(line) }
+        val orphanCount = min(block.style.orphans, lines.size)
+        if (orphanCount > 1) {
+            state.keepTogether(lineMetrics.take(orphanCount).sumOf { it.lineStep.toDouble() }.toFloat())
+        }
         lines.forEachIndexed { lineIndex, lineClusters ->
+            cancellationCheck()
             if (lineClusters.isEmpty()) return@forEachIndexed
-            val metrics = resolveLineMetrics(lineClusters)
+            val metrics = lineMetrics[lineIndex]
+            val widowCount = min(block.style.widows, lines.size)
+            if (widowCount > 1 && lineIndex == lines.size - widowCount) {
+                state.keepTogether(lineMetrics.takeLast(widowCount).sumOf { it.lineStep.toDouble() }.toFloat())
+            }
             state.prepareForLine(metrics.textHeight)
 
             val firstLine = lineIndex == 0
@@ -186,11 +327,14 @@ internal class EpubNativeTypesetter(
         block: EpubLayoutBlock,
         isTitle: Boolean,
         syntax: SyntaxStyleMap,
-        bundle: EpubLayoutChapterBundle
+        bundle: EpubLayoutChapterBundle,
+        actualBackgroundArgb: Int = spec.themeBackgroundArgb
     ): List<StyledCluster> {
         val result = ArrayList<StyledCluster>()
         var index = 0
+        var nextSpanIndex = 0
         while (index < layoutText.text.length) {
+            if (index and 0xFF == 0) cancellationCheck()
             val marker = layoutText.markersByIndex[index]
             var end = index + 1
             if (marker == null) {
@@ -205,7 +349,15 @@ internal class EpubNativeTypesetter(
             val sourceEnd = layoutText.sourceBoundary[end]
             val absoluteOffset = if (marker == null) bodyOffset + sourceStart else -1
             val spanIndex = if (absoluteOffset >= 0) {
-                block.spans.indexOfFirst { absoluteOffset in it.textStart until it.textEnd }
+                while (nextSpanIndex < block.spans.size &&
+                    absoluteOffset >= block.spans[nextSpanIndex].textEnd
+                ) {
+                    nextSpanIndex++
+                }
+                nextSpanIndex.takeIf { candidate ->
+                    candidate < block.spans.size &&
+                        absoluteOffset in block.spans[candidate].textStart until block.spans[candidate].textEnd
+                } ?: -1
             } else {
                 -1
             }
@@ -215,7 +367,13 @@ internal class EpubNativeTypesetter(
                 span?.elements?.isNotEmpty() == true && it.hasInlineDecoration()
             }
             val ruby = span?.rubyText?.takeIf(String::isNotBlank)
-            val resolved = resolveTextStyle(epubStyle, isTitle, bundle, absoluteOffset.takeIf { it >= 0 }?.let(syntax::at))
+            val resolved = resolveTextStyle(
+                epubStyle,
+                isTitle,
+                bundle,
+                absoluteOffset.takeIf { it >= 0 }?.let(syntax::at),
+                actualBackgroundArgb
+            )
             val clusterText = if (marker == null) layoutText.text.substring(index, end) else ""
             val width = if (marker == null) {
                 measure.charWidths(clusterText, resolved.measureStyle).sum()
@@ -229,6 +387,7 @@ internal class EpubNativeTypesetter(
                 sourceLength = sourceEnd - sourceStart,
                 marker = marker,
                 style = resolved,
+                linkHref = span?.linkHref,
                 keepTogetherId = spanIndex.takeIf {
                     it >= 0 && (span?.style?.avoidBreakInside == true || ruby != null)
                 },
@@ -292,6 +451,7 @@ internal class EpubNativeTypesetter(
         val lines = ArrayList<List<StyledCluster>>()
         var start = 0
         while (start < clusters.size) {
+            cancellationCheck()
             val lineLimit = (width - if (lines.isEmpty()) firstIndent else 0f).coerceAtLeast(1f)
             var used = 0f
             var end = start
@@ -321,6 +481,10 @@ internal class EpubNativeTypesetter(
                 }
             }
             if (!keptGroup && end < clusters.size && preferredBreak > start) end = preferredBreak
+            // 中文避头尾：句号、逗号、右引号等不能落到下一行开头，左括号、左引号
+            // 不能孤零零留在行尾。闭合标点允许轻微越过测量宽度，比另起一行自然得多。
+            while (end < clusters.size && clusters[end].startsWithForbiddenPunctuation()) end++
+            while (end > start + 1 && clusters[end - 1].endsWithOpeningPunctuation()) end--
             if (end <= start) end = start + 1
             lines += clusters.subList(start, end)
             start = end
@@ -381,7 +545,8 @@ internal class EpubNativeTypesetter(
                 opacity = style.opacity,
                 sourceLength = cluster.sourceLength,
                 inlineMarkerKind = cluster.marker?.kind,
-                inlineMarkerOffset = cluster.marker?.charOffset
+                inlineMarkerOffset = cluster.marker?.charOffset,
+                linkHref = cluster.linkHref
             )
             val boxId = cluster.inlineBoxId
             val boxStyle = cluster.inlineBoxStyle
@@ -462,24 +627,36 @@ internal class EpubNativeTypesetter(
         val top = lineTop + style.marginTopEm.toPx()
         val bottom = lineBottom - style.marginBottomEm.toPx()
         if (fragment.right <= fragment.left || bottom <= top) return@mapNotNull null
+        val mappedBackground = mappedBackground(style.backgroundColorArgb)
         TextBlockDecoration(
             left = fragment.left,
             top = top,
             right = fragment.right,
             bottom = bottom,
-            backgroundColorArgb = style.backgroundColorArgb,
+            backgroundColorArgb = mappedBackground,
             backgroundImagePath = style.backgroundImageHref?.let(bundle.resourcePaths::get),
-            borderColorArgb = style.borderColorArgb,
+            backgroundSizeMode = style.backgroundSizeMode.toPageMode(),
+            backgroundSizeWidth = style.backgroundSizeWidthEm.toPx(),
+            backgroundSizeHeight = style.backgroundSizeHeightEm.toPx(),
+            backgroundRepeatX = style.backgroundRepeatX,
+            backgroundRepeatY = style.backgroundRepeatY,
+            backgroundPositionX = style.backgroundPositionX,
+            backgroundPositionY = style.backgroundPositionY,
+            borderColorArgb = mappedForeground(style.borderColorArgb, mappedBackground),
             borderWidth = style.borderWidthEm.toPx(),
-            borderTopColorArgb = style.borderTopColorArgb,
-            borderRightColorArgb = style.borderRightColorArgb,
-            borderBottomColorArgb = style.borderBottomColorArgb,
-            borderLeftColorArgb = style.borderLeftColorArgb,
+            borderTopColorArgb = mappedForeground(style.borderTopColorArgb, mappedBackground),
+            borderRightColorArgb = mappedForeground(style.borderRightColorArgb, mappedBackground),
+            borderBottomColorArgb = mappedForeground(style.borderBottomColorArgb, mappedBackground),
+            borderLeftColorArgb = mappedForeground(style.borderLeftColorArgb, mappedBackground),
             borderTopWidth = style.borderTopPx(),
             borderRightWidth = style.borderRightPx(),
             borderBottomWidth = style.borderBottomPx(),
             borderLeftWidth = style.borderLeftPx(),
             borderRadius = style.borderRadiusEm.toPx(),
+            borderTopLeftRadius = (style.borderTopLeftRadiusEm ?: style.borderRadiusEm).toPx(),
+            borderTopRightRadius = (style.borderTopRightRadiusEm ?: style.borderRadiusEm).toPx(),
+            borderBottomRightRadius = (style.borderBottomRightRadiusEm ?: style.borderRadiusEm).toPx(),
+            borderBottomLeftRadius = (style.borderBottomLeftRadiusEm ?: style.borderRadiusEm).toPx(),
             boxShadows = style.textBoxShadows(),
             opacity = style.opacity,
             drawRightEdge = fragment.drawRightEdge,
@@ -491,13 +668,26 @@ internal class EpubNativeTypesetter(
         state: LayoutState,
         source: InlineImageSource,
         block: EpubLayoutBlock,
-        geometry: BlockGeometry
+        geometry: BlockGeometry,
+        containerHeight: Float?
     ) {
         val style = block.style
-        val size = resolveImageSize(source, style, geometry)
-        val width = size.first
-        val height = size.second
-        state.prepareForLine(height)
+        val size = resolveImageSize(source, style, geometry, containerHeight)
+        var width = size.first
+        var height = size.second
+        var occupiedHeight = max(height, containerHeight ?: height).coerceAtMost(spec.visibleHeight)
+        val remaining = state.remainingHeight()
+        // 普通插图若只差一点放不下，按比例缩进当前页；不要把整张图推到下一页，
+        // 在本页留下接近半屏的空白。100vh/显式整页容器仍保持独立页面。
+        if (state.hasContent() && containerHeight == null && occupiedHeight > remaining &&
+            remaining >= spec.contentLineStep * MIN_INLINE_IMAGE_REMAINING_LINES
+        ) {
+            val scale = (remaining / occupiedHeight).coerceIn(0.2f, 1f)
+            width *= scale
+            height *= scale
+            occupiedHeight = height
+        }
+        state.prepareForLine(occupiedHeight)
         val startX = when {
             style.float == EpubFloat.START -> geometry.left
             style.float == EpubFloat.END -> geometry.right - width
@@ -505,7 +695,10 @@ internal class EpubNativeTypesetter(
             style.textAlign == EpubTextAlign.END -> geometry.right - width
             else -> geometry.left + (geometry.width - width) / 2f
         }
-        val lineTop = state.durY
+        // Flex-like full-page illustration containers center the image in their 100vh box. Keep
+        // that occupied box in pagination while drawing only the aspect-correct bitmap inside it.
+        val imageOffsetY = ((occupiedHeight - height) / 2f).coerceAtLeast(0f)
+        val lineTop = state.durY + imageOffsetY
         val bodyLength = block.textEnd - block.textStart
         state.addLine(
             TextLine(
@@ -521,27 +714,139 @@ internal class EpubNativeTypesetter(
                 charLength = bodyLength,
                 inlineImage = InlineImagePlacement(source.imagePath, width, height, source.altText)
             ),
-            lineStep = height
+            lineStep = (occupiedHeight - imageOffsetY).coerceAtLeast(height)
         )
+    }
+
+    private fun layoutImageGallery(
+        state: LayoutState,
+        blocks: List<EpubLayoutBlock>,
+        sources: Map<Int, InlineImageSource>,
+        geometry: BlockGeometry,
+        galleryStyle: EpubComputedStyle
+    ) {
+        if (blocks.isEmpty()) return
+        val declaredFraction = blocks.firstNotNullOfOrNull { it.style.widthFraction }
+        val inferredColumns = declaredFraction
+            ?.takeIf { it > 0f }
+            ?.let { kotlin.math.round(1f / it).toInt().coerceIn(1, 8) }
+        val columns = (galleryStyle.layoutColumns ?: inferredColumns ?: when (galleryStyle.layoutMode) {
+            EpubLayoutMode.FLEX -> blocks.size.coerceAtMost(6)
+            EpubLayoutMode.GRID -> 2
+            EpubLayoutMode.FLOW -> 1
+        }).coerceIn(1, blocks.size)
+        val gap = (galleryStyle.layoutGapEm ?: DEFAULT_GALLERY_GAP_EM).toPx().coerceAtLeast(0f)
+        val cellWidth = ((geometry.width - gap * (columns - 1)) / columns).coerceAtLeast(1f)
+
+        blocks.chunked(columns).forEach { row ->
+            val sizes = row.map { block ->
+                val source = sources[block.textStart]
+                val aspect = source?.let {
+                    (it.pixelWidth.toFloat() / it.pixelHeight.coerceAtLeast(1))
+                        .coerceIn(MIN_IMAGE_ASPECT, MAX_IMAGE_ASPECT)
+                } ?: DEFAULT_MISSING_IMAGE_ASPECT
+                val requested = block.style.widthFraction?.times(geometry.width)
+                    ?: block.style.widthEm.toPx().takeIf { it > 0f }
+                    ?: cellWidth
+                val width = requested.coerceIn(1f, cellWidth)
+                width to (width / aspect).coerceAtMost(spec.visibleHeight * MAX_GALLERY_ROW_HEIGHT_FRACTION)
+            }
+            var rowHeight = sizes.maxOf { it.second }.coerceAtLeast(spec.contentLineStep)
+            val remaining = state.remainingHeight()
+            val rowScale = if (state.hasContent() && rowHeight > remaining &&
+                remaining >= spec.contentLineStep * MIN_INLINE_IMAGE_REMAINING_LINES
+            ) {
+                (remaining / rowHeight).coerceIn(0.25f, 1f)
+            } else {
+                1f
+            }
+            rowHeight *= rowScale
+            state.prepareForLine(rowHeight)
+            val lineTop = state.durY
+            val placements = row.mapIndexed { index, block ->
+                val source = sources[block.textStart]
+                val width = sizes[index].first * rowScale
+                val height = sizes[index].second * rowScale
+                val cellLeft = geometry.left + index * (cellWidth + gap)
+                PositionedInlineImagePlacement(
+                    imagePath = source?.imagePath.orEmpty(),
+                    left = cellLeft + (cellWidth - width) / 2f,
+                    topOffset = (rowHeight - height) / 2f,
+                    width = width,
+                    height = height,
+                    altText = source?.altText ?: block.altText
+                )
+            }
+            val start = row.first().textStart
+            val end = row.last().textEnd
+            state.addLine(
+                TextLine(
+                    text = "",
+                    columns = emptyList(),
+                    lineTop = lineTop,
+                    lineBase = lineTop + rowHeight,
+                    lineBottom = lineTop + rowHeight,
+                    startX = geometry.left,
+                    isTitle = false,
+                    isParagraphEnd = true,
+                    chapterPosition = start,
+                    charLength = (end - start).coerceAtLeast(0),
+                    inlineImages = placements
+                ),
+                lineStep = rowHeight + gap
+            )
+        }
     }
 
     private fun resolveImageSize(
         source: InlineImageSource,
         style: EpubComputedStyle,
-        geometry: BlockGeometry
+        geometry: BlockGeometry,
+        containerHeight: Float? = null
     ): Pair<Float, Float> {
         val aspect = (source.pixelWidth.toFloat() / source.pixelHeight.coerceAtLeast(1))
             .coerceIn(MIN_IMAGE_ASPECT, MAX_IMAGE_ASPECT)
-        var width = requestedWidth(style, geometry.width)
-            ?: min(geometry.width, source.pixelWidth.coerceAtLeast(1).toFloat())
-        width = min(width, requestedMaxWidth(style, geometry.width) ?: geometry.width)
-        var height = style.heightEm?.toPx()
+        val intrinsicWidth = source.pixelWidth.coerceAtLeast(1) *
+            (spec.contentFontSizePx / CSS_ROOT_FONT_PX).coerceAtLeast(1f)
+        val requestedWidth = requestedWidth(style, geometry.width)
+        val requestedHeight = style.heightEm?.toPx()
             ?: style.heightViewportFraction?.times(spec.visibleHeight)
-            ?: width / aspect
-        val maxHeight = requestedMaxHeight(style) ?: spec.visibleHeight * MAX_IMAGE_HEIGHT_FRACTION
-        if (height > maxHeight) {
-            height = maxHeight
-            width = min(width, height * aspect)
+        val widthLimit = min(
+            geometry.width,
+            requestedMaxWidth(style, geometry.width) ?: geometry.width
+        )
+        val fullPageImage = style.widthFraction?.let { it >= 0.9f } == true ||
+            style.heightViewportFraction?.let { it >= 0.8f } == true ||
+            aspect <= 0.85f && (requestedWidth ?: widthLimit) >= geometry.width * 0.9f
+        val heightLimit = requestedMaxHeight(style, containerHeight)
+            ?: containerHeight
+            ?: spec.visibleHeight * if (fullPageImage) 1f else MAX_IMAGE_HEIGHT_FRACTION
+
+        // A large class of illustrated EPUBs declares both width:100% and height:100% on a page
+        // image. Treat those as a containing box, like object-fit:contain, rather than stretching
+        // the bitmap independently in both axes. The painter can then draw 1:1 into this box
+        // without the visibly squeezed pages produced by the old width/height calculation.
+        var width = when {
+            requestedWidth != null -> requestedWidth
+            requestedHeight != null -> requestedHeight * aspect
+            else -> min(widthLimit, intrinsicWidth)
+        }
+        var height = when {
+            requestedHeight != null && requestedWidth == null -> requestedHeight
+            else -> width / aspect
+        }
+        if (requestedWidth != null && requestedHeight != null) {
+            val scale = min(requestedWidth / aspect, requestedHeight)
+            height = scale
+            width = scale * aspect
+        }
+        if (width > widthLimit) {
+            width = widthLimit
+            height = width / aspect
+        }
+        if (height > heightLimit) {
+            height = heightLimit
+            width = min(widthLimit, height * aspect)
         }
         return width.coerceAtLeast(1f) to height.coerceAtLeast(1f)
     }
@@ -584,17 +889,21 @@ internal class EpubNativeTypesetter(
     ): Float {
         var advance = 0f
         for (index in startIndex..endIndex.coerceAtMost(contexts.lastIndex)) {
+            cancellationCheck()
             val context = contexts[index]
             val block = context.block
             context.parents.filter { it.textStart == block.textStart }.forEach { container ->
                 advance += containerLeadingAdvance(container)
             }
-            val geometry = resolveGeometry(context.parents.map(EpubLayoutBlock::style) + block.style)
+            val parentStyles = context.parents.map(EpubLayoutBlock::style)
+            val imageContainerHeight = explicitImageContainerHeight(context.parents, block)
+            val geometry = resolveGeometry(parentStyles + block.style)
             advance += blockLeadingAdvance(block)
             advance += estimateBlockAdvance(
                 body,
                 block,
                 geometry,
+                imageContainerHeight,
                 inlineMarkers,
                 syntax,
                 bundle,
@@ -604,6 +913,7 @@ internal class EpubNativeTypesetter(
             context.parents.filter { it.textEnd == block.textEnd }.forEach { container ->
                 advance += containerTrailingAdvance(container)
             }
+            if (advance > spec.visibleHeight) return advance
         }
         return advance
     }
@@ -612,6 +922,7 @@ internal class EpubNativeTypesetter(
         body: String,
         block: EpubLayoutBlock,
         geometry: BlockGeometry,
+        imageContainerHeight: Float?,
         inlineMarkers: List<InlineMarkerReservation>,
         syntax: SyntaxStyleMap,
         bundle: EpubLayoutChapterBundle,
@@ -620,7 +931,12 @@ internal class EpubNativeTypesetter(
         EpubLayoutBlockKind.IMAGE, EpubLayoutBlockKind.SEPARATOR -> {
             val source = imagesByOffset[block.textStart]
             when {
-                source != null -> resolveImageSize(source, block.style, geometry).second
+                source != null -> max(
+                    resolveImageSize(
+                        source, block.style, geometry, imageContainerHeight
+                    ).second,
+                    imageContainerHeight ?: 0f
+                ).coerceAtMost(spec.visibleHeight)
                 block.textEnd > block.textStart -> estimateTextAdvance(
                     body,
                     block,
@@ -696,8 +1012,19 @@ internal class EpubNativeTypesetter(
             ascent = max(ascent, metrics.textHeight - metrics.descent + topExtra + rubyBandHeight)
             descent = max(descent, metrics.descent + bottomExtra)
             val fontPx = baseFontSize(cluster.style.measureStyle.isTitle) * cluster.style.measureStyle.textSizeScale
-            val requestedTextStep = cluster.style.lineHeightEm?.let { fontPx * it }
-                ?: defaultLineStep(cluster.style.measureStyle.isTitle)
+            val defaultStep = defaultLineStep(cluster.style.measureStyle.isTitle)
+            val requestedTextStep = when (spec.publisherStyleMode) {
+                PublisherStyleMode.RESPECT -> cluster.style.lineHeightEm?.let { fontPx * it } ?: defaultStep
+                PublisherStyleMode.SMART -> cluster.style.lineHeightEm?.let { publisherLineHeight ->
+                    val userScale = (spec.contentLineStep / spec.contentFontSizePx.coerceAtLeast(1f)) /
+                        DEFAULT_READER_LINE_HEIGHT
+                    fontPx * publisherLineHeight * userScale.coerceIn(
+                        MIN_LINE_HEIGHT_FACTOR,
+                        MAX_LINE_HEIGHT_FACTOR
+                    )
+                } ?: defaultStep
+                PublisherStyleMode.TAKE_OVER -> defaultStep
+            }
             requestedStep = max(requestedStep, requestedTextStep + topExtra + bottomExtra + rubyBandHeight)
         }
         val textHeight = ascent + descent
@@ -705,12 +1032,10 @@ internal class EpubNativeTypesetter(
     }
 
     private fun blockLeadingAdvance(block: EpubLayoutBlock): Float =
-        (block.style.marginTopEm?.toPx() ?: defaultTopGap(block)) +
-            block.style.borderTopPx() + block.style.paddingTopEm.toPx()
+        blockTopGap(block) + block.style.borderTopPx() + block.style.paddingTopEm.toPx()
 
     private fun blockTrailingAdvance(block: EpubLayoutBlock): Float =
-        block.style.paddingBottomEm.toPx() + block.style.borderBottomPx() +
-            (block.style.marginBottomEm?.toPx() ?: defaultBottomGap(block))
+        block.style.paddingBottomEm.toPx() + block.style.borderBottomPx() + blockBottomGap(block)
 
     private fun containerLeadingAdvance(container: EpubLayoutBlock): Float =
         container.style.marginTopEm.toPx() + container.style.borderTopPx() +
@@ -723,63 +1048,112 @@ internal class EpubNativeTypesetter(
     private fun decoratePages(
         pages: List<TextPage>,
         bundle: EpubLayoutChapterBundle,
-        containers: List<EpubLayoutBlock>
+        containers: List<EpubLayoutBlock>,
+        contentBlocks: List<EpubLayoutBlock>
     ): List<TextPage> {
+        // 普通正文的页面纸色归用户；封面/卷首页的 body 背景本身就是内容，必须保留。
         val bodyBackground = bundle.document.bodyStyle.backgroundImageHref
+            ?.takeIf { bundle.document.immersivePage }
             ?.let(bundle.resourcePaths::get)
-        val candidates = (containers + bundle.document.blocks.filter { it.kind != EpubLayoutBlockKind.CONTAINER })
+        val candidates = (containers + contentBlocks)
             .filter { it.style.hasDecoration() && it.textEnd > it.textStart }
             .sortedWith(compareByDescending<EpubLayoutBlock> { it.textEnd - it.textStart }.thenBy { it.orderIndex })
+        val chapterStart = contentBlocks.minOfOrNull(EpubLayoutBlock::textStart) ?: 0
+        val chapterEnd = contentBlocks.maxOfOrNull(EpubLayoutBlock::textEnd) ?: bundle.document.textLength
+        val publisherCanvases = if (spec.preferReaderBackground) {
+            candidates.asSequence()
+                .filter { it.isChapterCanvas(chapterStart, chapterEnd) }
+                .map(EpubLayoutBlock::orderIndex)
+                .toSet()
+        } else {
+            emptySet()
+        }
+        val pageBackgroundColor = bundle.document.bodyStyle.backgroundColorArgb
+            ?.takeIf { bundle.document.immersivePage }
+            ?.let(::mappedBackground)
+        val resolvedBodyBackground = bodyBackground
         return pages.map { page ->
-            val decorations = candidates.mapNotNull { block ->
-                val lines = page.lines.filter { line ->
-                    line.charLength > 0 && line.chapterPosition < block.textEnd &&
-                        line.chapterPosition + line.charLength > block.textStart
-                }
-                if (lines.isEmpty()) return@mapNotNull null
-                val style = block.style
-                val startsHere = lines.minOf(TextLine::chapterPosition) <= block.textStart
-                val endsHere = lines.maxOf { it.chapterPosition + it.charLength } >= block.textEnd
-                val geometry = resolveGeometry(
-                    containers
-                        .filter { it !== block && it.textStart <= block.textStart && it.textEnd >= block.textEnd }
-                        .sortedByDescending { it.textEnd - it.textStart }
-                        .map(EpubLayoutBlock::style) + style
-                )
-                TextBlockDecoration(
-                    left = geometry.boxLeft,
-                    top = if (startsHere) {
-                        (lines.first().lineTop - style.paddingTopEm.toPx() - style.borderTopPx())
-                            .coerceAtLeast(0f)
-                    } else {
-                        0f
-                    },
-                    right = geometry.boxRight,
-                    bottom = if (endsHere) {
-                        (lines.last().lineBottom + style.paddingBottomEm.toPx() + style.borderBottomPx())
-                            .coerceAtMost(spec.visibleHeight)
-                    } else {
-                        spec.visibleHeight
-                    },
-                    backgroundColorArgb = style.backgroundColorArgb,
-                    backgroundImagePath = style.backgroundImageHref?.let(bundle.resourcePaths::get),
-                    borderColorArgb = style.borderColorArgb,
-                    borderWidth = style.borderWidthEm.toPx(),
-                    borderTopColorArgb = style.borderTopColorArgb,
-                    borderRightColorArgb = style.borderRightColorArgb,
-                    borderBottomColorArgb = style.borderBottomColorArgb,
-                    borderLeftColorArgb = style.borderLeftColorArgb,
-                    borderTopWidth = style.borderTopPx(),
-                    borderRightWidth = style.borderRightPx(),
-                    borderBottomWidth = style.borderBottomPx(),
-                    borderLeftWidth = style.borderLeftPx(),
-                    borderRadius = style.borderRadiusEm.toPx(),
-                    boxShadows = style.textBoxShadows(),
-                    opacity = style.opacity,
-                    drawTopEdge = startsHere,
-                    drawBottomEdge = endsHere
-                )
+            cancellationCheck()
+            val pageLimit = spec.visibleHeight + if (page.index == 0) {
+                (if (immersivePage || firstPageHidesReaderHeader) spec.immersiveExtraTopPx else 0f) +
+                    (if (immersivePage) spec.immersiveExtraBottomPx else 0f)
+            } else {
+                0f
             }
+            val positionedLines = page.lines.filter { it.charLength > 0 }
+            val pageStart = positionedLines.minOfOrNull(TextLine::chapterPosition) ?: page.chapterPosition
+            val pageEnd = positionedLines.maxOfOrNull { it.chapterPosition + it.charLength } ?: pageStart
+            val decorations = candidates.asSequence()
+                .filter { block -> block.textStart < pageEnd && block.textEnd > pageStart }
+                .mapNotNull { block ->
+                    cancellationCheck()
+                    val lines = positionedLines.filter { line ->
+                        line.chapterPosition < block.textEnd &&
+                            line.chapterPosition + line.charLength > block.textStart
+                    }
+                    if (lines.isEmpty()) return@mapNotNull null
+                    val style = block.style
+                    val suppressCanvasPaint = block.orderIndex in publisherCanvases ||
+                        block.isChapterCanvas(chapterStart, chapterEnd) && !block.style.hasBorder()
+                    val mappedBackground = mappedBackground(style.backgroundColorArgb)
+                    val startsHere = lines.minOf(TextLine::chapterPosition) <= block.textStart
+                    val endsHere = lines.maxOf { it.chapterPosition + it.charLength } >= block.textEnd
+                    val geometry = resolveGeometry(
+                        containers
+                            .filter { it !== block && it.textStart <= block.textStart && it.textEnd >= block.textEnd }
+                            .sortedByDescending { it.textEnd - it.textStart }
+                            .map(EpubLayoutBlock::style) + style
+                    )
+                    TextBlockDecoration(
+                        left = geometry.boxLeft,
+                        top = if (startsHere) {
+                            (lines.first().lineTop - style.paddingTopEm.toPx() - style.borderTopPx())
+                                .coerceAtLeast(0f)
+                        } else {
+                            0f
+                        },
+                        right = geometry.boxRight,
+                        bottom = if (endsHere) {
+                            (lines.last().lineBottom + style.paddingBottomEm.toPx() + style.borderBottomPx())
+                                .coerceAtMost(spec.visibleHeight)
+                        } else {
+                            pageLimit
+                        },
+                        backgroundColorArgb = mappedBackground.takeUnless { suppressCanvasPaint },
+                        backgroundImagePath = style.backgroundImageHref
+                            ?.takeUnless { suppressCanvasPaint }
+                            ?.let(bundle.resourcePaths::get),
+                        backgroundSizeMode = style.backgroundSizeMode.toPageMode(),
+                        backgroundSizeWidth = style.backgroundSizeWidthEm.toPx(),
+                        backgroundSizeHeight = style.backgroundSizeHeightEm.toPx(),
+                        backgroundRepeatX = style.backgroundRepeatX,
+                        backgroundRepeatY = style.backgroundRepeatY,
+                        backgroundPositionX = style.backgroundPositionX,
+                        backgroundPositionY = style.backgroundPositionY,
+                        borderColorArgb = mappedForeground(style.borderColorArgb, mappedBackground),
+                        borderWidth = style.borderWidthEm.toPx(),
+                        borderTopColorArgb = mappedForeground(style.borderTopColorArgb, mappedBackground),
+                        borderRightColorArgb = mappedForeground(style.borderRightColorArgb, mappedBackground),
+                        borderBottomColorArgb = mappedForeground(style.borderBottomColorArgb, mappedBackground),
+                        borderLeftColorArgb = mappedForeground(style.borderLeftColorArgb, mappedBackground),
+                        borderTopWidth = style.borderTopPx(),
+                        borderRightWidth = style.borderRightPx(),
+                        borderBottomWidth = style.borderBottomPx(),
+                        borderLeftWidth = style.borderLeftPx(),
+                        borderRadius = style.borderRadiusEm.toPx(),
+                        borderTopLeftRadius = (style.borderTopLeftRadiusEm ?: style.borderRadiusEm).toPx(),
+                        borderTopRightRadius = (style.borderTopRightRadiusEm ?: style.borderRadiusEm).toPx(),
+                        borderBottomRightRadius = (style.borderBottomRightRadiusEm ?: style.borderRadiusEm).toPx(),
+                        borderBottomLeftRadius = (style.borderBottomLeftRadiusEm ?: style.borderRadiusEm).toPx(),
+                        boxShadows = style.textBoxShadows(),
+                        opacity = style.opacity,
+                        // 分页片段在断口补齐上下描边，避免卡片像被屏幕硬生生裁断；
+                        // padding 仍只在真实首尾结算，所以不会凭空多出一圈内边距。
+                        drawTopEdge = true,
+                        drawBottomEdge = true
+                    )
+                }
+                .toList()
             TextPage(
                 index = page.index,
                 lines = page.lines,
@@ -787,15 +1161,20 @@ internal class EpubNativeTypesetter(
                 charLength = page.charLength,
                 height = page.height,
                 decorations = decorations,
-                backgroundColorArgb = bundle.document.bodyStyle.backgroundColorArgb,
-                backgroundImagePath = bodyBackground,
+                backgroundColorArgb = pageBackgroundColor,
+                backgroundImagePath = resolvedBodyBackground,
                 backgroundOpacity = bundle.document.bodyStyle.opacity,
+                immersive = immersivePage,
+                hideHeader = page.index == 0 && firstPageHidesReaderHeader,
                 trailingGap = page.trailingGap
             )
         }
     }
 
-    private fun resolveGeometry(styles: List<EpubComputedStyle>): BlockGeometry {
+    private fun resolveGeometry(
+        styles: List<EpubComputedStyle>,
+        intrinsicFloatWidth: Float? = null
+    ): BlockGeometry {
         var left = 0f
         var right = spec.visibleWidth
         var boxLeft = left
@@ -805,6 +1184,7 @@ internal class EpubNativeTypesetter(
             val marginRight = style.marginRightEm.toPx()
             val available = (right - left - marginLeft - marginRight).coerceAtLeast(1f)
             val requested = requestedWidth(style, available)
+                ?: intrinsicFloatWidth?.takeIf { style.float != EpubFloat.NONE }
             val maximum = requestedMaxWidth(style, available)
             val width = min(requested ?: available, maximum ?: available).coerceIn(1f, available)
             boxLeft = when {
@@ -826,26 +1206,66 @@ internal class EpubNativeTypesetter(
     private fun requestedMaxWidth(style: EpubComputedStyle, available: Float): Float? =
         style.maxWidthFraction?.times(available) ?: style.maxWidthEm.toPx().takeIf { it > 0f }
 
-    private fun requestedMaxHeight(style: EpubComputedStyle): Float? =
+    private fun requestedMaxHeight(style: EpubComputedStyle, containerHeight: Float?): Float? =
         style.maxHeightViewportFraction?.times(spec.visibleHeight)
+            ?: style.maxHeightFraction?.times(containerHeight ?: spec.visibleHeight)
             ?: style.maxHeightEm.toPx().takeIf { it > 0f }
+
+    private fun explicitImageContainerHeight(
+        parents: List<EpubLayoutBlock>,
+        image: EpubLayoutBlock
+    ): Float? = parents
+        .asReversed()
+        .firstOrNull { container ->
+            container.textStart == image.textStart && container.textEnd == image.textEnd
+        }
+        ?.style
+        ?.let { style ->
+            style.heightViewportFraction?.times(spec.visibleHeight)
+                ?: style.heightEm.toPx().takeIf { it > 0f }
+        }
+        ?.coerceIn(1f, spec.visibleHeight)
 
     private fun resolveTextStyle(
         epub: EpubComputedStyle,
         isTitle: Boolean,
         bundle: EpubLayoutChapterBundle,
-        syntax: ReaderSyntaxStyleSpan?
+        syntax: ReaderSyntaxStyleSpan?,
+        inheritedBackgroundArgb: Int
     ): ResolvedTextStyle {
-        val fontSizeEm = epub.fontSizeEm ?: if (isTitle) DEFAULT_HEADING_EM else 1f
+        val fontSizeEm = when (spec.publisherStyleMode) {
+            PublisherStyleMode.TAKE_OVER -> if (isTitle) DEFAULT_HEADING_EM else 1f
+            else -> epub.fontSizeEm ?: if (isTitle) DEFAULT_HEADING_EM else 1f
+        }
         val baseSize = baseFontSize(isTitle).coerceAtLeast(1f)
         val sizeScale = (spec.contentFontSizePx * fontSizeEm / baseSize).coerceIn(MIN_TEXT_SCALE, MAX_TEXT_SCALE)
-        val family = epub.fontFamily
+        val publisherFamily = epub.fontFamily
+        val replaceDominantBodyFont = spec.publisherStyleMode != PublisherStyleMode.RESPECT &&
+            !isTitle && publisherFamily?.lowercase() == dominantBodyFontFamily
+        val family = publisherFamily.takeUnless { replaceDominantBodyFont }
         val fontPath = family?.let { name ->
             bundle.resolveFontPath(
                 family = name,
                 weight = epub.fontWeight ?: 400,
                 italic = epub.italic
             )
+        }
+        val adaptedBackground = EpubThemeColors.background(epub.backgroundColorArgb, spec.darkTheme)
+        val actualBackground = adaptedBackground
+            ?.let { EpubThemeColors.composite(it, inheritedBackgroundArgb) }
+            ?: inheritedBackgroundArgb
+        val adaptedColor = epub.colorArgb?.let { publisherColor ->
+            // 整页插画上的标题色通常是出版商针对图片手工挑选的（样书为铂金色），
+            // 图片底色无法靠单一 HSL 值推断，因此特殊页与“完全尊重”模式保持原色。
+            if (immersivePage || spec.publisherStyleMode == PublisherStyleMode.RESPECT) {
+                publisherColor
+            } else {
+                EpubThemeColors.foreground(
+                    color = publisherColor,
+                    actualBackground = actualBackground,
+                    fallback = spec.themeTextArgb
+                )
+            }
         }
         val verticalShift = when (epub.verticalAlign) {
             EpubVerticalAlign.SUPER -> -spec.contentFontSizePx * fontSizeEm * 0.35f
@@ -858,20 +1278,81 @@ internal class EpubNativeTypesetter(
                 textSizeScale = sizeScale,
                 fontFilePath = fontPath,
                 fontFamily = family,
-                bold = (epub.fontWeight ?: 400) >= 600 || syntax?.bold == true,
+                bold = epub.fontWeight?.let { it >= 600 } ?: (syntax?.bold == true),
                 italic = epub.italic || syntax?.italic == true,
                 letterSpacingEm = epub.letterSpacingEm ?: 0f
             ),
-            colorArgb = syntax?.colorArgb ?: epub.colorArgb,
-            backgroundArgb = syntax?.backgroundArgb ?: epub.backgroundColorArgb,
+            // Publisher styling wins property-by-property. User syntax highlighting only fills
+            // unspecified slots, so dialogue rules cannot repaint an EPUB badge/font/background.
+            colorArgb = adaptedColor ?: syntax?.colorArgb,
+            backgroundArgb = adaptedBackground ?: syntax?.backgroundArgb,
             underline = epub.underline || syntax?.underline == true,
             strikethrough = epub.strikethrough || syntax?.strikethrough == true,
-            syntaxFont = syntax?.font ?: ReaderSyntaxFont.INHERIT,
-            syntaxFontAssetId = syntax?.fontAssetId,
+            // Replacing the dominant body face with the reader font must not accidentally hand
+            // ownership to a syntax rule's unrelated font. The publisher still owns this slot;
+            // only the glyph source is substituted.
+            syntaxFont = if (publisherFamily != null) {
+                ReaderSyntaxFont.INHERIT
+            } else {
+                syntax?.font ?: ReaderSyntaxFont.INHERIT
+            },
+            syntaxFontAssetId = if (publisherFamily != null) null else syntax?.fontAssetId,
             baselineShiftPx = verticalShift,
             lineHeightEm = epub.lineHeightEm,
             opacity = epub.opacity
         )
+    }
+
+    private fun effectiveStyle(style: EpubComputedStyle): EpubComputedStyle {
+        if (spec.publisherStyleMode != PublisherStyleMode.TAKE_OVER) return style
+        return style.copy(
+            fontFamily = null,
+            fontSizeEm = null,
+            colorArgb = null,
+            backgroundColorArgb = null,
+            backgroundImageHref = null,
+            lineHeightEm = null,
+            letterSpacingEm = null,
+            marginTopEm = null,
+            marginRightEm = null,
+            marginBottomEm = null,
+            marginLeftEm = null,
+            paddingTopEm = null,
+            paddingRightEm = null,
+            paddingBottomEm = null,
+            paddingLeftEm = null,
+            borderWidthEm = null,
+            borderColorArgb = null,
+            borderTopWidthEm = null,
+            borderRightWidthEm = null,
+            borderBottomWidthEm = null,
+            borderLeftWidthEm = null,
+            borderTopColorArgb = null,
+            borderRightColorArgb = null,
+            borderBottomColorArgb = null,
+            borderLeftColorArgb = null,
+            borderRadiusEm = null,
+            borderTopLeftRadiusEm = null,
+            borderTopRightRadiusEm = null,
+            borderBottomRightRadiusEm = null,
+            borderBottomLeftRadiusEm = null,
+            boxShadows = emptyList(),
+            widthEm = null,
+            widthFraction = null,
+            maxWidthEm = null,
+            maxWidthFraction = null,
+            layoutMode = EpubLayoutMode.FLOW,
+            layoutColumns = null,
+            layoutGapEm = null,
+            centerBlock = false
+        )
+    }
+
+    private fun mappedBackground(color: Int?): Int? =
+        EpubThemeColors.background(color, spec.darkTheme)
+
+    private fun mappedForeground(color: Int?, background: Int?): Int? = color?.let {
+        EpubThemeColors.foreground(it, background ?: spec.themeBackgroundArgb, spec.themeTextArgb)
     }
 
     private fun defaultTopGap(block: EpubLayoutBlock): Float = when (block.kind) {
@@ -884,11 +1365,39 @@ internal class EpubNativeTypesetter(
         else -> spec.paragraphSpacing
     }
 
+    private fun blockTopGap(block: EpubLayoutBlock): Float = publisherBlockGap(
+        publisherEm = block.style.marginTopEm,
+        fallback = defaultTopGap(block)
+    )
+
+    private fun blockBottomGap(block: EpubLayoutBlock): Float = publisherBlockGap(
+        publisherEm = block.style.marginBottomEm,
+        fallback = defaultBottomGap(block)
+    )
+
+    private fun publisherBlockGap(publisherEm: Float?, fallback: Float): Float {
+        publisherEm ?: return fallback
+        return when (spec.publisherStyleMode) {
+            PublisherStyleMode.RESPECT -> publisherEm.toPx()
+            PublisherStyleMode.SMART -> spec.paragraphSpacing *
+                (publisherEm / DEFAULT_PUBLISHER_PARAGRAPH_EM).coerceIn(0f, MAX_PARAGRAPH_GAP_FACTOR)
+            PublisherStyleMode.TAKE_OVER -> fallback
+        }
+    }
+
     private fun baseFontSize(isTitle: Boolean): Float =
         if (isTitle) spec.titleFontSizePx else spec.contentFontSizePx
 
     private fun defaultLineStep(isTitle: Boolean): Float =
         if (isTitle) spec.titleLineStep else spec.contentLineStep
+
+    private fun EpubBackgroundSizeMode.toPageMode(): BackgroundSizeMode = when (this) {
+        EpubBackgroundSizeMode.AUTO -> BackgroundSizeMode.AUTO
+        EpubBackgroundSizeMode.COVER -> BackgroundSizeMode.COVER
+        EpubBackgroundSizeMode.CONTAIN -> BackgroundSizeMode.CONTAIN
+        EpubBackgroundSizeMode.STRETCH -> BackgroundSizeMode.STRETCH
+        EpubBackgroundSizeMode.EXPLICIT -> BackgroundSizeMode.EXPLICIT
+    }
 
     private fun Float?.toPx(): Float = (this ?: 0f) * spec.contentFontSizePx
 
@@ -902,6 +1411,11 @@ internal class EpubNativeTypesetter(
 
     private fun EpubComputedStyle.hasDecoration(): Boolean =
         backgroundColorArgb != null || backgroundImageHref != null || hasBorder() || boxShadows.isNotEmpty()
+
+    private fun EpubLayoutBlock.isChapterCanvas(chapterStart: Int, chapterEnd: Int): Boolean =
+        kind == EpubLayoutBlockKind.CONTAINER && textStart <= chapterStart && textEnd >= chapterEnd &&
+            ancestors.size <= MAX_CANVAS_ANCESTOR_DEPTH &&
+            (style.widthFraction == null || style.widthFraction >= MIN_CANVAS_WIDTH_FRACTION)
 
     private fun EpubComputedStyle.hasInlineDecoration(): Boolean =
         hasDecoration() || marginTopEm.toPx() != 0f || marginRightEm.toPx() != 0f ||
@@ -948,6 +1462,12 @@ internal class EpubNativeTypesetter(
         return codePoint in CJK_RANGE || codePoint in CJK_EXT_A_RANGE || text.last() in BREAK_PUNCTUATION
     }
 
+    private fun StyledCluster.startsWithForbiddenPunctuation(): Boolean =
+        text.firstOrNull() in FORBIDDEN_LINE_START
+
+    private fun StyledCluster.endsWithOpeningPunctuation(): Boolean =
+        text.lastOrNull() in FORBIDDEN_LINE_END
+
     private fun TextColumn.shifted(delta: Float) = TextColumn(
         start = start + delta,
         end = end + delta,
@@ -967,7 +1487,8 @@ internal class EpubNativeTypesetter(
         opacity = opacity,
         sourceLength = sourceLength,
         inlineMarkerKind = inlineMarkerKind,
-        inlineMarkerOffset = inlineMarkerOffset
+        inlineMarkerOffset = inlineMarkerOffset,
+        linkHref = linkHref
     )
 
     private data class BlockGeometry(
@@ -1036,6 +1557,7 @@ internal class EpubNativeTypesetter(
         val sourceLength: Int,
         val marker: InlineMarkerReservation?,
         val style: ResolvedTextStyle,
+        val linkHref: String?,
         val keepTogetherId: Int?,
         val inlineBoxId: Int? = null,
         val inlineBoxStyle: EpubComputedStyle? = null,
@@ -1094,21 +1616,36 @@ internal class EpubNativeTypesetter(
         var durY = 0f
         private var openGap = 0f
 
-        fun addSpacing(spacing: Float, keepAtPageTop: Boolean = false) {
+        fun hasContent(): Boolean = pendingLines.isNotEmpty()
+
+        fun remainingHeight(): Float = (pageHeightLimit() - durY).coerceAtLeast(0f)
+
+        fun addSpacing(
+            spacing: Float,
+            keepAtPageTop: Boolean = false,
+            collapse: Boolean = false
+        ) {
             if (spacing <= 0f || pendingLines.isEmpty() && !keepAtPageTop) return
-            durY += spacing
-            openGap += spacing
+            if (collapse && openGap > 0f) {
+                durY += (spacing - openGap).coerceAtLeast(0f)
+                openGap = max(openGap, spacing)
+            } else {
+                durY += spacing
+                openGap = if (collapse) spacing else 0f
+            }
         }
 
         fun keepTogether(height: Float) {
-            if (height <= 0f || height > spec.visibleHeight || pendingLines.isEmpty()) return
-            if (durY + height > spec.visibleHeight + HEIGHT_EPSILON) closePage(force = false)
+            val pageLimit = pageHeightLimit()
+            if (height <= 0f || height > pageLimit || pendingLines.isEmpty()) return
+            if (durY + height > pageLimit + HEIGHT_EPSILON) closePage(force = false)
         }
 
         fun prepareForLine(height: Float) {
-            if (pendingLines.isNotEmpty() && durY + height > spec.visibleHeight + HEIGHT_EPSILON) {
+            val pageLimit = pageHeightLimit()
+            if (pendingLines.isNotEmpty() && durY + height > pageLimit + HEIGHT_EPSILON) {
                 closePage(force = false)
-            } else if (pendingLines.isEmpty() && durY + height > spec.visibleHeight + HEIGHT_EPSILON) {
+            } else if (pendingLines.isEmpty() && durY + height > pageLimit + HEIGHT_EPSILON) {
                 durY = 0f
                 openGap = 0f
             }
@@ -1134,6 +1671,8 @@ internal class EpubNativeTypesetter(
                 chapterPosition = start,
                 charLength = pendingLines.sumOf(TextLine::charLength),
                 height = pendingLines.last().lineBottom,
+                immersive = immersivePage,
+                hideHeader = pages.isEmpty() && firstPageHidesReaderHeader,
                 trailingGap = openGap
             )
             pendingLines.clear()
@@ -1141,9 +1680,16 @@ internal class EpubNativeTypesetter(
             openGap = 0f
         }
 
+        private fun pageHeightLimit(): Float = spec.visibleHeight + if (pages.isEmpty()) {
+            (if (immersivePage || firstPageHidesReaderHeader) spec.immersiveExtraTopPx else 0f) +
+                (if (immersivePage) spec.immersiveExtraBottomPx else 0f)
+        } else {
+            0f
+        }
+
         private fun bottomAlign(lines: List<TextLine>) {
             if (lines.size < 2) return
-            val surplus = spec.visibleHeight - lines.last().lineBottom
+            val surplus = pageHeightLimit() - lines.last().lineBottom
             if (surplus <= 0f || surplus >= spec.contentLineStep) return
             val step = surplus / (lines.size - 1)
             lines.forEachIndexed { index, line ->
@@ -1178,9 +1724,25 @@ internal class EpubNativeTypesetter(
         const val MARKER_PLACEHOLDER = '\u3000'
         const val EpubTextExtractorPlaceholder = "［图片］"
         const val DEFAULT_HEADING_EM = 1.5f
+        const val MIN_BLOCK_START_LINES = 2f
+        const val MIN_INLINE_IMAGE_REMAINING_LINES = 3f
+        const val DEFAULT_PUBLISHER_LINE_HEIGHT = 1.5f
+        const val DEFAULT_READER_LINE_HEIGHT = 1.55f
+        const val MIN_PUBLISHER_LINE_HEIGHT = 0.8f
+        const val MAX_PUBLISHER_LINE_HEIGHT = 3f
+        const val MIN_LINE_HEIGHT_FACTOR = 0.8f
+        const val MAX_LINE_HEIGHT_FACTOR = 1.5f
+        const val DEFAULT_PUBLISHER_PARAGRAPH_EM = 0.55f
+        const val MAX_PARAGRAPH_GAP_FACTOR = 4f
         const val MIN_TEXT_SCALE = 0.5f
         const val MAX_TEXT_SCALE = 3f
         const val MAX_IMAGE_HEIGHT_FRACTION = 0.86f
+        const val MAX_GALLERY_ROW_HEIGHT_FRACTION = 0.42f
+        const val DEFAULT_GALLERY_GAP_EM = 0.35f
+        const val DEFAULT_MISSING_IMAGE_ASPECT = 1.4f
+        const val CSS_ROOT_FONT_PX = 16f
+        const val MAX_CANVAS_ANCESTOR_DEPTH = 2
+        const val MIN_CANVAS_WIDTH_FRACTION = 0.9f
         const val MIN_IMAGE_ASPECT = 0.15f
         const val MAX_IMAGE_ASPECT = 7f
         const val MAX_JUSTIFY_FRACTION = 0.35f
@@ -1190,5 +1752,12 @@ internal class EpubNativeTypesetter(
         val CJK_RANGE = 0x3400..0x9FFF
         val CJK_EXT_A_RANGE = 0x20000..0x2FA1F
         val BREAK_PUNCTUATION = setOf('，', '。', '、', '；', '：', '！', '？', '”', '’', ',', '.', ';', ':', '!', '?')
+        val FORBIDDEN_LINE_START = setOf(
+            '，', '。', '、', '；', '：', '！', '？', '）', '》', '】', '〉', '〕',
+            '」', '』', '”', '’', '…', '—', ',', '.', ';', ':', '!', '?', ')', ']', '}'
+        )
+        val FORBIDDEN_LINE_END = setOf(
+            '（', '《', '【', '〈', '〔', '「', '『', '“', '‘', '(', '[', '{'
+        )
     }
 }

@@ -22,6 +22,30 @@ data class SelectionRect(
     val bottom: Float
 )
 
+data class ReaderPageLink(
+    val sourceChapterIndex: Int,
+    val href: String,
+    val label: String
+)
+
+/** 返回点击位置对应的 EPUB 超链接，并合并同一 href 的可见文字作为预览标题。 */
+fun TextPage.linkAt(x: Float, y: Float, chapterIndex: Int): ReaderPageLink? {
+    val position = hitTextPos(x, y, exact = true) ?: return null
+    val href = lines.getOrNull(position.lineIndex)
+        ?.columns
+        ?.getOrNull(position.columnIndex)
+        ?.linkHref
+        ?.takeIf(String::isNotBlank)
+        ?: return null
+    val label = lines.asSequence()
+        .flatMap { it.columns.asSequence() }
+        .filter { it.linkHref == href }
+        .joinToString("") { it.charData }
+        .trim()
+        .take(80)
+    return ReaderPageLink(chapterIndex, href, label)
+}
+
 /** The nearest selectable cluster to (x, y), or null when the page has no text there. */
 fun TextPage.hitTextPos(x: Float, y: Float, exact: Boolean = false): TextPos? {
     val selectable = lines.withIndex().filter { line -> line.value.columns.any { it.sourceLength > 0 } }

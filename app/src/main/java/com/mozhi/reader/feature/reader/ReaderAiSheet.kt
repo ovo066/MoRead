@@ -7,24 +7,17 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.Send
-import androidx.compose.material.icons.outlined.Stop
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -34,8 +27,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -77,6 +72,17 @@ fun ReaderAiSheet(
         if (itemCount > 0) listState.scrollToItem(itemCount - 1)
     }
 
+    // 键盘弹出时列表被压矮，正向列表锚在顶部——不补一次滚动，刚生成的回答会被挤到视口下方。
+    val density = LocalDensity.current
+    val imeInsets = WindowInsets.ime
+    LaunchedEffect(listState, density) {
+        snapshotFlow { imeInsets.getBottom(density) }.collect { bottom ->
+            if (bottom <= 0) return@collect
+            val total = listState.layoutInfo.totalItemsCount
+            if (total > 0) listState.scrollToItem(total - 1)
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -110,7 +116,10 @@ fun ReaderAiSheet(
             state = listState,
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = 160.dp, max = 420.dp)
+                // fill = false：内容短时按内容高；键盘弹出时优先压缩列表、保住输入区。
+                // 之前这里是 heightIn(min = 160.dp, max = 420.dp) 的固定高，
+                // 键盘一弹，「列表 + 输入行 + ime」超过 sheet 可用高度，输入行直接被裁掉。
+                .weight(1f, fill = false)
                 .padding(top = 12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
@@ -175,59 +184,21 @@ fun ReaderAiSheet(
             item(key = "tail-spacer") { Box(Modifier.size(2.dp)) }
         }
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 10.dp, bottom = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            OutlinedTextField(
-                value = input,
-                onValueChange = { input = it },
-                placeholder = {
-                    Text(
-                        if (state.messages.isEmpty()) "就这段文字提问…" else "继续追问…",
-                        color = palette.muted
-                    )
-                },
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = palette.accent,
-                    unfocusedBorderColor = palette.glassBorder,
-                    cursorColor = palette.accent
-                ),
-                maxLines = 3,
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier.weight(1f)
-            )
-            if (state.isStreaming) {
-                Surface(
-                    shape = CircleShape,
-                    color = palette.accentContainer,
-                    contentColor = palette.accent
-                ) {
-                    IconButton(onClick = onStop) {
-                        Icon(Icons.Outlined.Stop, contentDescription = "停止生成")
-                    }
-                }
-            } else {
-                Surface(
-                    shape = CircleShape,
-                    color = palette.accent,
-                    contentColor = palette.onAccent
-                ) {
-                    IconButton(
-                        onClick = {
-                            onSend(input)
-                            input = ""
-                        },
-                        enabled = state.conversationId != null
-                    ) {
-                        Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = "发送")
-                    }
-                }
-            }
-        }
+        ReaderComposerBar(
+            input = input,
+            onInputChange = { input = it },
+            placeholder = if (state.messages.isEmpty()) "就这段文字提问…" else "继续追问…",
+            canSend = input.isNotBlank() && state.conversationId != null,
+            isStreaming = state.isStreaming,
+            palette = palette,
+            onSend = {
+                onSend(input)
+                input = ""
+            },
+            onStop = onStop,
+            maxLines = 3,
+            modifier = Modifier.padding(top = 10.dp, bottom = 10.dp)
+        )
     }
 }
 

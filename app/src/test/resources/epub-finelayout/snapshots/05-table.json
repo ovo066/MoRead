@@ -1,0 +1,437 @@
+{
+    "fixture": "05-table",
+    "bodyLength": 34,
+    "pages": [
+        {
+            "index": 0,
+            "chapterPosition": 0,
+            "charLength": 29,
+            "height": 159.75,
+            "backgroundColorArgb": -329486,
+            "backgroundImagePath": null,
+            "immersive": false,
+            "hideHeader": false,
+            "decorations": [
+                {
+                    "kind": "block",
+                    "left": 12.0,
+                    "top": 20.0,
+                    "right": 228.0,
+                    "bottom": 167.5,
+                    "backgroundColorArgb": null,
+                    "backgroundImagePath": null,
+                    "backgroundSizeMode": "AUTO",
+                    "backgroundSize": [
+                        0.0,
+                        0.0
+                    ],
+                    "backgroundRepeat": [
+                        true,
+                        true
+                    ],
+                    "backgroundPosition": [
+                        0.0,
+                        0.0
+                    ],
+                    "borderWidths": [
+                        1.25,
+                        1.25,
+                        1.25,
+                        1.25
+                    ],
+                    "borderColors": [
+                        -12372444,
+                        -12372444,
+                        -12372444,
+                        -12372444
+                    ],
+                    "radii": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "shadowCount": 0,
+                    "edges": [
+                        true,
+                        true,
+                        true,
+                        true
+                    ]
+                },
+                {
+                    "kind": "block",
+                    "left": 12.0,
+                    "top": 20.0,
+                    "right": 132.0,
+                    "bottom": 54.0,
+                    "backgroundColorArgb": -12372444,
+                    "backgroundImagePath": null,
+                    "backgroundSizeMode": "AUTO",
+                    "backgroundSize": [
+                        0.0,
+                        0.0
+                    ],
+                    "backgroundRepeat": [
+                        true,
+                        true
+                    ],
+                    "backgroundPosition": [
+                        0.5,
+                        0.5
+                    ],
+                    "borderWidths": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "borderColors": [
+                        -4743558,
+                        -4743558,
+                        -4743558,
+                        -4743558
+                    ],
+                    "radii": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "shadowCount": 0,
+                    "edges": [
+                        true,
+                        true,
+                        true,
+                        true
+                    ]
+                },
+                {
+                    "kind": "block",
+                    "left": 132.0,
+                    "top": 20.0,
+                    "right": 228.0,
+                    "bottom": 54.0,
+                    "backgroundColorArgb": -12372444,
+                    "backgroundImagePath": null,
+                    "backgroundSizeMode": "AUTO",
+                    "backgroundSize": [
+                        0.0,
+                        0.0
+                    ],
+                    "backgroundRepeat": [
+                        true,
+                        true
+                    ],
+                    "backgroundPosition": [
+                        0.5,
+                        0.5
+                    ],
+                    "borderWidths": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "borderColors": [
+                        -4743558,
+                        -4743558,
+                        -4743558,
+                        -4743558
+                    ],
+                    "radii": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "shadowCount": 0,
+                    "edges": [
+                        true,
+                        true,
+                        true,
+                        true
+                    ]
+                },
+                {
+                    "kind": "block",
+                    "left": 12.0,
+                    "top": 54.0,
+                    "right": 132.0,
+                    "bottom": 110.75,
+                    "backgroundColorArgb": null,
+                    "backgroundImagePath": null,
+                    "backgroundSizeMode": "AUTO",
+                    "backgroundSize": [
+                        0.0,
+                        0.0
+                    ],
+                    "backgroundRepeat": [
+                        true,
+                        true
+                    ],
+                    "backgroundPosition": [
+                        0.0,
+                        0.0
+                    ],
+                    "borderWidths": [
+                        0.0,
+                        1.25,
+                        0.0,
+                        0.0
+                    ],
+                    "borderColors": [
+                        -12372444,
+                        -12372444,
+                        -12372444,
+                        -12372444
+                    ],
+                    "radii": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "shadowCount": 0,
+                    "edges": [
+                        true,
+                        true,
+                        true,
+                        true
+                    ]
+                },
+                {
+                    "kind": "block",
+                    "left": 132.0,
+                    "top": 54.0,
+                    "right": 228.0,
+                    "bottom": 110.75,
+                    "backgroundColorArgb": null,
+                    "backgroundImagePath": null,
+                    "backgroundSizeMode": "AUTO",
+                    "backgroundSize": [
+                        0.0,
+                        0.0
+                    ],
+                    "backgroundRepeat": [
+                        true,
+                        true
+                    ],
+                    "backgroundPosition": [
+                        0.0,
+                        0.0
+                    ],
+                    "borderWidths": [
+                        0.0,
+                        1.25,
+                        0.0,
+                        0.0
+                    ],
+                    "borderColors": [
+                        -12372444,
+                        -12372444,
+                        -12372444,
+                        -12372444
+                    ],
+                    "radii": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "shadowCount": 0,
+                    "edges": [
+                        true,
+                        true,
+                        true,
+                        true
+                    ]
+                },
+                {
+                    "kind": "block",
+                    "left": 12.0,
+                    "top": 110.75,
+                    "right": 132.0,
+                    "bottom": 167.5,
+                    "backgroundColorArgb": null,
+                    "backgroundImagePath": null,
+                    "backgroundSizeMode": "AUTO",
+                    "backgroundSize": [
+                        0.0,
+                        0.0
+                    ],
+                    "backgroundRepeat": [
+                        true,
+                        true
+                    ],
+                    "backgroundPosition": [
+                        0.0,
+                        0.0
+                    ],
+                    "borderWidths": [
+                        0.0,
+                        1.25,
+                        0.0,
+                        0.0
+                    ],
+                    "borderColors": [
+                        -12372444,
+                        -12372444,
+                        -12372444,
+                        -12372444
+                    ],
+                    "radii": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "shadowCount": 0,
+                    "edges": [
+                        true,
+                        true,
+                        true,
+                        true
+                    ]
+                },
+                {
+                    "kind": "block",
+                    "left": 132.0,
+                    "top": 110.75,
+                    "right": 228.0,
+                    "bottom": 167.5,
+                    "backgroundColorArgb": null,
+                    "backgroundImagePath": null,
+                    "backgroundSizeMode": "AUTO",
+                    "backgroundSize": [
+                        0.0,
+                        0.0
+                    ],
+                    "backgroundRepeat": [
+                        true,
+                        true
+                    ],
+                    "backgroundPosition": [
+                        0.0,
+                        0.0
+                    ],
+                    "borderWidths": [
+                        0.0,
+                        1.25,
+                        0.0,
+                        0.0
+                    ],
+                    "borderColors": [
+                        -12372444,
+                        -12372444,
+                        -12372444,
+                        -12372444
+                    ],
+                    "radii": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "shadowCount": 0,
+                    "edges": [
+                        true,
+                        true,
+                        true,
+                        true
+                    ]
+                }
+            ],
+            "lines": [
+                {
+                    "chapterPosition": 0,
+                    "charLength": 2,
+                    "lineTop": 25.0,
+                    "lineBottom": 45.0,
+                    "startX": 17.0,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                },
+                {
+                    "chapterPosition": 3,
+                    "charLength": 2,
+                    "lineTop": 25.0,
+                    "lineBottom": 45.0,
+                    "startX": 137.0,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                },
+                {
+                    "chapterPosition": 6,
+                    "charLength": 1,
+                    "lineTop": 59.0,
+                    "lineBottom": 79.0,
+                    "startX": 66.375,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                },
+                {
+                    "chapterPosition": 8,
+                    "charLength": 7,
+                    "lineTop": 59.0,
+                    "lineBottom": 79.0,
+                    "startX": 140.75,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                },
+                {
+                    "chapterPosition": 15,
+                    "charLength": 2,
+                    "lineTop": 83.0,
+                    "lineBottom": 103.0,
+                    "startX": 140.75,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                },
+                {
+                    "chapterPosition": 18,
+                    "charLength": 1,
+                    "lineTop": 115.75,
+                    "lineBottom": 135.75,
+                    "startX": 66.375,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                },
+                {
+                    "chapterPosition": 20,
+                    "charLength": 7,
+                    "lineTop": 115.75,
+                    "lineBottom": 135.75,
+                    "startX": 140.75,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                },
+                {
+                    "chapterPosition": 27,
+                    "charLength": 7,
+                    "lineTop": 139.75,
+                    "lineBottom": 159.75,
+                    "startX": 140.75,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                }
+            ]
+        }
+    ]
+}

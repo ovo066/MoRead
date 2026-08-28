@@ -55,6 +55,16 @@ enum class ReaderFont {
     CUSTOM
 }
 
+/** EPUB 出版商样式与用户排版的合成策略。 */
+enum class PublisherStyleMode {
+    /** 尽量按原书 CSS 渲染，仅保留阅读器页面安全边距。 */
+    RESPECT,
+    /** 用户字号/行距/段距作为基准，原书比例与装饰继续保留。 */
+    SMART,
+    /** 去掉出版商可替换的字号、行距、间距与色板，统一使用用户排版。 */
+    TAKE_OVER
+}
+
 enum class ShelfLayout {
     GRID,
     LIST
@@ -73,6 +83,8 @@ data class ReaderSettings(
     /** 正文字重；Android Typeface 的常用有效区间为 100..900。 */
     val fontWeight: Int = 400,
     val lineHeight: Float = 1.55f,
+    /** EPUB 出版商 CSS 的处理方式，默认智能融合。 */
+    val publisherStyleMode: PublisherStyleMode = PublisherStyleMode.SMART,
     /** 旧版统一边距；保留用于迁移，运行时请使用四边独立值。 */
     val pageMargin: Float = 1f,
     /** 阅读正文左侧边距，0..2 对应紧凑到宽松。 */
@@ -138,7 +150,9 @@ data class ReaderSettings(
     /** 夜间槽的背景图。 */
     val nightSelectedBackgroundImageId: String? = null,
     /** 夜间槽的背景图不透明度。 */
-    val nightBackgroundImageOpacity: Float = 0.28f
+    val nightBackgroundImageOpacity: Float = 0.28f,
+    /** 用户主动启用的逐书主题；键为 books.id。 */
+    val bookThemes: Map<Long, BookReaderTheme> = emptyMap()
 )
 
 /** 当前生效的自定义主题；id 悬空（预设已删）按未启用处理。 */
@@ -185,6 +199,9 @@ class ReaderSettingsRepository @Inject constructor(
             selectedCustomFontId = selectedFontId,
             fontWeight = (preferences[Keys.FontWeight] ?: 400).coerceIn(300, 700),
             lineHeight = (preferences[Keys.LineHeight] ?: 1.55f).coerceIn(1f, 2.2f),
+            publisherStyleMode = preferences[Keys.PublisherStyleMode]
+                ?.let { runCatching { PublisherStyleMode.valueOf(it) }.getOrNull() }
+                ?: PublisherStyleMode.SMART,
             pageMargin = (preferences[Keys.PageMargin] ?: 1f).coerceIn(0f, 2f),
             pageMarginLeft = (preferences[Keys.PageMarginLeft]
                 ?: preferences[Keys.PageMargin]
@@ -241,7 +258,8 @@ class ReaderSettingsRepository @Inject constructor(
             nightSelectedBackgroundImageId = preferences[Keys.NightSelectedBackgroundImageId]
                 ?.takeIf { id -> imageLibrary.any { it.id == id } },
             nightBackgroundImageOpacity = (preferences[Keys.NightBackgroundImageOpacity] ?: 0.28f)
-                .coerceIn(0.05f, 1f)
+                .coerceIn(0.05f, 1f),
+            bookThemes = BookReaderThemeCodec.decode(preferences[Keys.BookThemes])
         )
     }
 
@@ -387,6 +405,10 @@ class ReaderSettingsRepository @Inject constructor(
         dataStore.edit { it[Keys.LineHeight] = value.coerceIn(1f, 2.2f) }
     }
 
+    suspend fun setPublisherStyleMode(value: PublisherStyleMode) {
+        dataStore.edit { it[Keys.PublisherStyleMode] = value.name }
+    }
+
     suspend fun setPageMargin(value: Float) {
         val safe = value.coerceIn(0f, 2f)
         dataStore.edit {
@@ -481,6 +503,50 @@ class ReaderSettingsRepository @Inject constructor(
         }
     }
 
+    suspend fun setBookThemeEnabled(bookId: Long, enabled: Boolean) {
+        require(bookId > 0L)
+        dataStore.edit { preferences ->
+            val themes = BookReaderThemeCodec.decode(preferences[Keys.BookThemes]).toMutableMap()
+            val current = themes[bookId] ?: BookReaderTheme(
+                dayTheme = preferences[Keys.Theme]
+                    ?.let { runCatching { ReaderTheme.valueOf(it) }.getOrNull() }
+                    ?: ReaderTheme.LIGHT,
+                dayCustomThemeId = preferences[Keys.ActiveCustomThemeId],
+                nightTheme = preferences[Keys.NightTheme]
+                    ?.let { runCatching { ReaderTheme.valueOf(it) }.getOrNull() }
+                    ?: ReaderTheme.DARK,
+                nightCustomThemeId = preferences[Keys.NightActiveCustomThemeId]
+            )
+            themes[bookId] = current.copy(enabled = enabled)
+            preferences[Keys.BookThemes] = BookReaderThemeCodec.encode(themes)
+        }
+    }
+
+    suspend fun setBookTheme(bookId: Long, theme: ReaderTheme, slot: ReaderThemeSlot) {
+        updateBookTheme(bookId) { it.withTheme(slot, theme) }
+    }
+
+    suspend fun selectBookCustomTheme(bookId: Long, id: Long, slot: ReaderThemeSlot) {
+        dataStore.edit { preferences ->
+            if (CustomReaderThemeCodec.decode(preferences[Keys.CustomThemes]).none { it.id == id }) {
+                return@edit
+            }
+            val themes = BookReaderThemeCodec.decode(preferences[Keys.BookThemes]).toMutableMap()
+            val current = themes[bookId] ?: BookReaderTheme(enabled = true)
+            themes[bookId] = current.withCustomTheme(slot, id)
+            preferences[Keys.BookThemes] = BookReaderThemeCodec.encode(themes)
+        }
+    }
+
+    private suspend fun updateBookTheme(bookId: Long, transform: (BookReaderTheme) -> BookReaderTheme) {
+        require(bookId > 0L)
+        dataStore.edit { preferences ->
+            val themes = BookReaderThemeCodec.decode(preferences[Keys.BookThemes]).toMutableMap()
+            themes[bookId] = transform(themes[bookId] ?: BookReaderTheme(enabled = true))
+            preferences[Keys.BookThemes] = BookReaderThemeCodec.encode(themes)
+        }
+    }
+
     /** 保存（新建或覆盖）自定义主题并立即应用到指定槽；返回落盘的 id。 */
     suspend fun saveCustomTheme(
         theme: CustomReaderTheme,
@@ -499,6 +565,31 @@ class ReaderSettingsRepository @Inject constructor(
         return assigned
     }
 
+    /** 保存本书使用的预设，但不改写其他书正在使用的全局排版。 */
+    suspend fun saveBookCustomTheme(
+        bookId: Long,
+        theme: CustomReaderTheme,
+        slot: ReaderThemeSlot
+    ): Long {
+        var assigned = theme.id
+        dataStore.edit { preferences ->
+            persistLegacyReaderAssets(preferences)
+            val existing = CustomReaderThemeCodec.decode(preferences[Keys.CustomThemes])
+            if (assigned == 0L) assigned = (existing.maxOfOrNull { it.id } ?: 0L) + 1
+            val saved = theme.copy(id = assigned)
+            persistThemeAssets(preferences, saved)
+            preferences[Keys.CustomThemes] = CustomReaderThemeCodec.encode(
+                existing.filterNot { it.id == assigned } + saved
+            )
+            val bookThemes = BookReaderThemeCodec.decode(preferences[Keys.BookThemes]).toMutableMap()
+            bookThemes[bookId] = (bookThemes[bookId] ?: BookReaderTheme(enabled = true))
+                .withCustomTheme(slot, assigned)
+                .copy(enabled = true)
+            preferences[Keys.BookThemes] = BookReaderThemeCodec.encode(bookThemes)
+        }
+        return assigned
+    }
+
     suspend fun deleteCustomTheme(id: Long) {
         dataStore.edit { preferences ->
             val remaining = CustomReaderThemeCodec.decode(preferences[Keys.CustomThemes])
@@ -507,6 +598,14 @@ class ReaderSettingsRepository @Inject constructor(
             ReaderThemeSlot.entries.forEach { slot ->
                 if (preferences[customThemeKey(slot)] == id) preferences.remove(customThemeKey(slot))
             }
+            val repairedBookThemes = BookReaderThemeCodec.decode(preferences[Keys.BookThemes])
+                .mapValues { (_, value) ->
+                    value.copy(
+                        dayCustomThemeId = value.dayCustomThemeId?.takeUnless { it == id },
+                        nightCustomThemeId = value.nightCustomThemeId?.takeUnless { it == id }
+                    )
+                }
+            preferences[Keys.BookThemes] = BookReaderThemeCodec.encode(repairedBookThemes)
         }
     }
 
@@ -950,6 +1049,7 @@ class ReaderSettingsRepository @Inject constructor(
         val SelectedCustomFontId = stringPreferencesKey("reader_selected_custom_font_id")
         val FontWeight = intPreferencesKey("reader_font_weight")
         val LineHeight = floatPreferencesKey("reader_line_height")
+        val PublisherStyleMode = stringPreferencesKey("reader_epub_publisher_style_mode")
         val PageMargin = floatPreferencesKey("reader_page_margin")
         val PageMarginLeft = floatPreferencesKey("reader_page_margin_left")
         val PageMarginRight = floatPreferencesKey("reader_page_margin_right")
@@ -1010,5 +1110,6 @@ class ReaderSettingsRepository @Inject constructor(
             stringPreferencesKey("reader_selected_background_image_night_id")
         val NightBackgroundImageOpacity =
             floatPreferencesKey("reader_background_image_night_opacity")
+        val BookThemes = stringPreferencesKey("reader_book_themes")
     }
 }

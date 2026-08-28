@@ -1,0 +1,7 @@
+body.log-page { background-color: #161c23; }
+body.log-page p { color: #b8b2aa; text-indent: 0; font-size: .9em; }
+.log-frame { border-left: 1px solid #b8b2aa; border-right: 1px solid #b8b2aa; margin: auto -10%; }
+.log-left { border: 1px solid #b8b2aa; border-width: 1px 1px 1px 0; border-radius: 0 30px 30px 0; margin: .8em 10% .8em -10%; padding: 6px; }
+.log-right { border: 1px solid #b8b2aa; border-width: 1px 0 1px 1px; border-radius: 30px 0 0 30px; margin: .8em -10% .8em 10%; padding: 6px; }
+.log-left p { text-align: right; margin-right: 2%; }
+.log-right p { text-align: left; margin-left: 2%; }

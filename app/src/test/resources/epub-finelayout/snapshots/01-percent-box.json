@@ -1,0 +1,180 @@
+{
+    "fixture": "01-percent-box",
+    "bodyLength": 67,
+    "pages": [
+        {
+            "index": 0,
+            "chapterPosition": 0,
+            "charLength": 64,
+            "height": 290.5,
+            "backgroundColorArgb": -329486,
+            "backgroundImagePath": null,
+            "immersive": false,
+            "hideHeader": true,
+            "decorations": [
+                {
+                    "kind": "block",
+                    "left": 24.0,
+                    "top": 32.0,
+                    "right": 216.0,
+                    "bottom": 173.70001,
+                    "backgroundColorArgb": 1204472522,
+                    "backgroundImagePath": null,
+                    "backgroundSizeMode": "AUTO",
+                    "backgroundSize": [
+                        0.0,
+                        0.0
+                    ],
+                    "backgroundRepeat": [
+                        true,
+                        true
+                    ],
+                    "backgroundPosition": [
+                        0.0,
+                        0.0
+                    ],
+                    "borderWidths": [
+                        1.25,
+                        1.25,
+                        1.25,
+                        1.25
+                    ],
+                    "borderColors": [
+                        -11250604,
+                        -11250604,
+                        -11250604,
+                        -11250604
+                    ],
+                    "radii": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "shadowCount": 0,
+                    "edges": [
+                        true,
+                        true,
+                        true,
+                        true
+                    ]
+                },
+                {
+                    "kind": "block",
+                    "left": -24.0,
+                    "top": 205.70001,
+                    "right": 264.0,
+                    "bottom": 234.50002,
+                    "backgroundColorArgb": null,
+                    "backgroundImagePath": null,
+                    "backgroundSizeMode": "AUTO",
+                    "backgroundSize": [
+                        0.0,
+                        0.0
+                    ],
+                    "backgroundRepeat": [
+                        true,
+                        true
+                    ],
+                    "backgroundPosition": [
+                        0.0,
+                        0.0
+                    ],
+                    "borderWidths": [
+                        0.0,
+                        1.25,
+                        0.0,
+                        1.25
+                    ],
+                    "borderColors": [
+                        null,
+                        -9079435,
+                        null,
+                        -9079435
+                    ],
+                    "radii": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "shadowCount": 0,
+                    "edges": [
+                        true,
+                        true,
+                        true,
+                        true
+                    ]
+                }
+            ],
+            "lines": [
+                {
+                    "chapterPosition": 0,
+                    "charLength": 10,
+                    "lineTop": 53.25,
+                    "lineBottom": 73.25,
+                    "startX": 65.25,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                },
+                {
+                    "chapterPosition": 10,
+                    "charLength": 11,
+                    "lineTop": 74.05,
+                    "lineBottom": 94.05,
+                    "startX": 65.25,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                },
+                {
+                    "chapterPosition": 22,
+                    "charLength": 10,
+                    "lineTop": 102.850006,
+                    "lineBottom": 122.850006,
+                    "startX": 65.25,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                },
+                {
+                    "chapterPosition": 32,
+                    "charLength": 7,
+                    "lineTop": 123.65001,
+                    "lineBottom": 143.65001,
+                    "startX": 65.25,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                },
+                {
+                    "chapterPosition": 40,
+                    "charLength": 19,
+                    "lineTop": 205.70001,
+                    "lineBottom": 225.70001,
+                    "startX": -22.75,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                },
+                {
+                    "chapterPosition": 60,
+                    "charLength": 7,
+                    "lineTop": 270.5,
+                    "lineBottom": 290.5,
+                    "startX": 36.0,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                }
+            ]
+        }
+    ]
+}

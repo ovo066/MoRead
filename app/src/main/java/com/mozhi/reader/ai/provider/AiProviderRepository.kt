@@ -18,6 +18,7 @@ import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 data class AiProviderDraft(
     val id: Long = 0,
@@ -56,9 +57,7 @@ class AiProviderRepository @Inject constructor(
 
     suspend fun save(draft: AiProviderDraft): Long {
         require(draft.name.isNotBlank()) { "Provider 名称不能为空" }
-        require(draft.baseUrl.startsWith("https://")) { "Base URL 必须使用 HTTPS" }
-
-        val normalizedUrl = draft.baseUrl.trim().trimEnd('/')
+        val normalizedUrl = normalizeProviderBaseUrl(draft.baseUrl)
         val existing = draft.id.takeIf { it != 0L }?.let { providerDao.getProvider(it) }
         val alias = existing?.apiKeyAlias ?: "provider-${UUID.randomUUID()}"
         if (draft.apiKey.isNotBlank()) {
@@ -212,4 +211,13 @@ class AiProviderRepository @Inject constructor(
         ModelRole.TTS -> AiModelType.TTS
         ModelRole.IMAGE -> AiModelType.IMAGE
     }
+}
+
+/** AI 服务可以是公网 HTTPS，也可以是用户局域网/本机部署的 HTTP 端点。 */
+internal fun normalizeProviderBaseUrl(value: String): String {
+    val normalized = value.trim().trimEnd('/')
+    require(normalized.toHttpUrlOrNull() != null) {
+        "Base URL 必须是有效的 HTTP 或 HTTPS 地址"
+    }
+    return normalized
 }

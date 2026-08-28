@@ -1,43 +1,31 @@
 package com.mozhi.reader.feature.reader
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.exclude
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.StopCircle
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -50,13 +38,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.animation.core.animateFloatAsState
 import coil3.compose.AsyncImage
 
 /** 扩展面板里的一格：图标 + 一行小字；[selected] 非 null 时它是个开关格。 */
@@ -69,10 +56,13 @@ internal data class ComposerAction(
 )
 
 /**
- * 输入区：独立圆形按钮 + 自然加高的输入胶囊，避免整块半圆底板形成梯形观感。
+ * 伴读输入区：一整条输入胶囊（[ReaderComposerBar]），`＋` 嵌在左端、发送嵌在右端，
  * 扩展面板作为输入条上方的内联卡片展开。
  *
- * 之所以不用 DropdownMenu：它锚在按钮上、浮在输入条上方一段距离，
+ * 之前是「圆钮＋ | 胶囊 | 圆钮发送」三块各自描边的独立容器并排，看着像三颗按钮而不是一个输入框；
+ * 收进一条胶囊后两端对称，也和选词 AI、段评讨论用上了同一个组件。
+ *
+ * 之所以不用 DropdownMenu 承载扩展面板：它锚在按钮上、浮在输入条上方一段距离，
  * 中间那条空白既没法消掉，也让面板看着不属于输入区。
  */
 @Composable
@@ -99,9 +89,7 @@ internal fun CompanionComposer(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            // 键盘弹出时 imePadding 已把整块内容抬到键盘上方，此时导航栏
-            // 的内边距必须归零，否则输入条和键盘之间会多出一条导航栏高的空白。
-            .windowInsetsPadding(WindowInsets.navigationBars.exclude(WindowInsets.ime))
+            // 导航栏内边距由 ReaderComposerBar 统一处理（键盘弹出时归零），这里不再重复加。
             .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
         AnimatedVisibility(
@@ -126,114 +114,26 @@ internal fun CompanionComposer(
         if (attachments.isNotEmpty()) {
             AttachmentStrip(attachments, palette, onRemoveAttachment)
         }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 54.dp),
-            verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            ComposerCircleButton(
-                icon = Icons.Outlined.Add,
-                description = if (panelExpanded) "收起更多输入" else "更多输入",
-                tint = palette.accent,
-                background = palette.glassStrong,
-                border = palette.glassBorder,
-                onClick = { panelExpanded = !panelExpanded },
-                iconModifier = Modifier.rotate(plusRotation),
-                modifier = Modifier.padding(bottom = 5.dp)
-            )
-            Surface(
-                shape = RoundedCornerShape(27.dp),
-                color = palette.glassStrong,
-                contentColor = palette.onBackground,
-                border = BorderStroke(1.dp, palette.glassBorder),
-                modifier = Modifier
-                    .weight(1f)
-                    .heightIn(min = 54.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 54.dp)
-                        .padding(horizontal = 16.dp, vertical = 15.dp),
-                    contentAlignment = Alignment.CenterStart
-                ) {
-                    if (input.isEmpty()) {
-                        Text(
-                            text = placeholder,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = palette.muted,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                    BasicTextField(
-                        value = input,
-                        onValueChange = onInputChange,
-                        textStyle = MaterialTheme.typography.bodyMedium.copy(
-                            color = palette.onBackground
-                        ),
-                        cursorBrush = SolidColor(palette.accent),
-                        maxLines = 5,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            }
-            if (isStreaming) {
-                ComposerCircleButton(
-                    icon = Icons.Outlined.StopCircle,
-                    description = "停止",
-                    tint = palette.onAccent,
-                    background = palette.accent,
-                    border = palette.accent,
-                    onClick = onStop,
-                    modifier = Modifier.padding(bottom = 5.dp)
-                )
-            } else {
-                ComposerCircleButton(
-                    icon = Icons.AutoMirrored.Filled.Send,
-                    description = "发送",
-                    tint = if (canSend) palette.onAccent else palette.muted,
-                    background = if (canSend) palette.accent else palette.glassStrong,
-                    border = if (canSend) palette.accent else palette.glassBorder,
-                    enabled = canSend,
-                    onClick = onSend,
-                    iconModifier = Modifier.rotate(-90f),
-                    modifier = Modifier.padding(bottom = 5.dp)
+        ReaderComposerBar(
+            input = input,
+            onInputChange = onInputChange,
+            placeholder = placeholder,
+            canSend = canSend,
+            isStreaming = isStreaming,
+            palette = palette,
+            onSend = onSend,
+            onStop = onStop,
+            leading = {
+                ComposerRoundAction(
+                    icon = Icons.Outlined.Add,
+                    description = if (panelExpanded) "收起更多输入" else "更多输入",
+                    tint = palette.accent,
+                    background = Color.Transparent,
+                    border = palette.glassBorder,
+                    iconModifier = Modifier.rotate(plusRotation),
+                    onClick = { panelExpanded = !panelExpanded }
                 )
             }
-        }
-    }
-}
-
-/** 输入胶囊两侧的独立圆钮。发送图标旋转为尖头朝上。 */
-@Composable
-private fun ComposerCircleButton(
-    icon: ImageVector,
-    description: String,
-    tint: androidx.compose.ui.graphics.Color,
-    background: androidx.compose.ui.graphics.Color,
-    border: androidx.compose.ui.graphics.Color,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    iconModifier: Modifier = Modifier,
-    enabled: Boolean = true
-) {
-    IconButton(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = modifier
-            .size(44.dp)
-            .clip(CircleShape)
-            .background(background)
-            .border(1.dp, border, CircleShape)
-    ) {
-        Icon(
-            icon,
-            contentDescription = description,
-            tint = tint,
-            modifier = iconModifier.size(19.dp)
         )
     }
 }

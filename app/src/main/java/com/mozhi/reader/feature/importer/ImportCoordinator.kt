@@ -441,7 +441,37 @@ class ImportCoordinator @Inject constructor(
                 ?: indexedSpineHrefs?.getOrNull(index)
                 ?: EpubResourcePath.normalize(readiumHref)
                 ?: readiumHref
-            val extracted = bytes?.let {
+            val parsedLayout = if (layoutPackage != null) {
+                requireNotNull(bytes) { "无法读取 EPUB 第 ${index + 1} 章：$chapterHref" }
+                try {
+                    val parsed = layoutParser.parseWithText(
+                        bytes = bytes,
+                        chapterIndex = index,
+                        href = chapterHref,
+                        stylesheets = stylesheets
+                    )
+                    val spineProperties = layoutPackage.spine.getOrNull(index)?.properties.orEmpty()
+                    val immersiveFromSpine = spineProperties.any { property ->
+                        property.contains("cover", true) || property.contains("titlepage", true) ||
+                            property.contains("page-fullscreen", true)
+                    }
+                    if (immersiveFromSpine && !parsed.document.immersivePage) {
+                        parsed.copy(document = parsed.document.copy(immersivePage = true))
+                    } else {
+                        parsed
+                    }
+                } catch (error: Throwable) {
+                    throw IllegalStateException(
+                        "EPUB 第 ${index + 1} 章精排解析失败：$chapterHref",
+                        error
+                    )
+                }
+            } else {
+                null
+            }
+            val extracted = parsedLayout?.let { parsed ->
+                ExtractedEpubText(parsed.text, parsed.images)
+            } ?: bytes?.let {
                 textExtractor.extractWithImages(it, chapterHref)
             } ?: ExtractedEpubText("", emptyList())
             // 正文始终保留同长度的「［图片］」token。资源缺失时它直接作为降级文本，
@@ -450,7 +480,7 @@ class ImportCoordinator @Inject constructor(
                 val imageBytes = if (resourceCache.containsKey(reference.href)) {
                     resourceCache[reference.href]
                 } else {
-                    readImageResource(publication, reference.href, layoutPackage)
+                    readImageResource(publication, reference.href, layoutPackage, epubFile)
                         ?.takeIf { it.size <= MAX_INLINE_IMAGE_BYTES }
                         .also { resourceCache[reference.href] = it }
                 }
@@ -465,23 +495,8 @@ class ImportCoordinator @Inject constructor(
                 }
             }
             chapters += ChapterTextInput(index = index, body = extracted.text)
-            if (layoutPackage != null) {
-                requireNotNull(bytes) { "无法读取 EPUB 第 ${index + 1} 章：$chapterHref" }
-                val document = try {
-                    layoutParser.parse(
-                        bytes = bytes,
-                        chapterIndex = index,
-                        href = chapterHref,
-                        expectedText = extracted.text,
-                        stylesheets = stylesheets
-                    )
-                } catch (error: Throwable) {
-                    throw IllegalStateException(
-                        "EPUB 第 ${index + 1} 章精排解析失败：$chapterHref",
-                        error
-                    )
-                }
-                layouts += EpubLayoutChapterInput(index, chapterHref, document)
+            parsedLayout?.let { parsed ->
+                layouts += EpubLayoutChapterInput(index, chapterHref, parsed.document, parsed.dom)
             }
         }
         return ExtractedSpine(chapters, images, layouts)
@@ -494,7 +509,8 @@ class ImportCoordinator @Inject constructor(
     private suspend fun readImageResource(
         publication: Publication,
         href: String,
-        layoutPackage: EpubLayoutPackage?
+        layoutPackage: EpubLayoutPackage?,
+        epubFile: File? = null
     ): ByteArray? {
         if (href.startsWith("data:", ignoreCase = true)) {
             val comma = href.indexOf(',')
@@ -522,6 +538,40 @@ class ImportCoordinator @Inject constructor(
                     ?.takeIf { it.size <= MAX_INLINE_IMAGE_BYTES }
             }
             if (bytes != null) return bytes
+        }
+        // Readium 对少数非规范包根 href、URL 编码路径或未列入 manifest 的图片会返回空。
+        // 最后直接按规范化 archive path 从 EPUB 读取，仍受当前书包与大小上限约束。
+        if (epubFile?.isFile == true) {
+            return runCatching {
+                java.util.zip.ZipFile(epubFile).use { zip ->
+                    val normalizedHref = EpubResourcePath.normalize(href)?.lowercase()
+                    val manifestResource = layoutPackage?.resources?.firstOrNull { resource ->
+                        EpubResourcePath.packageAliases(resource.href, layoutPackage.packageDocumentPath)
+                            .any { it.equals(normalizedHref, true) } ||
+                            EpubResourcePath.packageAliases(resource.archivePath, layoutPackage.packageDocumentPath)
+                                .any { it.equals(normalizedHref, true) }
+                    }
+                    val wanted = manifestResource?.archivePath?.lowercase() ?: normalizedHref
+                    val entry = zip.entries().asSequence().firstOrNull { entry ->
+                        !entry.isDirectory && entry.name.replace('\\', '/').removePrefix("./")
+                            .equals(wanted, true)
+                    } ?: return@use null
+                    if (entry.size > MAX_INLINE_IMAGE_BYTES) return@use null
+                    zip.getInputStream(entry).use { input ->
+                        val output = java.io.ByteArrayOutputStream()
+                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                        var total = 0
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            total += count
+                            if (total > MAX_INLINE_IMAGE_BYTES) return@use null
+                            output.write(buffer, 0, count)
+                        }
+                        output.toByteArray()
+                    }
+                }
+            }.getOrNull()
         }
         return null
     }

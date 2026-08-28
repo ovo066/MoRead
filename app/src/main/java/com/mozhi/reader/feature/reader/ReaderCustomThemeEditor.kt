@@ -364,12 +364,12 @@ internal fun CustomThemeEditorDialog(
                     }
                 }
                 if (selectedBackgroundImageId != null) {
-                    TypographyValueSlider(
+                    TypographyStepper(
                         label = "背景强度",
                         valueText = "" + (backgroundImageOpacity * 100).roundToInt() + "%",
                         value = backgroundImageOpacity,
                         range = 0.05f..1f,
-                        steps = 18,
+                        step = 0.05f,
                         palette = palette,
                         onValueChange = { backgroundImageOpacity = it }
                     )

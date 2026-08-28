@@ -1,0 +1,249 @@
+{
+    "fixture": "04-chat-bubbles",
+    "bodyLength": 52,
+    "pages": [
+        {
+            "index": 0,
+            "chapterPosition": 0,
+            "charLength": 49,
+            "height": 139.79092,
+            "backgroundColorArgb": -329486,
+            "backgroundImagePath": null,
+            "immersive": false,
+            "hideHeader": false,
+            "decorations": [
+                {
+                    "kind": "block",
+                    "left": 28.75,
+                    "top": 22.045454,
+                    "right": 108.75,
+                    "bottom": 52.045456,
+                    "backgroundColorArgb": -103,
+                    "backgroundImagePath": null,
+                    "backgroundSizeMode": "AUTO",
+                    "backgroundSize": [
+                        0.0,
+                        0.0
+                    ],
+                    "backgroundRepeat": [
+                        true,
+                        true
+                    ],
+                    "backgroundPosition": [
+                        0.5,
+                        0.5
+                    ],
+                    "borderWidths": [
+                        1.25,
+                        1.25,
+                        1.25,
+                        1.25
+                    ],
+                    "borderColors": [
+                        -16777216,
+                        -16777216,
+                        -16777216,
+                        -16777216
+                    ],
+                    "radii": [
+                        0.0,
+                        12.5,
+                        12.5,
+                        12.5
+                    ],
+                    "shadowCount": 0,
+                    "edges": [
+                        true,
+                        true,
+                        true,
+                        true
+                    ]
+                },
+                {
+                    "kind": "block",
+                    "left": 91.25,
+                    "top": 59.545456,
+                    "right": 211.25,
+                    "bottom": 89.545456,
+                    "backgroundColorArgb": -5640835,
+                    "backgroundImagePath": null,
+                    "backgroundSizeMode": "AUTO",
+                    "backgroundSize": [
+                        0.0,
+                        0.0
+                    ],
+                    "backgroundRepeat": [
+                        true,
+                        true
+                    ],
+                    "backgroundPosition": [
+                        0.5,
+                        0.5
+                    ],
+                    "borderWidths": [
+                        1.25,
+                        1.25,
+                        1.25,
+                        1.25
+                    ],
+                    "borderColors": [
+                        -10461088,
+                        -10461088,
+                        -10461088,
+                        -10461088
+                    ],
+                    "radii": [
+                        12.5,
+                        0.0,
+                        12.5,
+                        12.5
+                    ],
+                    "shadowCount": 0,
+                    "edges": [
+                        true,
+                        true,
+                        true,
+                        true
+                    ]
+                },
+                {
+                    "kind": "block",
+                    "left": 28.75,
+                    "top": 97.045456,
+                    "right": 188.75,
+                    "bottom": 127.045456,
+                    "backgroundColorArgb": -103,
+                    "backgroundImagePath": null,
+                    "backgroundSizeMode": "AUTO",
+                    "backgroundSize": [
+                        0.0,
+                        0.0
+                    ],
+                    "backgroundRepeat": [
+                        true,
+                        true
+                    ],
+                    "backgroundPosition": [
+                        0.5,
+                        0.5
+                    ],
+                    "borderWidths": [
+                        1.25,
+                        1.25,
+                        1.25,
+                        1.25
+                    ],
+                    "borderColors": [
+                        -16777216,
+                        -16777216,
+                        -16777216,
+                        -16777216
+                    ],
+                    "radii": [
+                        0.0,
+                        12.5,
+                        12.5,
+                        12.5
+                    ],
+                    "shadowCount": 0,
+                    "edges": [
+                        true,
+                        true,
+                        true,
+                        true
+                    ]
+                }
+            ],
+            "lines": [
+                {
+                    "chapterPosition": 0,
+                    "charLength": 6,
+                    "lineTop": 27.045454,
+                    "lineBottom": 47.045456,
+                    "startX": 38.75,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                },
+                {
+                    "chapterPosition": 7,
+                    "charLength": 10,
+                    "lineTop": 64.545456,
+                    "lineBottom": 84.545456,
+                    "startX": 101.25,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                },
+                {
+                    "chapterPosition": 18,
+                    "charLength": 14,
+                    "lineTop": 102.045456,
+                    "lineBottom": 122.045456,
+                    "startX": 38.75,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                },
+                {
+                    "chapterPosition": 33,
+                    "charLength": 1,
+                    "lineTop": 36.590908,
+                    "lineBottom": 56.590908,
+                    "startX": 148.75,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                },
+                {
+                    "chapterPosition": 34,
+                    "charLength": 9,
+                    "lineTop": 57.390907,
+                    "lineBottom": 77.39091,
+                    "startX": 0.0,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                },
+                {
+                    "chapterPosition": 43,
+                    "charLength": 1,
+                    "lineTop": 78.19091,
+                    "lineBottom": 98.19091,
+                    "startX": 188.75,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                },
+                {
+                    "chapterPosition": 44,
+                    "charLength": 5,
+                    "lineTop": 98.99091,
+                    "lineBottom": 118.99091,
+                    "startX": 188.75,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                },
+                {
+                    "chapterPosition": 49,
+                    "charLength": 3,
+                    "lineTop": 119.79092,
+                    "lineBottom": 139.79092,
+                    "startX": 188.75,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                }
+            ]
+        }
+    ]
+}

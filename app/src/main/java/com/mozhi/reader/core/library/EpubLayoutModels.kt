@@ -1,5 +1,6 @@
 package com.mozhi.reader.core.library
 
+import com.mozhi.reader.core.epub.dom.EpubDomChapter
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -11,11 +12,12 @@ data class EpubLayoutPackage(
     val resources: List<EpubLayoutResource> = emptyList(),
     val spine: List<EpubLayoutSpineItem> = emptyList(),
     val fontFaces: List<EpubFontFace> = emptyList(),
+    val stylesheets: List<EpubStylesheetText> = emptyList(),
     val chapters: List<EpubLayoutChapterRef> = emptyList(),
     val diagnostics: List<EpubLayoutDiagnostic> = emptyList()
 ) {
     companion object {
-        const val CURRENT_SCHEMA_VERSION = 2
+        const val CURRENT_SCHEMA_VERSION = 10
     }
 }
 
@@ -52,6 +54,12 @@ data class EpubLayoutSpineItem(
 )
 
 @Serializable
+data class EpubStylesheetText(
+    val href: String,
+    val css: String
+)
+
+@Serializable
 data class EpubFontFace(
     val family: String,
     val resourceHref: String,
@@ -77,12 +85,15 @@ data class EpubLayoutChapterRef(
     val fileName: String
 )
 
+@Deprecated("v9 compatibility model")
 @Serializable
 data class EpubLayoutChapter(
-    val schemaVersion: Int = EpubLayoutPackage.CURRENT_SCHEMA_VERSION,
+    val schemaVersion: Int = 9,
     val chapterIndex: Int,
     val href: String,
     val documentTitle: String? = null,
+    /** 封面、卷首或单图页：渲染时隐藏页眉页脚。 */
+    val immersivePage: Boolean = false,
     val bodyStyle: EpubComputedStyle = EpubComputedStyle(),
     val stylesheetHrefs: List<String> = emptyList(),
     val blocks: List<EpubLayoutBlock> = emptyList(),
@@ -144,6 +155,13 @@ data class EpubComputedStyle(
     val colorArgb: Int? = null,
     val backgroundColorArgb: Int? = null,
     val backgroundImageHref: String? = null,
+    val backgroundSizeMode: EpubBackgroundSizeMode = EpubBackgroundSizeMode.COVER,
+    val backgroundSizeWidthEm: Float? = null,
+    val backgroundSizeHeightEm: Float? = null,
+    val backgroundRepeatX: Boolean = false,
+    val backgroundRepeatY: Boolean = false,
+    val backgroundPositionX: Float = 0.5f,
+    val backgroundPositionY: Float = 0.5f,
     val textAlign: EpubTextAlign? = null,
     val textIndentEm: Float? = null,
     val lineHeightEm: Float? = null,
@@ -167,6 +185,10 @@ data class EpubComputedStyle(
     val borderBottomColorArgb: Int? = null,
     val borderLeftColorArgb: Int? = null,
     val borderRadiusEm: Float? = null,
+    val borderTopLeftRadiusEm: Float? = null,
+    val borderTopRightRadiusEm: Float? = null,
+    val borderBottomRightRadiusEm: Float? = null,
+    val borderBottomLeftRadiusEm: Float? = null,
     val boxShadows: List<EpubBoxShadow> = emptyList(),
     val widthEm: Float? = null,
     val widthFraction: Float? = null,
@@ -175,16 +197,29 @@ data class EpubComputedStyle(
     val heightEm: Float? = null,
     val heightViewportFraction: Float? = null,
     val maxHeightEm: Float? = null,
+    /** Percentage max-height, resolved against the nearest explicitly sized container. */
+    val maxHeightFraction: Float? = null,
     val maxHeightViewportFraction: Float? = null,
     val verticalAlign: EpubVerticalAlign = EpubVerticalAlign.BASELINE,
     val float: EpubFloat = EpubFloat.NONE,
+    val layoutMode: EpubLayoutMode = EpubLayoutMode.FLOW,
+    val layoutColumns: Int? = null,
+    val layoutGapEm: Float? = null,
+    /** span/a 等行内标签被 CSS `display:block` 提升为独立块。 */
+    val blockDisplay: Boolean = false,
     val centerBlock: Boolean = false,
     val opacity: Float = 1f,
     val breakBefore: Boolean = false,
     val breakAfter: Boolean = false,
+    val avoidBreakAfter: Boolean = false,
     val avoidBreakInside: Boolean = false,
+    val orphans: Int = 1,
+    val widows: Int = 1,
     val hidden: Boolean = false
 )
+
+@Serializable
+enum class EpubBackgroundSizeMode { AUTO, COVER, CONTAIN, STRETCH, EXPLICIT }
 
 @Serializable
 enum class EpubTextAlign { START, CENTER, END, JUSTIFY }
@@ -194,6 +229,9 @@ enum class EpubVerticalAlign { BASELINE, SUPER, SUB }
 
 @Serializable
 enum class EpubFloat { NONE, START, END }
+
+@Serializable
+enum class EpubLayoutMode { FLOW, FLEX, GRID }
 
 @Serializable
 data class EpubLayoutDiagnostic(
@@ -209,7 +247,8 @@ enum class EpubLayoutDiagnosticSeverity { INFO, WARNING, ERROR }
 data class EpubLayoutChapterInput(
     val chapterIndex: Int,
     val href: String,
-    val document: EpubLayoutChapter
+    val document: EpubLayoutChapter,
+    val dom: EpubDomChapter? = null
 )
 
 data class EpubResolvedFontFace(
@@ -223,5 +262,7 @@ data class EpubLayoutChapterBundle(
     val document: EpubLayoutChapter,
     val resourcePaths: Map<String, String>,
     val fontPaths: Map<String, String>,
-    val fontFaces: List<EpubResolvedFontFace> = emptyList()
+    val fontFaces: List<EpubResolvedFontFace> = emptyList(),
+    val dom: EpubDomChapter? = null,
+    val stylesheets: List<EpubStylesheetText> = emptyList()
 )

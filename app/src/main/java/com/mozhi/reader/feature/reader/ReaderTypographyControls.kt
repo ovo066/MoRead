@@ -100,9 +100,11 @@ import kotlin.math.roundToInt
 internal fun TypographyMainPanel(
     settings: ReaderSettings,
     slot: ReaderThemeSlot,
+    bookThemeEnabled: Boolean,
     palette: ReaderPalette,
     actions: ReaderTypographyActions,
     onOpenPage: (TypographySecondaryPage) -> Unit,
+    onOpenTypographyCard: () -> Unit,
     onEditCustomTheme: (CustomReaderTheme) -> Unit,
     onCreateCustomTheme: () -> Unit
 ) {
@@ -146,6 +148,7 @@ internal fun TypographyMainPanel(
             slot = slot,
             palette = palette,
             actions = actions,
+            useBookTheme = bookThemeEnabled,
             onEditCustomTheme = onEditCustomTheme,
             onCreateCustomTheme = onCreateCustomTheme,
             modifier = Modifier.weight(1f)
@@ -179,14 +182,24 @@ internal fun TypographyMainPanel(
 
     HorizontalDivider(color = palette.glassBorder)
 
-    SecondaryPageChips(palette = palette, onOpenPage = onOpenPage)
+    SecondaryPageChips(
+        palette = palette,
+        onOpenTypographyCard = onOpenTypographyCard,
+        onOpenPage = onOpenPage
+    )
 }
 
-/** 二级页入口：一排胶囊，两行放下六个，不占用一级页的纵向预算。 */
+/**
+ * 二级入口：一排胶囊，两行放下五个，不占用一级页的纵向预算。
+ *
+ * 「排版」不推弹层内的二级页，而是收起弹层、浮出居中卡片——那一类设置每改一格都要看重排，
+ * 半屏弹层压着下半屏正文时看不出所以然。
+ */
 @Composable
 @OptIn(ExperimentalLayoutApi::class)
 internal fun SecondaryPageChips(
     palette: ReaderPalette,
+    onOpenTypographyCard: () -> Unit,
     onOpenPage: (TypographySecondaryPage) -> Unit
 ) {
     FlowRow(
@@ -194,6 +207,12 @@ internal fun SecondaryPageChips(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        EntryChip(
+            icon = Icons.Outlined.Tune,
+            text = "排版",
+            palette = palette,
+            onClick = onOpenTypographyCard
+        )
         TypographySecondaryPage.entries.forEach { page ->
             EntryChip(
                 icon = page.icon,
@@ -266,6 +285,7 @@ internal fun ThemeSwatchStrip(
     slot: ReaderThemeSlot,
     palette: ReaderPalette,
     actions: ReaderTypographyActions,
+    useBookTheme: Boolean = false,
     onEditCustomTheme: (CustomReaderTheme) -> Unit,
     onCreateCustomTheme: () -> Unit,
     modifier: Modifier = Modifier
@@ -285,7 +305,10 @@ internal fun ThemeSwatchStrip(
                     theme = theme,
                     selected = activeCustomId == null && activeTheme == theme,
                     palette = palette
-                ) { actions.onThemeChange(theme, slot) }
+                ) {
+                    if (useBookTheme) actions.onBookThemeChange(theme, slot)
+                    else actions.onThemeChange(theme, slot)
+                }
             }
         settings.customThemes.forEach { custom ->
             val selected = activeCustomId == custom.id
@@ -298,31 +321,53 @@ internal fun ThemeSwatchStrip(
                 selected = selected,
                 palette = palette
             ) {
-                if (selected) onEditCustomTheme(custom) else actions.onCustomThemeSelect(custom.id, slot)
+                if (selected) {
+                    onEditCustomTheme(custom)
+                } else if (useBookTheme) {
+                    actions.onBookCustomThemeSelect(custom.id, slot)
+                } else {
+                    actions.onCustomThemeSelect(custom.id, slot)
+                }
             }
         }
         AddThemeSwatch(palette = palette, onClick = onCreateCustomTheme)
     }
 }
 
+/**
+ * 字体页只管「用哪套字」。字号、行距、字重这些数值项都在悬浮排版卡片里——
+ * 它们要边调边看重排，二级页在半屏弹层里看不见正文。
+ */
 @Composable
 internal fun FontPage(
     settings: ReaderSettings,
     palette: ReaderPalette,
     actions: ReaderTypographyActions
 ) {
-    SheetRow(label = "字体", palette = palette) {
-        Row(
-            modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(7.dp)
+    Text("内置字体", style = MaterialTheme.typography.labelMedium, color = palette.muted)
+    @OptIn(ExperimentalLayoutApi::class)
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp)
+    ) {
+        ReaderFont.entries.filter { it != ReaderFont.CUSTOM }.forEach { font ->
+            SegChip(
+                text = font.shortLabel(),
+                selected = settings.font == font,
+                palette = palette,
+                modifier = Modifier.width(76.dp)
+            ) { actions.onFontChange(font) }
+        }
+    }
+    if (settings.fontLibrary.isNotEmpty()) {
+        Text("已导入", style = MaterialTheme.typography.labelMedium, color = palette.muted)
+        @OptIn(ExperimentalLayoutApi::class)
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(7.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp)
         ) {
-            ReaderFont.entries.filter { it != ReaderFont.CUSTOM }.forEach { font ->
-                SegChip(
-                    text = font.shortLabel(),
-                    selected = settings.font == font,
-                    palette = palette
-                ) { actions.onFontChange(font) }
-            }
             settings.fontLibrary.forEach { font ->
                 SegChip(
                     text = font.displayName,
@@ -353,114 +398,6 @@ internal fun FontPage(
             Text("导入 TTF/OTF/TTC", style = MaterialTheme.typography.labelMedium)
         }
     }
-    TypographyValueSlider(
-        label = "字号",
-        valueText = "" + (ReaderPageStyle.BASE_CONTENT_SP * settings.fontScale).roundToInt() + " sp",
-        value = settings.fontScale,
-        range = 0.75f..2f,
-        steps = 24,
-        palette = palette,
-        onValueChange = actions.onFontScaleChange
-    )
-    TypographyValueSlider(
-        label = "行距",
-        valueText = String.format(java.util.Locale.ROOT, "%.2f×", settings.lineHeight),
-        value = settings.lineHeight,
-        range = 1f..2.2f,
-        steps = 23,
-        palette = palette,
-        onValueChange = actions.onLineHeightChange
-    )
-    Text("正文字重", style = MaterialTheme.typography.labelMedium, color = palette.muted)
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        listOf(300, 400, 500, 600, 700).forEach { weight ->
-            SegChip(
-                text = weight.toString(),
-                selected = settings.fontWeight == weight,
-                palette = palette,
-                modifier = Modifier.weight(1f)
-            ) { actions.onFontWeightChange(weight) }
-        }
-    }
-}
-
-@Composable
-internal fun MarginPage(
-    settings: ReaderSettings,
-    palette: ReaderPalette,
-    actions: ReaderTypographyActions
-) {
-    Text("正文边距", style = MaterialTheme.typography.labelMedium, color = palette.muted)
-    TypographyValueSlider(
-        label = "左边距",
-        valueText = horizontalMarginText(settings.pageMarginLeft),
-        value = settings.pageMarginLeft,
-        range = 0f..2f,
-        steps = 19,
-        palette = palette,
-        onValueChange = actions.onPageMarginLeftChange
-    )
-    TypographyValueSlider(
-        label = "右边距",
-        valueText = horizontalMarginText(settings.pageMarginRight),
-        value = settings.pageMarginRight,
-        range = 0f..2f,
-        steps = 19,
-        palette = palette,
-        onValueChange = actions.onPageMarginRightChange
-    )
-    TypographyValueSlider(
-        label = "上边距",
-        valueText = verticalMarginText(settings.pageMarginTop),
-        value = settings.pageMarginTop,
-        range = 0f..2f,
-        steps = 19,
-        palette = palette,
-        onValueChange = actions.onPageMarginTopChange
-    )
-    TypographyValueSlider(
-        label = "下边距",
-        valueText = verticalMarginText(settings.pageMarginBottom),
-        value = settings.pageMarginBottom,
-        range = 0f..2f,
-        steps = 19,
-        palette = palette,
-        onValueChange = actions.onPageMarginBottomChange
-    )
-    HorizontalDivider(color = palette.glassBorder)
-    Text("页眉与页脚", style = MaterialTheme.typography.labelMedium, color = palette.muted)
-    AdvancedSwitchRow(
-        "显示页眉",
-        "章节标题",
-        settings.showHeader,
-        palette,
-        actions.onShowHeaderChange
-    )
-    TypographyValueSlider(
-        label = "页眉上边距",
-        valueText = chromeMarginText(settings.headerMarginTop),
-        value = settings.headerMarginTop,
-        range = 0f..2f,
-        steps = 19,
-        palette = palette,
-        onValueChange = actions.onHeaderMarginTopChange
-    )
-    AdvancedSwitchRow(
-        "显示页脚",
-        "页码、进度、时间与电量",
-        settings.showFooter,
-        palette,
-        actions.onShowFooterChange
-    )
-    TypographyValueSlider(
-        label = "页脚边距",
-        valueText = chromeMarginText(settings.footerMarginBottom),
-        value = settings.footerMarginBottom,
-        range = 0f..2f,
-        steps = 19,
-        palette = palette,
-        onValueChange = actions.onFooterMarginBottomChange
-    )
 }
 
 /**
@@ -471,14 +408,23 @@ internal fun MarginPage(
 internal fun ThemePage(
     settings: ReaderSettings,
     activeSlot: ReaderThemeSlot,
+    bookThemeEnabled: Boolean,
     palette: ReaderPalette,
     actions: ReaderTypographyActions,
     onEditCustomTheme: (CustomReaderTheme, ReaderThemeSlot) -> Unit,
     onCreateCustomTheme: (ReaderThemeSlot) -> Unit
 ) {
     var editingSlot by remember { mutableStateOf(activeSlot) }
-    val slot = if (settings.dayNightThemeAuto) editingSlot else ReaderThemeSlot.DAY
+    val slot = if (settings.dayNightThemeAuto || bookThemeEnabled) editingSlot else ReaderThemeSlot.DAY
 
+    AdvancedSwitchRow(
+        "本书主题",
+        "开启后，本书固定使用下面的日间/夜间方案，不影响其他书",
+        bookThemeEnabled,
+        palette,
+        actions.onBookThemeEnabledChange
+    )
+    HorizontalDivider(color = palette.glassBorder)
     AdvancedSwitchRow(
         "日夜自动切换",
         "白天和夜里各用一套配色，跟随应用日夜模式换",
@@ -486,7 +432,7 @@ internal fun ThemePage(
         palette,
         actions.onDayNightAutoChange
     )
-    if (settings.dayNightThemeAuto) {
+    if (settings.dayNightThemeAuto || bookThemeEnabled) {
         SheetRow(label = "方案", palette = palette) {
             SegChip(
                 text = "日间",
@@ -509,6 +455,7 @@ internal fun ThemePage(
             slot = slot,
             palette = palette,
             actions = actions,
+            useBookTheme = bookThemeEnabled,
             onEditCustomTheme = { theme -> onEditCustomTheme(theme, slot) },
             onCreateCustomTheme = { onCreateCustomTheme(slot) },
             modifier = Modifier.weight(1f)
@@ -516,7 +463,13 @@ internal fun ThemePage(
     }
 
     HorizontalDivider(color = palette.glassBorder)
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    if (bookThemeEnabled) {
+        Text(
+            "本书的字体、排版和背景随所选主题预设；点已选中的自定义主题可编辑整套方案。",
+            style = MaterialTheme.typography.labelSmall,
+            color = palette.muted
+        )
+    } else Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         val backgroundId = settings.backgroundImageIdFor(slot)
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
@@ -561,12 +514,12 @@ internal fun ThemePage(
         }
         if (backgroundId != null) {
             val opacity = settings.backgroundOpacityFor(slot)
-            TypographyValueSlider(
+            TypographyStepper(
                 label = "背景强度",
                 valueText = "" + (opacity * 100).roundToInt() + "%",
                 value = opacity,
                 range = 0.05f..1f,
-                steps = 18,
+                step = 0.05f,
                 palette = palette,
                 onValueChange = { actions.onBackgroundOpacityChange(it, slot) }
             )

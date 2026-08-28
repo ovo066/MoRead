@@ -105,7 +105,7 @@ internal fun ContentsSheet(
     tocEntries: List<BookTocEntryEntity>,
     currentChapterIndex: Int,
     palette: ReaderPalette,
-    onChapterClick: (Int) -> Unit
+    onChapterClick: (Int, String) -> Unit
 ) {
     val tocItems = remember(chapters, tocEntries) { buildReaderTocItems(chapters, tocEntries) }
     var collapsedOrderIndices by remember { mutableStateOf(emptySet<Int>()) }
@@ -198,7 +198,7 @@ internal fun ContentsSheet(
                 Surface(
                     onClick = {
                         when {
-                            item.chapterIndex != null -> onChapterClick(item.chapterIndex)
+                            item.chapterIndex != null -> onChapterClick(item.chapterIndex, item.href)
                             item.hasChildren -> collapsedOrderIndices = collapsedOrderIndices.toggle(item.orderIndex)
                         }
                     },

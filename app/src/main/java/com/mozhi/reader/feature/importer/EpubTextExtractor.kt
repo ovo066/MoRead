@@ -53,6 +53,7 @@ class EpubTextExtractor @Inject constructor() {
                         flush()
                         val source = node.attr("src")
                             .ifBlank { node.attr("data-src") }
+                            .ifBlank { node.attr("data") }
                             .ifBlank { node.attr("href") }
                             .ifBlank { node.attr("xlink:href") }
                         val href = resolveResourceHref(baseUri, source)
@@ -69,7 +70,7 @@ class EpubTextExtractor @Inject constructor() {
             }
 
             override fun tail(node: Node, depth: Int) {
-                if (node is Element && node.normalName() in BLOCK_TAGS) flush()
+                if (node is Element && node.isTextBlock()) flush()
             }
         })
         flush()
@@ -122,6 +123,9 @@ class EpubTextExtractor @Inject constructor() {
         }.getOrElse { normalized.joinToString("/") }
     }
 
+    private fun Element.isTextBlock(): Boolean = normalName() in BLOCK_TAGS ||
+        attr("style").replace(" ", "").contains("display:block", true)
+
     private fun String.collapseSpaces(): String {
         val builder = StringBuilder(length)
         var pendingSpace = false
@@ -148,7 +152,7 @@ class EpubTextExtractor @Inject constructor() {
         const val INLINE_IMAGE_CHAR: Char = '\uFFFC'
         const val IMAGE_PLACEHOLDER = "［图片］"
         private const val DROPPED_SELECTOR = "script, style, title, rt, rp, [style*=display:none]"
-        private val IMAGE_TAGS = setOf("img", "image")
+        private val IMAGE_TAGS = setOf("img", "image", "object")
         private val BLOCK_TAGS = setOf(
             "p", "div", "section", "article", "blockquote", "li", "tr", "td", "th",
             "h1", "h2", "h3", "h4", "h5", "h6", "pre", "figcaption", "dd", "dt"

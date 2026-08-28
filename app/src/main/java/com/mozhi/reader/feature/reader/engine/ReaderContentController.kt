@@ -1,8 +1,11 @@
 package com.mozhi.reader.feature.reader.engine
 
 import com.mozhi.reader.core.library.EpubLayoutChapterBundle
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -68,6 +71,9 @@ class ReaderContentController(
             pageCount: Int,
             bookProgress: Float
         )
+
+        /** A failed current chapter must surface as an error instead of an endless spinner. */
+        fun onContentError(chapterIndex: Int, error: Throwable) = Unit
     }
 
     private class Slot(val index: Int, val body: String, var chapter: TextChapter?)
@@ -150,7 +156,15 @@ class ReaderContentController(
         relayoutJob = scope.launch {
             try {
                 for (slot in slots) {
-                    val laid = typesetChapter(slot.index, slot.body) ?: continue
+                    currentCoroutineContext().ensureActive()
+                    val laid = try {
+                        typesetChapter(slot.index, slot.body)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Throwable) {
+                        if (slot.index == chapterIndex) listener.onContentError(slot.index, error)
+                        continue
+                    } ?: continue
                     if (version != environmentVersion) return@launch
                     slot.chapter = laid
                     notifySlotChanged(slot.index)
@@ -369,6 +383,7 @@ class ReaderContentController(
                 // while the chapter was loading), so a stale spec never reaches a slot.
                 var laid: TextChapter?
                 do {
+                    currentCoroutineContext().ensureActive()
                     val version = environmentVersion
                     laid = typesetChapter(index, body)
                 } while (version != environmentVersion)
@@ -380,6 +395,10 @@ class ReaderContentController(
                     chapterIndex + 1 -> nextSlot = slot
                 }
                 notifySlotChanged(index)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                if (index == chapterIndex) listener.onContentError(index, error)
             } finally {
                 loadingIndices.remove(index)
             }
@@ -390,18 +409,46 @@ class ReaderContentController(
         val typesetter = typesetter ?: return null
         val title = chapters.getOrNull(index)?.title.orEmpty()
         return layoutMutex.withLock {
-            val epubLayout = layoutBundles[index]
-                ?: runCatching { layoutLoader(index) }.getOrNull()?.also { layoutBundles[index] = it }
-            withContext(Dispatchers.Default) {
-                typesetter.typeset(
-                    chapterIndex = index,
-                    title = title,
-                    body = body,
-                    inlineImages = inlineImagesByChapter[index].orEmpty(),
-                    inlineMarkers = inlineMarkersByChapter[index].orEmpty(),
-                    epubLayout = epubLayout
-                )
+            val epubLayout = layoutBundles[index] ?: try {
+                layoutLoader(index)?.also { layoutBundles[index] = it }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                null
             }
+            val result = withContext(Dispatchers.Default) {
+                val context = currentCoroutineContext()
+                val cancellationCheck = { context.ensureActive() }
+                try {
+                    typesetter.typeset(
+                        chapterIndex = index,
+                        title = title,
+                        body = body,
+                        inlineImages = inlineImagesByChapter[index].orEmpty(),
+                        inlineMarkers = inlineMarkersByChapter[index].orEmpty(),
+                        epubLayout = epubLayout,
+                        cancellationCheck = cancellationCheck
+                    ) to false
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (nativeError: Throwable) {
+                    if (epubLayout == null) throw nativeError
+                    // Native-layout support is best effort per chapter. A malformed/unsupported
+                    // style must never strand the reader; immediately fall back to the stable text
+                    // path and forget this bundle for the rest of the session.
+                    typesetter.typeset(
+                        chapterIndex = index,
+                        title = title,
+                        body = body,
+                        inlineImages = inlineImagesByChapter[index].orEmpty(),
+                        inlineMarkers = inlineMarkersByChapter[index].orEmpty(),
+                        epubLayout = null,
+                        cancellationCheck = cancellationCheck
+                    ) to true
+                }
+            }
+            if (result.second) layoutBundles.remove(index)
+            result.first
         }
     }
 

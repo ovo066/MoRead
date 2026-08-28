@@ -11,18 +11,14 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.exclude
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -30,9 +26,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.Colorize
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Stop
@@ -546,75 +540,23 @@ internal fun AnnotationDiscussionSheet(
             }
         }
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 8.dp, bottom = 14.dp)
-                // 键盘弹出时导航栏内边距归零，避免 ime + navigationBars 双重叠加出空隙
-                .windowInsetsPadding(WindowInsets.navigationBars.exclude(WindowInsets.ime)),
-            verticalAlignment = Alignment.Bottom
-        ) {
-            Surface(
-                shape = RoundedCornerShape(21.dp),
-                color = palette.glass,
-                contentColor = palette.onBackground,
-                border = BorderStroke(1.dp, palette.glassBorder),
-                modifier = Modifier.weight(1f)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.Bottom,
-                    modifier = Modifier.padding(start = 14.dp, end = 5.dp, top = 5.dp, bottom = 5.dp)
-                ) {
-                    BasicTextField(
-                        value = input,
-                        onValueChange = { input = it },
-                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = palette.onBackground),
-                        cursorBrush = androidx.compose.ui.graphics.SolidColor(palette.accent),
-                        maxLines = 4,
-                        decorationBox = { inner ->
-                            Box(modifier = Modifier.padding(vertical = 7.dp)) {
-                                if (input.isEmpty()) {
-                                    Text(
-                                        text = if (respondTarget != null) {
-                                            "说点什么，TA 会回应…"
-                                        } else {
-                                            "写下你的想法…"
-                                        },
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = palette.muted
-                                    )
-                                }
-                                inner()
-                            }
-                        },
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(end = 6.dp)
-                    )
-                    val canSend = input.isNotBlank() && annotations.isNotEmpty() && streaming == null
-                    Surface(
-                        onClick = {
-                            val target = annotations.firstOrNull { it.personaId == null } ?: annotations.first()
-                            onSend(target, input.trim(), respondTarget)
-                            input = ""
-                        },
-                        enabled = canSend,
-                        shape = CircleShape,
-                        color = if (canSend) palette.accent else palette.glass,
-                        contentColor = if (canSend) palette.background else palette.muted,
-                        modifier = Modifier.size(30.dp)
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                Icons.AutoMirrored.Outlined.Send,
-                                contentDescription = "发送",
-                                modifier = Modifier.size(15.dp)
-                            )
-                        }
-                    }
-                }
-            }
-        }
+        val canSend = input.isNotBlank() && annotations.isNotEmpty() && streaming == null
+        ReaderComposerBar(
+            input = input,
+            onInputChange = { input = it },
+            placeholder = if (respondTarget != null) "说点什么，TA 会回应…" else "写下你的想法…",
+            canSend = canSend,
+            isStreaming = streaming != null,
+            palette = palette,
+            onSend = {
+                val target = annotations.firstOrNull { it.personaId == null } ?: annotations.first()
+                onSend(target, input.trim(), respondTarget)
+                input = ""
+            },
+            onStop = onCancelStreaming,
+            maxLines = 4,
+            modifier = Modifier.padding(top = 8.dp, bottom = 10.dp)
+        )
     }
 }
 

@@ -1,0 +1,97 @@
+{
+    "fixture": "07-footnote",
+    "bodyLength": 44,
+    "pages": [
+        {
+            "index": 0,
+            "chapterPosition": 0,
+            "charLength": 43,
+            "height": 64.068184,
+            "backgroundColorArgb": -329486,
+            "backgroundImagePath": null,
+            "immersive": false,
+            "hideHeader": false,
+            "decorations": [
+                {
+                    "kind": "block",
+                    "left": 0.0,
+                    "top": 45.818184,
+                    "right": 240.0,
+                    "bottom": 73.428185,
+                    "backgroundColorArgb": null,
+                    "backgroundImagePath": null,
+                    "backgroundSizeMode": "AUTO",
+                    "backgroundSize": [
+                        0.0,
+                        0.0
+                    ],
+                    "backgroundRepeat": [
+                        true,
+                        true
+                    ],
+                    "backgroundPosition": [
+                        0.0,
+                        0.0
+                    ],
+                    "borderWidths": [
+                        1.25,
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "borderColors": [
+                        -16777216,
+                        null,
+                        null,
+                        null
+                    ],
+                    "radii": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "shadowCount": 0,
+                    "edges": [
+                        true,
+                        true,
+                        true,
+                        true
+                    ]
+                }
+            ],
+            "lines": [
+                {
+                    "chapterPosition": 0,
+                    "charLength": 23,
+                    "lineTop": 0.0,
+                    "lineBottom": 24.0,
+                    "startX": 40.0,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [
+                        {
+                            "path": "fixture://OEBPS/Images/note.png",
+                            "left": 160.0,
+                            "top": 0.0,
+                            "width": 20.0,
+                            "height": 20.0
+                        }
+                    ],
+                    "decorations": []
+                },
+                {
+                    "chapterPosition": 24,
+                    "charLength": 20,
+                    "lineTop": 47.068184,
+                    "lineBottom": 64.068184,
+                    "startX": 0.0,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                }
+            ]
+        }
+    ]
+}

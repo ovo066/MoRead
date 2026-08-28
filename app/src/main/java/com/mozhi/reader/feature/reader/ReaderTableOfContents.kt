@@ -10,6 +10,7 @@ internal data class ReaderTocItem(
     val depth: Int,
     val parentOrderIndex: Int?,
     val chapterIndex: Int?,
+    val href: String,
     val hasChildren: Boolean
 )
 
@@ -25,6 +26,7 @@ internal fun buildReaderTocItems(
             depth = entry.depth,
             parentOrderIndex = entry.parentOrderIndex,
             chapterIndex = entry.chapterIndex,
+            href = entry.href,
             hasChildren = entry.hasChildren
         )
     }
@@ -37,6 +39,7 @@ internal fun buildReaderTocItems(
             depth = 0,
             parentOrderIndex = null,
             chapterIndex = chapter.chapterIndex,
+            href = chapter.href,
             hasChildren = false
         )
     }

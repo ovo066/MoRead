@@ -4,6 +4,7 @@ import com.mozhi.reader.core.library.EpubComputedStyle
 import com.mozhi.reader.core.library.EpubBoxShadow
 import com.mozhi.reader.core.library.EpubFloat
 import com.mozhi.reader.core.library.EpubFontFace
+import com.mozhi.reader.core.library.EpubLayoutMode
 import com.mozhi.reader.core.library.EpubResourcePath
 import com.mozhi.reader.core.library.EpubTextAlign
 import com.mozhi.reader.core.library.EpubVerticalAlign
@@ -15,17 +16,41 @@ internal data class EpubStylesheetSource(
     val css: String
 )
 
-internal class EpubCssStylesheetSet private constructor(
+internal class EpubLegacyStyleBridge private constructor(
     private val rules: List<CssRule>,
     val fontFaces: List<EpubFontFace>,
     val unsupportedProperties: Set<String>
 ) {
     private val styleCache = IdentityHashMap<Element, EpubComputedStyle>()
+    private val rulesById = HashMap<String, MutableList<CssRule>>()
+    private val rulesByClass = HashMap<String, MutableList<CssRule>>()
+    private val rulesByTag = HashMap<String, MutableList<CssRule>>()
+    private val universalRules = ArrayList<CssRule>()
+
+    init {
+        // Browser engines do not test every selector against every DOM node. Index each rule by
+        // its right-most simple selector; fine-layout EPUBs often have thousands of CSS rules and
+        // this turns the import hot path from nodes × all-rules into nodes × plausible-rules.
+        rules.forEach { rule ->
+            val target = rule.selector.parts.last()
+            when {
+                target.id != null -> rulesById.getOrPut(target.id) { ArrayList() } += rule
+                target.classes.isNotEmpty() -> {
+                    rulesByClass.getOrPut(target.classes.first()) { ArrayList() } += rule
+                }
+                target.tag != null -> rulesByTag.getOrPut(target.tag) { ArrayList() } += rule
+                else -> universalRules += rule
+            }
+        }
+    }
+
+    fun newDocumentScope(): EpubLegacyStyleBridge =
+        EpubLegacyStyleBridge(rules, fontFaces, unsupportedProperties)
 
     fun styleFor(element: Element): EpubComputedStyle = styleCache[element] ?: run {
         val inherited = element.parent()?.let(::styleFor) ?: EpubComputedStyle()
         val winners = LinkedHashMap<String, CascadeValue>()
-        rules.forEach { rule ->
+        candidateRules(element).forEach { rule ->
             if (!rule.selector.matches(element)) return@forEach
             rule.declarations.forEach { (property, declaration) ->
                 val candidate = CascadeValue(
@@ -53,6 +78,13 @@ internal class EpubCssStylesheetSet private constructor(
         val resolved = resolveStyle(element, inherited, winners)
         styleCache[element] = resolved
         resolved
+    }
+
+    private fun candidateRules(element: Element): Sequence<CssRule> = sequence {
+        element.id().takeIf(String::isNotEmpty)?.let { id -> rulesById[id]?.let { yieldAll(it) } }
+        element.classNames().forEach { name -> rulesByClass[name]?.let { yieldAll(it) } }
+        rulesByTag[element.normalName()]?.let { yieldAll(it) }
+        yieldAll(universalRules)
     }
 
     private fun resolveStyle(
@@ -85,8 +117,11 @@ internal class EpubCssStylesheetSet private constructor(
         val borderColors = List(4) { side ->
             borderSideColor(values, side) ?: border?.firstColorArgb()
         }
-        val borderWidth = borderWidths.filterNotNull().maxOrNull()
-        val borderColor = borderColors.firstNotNullOfOrNull { it }
+        // 通用 border 只能来自真正的 border shorthand。过去取四边最大值会把
+        // `border-left: 5px` 错扩成四边框，正是版权说明被画成整圈方框的原因。
+        val borderWidth = border?.firstLengthEm()
+        val borderColor = border?.firstColorArgb()
+        val cornerRadii = values["border-radius"]?.value?.cornerRadiiEm()
         return EpubComputedStyle(
             fontFamily = values["font-family"]?.value?.firstFontFamily() ?: inherited.fontFamily,
             fontSizeEm = fontSize ?: inherited.fontSizeEm,
@@ -125,7 +160,15 @@ internal class EpubCssStylesheetSet private constructor(
             borderRightColorArgb = borderColors[1],
             borderBottomColorArgb = borderColors[2],
             borderLeftColorArgb = borderColors[3],
-            borderRadiusEm = values["border-radius"]?.value?.firstLengthEm(),
+            borderRadiusEm = cornerRadii?.firstOrNull(),
+            borderTopLeftRadiusEm = values["border-top-left-radius"]?.value?.firstLengthEm()
+                ?: cornerRadii?.getOrNull(0),
+            borderTopRightRadiusEm = values["border-top-right-radius"]?.value?.firstLengthEm()
+                ?: cornerRadii?.getOrNull(1),
+            borderBottomRightRadiusEm = values["border-bottom-right-radius"]?.value?.firstLengthEm()
+                ?: cornerRadii?.getOrNull(2),
+            borderBottomLeftRadiusEm = values["border-bottom-left-radius"]?.value?.firstLengthEm()
+                ?: cornerRadii?.getOrNull(3),
             boxShadows = values["box-shadow"]?.value?.toBoxShadows().orEmpty(),
             widthEm = values["width"]?.value?.absoluteLengthEm(),
             widthFraction = values["width"]?.value?.percentageFraction(),
@@ -134,6 +177,7 @@ internal class EpubCssStylesheetSet private constructor(
             heightEm = values["height"]?.value?.absoluteLengthEm(),
             heightViewportFraction = values["height"]?.value?.viewportHeightFraction(),
             maxHeightEm = values["max-height"]?.value?.absoluteLengthEm(),
+            maxHeightFraction = values["max-height"]?.value?.percentageFraction(),
             maxHeightViewportFraction = values["max-height"]?.value?.viewportHeightFraction(),
             verticalAlign = values["vertical-align"]?.value?.toVerticalAlign()
                 ?: when (tag) {
@@ -142,13 +186,22 @@ internal class EpubCssStylesheetSet private constructor(
                     else -> inherited.verticalAlign
                 },
             float = values["float"]?.value?.toFloatSide() ?: EpubFloat.NONE,
+            layoutMode = values["display"]?.value?.toLayoutMode(
+                flexDirection = values["flex-direction"]?.value
+            ) ?: EpubLayoutMode.FLOW,
+            layoutColumns = values["grid-template-columns"]?.value?.gridColumnCount(),
+            layoutGapEm = (values["gap"] ?: values["column-gap"])?.value?.firstLengthEm(),
+            blockDisplay = values["display"]?.value?.trim()?.lowercase() in BLOCK_DISPLAY_VALUES,
             centerBlock = values["margin-left"]?.value?.trim()?.equals("auto", true) == true &&
                 values["margin-right"]?.value?.trim()?.equals("auto", true) == true ||
                 values["margin"]?.value?.hasAutoHorizontalMargins() == true,
             opacity = values["opacity"]?.value?.toFloatOrNull()?.coerceIn(0f, 1f) ?: inherited.opacity,
-            breakBefore = values.breakValue("break-before", "page-break-before") == "always",
-            breakAfter = values.breakValue("break-after", "page-break-after") == "always",
+            breakBefore = values.breakValue("break-before", "page-break-before") in FORCE_BREAK_VALUES,
+            breakAfter = values.breakValue("break-after", "page-break-after") in FORCE_BREAK_VALUES,
+            avoidBreakAfter = values.breakValue("break-after", "page-break-after") == "avoid",
             avoidBreakInside = values.breakValue("break-inside", "page-break-inside") == "avoid",
+            orphans = values["orphans"]?.value?.toIntOrNull()?.coerceIn(1, 10) ?: inherited.orphans,
+            widows = values["widows"]?.value?.toIntOrNull()?.coerceIn(1, 10) ?: inherited.widows,
             hidden = inherited.hidden || values["display"]?.value?.trim()?.equals("none", true) == true
         )
     }
@@ -184,7 +237,7 @@ internal class EpubCssStylesheetSet private constructor(
     }
 
     companion object {
-        fun parse(sources: List<EpubStylesheetSource>): EpubCssStylesheetSet {
+        fun parse(sources: List<EpubStylesheetSource>): EpubLegacyStyleBridge {
             val rules = ArrayList<CssRule>()
             val fonts = ArrayList<EpubFontFace>()
             val unsupported = linkedSetOf<String>()
@@ -223,7 +276,7 @@ internal class EpubCssStylesheetSet private constructor(
                     }
                 }
             }
-            return EpubCssStylesheetSet(rules, fonts.distinct(), unsupported)
+            return EpubLegacyStyleBridge(rules, fonts.distinct(), unsupported)
         }
 
         private const val INLINE_SPECIFICITY = 1_000
@@ -243,11 +296,16 @@ internal class EpubCssStylesheetSet private constructor(
             "border-bottom", "border-left", "border-width", "border-color", "border-radius",
             "border-top-width", "border-right-width", "border-bottom-width", "border-left-width",
             "border-top-color", "border-right-color", "border-bottom-color", "border-left-color",
-            "box-shadow", "width", "max-width", "height", "max-height", "float", "opacity", "display",
+            "border-top-left-radius", "border-top-right-radius", "border-bottom-right-radius",
+            "border-bottom-left-radius", "box-shadow", "width", "max-width", "height", "max-height",
+            "float", "opacity", "display", "flex-direction", "flex-wrap", "justify-content",
+            "align-items", "gap", "row-gap", "column-gap", "grid-template-columns",
             "break-before", "break-after", "break-inside", "page-break-before", "page-break-after",
-            "page-break-inside"
+            "page-break-inside", "orphans", "widows", "position"
         )
         private val BORDER_SIDES = listOf("top", "right", "bottom", "left")
+        private val FORCE_BREAK_VALUES = setOf("always", "page", "left", "right")
+        private val BLOCK_DISPLAY_VALUES = setOf("block", "flow-root", "list-item", "table")
     }
 }
 
@@ -276,20 +334,24 @@ private data class CascadeValue(
 
 private data class CssSelector(
     val parts: List<SimpleSelector>,
+    val combinators: List<CssCombinator>,
     val specificity: Int
 ) {
     fun matches(element: Element): Boolean {
         var candidate: Element? = element
-        for (index in parts.indices.reversed()) {
-            val part = parts[index]
-            if (index == parts.lastIndex) {
-                if (candidate == null || !part.matches(candidate)) return false
-                candidate = candidate.parent()
-            } else {
-                while (candidate != null && !part.matches(candidate)) candidate = candidate.parent()
-                if (candidate == null) return false
-                candidate = candidate.parent()
+        if (!parts.last().matches(element)) return false
+        for (rightIndex in parts.lastIndex downTo 1) {
+            val left = parts[rightIndex - 1]
+            candidate = when (combinators[rightIndex - 1]) {
+                CssCombinator.DESCENDANT -> candidate?.parent()?.let { parent ->
+                    var ancestor: Element? = parent
+                    while (ancestor != null && !left.matches(ancestor)) ancestor = ancestor.parent()
+                    ancestor
+                }
+                CssCombinator.CHILD -> candidate?.parent()?.takeIf(left::matches)
+                CssCombinator.ADJACENT -> candidate?.previousElementSibling()?.takeIf(left::matches)
             }
+            if (candidate == null) return false
         }
         return true
     }
@@ -297,15 +359,38 @@ private data class CssSelector(
     companion object {
         fun parse(raw: String): CssSelector? {
             val value = raw.trim()
-            if (value.isEmpty() || value.startsWith('@') || value.any { it in ">+~[" } || ':' in value) {
+            if (value.isEmpty() || value.startsWith('@') || value.any { it in "~[" } || ':' in value) {
                 return null
             }
-            val parts = value.split(Regex("\\s+")).mapNotNull(SimpleSelector::parse)
-            if (parts.isEmpty()) return null
-            return CssSelector(parts, parts.sumOf(SimpleSelector::specificity))
+            val tokens = value
+                .replace(">", " > ")
+                .replace("+", " + ")
+                .split(Regex("\\s+"))
+                .filter(String::isNotEmpty)
+            val parts = ArrayList<SimpleSelector>()
+            val combinators = ArrayList<CssCombinator>()
+            var pending = CssCombinator.DESCENDANT
+            tokens.forEach { token ->
+                when (token) {
+                    ">" -> pending = CssCombinator.CHILD
+                    "+" -> pending = CssCombinator.ADJACENT
+                    else -> {
+                        val part = SimpleSelector.parse(token) ?: return null
+                        if (parts.isNotEmpty()) combinators += pending
+                        parts += part
+                        pending = CssCombinator.DESCENDANT
+                    }
+                }
+            }
+            if (parts.isEmpty() || combinators.size != parts.size - 1 || tokens.last() in setOf(">", "+")) {
+                return null
+            }
+            return CssSelector(parts, combinators, parts.sumOf(SimpleSelector::specificity))
         }
     }
 }
+
+private enum class CssCombinator { DESCENDANT, CHILD, ADJACENT }
 
 private data class SimpleSelector(
     val tag: String?,
@@ -453,6 +538,25 @@ private fun String.toFloatSide(): EpubFloat? = when (trim().lowercase()) {
     else -> null
 }
 
+private fun String.toLayoutMode(flexDirection: String?): EpubLayoutMode? = when (trim().lowercase()) {
+    "flex", "inline-flex" -> if (flexDirection?.contains("column", true) == true) {
+        EpubLayoutMode.FLOW
+    } else {
+        EpubLayoutMode.FLEX
+    }
+    "grid", "inline-grid" -> EpubLayoutMode.GRID
+    else -> null
+}
+
+private fun String.gridColumnCount(): Int? {
+    Regex("repeat\\(\\s*(\\d+)", RegexOption.IGNORE_CASE).find(this)
+        ?.groupValues?.getOrNull(1)?.toIntOrNull()?.let { return it.coerceIn(1, 12) }
+    val tracks = trim().split(Regex("\\s+")).filter { token ->
+        token.isNotBlank() && token != "/" && !token.startsWith("[")
+    }
+    return tracks.size.takeIf { it > 0 }?.coerceIn(1, 12)
+}
+
 private fun String.hasAutoHorizontalMargins(): Boolean {
     val values = trim().split(Regex("\\s+")).filter(String::isNotEmpty)
     return when (values.size) {
@@ -479,6 +583,19 @@ private fun String.boxSide(side: Int): String? {
 }
 
 private fun String.firstLengthEm(): Float? = split(Regex("\\s+")).firstNotNullOfOrNull { it.toEm() }
+
+/** CSS border-radius 四角顺序：top-left, top-right, bottom-right, bottom-left。 */
+private fun String.cornerRadiiEm(): List<Float>? {
+    val horizontal = substringBefore('/').trim().split(Regex("\\s+"))
+        .mapNotNull(String::toEm)
+    if (horizontal.isEmpty()) return null
+    return when (horizontal.size) {
+        1 -> List(4) { horizontal[0] }
+        2 -> listOf(horizontal[0], horizontal[1], horizontal[0], horizontal[1])
+        3 -> listOf(horizontal[0], horizontal[1], horizontal[2], horizontal[1])
+        else -> horizontal.take(4)
+    }
+}
 
 private fun String.firstColorArgb(): Int? = toColorArgb()
     ?: COLOR_TOKEN.findAll(this).firstNotNullOfOrNull { it.value.toColorArgb() }

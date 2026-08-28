@@ -50,37 +50,45 @@ class BookMediaStore @Inject constructor(
         staging.deleteRecursively()
         staging.mkdirs()
         val stored = ArrayList<StoredImage>(images.size)
+        val assetsBySource = HashMap<String, StoredAsset>()
         try {
             images.forEachIndexed { index, input ->
                 if (input.bytes.isEmpty() || input.bytes.size > MAX_IMAGE_BYTES) return@forEachIndexed
-                val sourceExtension = imageExtension(input.sourceName, input.bytes)
-                    ?: return@forEachIndexed
-                val extension = if (sourceExtension == "svg") "png" else sourceExtension
-                val fileName = "ch-${input.chapterIndex.toString().padStart(5, '0')}-" +
-                    "${index.toString().padStart(4, '0')}.$extension"
-                val output = File(staging, fileName)
-                val dimensions = if (sourceExtension == "svg") {
-                    renderSvgToPng(input.bytes, output) ?: return@forEachIndexed
+                val existing = assetsBySource[input.sourceName]
+                val asset = if (existing != null) {
+                    existing
                 } else {
-                    output.writeBytes(input.bytes)
-                    val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                    val decodedBounds = runCatching {
-                        BitmapFactory.decodeFile(output.absolutePath, options)
-                        true
-                    }.getOrDefault(false)
-                    if (!decodedBounds || options.outWidth <= 0 || options.outHeight <= 0) {
-                        output.delete()
-                        return@forEachIndexed
+                    val sourceExtension = imageExtension(input.sourceName, input.bytes)
+                        ?: return@forEachIndexed
+                    val extension = if (sourceExtension == "svg") "png" else sourceExtension
+                    val fileName = "ch-${input.chapterIndex.toString().padStart(5, '0')}-" +
+                        "${index.toString().padStart(4, '0')}.$extension"
+                    val output = File(staging, fileName)
+                    val dimensions = if (sourceExtension == "svg") {
+                        renderSvgToPng(input.bytes, output) ?: return@forEachIndexed
+                    } else {
+                        output.writeBytes(input.bytes)
+                        val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                        val decodedBounds = runCatching {
+                            BitmapFactory.decodeFile(output.absolutePath, options)
+                            true
+                        }.getOrDefault(false)
+                        if (!decodedBounds || options.outWidth <= 0 || options.outHeight <= 0) {
+                            output.delete()
+                            return@forEachIndexed
+                        }
+                        options.outWidth to options.outHeight
                     }
-                    options.outWidth to options.outHeight
+                    StoredAsset(fileName, dimensions.first, dimensions.second).also { value ->
+                        assetsBySource[input.sourceName] = value
+                    }
                 }
-                val (pixelWidth, pixelHeight) = dimensions
                 stored += StoredImage(
                     chapterIndex = input.chapterIndex,
                     charOffset = input.charOffset,
-                    fileName = fileName,
-                    pixelWidth = pixelWidth,
-                    pixelHeight = pixelHeight,
+                    fileName = asset.fileName,
+                    pixelWidth = asset.pixelWidth,
+                    pixelHeight = asset.pixelHeight,
                     altText = input.altText.take(MAX_ALT_CHARS)
                 )
             }
@@ -181,6 +189,12 @@ class BookMediaStore @Inject constructor(
 
     private fun ByteArray.startsWith(prefix: ByteArray): Boolean =
         size >= prefix.size && indices.take(prefix.size).all { this[it] == prefix[it] }
+
+    private data class StoredAsset(
+        val fileName: String,
+        val pixelWidth: Int,
+        val pixelHeight: Int
+    )
 
     @Serializable
     private data class StoredImage(

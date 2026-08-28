@@ -156,7 +156,7 @@ internal fun buildCompanionChatEntries(
         }
         streamingText
             ?.takeIf(String::isNotBlank)
-            ?.takeUnless { text -> timeline.endsWithAssistantText(text) }
+            ?.takeUnless { text -> timeline.hasCommittedAssistantCovering(text) }
             ?.let { text ->
                 // 流式期间只把「已经换行落定」的段落切成稳定气泡，最后一段跟着 token 长；
                 // 否则每来一个字都会重排整条消息的气泡结构。
@@ -217,14 +217,29 @@ private fun List<ChatEntry>.withBubbleGrouping(): List<ChatEntry> {
     return result
 }
 
-/** 数据库 Flow 可能先于 RoundCommitted 抵达 UI；此时隐藏已被历史接管的流式副本。 */
-private fun List<CompanionTimelineItem>.endsWithAssistantText(text: String): Boolean =
-    asReversed()
+/**
+ * 数据库 Flow 可能先于 RoundCommitted 抵达 UI。尤其在多气泡模式下，Room 已经给出完整
+ * 回复时，节拍器发布的流式快照还可能少最后几个字；若只判断完全相等，就会短暂画出一份
+ * 完整历史气泡，再画一份「完整前文 + 被截断尾段」的流式副本。
+ *
+ * 只检查时间线最后一条可见消息：若用户已经发了下一问，它会挡在旧 AI 回复后面，不会把
+ * 新一轮恰好相同的开头误判成旧回复。统一换行后，已落库正文等于或覆盖当前快照都说明历史
+ * 已经接管显示，应隐藏流式副本。
+ */
+private fun List<CompanionTimelineItem>.hasCommittedAssistantCovering(text: String): Boolean {
+    val latestMessage = asReversed()
         .filterIsInstance<CompanionTimelineItem.Bubble>()
         .firstOrNull()
         ?.message
-        ?.let { it.role == "assistant" && it.content == text }
-        ?: false
+        ?: return false
+    if (latestMessage.role != "assistant") return false
+
+    val snapshot = text.normalizedLineEndings()
+    val committed = latestMessage.content.normalizedLineEndings()
+    return committed == snapshot || committed.startsWith(snapshot)
+}
+
+private fun String.normalizedLineEndings(): String = replace("\r\n", "\n").replace('\r', '\n')
 
 /** 正向列表的贴底判定容差；「回到底部」浮钮与建议条都以它为界。 */
 internal const val CHAT_BOTTOM_SLACK_PX = 32

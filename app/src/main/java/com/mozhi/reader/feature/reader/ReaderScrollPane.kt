@@ -48,6 +48,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.mozhi.reader.ai.prompt.SelectionAiAction
@@ -56,6 +57,7 @@ import com.mozhi.reader.feature.reader.engine.ChapterStrip
 import com.mozhi.reader.feature.reader.engine.TransientHighlightSpan
 import com.mozhi.reader.feature.reader.engine.ReaderAnnotationMark
 import com.mozhi.reader.feature.reader.engine.ReaderIllustrationMark
+import com.mozhi.reader.feature.reader.engine.ReaderPageLink
 import com.mozhi.reader.feature.reader.engine.ReaderContentController
 import com.mozhi.reader.feature.reader.engine.RenderPage
 import com.mozhi.reader.feature.reader.engine.SelectionRect
@@ -64,6 +66,7 @@ import com.mozhi.reader.feature.reader.engine.annotationGeometry
 import com.mozhi.reader.feature.reader.engine.dragSelectionHandle
 import com.mozhi.reader.feature.reader.engine.hitTextPos
 import com.mozhi.reader.feature.reader.engine.inlineMarkerLayout
+import com.mozhi.reader.feature.reader.engine.linkAt
 import com.mozhi.reader.feature.reader.engine.selectionBodyRange
 import com.mozhi.reader.feature.reader.engine.selectionRects
 import com.mozhi.reader.feature.reader.engine.textPosAtBodyOffset
@@ -104,6 +107,7 @@ fun ReaderScrollPane(
     onAnnotationAction: (selection: String, range: IntRange, anchorTopPx: Int) -> Unit,
     onAnnotationClick: (annotationIds: List<Long>) -> Unit,
     onIllustrationClick: (illustrationIds: List<Long>) -> Unit = {},
+    onLinkClick: (ReaderPageLink) -> Unit = {},
     onTtsAction: (selection: String) -> Unit,
     onImageAction: (selection: String, context: String, range: IntRange) -> Unit,
     onEditText: (selection: String, range: IntRange) -> Unit,
@@ -200,6 +204,7 @@ fun ReaderScrollPane(
         font = settings.font,
         customFontPath = settings.customFontPath,
         lineHeight = settings.lineHeight,
+        publisherStyleMode = settings.publisherStyleMode,
         pageMarginsHash = listOf(
             settings.pageMarginLeft,
             settings.pageMarginRight,
@@ -339,9 +344,13 @@ fun ReaderScrollPane(
                     sourceCenter = { selection.magnifierCenter ?: Offset.Unspecified },
                     magnifierCenter = {
                         selection.magnifierCenter?.let { center ->
-                            Offset(center.x, center.y - 72.dp.toPx())
+                            Offset(center.x, center.y - 94.dp.toPx())
                         } ?: Offset.Unspecified
-                    }
+                    },
+                    size = DpSize(168.dp, 76.dp),
+                    cornerRadius = 18.dp,
+                    elevation = 8.dp,
+                    zoom = 2f
                 )
                 .pointerInput(enabled, holder, selection) {
                     if (!enabled) return@pointerInput
@@ -441,6 +450,11 @@ fun ReaderScrollPane(
                             onAnnotationClick(annotationIds)
                             return@awaitEachGesture
                         }
+                        holder.linkAt(upPosition)?.let { link ->
+                            selection.clear()
+                            onLinkClick(link)
+                            return@awaitEachGesture
+                        }
                         val fraction = upPosition.x / size.width.coerceAtLeast(1)
                         val pageStep = holder.viewportHeight * PAGE_STEP_FRACTION
                         when {
@@ -518,6 +532,7 @@ private data class ReaderScrollEnvironmentKey(
     val font: com.mozhi.reader.core.datastore.ReaderFont,
     val customFontPath: String?,
     val lineHeight: Float,
+    val publisherStyleMode: com.mozhi.reader.core.datastore.PublisherStyleMode,
     val pageMarginsHash: Int,
     val advancedTypographyHash: Int,
     val syntaxHighlightEnabled: Boolean,
@@ -826,6 +841,11 @@ private class ScrollPaneHolder(private val controller: ReaderContentController) 
         val strip = block.strip ?: return null
         val top = strip.pageTops.getOrNull(pageIndex) ?: return null
         return Offset(style.paddingLeft, contentTop + block.originY + top)
+    }
+
+    fun linkAt(position: Offset): ReaderPageLink? {
+        val hit = resolve(position) ?: return null
+        return hit.page.linkAt(hit.local.x, hit.local.y, hit.chapterIndex)
     }
 
     fun annotationIdsAt(position: Offset): List<Long> {

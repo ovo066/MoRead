@@ -22,10 +22,12 @@ import com.mozhi.reader.core.datastore.ReaderFontImporter
 import com.mozhi.reader.core.datastore.ReaderImageImporter
 import com.mozhi.reader.core.datastore.ReaderSettings
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
+import com.mozhi.reader.core.datastore.PublisherStyleMode
 import com.mozhi.reader.core.datastore.ReaderTextReplacementRule
 import com.mozhi.reader.core.datastore.ReaderThemeSlot
 import com.mozhi.reader.core.datastore.validationError
 import com.mozhi.reader.core.library.EditableChapterDraft
+import com.mozhi.reader.core.library.EpubResourcePath
 import com.mozhi.reader.core.datastore.ReaderTheme
 import com.mozhi.reader.core.library.AnnotationRepository
 import com.mozhi.reader.core.library.BookMediaStore
@@ -37,8 +39,11 @@ import com.mozhi.reader.feature.importer.TxtTocRuleLoader
 import com.mozhi.reader.feature.reader.engine.ChapterMeta
 import com.mozhi.reader.feature.reader.engine.InlineImageSource
 import com.mozhi.reader.feature.reader.engine.ReaderContentController
+import com.mozhi.reader.feature.reader.engine.ReaderPageLink
 import com.mozhi.reader.feature.reader.engine.RenderPage
 import dagger.hilt.android.lifecycle.HiltViewModel
+import java.net.URLDecoder
+import java.nio.charset.StandardCharsets
 import java.time.LocalDate
 import javax.inject.Inject
 import kotlinx.coroutines.Job
@@ -84,6 +89,17 @@ data class ReaderUiState(
 data class ReadingDayStat(
     val epochDay: Long,
     val durationMs: Long
+)
+
+data class EpubLinkPreview(
+    val sourceChapterIndex: Int,
+    val href: String,
+    val label: String,
+    val targetChapterIndex: Int?,
+    val targetCharOffset: Int,
+    val targetTitle: String,
+    val content: String,
+    val externalUrl: String? = null
 )
 
 data class ReaderStatistics(
@@ -244,6 +260,10 @@ class ReaderViewModel @Inject constructor(
             contentController.setChapters(
                 chapters.map { ChapterMeta(it.chapterIndex, it.title, it.charCount) }
             )
+            // Install image anchors before opening the three-chapter window. Opening first laid
+            // every visible chapter as text and immediately discarded that work when images
+            // arrived, which was the main source of the post-import stutter on illustrated EPUBs.
+            contentController.setInlineImages(imagesAsync.await())
             mutableState.update {
                 it.copy(
                     book = resolved,
@@ -258,7 +278,6 @@ class ReaderViewModel @Inject constructor(
                 chapterIndex = resolved.lastReadChapterIndex,
                 charOffset = resolved.lastReadCharOffset
             )
-            contentController.setInlineImages(imagesAsync.await())
             if (resolved.sourceType == BookSourceType.EPUB ||
                 resolved.textVersion < LibraryRepository.CURRENT_TEXT_VERSION
             ) {
@@ -269,12 +288,9 @@ class ReaderViewModel @Inject constructor(
                     val layoutReady = resolved.sourceType != BookSourceType.EPUB ||
                         layoutStore.hasCurrentLayout(bookId, chapterTextLengths)
                     if (resolved.textVersion >= LibraryRepository.CURRENT_TEXT_VERSION && layoutReady) {
-                        if (resolved.sourceType == BookSourceType.EPUB) {
-                            // The first layout read can race a just-finished import/repair. Even when
-                            // the sidecar is complete now, reload the visible window so a transient
-                            // plain-text fallback cannot remain on screen for the whole session.
-                            contentController.invalidateEpubLayouts()
-                        }
+                        // The sidecar is committed before an import is published. Reloading here on
+                        // every normal reader entry discarded the just-finished native layout and
+                        // typeset the three visible chapters twice.
                         return@launch
                     }
                     if (awaitMaterializedAssets(resolved.sourceType, chapterTextLengths)) {
@@ -314,7 +330,7 @@ class ReaderViewModel @Inject constructor(
         sourceType: BookSourceType,
         expectedTextLengths: List<Int>
     ): Boolean {
-        while (true) {
+        repeat(ASSET_WAIT_ATTEMPTS) {
             val book = libraryRepository.getBook(bookId) ?: return false
             val textReady = book.textVersion >= LibraryRepository.CURRENT_TEXT_VERSION
             val layoutReady = sourceType != BookSourceType.EPUB ||
@@ -322,6 +338,7 @@ class ReaderViewModel @Inject constructor(
             if (textReady && layoutReady) return true
             delay(TEXT_WAIT_INTERVAL_MS)
         }
+        return false
     }
 
     private suspend fun loadChapterBody(chapterIndex: Int): String? {
@@ -336,6 +353,15 @@ class ReaderViewModel @Inject constructor(
         // relativePosition == 0 且窗口已排版 = 当前章首页可画，正文可以露脸了。
         if (relativePosition == 0 && contentController.isReady && !mutableState.value.isContentReady) {
             mutableState.update { it.copy(isContentReady = true) }
+        }
+    }
+
+    override fun onContentError(chapterIndex: Int, error: Throwable) {
+        mutableState.update {
+            it.copy(
+                isContentReady = false,
+                errorMessage = "章节加载失败，请重试或重新导入本书"
+            )
         }
     }
 
@@ -422,6 +448,95 @@ class ReaderViewModel @Inject constructor(
 
     fun goToChapter(chapterIndex: Int) {
         contentController.jumpToChapter(chapterIndex)
+    }
+
+    /** 目录项可能指向章内 fragment，不能只跳到章节首页。 */
+    fun goToTocEntry(chapterIndex: Int, href: String) {
+        viewModelScope.launch {
+            val target = resolveEpubTarget(chapterIndex, href, chapterIndex)
+            contentController.jumpToChapter(chapterIndex, target?.offset ?: 0)
+        }
+    }
+
+    /** 点击正文脚注/标注链接时先解析并读取目标内容，是否真正跳转由用户决定。 */
+    suspend fun previewEpubLink(link: ReaderPageLink): EpubLinkPreview? {
+        if (link.href.startsWith("http://", true) || link.href.startsWith("https://", true)) {
+            return EpubLinkPreview(
+                sourceChapterIndex = link.sourceChapterIndex,
+                href = link.href,
+                label = link.label,
+                targetChapterIndex = null,
+                targetCharOffset = 0,
+                targetTitle = "外部链接",
+                content = link.href,
+                externalUrl = link.href
+            )
+        }
+        val target = resolveEpubTarget(link.sourceChapterIndex, link.href) ?: return null
+        val body = loadChapterBody(target.chapterIndex).orEmpty()
+        val start = target.offset.coerceIn(0, body.length)
+        val end = target.endOffset.coerceIn(start, body.length)
+        val previewEnd = if (end > start) end.coerceAtMost(start + LINK_PREVIEW_MAX_CHARS)
+            else (start + LINK_PREVIEW_MAX_CHARS).coerceAtMost(body.length)
+        val content = body.substring(start, previewEnd)
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .ifBlank { link.label.ifBlank { "该链接没有可预览的文字内容" } }
+        return EpubLinkPreview(
+            sourceChapterIndex = link.sourceChapterIndex,
+            href = link.href,
+            label = link.label,
+            targetChapterIndex = target.chapterIndex,
+            targetCharOffset = start,
+            targetTitle = chapterEntities.getOrNull(target.chapterIndex)?.title.orEmpty(),
+            content = content
+        )
+    }
+
+    private suspend fun resolveEpubTarget(
+        sourceChapterIndex: Int,
+        href: String,
+        hintedChapterIndex: Int? = null
+    ): EpubTarget? {
+        val raw = href.trim()
+        if (raw.isEmpty() || raw.startsWith("http://", true) || raw.startsWith("https://", true)) {
+            return null
+        }
+        val source = chapterEntities.getOrNull(sourceChapterIndex) ?: return null
+        val fragment = raw.substringAfter('#', "")
+            .substringBefore('?')
+            .takeIf(String::isNotBlank)
+            ?.let { encoded ->
+                runCatching {
+                    URLDecoder.decode(encoded.replace("+", "%2B"), StandardCharsets.UTF_8.name())
+                }.getOrDefault(encoded)
+            }
+        val targetChapterIndex = hintedChapterIndex ?: run {
+            val rawPath = raw.substringBefore('#').substringBefore('?')
+            if (rawPath.isBlank()) {
+                sourceChapterIndex
+            } else {
+                val resolved = EpubResourcePath.normalize(rawPath, source.href) ?: return null
+                val matched = EpubResourcePath.matchKnown(resolved, chapterEntities.map(ChapterEntity::href))
+                    ?: resolved
+                chapterEntities.firstOrNull {
+                    EpubResourcePath.normalize(it.href)?.equals(matched, true) == true
+                }?.chapterIndex ?: return null
+            }
+        }
+        if (fragment == null) return EpubTarget(targetChapterIndex, 0, 0)
+        val bundle = layoutStore.readChapter(bookId, targetChapterIndex)
+            ?: return EpubTarget(targetChapterIndex, 0, 0)
+        val matches = bundle.document.blocks.filter { block ->
+            block.element.id == fragment || block.ancestors.any { it.id == fragment } ||
+                block.spans.any { span -> span.elements.any { it.id == fragment } }
+        }
+        val start = matches.minOfOrNull { block ->
+            block.spans.firstOrNull { span -> span.elements.any { it.id == fragment } }?.textStart
+                ?: block.textStart
+        } ?: 0
+        val end = matches.maxOfOrNull { it.textEnd } ?: start
+        return EpubTarget(targetChapterIndex, start, end)
     }
 
     fun goToPrevChapter() {
@@ -746,6 +861,10 @@ class ReaderViewModel @Inject constructor(
         viewModelScope.launch { settingsRepository.setLineHeight(value) }
     }
 
+    fun setPublisherStyleMode(value: PublisherStyleMode) {
+        viewModelScope.launch { settingsRepository.setPublisherStyleMode(value) }
+    }
+
     fun setPageMargin(value: Float) {
         viewModelScope.launch { settingsRepository.setPageMargin(value) }
     }
@@ -829,12 +948,31 @@ class ReaderViewModel @Inject constructor(
         viewModelScope.launch { settingsRepository.saveCustomTheme(theme, slot) }
     }
 
+    fun saveBookCustomTheme(
+        theme: com.mozhi.reader.core.datastore.CustomReaderTheme,
+        slot: ReaderThemeSlot
+    ) {
+        viewModelScope.launch { settingsRepository.saveBookCustomTheme(bookId, theme, slot) }
+    }
+
     fun deleteCustomTheme(id: Long) {
         viewModelScope.launch { settingsRepository.deleteCustomTheme(id) }
     }
 
     fun setDayNightThemeAuto(enabled: Boolean) {
         viewModelScope.launch { settingsRepository.setDayNightThemeAuto(enabled) }
+    }
+
+    fun setBookThemeEnabled(enabled: Boolean) {
+        viewModelScope.launch { settingsRepository.setBookThemeEnabled(bookId, enabled) }
+    }
+
+    fun setBookTheme(value: ReaderTheme, slot: ReaderThemeSlot) {
+        viewModelScope.launch { settingsRepository.setBookTheme(bookId, value, slot) }
+    }
+
+    fun selectBookCustomTheme(id: Long, slot: ReaderThemeSlot) {
+        viewModelScope.launch { settingsRepository.selectBookCustomTheme(bookId, id, slot) }
     }
 
     fun setPageTurnAnimation(value: PageTurnAnimation) {
@@ -928,9 +1066,17 @@ class ReaderViewModel @Inject constructor(
     private companion object {
         const val PROGRESS_SAVE_DEBOUNCE_MS = 750L
         const val TEXT_WAIT_ATTEMPTS = 20
+        const val ASSET_WAIT_ATTEMPTS = 120
         const val TEXT_WAIT_INTERVAL_MS = 1500L
+        const val LINK_PREVIEW_MAX_CHARS = 360
     }
 }
+
+private data class EpubTarget(
+    val chapterIndex: Int,
+    val offset: Int,
+    val endOffset: Int
+)
 
 private data class ReaderPositionSnapshot(
     val chapterIndex: Int,

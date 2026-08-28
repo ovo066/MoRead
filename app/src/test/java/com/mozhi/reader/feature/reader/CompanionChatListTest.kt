@@ -123,6 +123,43 @@ class CompanionChatListTest {
     }
 
     @Test
+    fun `落库完整回复先到时隐藏尚未追平的多气泡快照`() {
+        val timeline = buildCompanionTimeline(
+            listOf(message(1, "user", "继续"), message(2, "assistant", "111。\n222。"))
+        )
+
+        val bubbles = entries(
+            timeline = timeline,
+            streamingText = "111。\n22",
+            isStreaming = true,
+            multiBubble = true
+        ).filterIsInstance<ChatEntry.Bubble>()
+
+        assertEquals(listOf("继续", "111。", "222。"), bubbles.map { it.part.text })
+        assertTrue(bubbles.none { it.streaming })
+    }
+
+    @Test
+    fun `下一条用户消息阻止旧回复吞掉新一轮相同开头`() {
+        val timeline = buildCompanionTimeline(
+            listOf(
+                message(1, "assistant", "好的，我继续说。"),
+                message(2, "user", "继续")
+            )
+        )
+
+        val bubbles = entries(
+            timeline = timeline,
+            streamingText = "好的",
+            isStreaming = true,
+            multiBubble = true
+        ).filterIsInstance<ChatEntry.Bubble>()
+
+        assertEquals("好的", bubbles.last().part.text)
+        assertTrue(bubbles.last().streaming)
+    }
+
+    @Test
     fun `工具状态优先于思考占位`() {
         val result = entries(isStreaming = true, toolStatus = "正在检索书中原文…")
         assertEquals("正在检索书中原文…", (result.last() as ChatEntry.Status).text)

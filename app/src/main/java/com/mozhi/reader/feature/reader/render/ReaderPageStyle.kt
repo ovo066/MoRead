@@ -3,6 +3,7 @@ package com.mozhi.reader.feature.reader.render
 import android.graphics.Typeface
 import android.os.Build
 import java.io.File
+import kotlin.math.floor
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.Density
 import com.mozhi.reader.core.datastore.ReaderFont
@@ -28,6 +29,10 @@ class ReaderPageStyle(
     val footerHeight: Float,
     val contentPaddingTop: Float,
     val contentPaddingBottom: Float,
+    /** 隐藏书内页眉时的内容起点；仍保留系统安全区与用户上边距。 */
+    val immersiveContentTop: Float,
+    /** 特殊页可用底边；始终停在系统导航安全区上方。 */
+    val immersiveContentBottom: Float,
     val headerOffset: Float,
     val footerOffset: Float,
     val contentSizePx: Float,
@@ -48,6 +53,8 @@ class ReaderPageStyle(
     val showFooter: Boolean,
     val backgroundImagePath: String?,
     val backgroundImageOpacity: Float,
+    val preferReaderBackground: Boolean,
+    val publisherStyleMode: com.mozhi.reader.core.datastore.PublisherStyleMode,
     val syntaxHighlightRules: List<ReaderSyntaxRule>,
     val titleTopSpacingLines: Float,
     val titleBottomSpacingLines: Float,
@@ -56,10 +63,12 @@ class ReaderPageStyle(
     val textJustification: Boolean,
     val letterSpacingEm: Float
 ) {
-    val contentWidth: Float = (viewWidth - paddingLeft - paddingRight).coerceAtLeast(1f)
-    val contentTop: Float = headerHeight + contentPaddingTop
-    val contentBottom: Float = viewHeight - footerHeight - contentPaddingBottom
-    val contentHeight: Float = (contentBottom - contentTop).coerceAtLeast(1f)
+    // Pagination geometry uses whole physical pixels. Fractional viewport dimensions accumulate
+    // at page boundaries and can expose a clipped half-line or let chrome overlap the last row.
+    val contentWidth: Float = floor(viewWidth - paddingLeft - paddingRight).coerceAtLeast(1f)
+    val contentTop: Float = floor(headerHeight + contentPaddingTop)
+    val contentBottom: Float = floor(viewHeight - footerHeight - contentPaddingBottom)
+    val contentHeight: Float = floor(contentBottom - contentTop).coerceAtLeast(1f)
     val headerBaseline: Float = headerHeight - tipSizePx * 0.45f + headerOffset
     val footerBaseline: Float = viewHeight - footerHeight + tipSizePx * 1.25f - footerOffset
 
@@ -76,7 +85,16 @@ class ReaderPageStyle(
         indentCharCount = firstLineIndentEm,
         justifyContent = textJustification,
         contentFontSizePx = contentSizePx,
-        titleFontSizePx = titleSizePx
+        titleFontSizePx = titleSizePx,
+        // Match mature EPUB readers: custom reader artwork owns the viewport instead of being
+        // covered by an inset publisher body/wrapper canvas.
+        preferReaderBackground = preferReaderBackground,
+        publisherStyleMode = publisherStyleMode,
+        themeBackgroundArgb = backgroundColor,
+        themeTextArgb = textColor,
+        darkTheme = isDark,
+        immersiveExtraTopPx = (contentTop - immersiveContentTop).coerceAtLeast(0f),
+        immersiveExtraBottomPx = (immersiveContentBottom - contentBottom).coerceAtLeast(0f)
     )
 
     val measure: AndroidTextMeasure = AndroidTextMeasure(
@@ -146,6 +164,10 @@ class ReaderPageStyle(
                 settings.syntaxHighlightEnabled
             }.orEmpty()
             val baseTypeface = settings.resolveTypeface()
+            val immersiveTop = statusBarPx.coerceAtLeast(headerPadding) + top
+            val bottomSafeInset = navigationBarPx.coerceAtLeast(footerPadding) + footerPadding * 0.35f
+            val immersiveBottom = (viewHeight - bottomSafeInset - bottom)
+                .coerceAtLeast(immersiveTop + 1f)
             return ReaderPageStyle(
                 viewWidth = viewWidth,
                 viewHeight = viewHeight,
@@ -163,6 +185,8 @@ class ReaderPageStyle(
                 },
                 contentPaddingTop = top,
                 contentPaddingBottom = bottom,
+                immersiveContentTop = floor(immersiveTop),
+                immersiveContentBottom = floor(immersiveBottom),
                 headerOffset = headerOffset,
                 footerOffset = footerOffset,
                 contentSizePx = contentSize,
@@ -184,6 +208,9 @@ class ReaderPageStyle(
                 showFooter = settings.showFooter,
                 backgroundImagePath = settings.backgroundImagePath,
                 backgroundImageOpacity = settings.backgroundImageOpacity,
+                preferReaderBackground = settings.backgroundImagePath != null ||
+                    settings.activeCustomThemeId != null,
+                publisherStyleMode = settings.publisherStyleMode,
                 syntaxHighlightRules = syntaxRules,
                 titleTopSpacingLines = settings.titleTopSpacing,
                 titleBottomSpacingLines = settings.titleBottomSpacing,

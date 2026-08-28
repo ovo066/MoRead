@@ -3,6 +3,7 @@ package com.mozhi.reader.feature.reader.engine
 import com.mozhi.reader.core.datastore.ReaderSyntaxHighlighter
 import com.mozhi.reader.core.datastore.ReaderSyntaxRule
 import com.mozhi.reader.core.datastore.ReaderSyntaxStyleSpan
+import com.mozhi.reader.core.datastore.PublisherStyleMode
 import com.mozhi.reader.core.library.EpubComputedStyle
 import com.mozhi.reader.core.library.EpubFloat
 import com.mozhi.reader.core.library.EpubLayoutBlock
@@ -10,6 +11,7 @@ import com.mozhi.reader.core.library.EpubLayoutBlockKind
 import com.mozhi.reader.core.library.EpubLayoutChapterBundle
 import com.mozhi.reader.core.library.EpubTextAlign
 import com.mozhi.reader.core.library.EpubVerticalAlign
+import com.mozhi.reader.feature.reader.engine.epub.EpubTypesetterV2
 import kotlin.math.max
 import kotlin.math.min
 
@@ -36,7 +38,16 @@ data class TypesetSpec(
     val justifyContent: Boolean = true,
     val bottomAlign: Boolean = true,
     val contentFontSizePx: Float = contentLineStep,
-    val titleFontSizePx: Float = titleLineStep
+    val titleFontSizePx: Float = titleLineStep,
+    /** A reader-selected custom paper is the canvas; publisher root backgrounds must not cover it. */
+    val preferReaderBackground: Boolean = false,
+    val publisherStyleMode: PublisherStyleMode = PublisherStyleMode.SMART,
+    val themeBackgroundArgb: Int = 0xFFFFFFFF.toInt(),
+    val themeTextArgb: Int = 0xFF202020.toInt(),
+    val darkTheme: Boolean = false,
+    /** 特殊页拿回普通页为页眉、页脚预留的纵向空间。 */
+    val immersiveExtraTopPx: Float = 0f,
+    val immersiveExtraBottomPx: Float = 0f
 )
 
 /**
@@ -65,19 +76,23 @@ class ChapterTypesetter(
         body: String,
         inlineImages: List<InlineImageSource> = emptyList(),
         inlineMarkers: List<InlineMarkerReservation> = emptyList(),
-        epubLayout: EpubLayoutChapterBundle? = null
+        epubLayout: EpubLayoutChapterBundle? = null,
+        cancellationCheck: () -> Unit = {}
     ): TextChapter {
-        if (epubLayout != null && epubLayout.document.textLength == body.length &&
-            epubLayout.document.blocks.any { it.kind != EpubLayoutBlockKind.CONTAINER }
-        ) {
-            return EpubNativeTypesetter(spec, measure).typeset(
-                chapterIndex,
-                title,
-                body,
-                inlineImages,
-                inlineMarkers,
-                epubLayout
-            )
+        cancellationCheck()
+        if (epubLayout != null && epubLayout.document.textLength == body.length) {
+            val hasDomPath = epubLayout.dom != null && epubLayout.stylesheets.isNotEmpty()
+            val hasLegacyBlocks = epubLayout.document.blocks.any { it.kind != EpubLayoutBlockKind.CONTAINER }
+            if (hasDomPath) {
+                return EpubTypesetterV2(spec, measure, cancellationCheck).typeset(
+                    chapterIndex, title, body, inlineImages, inlineMarkers, epubLayout
+                )
+            }
+            if (hasLegacyBlocks) {
+                return EpubBoxLayoutBackend(spec, measure, cancellationCheck).typeset(
+                    chapterIndex, title, body, inlineImages, inlineMarkers, epubLayout
+                )
+            }
         }
         val state = LayoutState()
         val syntax = SyntaxStyleMap(body, spec.syntaxHighlightRules)
@@ -90,6 +105,7 @@ class ChapterTypesetter(
         var pendingGap = 0f
 
         while (cursor <= body.length) {
+            cancellationCheck()
             val newline = body.indexOf('\n', cursor)
             val end = if (newline >= 0) newline else body.length
             val paragraph = body.substring(cursor, end)
@@ -99,14 +115,20 @@ class ChapterTypesetter(
                 firstParagraph = false
                 state.addSpacing(spec.titleTopSpacing, atPageTop = true)
                 if (trimmedTitle.isNotEmpty() && paragraph.trim() == trimmedTitle) {
-                    layoutParagraph(state, paragraph, cursor, isTitle = true, synthetic = false, syntax = syntax, inlineMarkers = inlineMarkers)
+                    layoutParagraph(
+                        state, paragraph, cursor, isTitle = true, synthetic = false,
+                        syntax = syntax, inlineMarkers = inlineMarkers, cancellationCheck = cancellationCheck
+                    )
                     pendingGap = spec.titleBottomSpacing
                     cursor = end + 1
                     if (isLastParagraph) break
                     continue
                 }
                 if (trimmedTitle.isNotEmpty()) {
-                    layoutParagraph(state, trimmedTitle, cursor, isTitle = true, synthetic = true, syntax = syntax, inlineMarkers = emptyList())
+                    layoutParagraph(
+                        state, trimmedTitle, cursor, isTitle = true, synthetic = true,
+                        syntax = syntax, inlineMarkers = emptyList(), cancellationCheck = cancellationCheck
+                    )
                     pendingGap = spec.titleBottomSpacing
                 }
             }
@@ -122,7 +144,10 @@ class ChapterTypesetter(
                 }
                 paragraph.isNotEmpty() -> {
                     state.addSpacing(pendingGap)
-                    layoutParagraph(state, paragraph, cursor, isTitle = false, synthetic = false, syntax = syntax, inlineMarkers = inlineMarkers)
+                    layoutParagraph(
+                        state, paragraph, cursor, isTitle = false, synthetic = false,
+                        syntax = syntax, inlineMarkers = inlineMarkers, cancellationCheck = cancellationCheck
+                    )
                     pendingGap = spec.paragraphSpacing
                 }
                 // 空行只是分段信号：抬高待结算间隙，不再占一整行正文高度。
@@ -190,8 +215,10 @@ class ChapterTypesetter(
         isTitle: Boolean,
         synthetic: Boolean,
         syntax: SyntaxStyleMap,
-        inlineMarkers: List<InlineMarkerReservation>
+        inlineMarkers: List<InlineMarkerReservation>,
+        cancellationCheck: () -> Unit
     ) {
+        cancellationCheck()
         val metrics = if (isTitle) titleMetrics else contentMetrics
         val lineStep = if (isTitle) spec.titleLineStep else spec.contentLineStep
         val indent = if (isTitle) 0f else indentWidth
@@ -200,6 +227,7 @@ class ChapterTypesetter(
         val lineStarts = measure.breakLines(layoutText.text, isTitle, spec.visibleWidth, indent)
 
         for (lineIndex in lineStarts.indices) {
+            cancellationCheck()
             val lineStart = lineStarts[lineIndex]
             val lineEnd = if (lineIndex + 1 < lineStarts.size) lineStarts[lineIndex + 1] else layoutText.text.length
             if (lineStart >= lineEnd) continue

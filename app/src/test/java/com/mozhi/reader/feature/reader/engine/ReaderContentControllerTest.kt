@@ -22,6 +22,7 @@ class ReaderContentControllerTest {
         var lastChapter = -1
         var lastOffset = -1
         var lastPageIndex = -1
+        var contentErrors = 0
         override fun onContentChanged(relativePosition: Int) {
             contentChanges++
         }
@@ -36,6 +37,10 @@ class ReaderContentControllerTest {
             lastChapter = chapterIndex
             lastOffset = charOffset
             lastPageIndex = pageIndex
+        }
+
+        override fun onContentError(chapterIndex: Int, error: Throwable) {
+            contentErrors++
         }
     }
 
@@ -238,5 +243,51 @@ class ReaderContentControllerTest {
         assertTrue(styledPage.page.lines.single().startX > plainStart)
         assertTrue(styledPage.page.decorations.isNotEmpty())
         assertTrue(styledPage.page.lines.single().columns.all { it.syntaxBold })
+    }
+
+    @Test
+    fun `broken native layout falls back to plain text instead of spinning forever`() = runTest {
+        val body = "可正常阅读"
+        val listener = RecordingListener()
+        val throwingMeasure = object : TextMeasure by FakeMeasure() {
+            override fun charWidths(text: String, style: MeasuredTextStyle): FloatArray {
+                if (style.fontFamily == "broken-font") error("broken embedded font")
+                return FakeMeasure().charWidths(text, style)
+            }
+        }
+        val bundle = EpubLayoutChapterBundle(
+            document = EpubLayoutChapter(
+                chapterIndex = 0,
+                href = "chapter.xhtml",
+                blocks = listOf(
+                    EpubLayoutBlock(
+                        orderIndex = 0,
+                        kind = EpubLayoutBlockKind.PARAGRAPH,
+                        textStart = 0,
+                        textEnd = body.length,
+                        element = EpubElementRef("p"),
+                        style = EpubComputedStyle(fontFamily = "broken-font")
+                    )
+                ),
+                textLength = body.length
+            ),
+            resourcePaths = emptyMap(),
+            fontPaths = emptyMap()
+        )
+        val controller = ReaderContentController(
+            scope = this,
+            bodyLoader = { body },
+            listener = listener,
+            layoutLoader = { bundle }
+        )
+        controller.setChapters(listOf(ChapterMeta(0, "", body.length)))
+        controller.updateEnvironment(spec(), throwingMeasure)
+        controller.openPosition(0, 0)
+        advanceUntilIdle()
+        coroutineContext.job.children.forEach { it.join() }
+
+        assertTrue(controller.isReady)
+        assertTrue(controller.curPage() is RenderPage.Laid)
+        assertEquals(0, listener.contentErrors)
     }
 }

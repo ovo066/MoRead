@@ -112,11 +112,14 @@ class CompanionMessagePartsTest {
     fun `tables and lists stay glued to their lead-in line`() {
         val content = "对比如下：\n| 项 | 值 |\n|---|---|\n| a | 1 |\n再说说列表：\n- 第一条\n- 第二条\n你怎么看？"
         val parts = parseCompanionParts(content, multiBubble = true)
-        assertEquals(3, parts.size)
-        assertTrue(parts[0].text.startsWith("对比如下：") && parts[0].text.contains("| a | 1 |"))
-        assertTrue(parts[1].text.startsWith("再说说列表：") && parts[1].text.contains("- 第二条"))
-        // 列表之后的普通句仍然自成一泡，不该被列表吸进去。
-        assertEquals("你怎么看？", parts[2].text)
+        assertEquals(
+            listOf(
+                "对比如下：\n| 项 | 值 |\n|---|---|\n| a | 1 |",
+                "再说说列表：\n- 第一条\n- 第二条",
+                "你怎么看？"
+            ),
+            parts.map { it.text }
+        )
     }
 
     @Test

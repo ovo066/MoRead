@@ -70,6 +70,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -81,6 +82,7 @@ import com.mozhi.reader.core.datastore.ReaderSettings
 import com.mozhi.reader.feature.reader.engine.TransientHighlightSpan
 import com.mozhi.reader.feature.reader.engine.ReaderAnnotationMark
 import com.mozhi.reader.feature.reader.engine.ReaderIllustrationMark
+import com.mozhi.reader.feature.reader.engine.ReaderPageLink
 import com.mozhi.reader.feature.reader.engine.ReaderContentController
 import com.mozhi.reader.feature.reader.engine.RenderPage
 import com.mozhi.reader.feature.reader.engine.SelectionRect
@@ -89,6 +91,7 @@ import com.mozhi.reader.feature.reader.engine.annotationGeometry
 import com.mozhi.reader.feature.reader.engine.dragSelectionHandle
 import com.mozhi.reader.feature.reader.engine.hitTextPos
 import com.mozhi.reader.feature.reader.engine.inlineMarkerLayout
+import com.mozhi.reader.feature.reader.engine.linkAt
 import com.mozhi.reader.feature.reader.engine.selectionBodyRange
 import com.mozhi.reader.feature.reader.engine.selectionRects
 import com.mozhi.reader.feature.reader.engine.textPosAtBodyOffset
@@ -98,6 +101,8 @@ import com.mozhi.reader.feature.reader.render.ReaderPageStyle
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * The self-drawn reading surface: renders the three-page window into bitmaps, drives the
@@ -121,6 +126,7 @@ fun ReaderPane(
     onAnnotationAction: (selection: String, range: IntRange, anchorTopPx: Int) -> Unit,
     onAnnotationClick: (annotationIds: List<Long>) -> Unit,
     onIllustrationClick: (illustrationIds: List<Long>) -> Unit = {},
+    onLinkClick: (ReaderPageLink) -> Unit = {},
     onTtsAction: (selection: String) -> Unit,
     onImageAction: (selection: String, context: String, range: IntRange) -> Unit,
     onEditText: (selection: String, range: IntRange) -> Unit,
@@ -190,6 +196,21 @@ fun ReaderPane(
         PageTurnAnimation.NONE -> PageTurnDriver.Mode.INSTANT
     }
 
+    // 位图正被翻页合成器读取时绝不原地重绘；内容、批注或时钟更新等到手势落定后
+    // 再原子发布，避免偶发出现一帧透明页/旧邻页的闪烁。
+    val refreshSafely: (Int) -> Unit = { relativePosition ->
+        if (!driver.isRunning) {
+            holder.refresh(relativePosition)
+            frameTick++
+        } else {
+            scope.launch {
+                while (driver.isRunning) delay(PAGE_REFRESH_POLL_MS)
+                holder.refresh(relativePosition)
+                frameTick++
+            }
+        }
+    }
+
     LaunchedEffect(pageTurnRequest?.sequence) {
         val request = pageTurnRequest ?: return@LaunchedEffect
         if (enabled) driver.turnByTap(request.direction)
@@ -201,6 +222,7 @@ fun ReaderPane(
         font = settings.font,
         customFontPath = settings.customFontPath,
         lineHeight = settings.lineHeight,
+        publisherStyleMode = settings.publisherStyleMode,
         pageMarginsHash = listOf(
             settings.pageMarginLeft,
             settings.pageMarginRight,
@@ -248,11 +270,20 @@ fun ReaderPane(
                 style = style,
                 environment = environment,
                 includeBackgroundInPages = settings.pageTurnAnimation.usesEmbeddedPageBackground(),
-                // 背景图在后台合成，落地后才重画页面位图——首帧不等它。
+                // 背景图在后台合成，落地后只刷新真正把纸面烘进位图的仿真模式。
+                // 平移/覆盖模式的纸面是独立静态层；重画正在翻动的透明页会短暂露底，
+                // 正是自定义背景下偶发“闪一下”的来源。
                 onBackgroundReady = {
-                    holder.refresh(0)
-                    frameTick++
-                    backgroundTick++
+                    scope.launch {
+                        // Never swap the static paper or its embedded snapshot under an active
+                        // gesture. Wait for commit/cancel, then publish both layers in one frame.
+                        while (driver.isRunning) delay(BACKGROUND_SWAP_POLL_MS)
+                        if (holder.embedsBackgroundInPages()) {
+                            holder.refresh(0)
+                            frameTick++
+                        }
+                        backgroundTick++
+                    }
                 }
             )
             if (relayout) {
@@ -280,31 +311,21 @@ fun ReaderPane(
     }
 
     LaunchedEffect(annotations) {
-        if (holder.setAnnotations(annotations)) {
-            holder.refresh(0)
-            frameTick++
-        }
+        if (holder.setAnnotations(annotations)) refreshSafely(0)
     }
     LaunchedEffect(illustrations) {
-        if (holder.setIllustrations(illustrations)) {
-            holder.refresh(0)
-            frameTick++
-        }
+        if (holder.setIllustrations(illustrations)) refreshSafely(0)
     }
 
     // 听书当前句变化时重绘页面位图，让底色跟随朗读进度。
     LaunchedEffect(transientHighlight) {
-        if (holder.setTransientHighlight(transientHighlight)) {
-            holder.refresh(0)
-            frameTick++
-        }
+        if (holder.setTransientHighlight(transientHighlight)) refreshSafely(0)
     }
 
     DisposableEffect(controller) {
         registerContentHook { relativePosition ->
             if (relativePosition == 0 && !selection.consumePreservedPageChange()) selection.clear()
-            holder.refresh(relativePosition)
-            frameTick++
+            refreshSafely(relativePosition)
         }
         onDispose {
             registerContentHook(null)
@@ -321,10 +342,7 @@ fun ReaderPane(
                     Intent.ACTION_BATTERY_CHANGED -> holder.updateBattery(intent)
                     else -> false
                 }
-                if (changed) {
-                    holder.refresh(0)
-                    frameTick++
-                }
+                if (changed) refreshSafely(0)
             }
         }
         val filter = IntentFilter().apply {
@@ -364,10 +382,13 @@ fun ReaderPane(
                     sourceCenter = { selection.magnifierCenter ?: Offset.Unspecified },
                     magnifierCenter = {
                         selection.magnifierCenter?.let { center ->
-                            Offset(center.x, center.y - 72.dp.toPx())
+                            Offset(center.x, center.y - 94.dp.toPx())
                         } ?: Offset.Unspecified
                     },
-                    zoom = 1.8f
+                    size = DpSize(168.dp, 76.dp),
+                    cornerRadius = 18.dp,
+                    elevation = 8.dp,
+                    zoom = 2f
                 )
                 .readerPageTouch(
                     enabled = enabled,
@@ -384,6 +405,11 @@ fun ReaderPane(
                     if (annotationIds.isNotEmpty()) {
                         selection.clear()
                         onAnnotationClick(annotationIds)
+                        return@readerPageTouch
+                    }
+                    holder.linkAt(position)?.let { link ->
+                        selection.clear()
+                        onLinkClick(link)
                         return@readerPageTouch
                     }
                     val fraction = position.x / holder.viewWidth.coerceAtLeast(1)
@@ -585,6 +611,7 @@ private data class ReaderEnvironmentKey(
     val font: ReaderFont,
     val customFontPath: String?,
     val lineHeight: Float,
+    val publisherStyleMode: com.mozhi.reader.core.datastore.PublisherStyleMode,
     val pageMarginsHash: Int,
     val advancedTypographyHash: Int,
     val syntaxHighlightEnabled: Boolean,
@@ -624,6 +651,8 @@ private class ReaderSelectionController(
     private var draggedHandle: Handle? = null
     private var preserveNextPageChange = false
     private var lastAutoTurnAt = 0L
+    private var edgeEnteredAt = 0L
+    private var edgeDirection: PageTurnDirection? = null
 
     override val isActive: Boolean get() = active != null
 
@@ -708,13 +737,24 @@ private class ReaderSelectionController(
 
     private fun autoTurnAtEdge(position: Offset, current: ActiveSelection): Boolean {
         val now = SystemClock.uptimeMillis()
-        if (now - lastAutoTurnAt < AUTO_TURN_COOLDOWN_MS) return false
         val edge = holder.viewHeight * AUTO_TURN_EDGE_FRACTION
         val direction = when {
             position.y <= edge -> PageTurnDirection.PREVIOUS
             position.y >= holder.viewHeight - edge -> PageTurnDirection.NEXT
-            else -> return false
+            else -> {
+                edgeDirection = null
+                edgeEnteredAt = 0L
+                return false
+            }
         }
+        if (edgeDirection != direction) {
+            edgeDirection = direction
+            edgeEnteredAt = now
+            return false
+        }
+        if (now - edgeEnteredAt < AUTO_TURN_DWELL_MS ||
+            now - lastAutoTurnAt < AUTO_TURN_COOLDOWN_MS
+        ) return false
         val candidate = when (direction) {
             PageTurnDirection.PREVIOUS -> controller.prevPage()
             PageTurnDirection.NEXT -> controller.nextPage()
@@ -727,6 +767,7 @@ private class ReaderSelectionController(
         }
         if (!moved) preserveNextPageChange = false
         lastAutoTurnAt = now
+        edgeEnteredAt = now
         return moved
     }
 
@@ -739,12 +780,16 @@ private class ReaderSelectionController(
     override fun end() {
         draggedHandle = null
         magnifierCenter = null
+        edgeDirection = null
+        edgeEnteredAt = 0L
         active = active?.copy(dragging = false)
     }
 
     override fun clear() {
         draggedHandle = null
         magnifierCenter = null
+        edgeDirection = null
+        edgeEnteredAt = 0L
         active = null
     }
 
@@ -833,12 +878,16 @@ private class ReaderSelectionController(
     }
 
     private companion object {
-        const val AUTO_TURN_EDGE_FRACTION = 0.08f
-        const val AUTO_TURN_COOLDOWN_MS = 420L
+        const val AUTO_TURN_EDGE_FRACTION = 0.07f
+        const val AUTO_TURN_DWELL_MS = 620L
+        const val AUTO_TURN_COOLDOWN_MS = 1100L
     }
 }
 
 /** Owns the page bitmaps and the render pipeline; all mutation happens on the main thread. */
+private const val BACKGROUND_SWAP_POLL_MS = 16L
+private const val PAGE_REFRESH_POLL_MS = 16L
+
 private class ReaderPaneHolder(private val controller: ReaderContentController) {
     var viewWidth = 0
         private set
@@ -898,6 +947,8 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
         renderer?.drawBackdrop(canvas, width, height) ?: canvas.drawColor(backgroundColor)
     }
 
+    fun embedsBackgroundInPages(): Boolean = includeBackgroundInPages
+
     fun setIncludeBackgroundInPages(value: Boolean): Boolean {
         if (includeBackgroundInPages == value) return false
         includeBackgroundInPages = value
@@ -926,8 +977,21 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
         return true
     }
 
-    /** Top-left of the typeset content area in view coordinates, or null before the first style. */
-    fun contentOrigin(): Offset? = style?.let { Offset(it.paddingLeft, it.contentTop) }
+    /** Top-left of the typeset content area；特殊页不再保留已隐藏页眉的空白带。 */
+    fun contentOrigin(): Offset? = style?.let { currentStyle ->
+        val page = (controller.curPage() as? RenderPage.Laid)?.page
+        val reclaimsHeader = page?.immersive == true || page?.hideHeader == true
+        Offset(
+            currentStyle.paddingLeft,
+            if (reclaimsHeader) currentStyle.immersiveContentTop else currentStyle.contentTop
+        )
+    }
+
+    fun linkAt(position: Offset): ReaderPageLink? {
+        val page = controller.curPage() as? RenderPage.Laid ?: return null
+        val local = toContentLocal(position) ?: return null
+        return page.page.linkAt(local.x, local.y, page.chapterIndex)
+    }
 
     fun annotationIdsAt(position: Offset): List<Long> {
         val currentStyle = style ?: return emptyList()

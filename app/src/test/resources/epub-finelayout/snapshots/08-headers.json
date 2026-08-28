@@ -1,0 +1,143 @@
+{
+    "fixture": "08-headers",
+    "bodyLength": 45,
+    "pages": [
+        {
+            "index": 0,
+            "chapterPosition": 0,
+            "charLength": 4,
+            "height": 135.0,
+            "backgroundColorArgb": -329486,
+            "backgroundImagePath": null,
+            "immersive": false,
+            "hideHeader": false,
+            "decorations": [],
+            "lines": [
+                {
+                    "chapterPosition": 0,
+                    "charLength": 4,
+                    "lineTop": 0.0,
+                    "lineBottom": 135.0,
+                    "startX": 0.0,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [
+                        {
+                            "path": "fixture://OEBPS/Images/header.png",
+                            "left": 0.0,
+                            "top": 0.0,
+                            "width": 240.0,
+                            "height": 135.0
+                        }
+                    ],
+                    "decorations": []
+                }
+            ]
+        },
+        {
+            "index": 1,
+            "chapterPosition": 5,
+            "charLength": 37,
+            "height": 246.90909,
+            "backgroundColorArgb": -329486,
+            "backgroundImagePath": null,
+            "immersive": false,
+            "hideHeader": false,
+            "decorations": [
+                {
+                    "kind": "block",
+                    "left": 0.0,
+                    "top": 122.90909,
+                    "right": 240.0,
+                    "bottom": 226.90909,
+                    "backgroundColorArgb": 0,
+                    "backgroundImagePath": "fixture://OEBPS/Images/ornament.png",
+                    "backgroundSizeMode": "EXPLICIT",
+                    "backgroundSize": [
+                        60.0,
+                        60.0
+                    ],
+                    "backgroundRepeat": [
+                        false,
+                        false
+                    ],
+                    "backgroundPosition": [
+                        0.5,
+                        0.5
+                    ],
+                    "borderWidths": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "borderColors": [
+                        null,
+                        null,
+                        null,
+                        null
+                    ],
+                    "radii": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "shadowCount": 0,
+                    "edges": [
+                        true,
+                        true,
+                        true,
+                        true
+                    ]
+                }
+            ],
+            "lines": [
+                {
+                    "chapterPosition": 5,
+                    "charLength": 6,
+                    "lineTop": 0.0,
+                    "lineBottom": 40.0,
+                    "startX": 0.0,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                },
+                {
+                    "chapterPosition": 12,
+                    "charLength": 6,
+                    "lineTop": 69.09091,
+                    "lineBottom": 99.09091,
+                    "startX": 0.0,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                },
+                {
+                    "chapterPosition": 19,
+                    "charLength": 6,
+                    "lineTop": 158.90909,
+                    "lineBottom": 178.90909,
+                    "startX": 97.77778,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                },
+                {
+                    "chapterPosition": 26,
+                    "charLength": 19,
+                    "lineTop": 226.90909,
+                    "lineBottom": 246.90909,
+                    "startX": 40.0,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                }
+            ]
+        }
+    ]
+}

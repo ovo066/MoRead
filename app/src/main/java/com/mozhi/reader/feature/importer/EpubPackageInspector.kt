@@ -1,5 +1,7 @@
 package com.mozhi.reader.feature.importer
 
+import com.mozhi.reader.core.epub.css.CssParser
+import com.mozhi.reader.core.library.EpubFontFace
 import com.mozhi.reader.core.library.EpubLayoutDiagnostic
 import com.mozhi.reader.core.library.EpubLayoutDiagnosticSeverity
 import com.mozhi.reader.core.library.EpubLayoutPackage
@@ -7,9 +9,9 @@ import com.mozhi.reader.core.library.EpubLayoutResource
 import com.mozhi.reader.core.library.EpubLayoutResourceKind
 import com.mozhi.reader.core.library.EpubLayoutSpineItem
 import com.mozhi.reader.core.library.EpubResourcePath
+import com.mozhi.reader.core.library.EpubStylesheetText
 import java.io.File
 import java.io.InputStream
-import java.security.MessageDigest
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import javax.inject.Inject
@@ -37,7 +39,6 @@ class EpubPackageInspector @Inject constructor() {
             val packageElement = packageDocument.selectFirst("package")
             val manifestItems = packageDocument.select("manifest > item")
             val resourceById = LinkedHashMap<String, EpubLayoutResource>()
-            var totalHashedBytes = 0L
             manifestItems.forEach { item ->
                 val id = item.attr("id").trim()
                 val rawHref = item.attr("href")
@@ -53,17 +54,12 @@ class EpubPackageInspector @Inject constructor() {
                     diagnostics += warning("missing-resource", "清单资源在 EPUB 中不存在", href)
                 }
                 val size = archiveEntry?.size?.coerceAtLeast(0L) ?: 0L
-                val shouldHash = archiveEntry != null && kind != EpubLayoutResourceKind.OTHER &&
-                    size <= MAX_RESOURCE_BYTES && totalHashedBytes + size <= MAX_HASHED_BYTES
-                val digest = if (shouldHash) {
-                    totalHashedBytes += size
-                    zip.getInputStream(archiveEntry).use(::sha256)
-                } else {
-                    if (archiveEntry != null && kind != EpubLayoutResourceKind.OTHER) {
-                        diagnostics += warning("resource-too-large", "资源过大，未建立内容哈希", href)
-                    }
-                    null
-                }
+                // ZipFile already verifies every entry's CRC while it is extracted. Hashing the
+                // complete manifest here made large illustrated books read all fonts/images once,
+                // only for BookLayoutStore to read them again during extraction. Keep sha256
+                // optional for old sidecars, but do not put a second full-book pass on import's
+                // critical path.
+                val digest: String? = null
                 resourceById[id] = EpubLayoutResource(
                     id = id,
                     href = href,
@@ -86,26 +82,41 @@ class EpubPackageInspector @Inject constructor() {
                     idref = idref,
                     href = resource?.href,
                     linear = !item.attr("linear").equals("no", true),
-                    properties = item.attr("properties").splitWhitespace()
+                    properties = (item.attr("properties").splitWhitespace() +
+                        resource?.properties.orEmpty()).distinct()
                 )
             }
             val stylesheets = resourceById.values
                 .filter { it.kind == EpubLayoutResourceKind.STYLESHEET }
                 .mapNotNull { resource ->
                     entriesByPath[resource.archivePath.lowercase()]?.let { entry ->
-                        EpubStylesheetSource(
+                        if (entry.size > MAX_STYLESHEET_BYTES) {
+                            diagnostics += warning("stylesheet-truncated", "样式表超过 512KB，已截断", resource.href)
+                        }
+                        EpubStylesheetText(
                             href = resource.href,
-                            css = readText(zip, entry, MAX_STYLESHEET_BYTES)
+                            css = readTextTruncated(zip, entry, MAX_STYLESHEET_BYTES)
                         )
                     }
                 }
-            val css = EpubCssStylesheetSet.parse(stylesheets)
-            css.unsupportedProperties.sorted().forEach { property ->
-                diagnostics += EpubLayoutDiagnostic(
-                    severity = EpubLayoutDiagnosticSeverity.INFO,
-                    code = "unsupported-css-property",
-                    message = property
-                )
+            var cssOrder = 0
+            val fontFaces = ArrayList<EpubFontFace>()
+            stylesheets.forEach { stylesheet ->
+                val parsed = CssParser(stylesheet.href, cssOrder).parse(stylesheet.css)
+                cssOrder += parsed.stylesheet.rules.size
+                parsed.unsupportedProperties.forEach { property ->
+                    diagnostics += EpubLayoutDiagnostic(
+                        severity = EpubLayoutDiagnosticSeverity.INFO,
+                        code = "unsupported-css-property",
+                        message = property,
+                        href = stylesheet.href
+                    )
+                }
+                parsed.stylesheet.fontFaces.forEach { face ->
+                    face.sources.firstOrNull()?.let { source ->
+                        fontFaces += EpubFontFace(face.family, source, face.weight, face.style == "italic")
+                    }
+                }
             }
             return EpubLayoutPackage(
                 packageDocumentPath = packagePath,
@@ -117,14 +128,21 @@ class EpubPackageInspector @Inject constructor() {
                     ?.takeIf(String::isNotEmpty),
                 resources = resourceById.values.toList(),
                 spine = spine,
-                fontFaces = css.fontFaces,
+                fontFaces = fontFaces.distinct(),
+                stylesheets = stylesheets,
                 diagnostics = diagnostics
             )
         }
     }
 
-    fun readStylesheets(epubFile: File, layoutPackage: EpubLayoutPackage): Map<String, String> =
-        ZipFile(epubFile).use { zip ->
+    fun readStylesheets(epubFile: File, layoutPackage: EpubLayoutPackage): Map<String, String> {
+        if (layoutPackage.stylesheets.isNotEmpty()) return buildMap {
+            layoutPackage.stylesheets.forEach { stylesheet ->
+                EpubResourcePath.packageAliases(stylesheet.href, layoutPackage.packageDocumentPath)
+                    .forEach { alias -> putIfAbsent(alias, stylesheet.css) }
+            }
+        }
+        return ZipFile(epubFile).use { zip ->
             val entries = zip.entries().asSequence().filterNot(ZipEntry::isDirectory)
                 .associateBy { normalizeArchivePath(it.name).lowercase() }
             buildMap {
@@ -133,7 +151,7 @@ class EpubPackageInspector @Inject constructor() {
                     .filter { it.kind == EpubLayoutResourceKind.STYLESHEET }
                     .forEach resourceLoop@ { resource ->
                         val entry = entries[resource.archivePath.lowercase()] ?: return@resourceLoop
-                        val css = readText(zip, entry, MAX_STYLESHEET_BYTES)
+                        val css = readTextTruncated(zip, entry, MAX_STYLESHEET_BYTES)
                         EpubResourcePath.packageAliases(resource.href, layoutPackage.packageDocumentPath)
                             .forEach { alias -> putIfAbsent(alias, css) }
                         EpubResourcePath.packageAliases(resource.archivePath, layoutPackage.packageDocumentPath)
@@ -141,6 +159,7 @@ class EpubPackageInspector @Inject constructor() {
                     }
             }
         }
+    }
 
     private fun readPackagePath(zip: ZipFile, entries: Map<String, ZipEntry>): String {
         val container = entries[CONTAINER_PATH.lowercase()] ?: error("EPUB 缺少 container.xml")
@@ -152,6 +171,18 @@ class EpubPackageInspector @Inject constructor() {
 
     private fun readText(zip: ZipFile, entry: ZipEntry, maxBytes: Int): String =
         zip.getInputStream(entry).use { input -> readLimited(input, maxBytes).toString(Charsets.UTF_8) }
+
+    private fun readTextTruncated(zip: ZipFile, entry: ZipEntry, maxBytes: Int): String =
+        zip.getInputStream(entry).use { input ->
+            val output = ByteArray(maxBytes)
+            var total = 0
+            while (total < maxBytes) {
+                val count = input.read(output, total, maxBytes - total)
+                if (count < 0) break
+                total += count
+            }
+            output.copyOf(total).toString(Charsets.UTF_8)
+        }
 
     private fun readLimited(input: InputStream, maxBytes: Int): ByteArray {
         val output = java.io.ByteArrayOutputStream()
@@ -165,17 +196,6 @@ class EpubPackageInspector @Inject constructor() {
             output.write(buffer, 0, count)
         }
         return output.toByteArray()
-    }
-
-    private fun sha256(input: InputStream): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-        while (true) {
-            val count = input.read(buffer)
-            if (count < 0) break
-            digest.update(buffer, 0, count)
-        }
-        return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
     private fun resourceKind(mediaType: String, href: String, properties: String): EpubLayoutResourceKind =
@@ -209,9 +229,7 @@ class EpubPackageInspector @Inject constructor() {
         const val MAX_ARCHIVE_ENTRIES = 20_000
         const val MAX_CONTAINER_BYTES = 1024 * 1024
         const val MAX_PACKAGE_BYTES = 8 * 1024 * 1024
-        const val MAX_STYLESHEET_BYTES = 8 * 1024 * 1024
-        const val MAX_RESOURCE_BYTES = 64L * 1024 * 1024
-        const val MAX_HASHED_BYTES = 1024L * 1024 * 1024
+        const val MAX_STYLESHEET_BYTES = 512 * 1024
         val FONT_MEDIA_TYPES = setOf(
             "application/font-sfnt",
             "application/font-woff",

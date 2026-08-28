@@ -1,0 +1,38 @@
+{
+    "fixture": "12-fullpage-image",
+    "bodyLength": 4,
+    "pages": [
+        {
+            "index": 0,
+            "chapterPosition": 0,
+            "charLength": 4,
+            "height": 223.5,
+            "backgroundColorArgb": 0,
+            "backgroundImagePath": "fixture://OEBPS/Images/paper.jpg",
+            "immersive": true,
+            "hideHeader": false,
+            "decorations": [],
+            "lines": [
+                {
+                    "chapterPosition": 0,
+                    "charLength": 4,
+                    "lineTop": 88.5,
+                    "lineBottom": 223.5,
+                    "startX": 0.0,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [
+                        {
+                            "path": "fixture://OEBPS/Images/fullpage.jpg",
+                            "left": 0.0,
+                            "top": 88.5,
+                            "width": 240.0,
+                            "height": 135.0
+                        }
+                    ],
+                    "decorations": []
+                }
+            ]
+        }
+    ]
+}

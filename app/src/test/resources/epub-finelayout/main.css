@@ -1,0 +1,57 @@
+@charset "utf-8";
+body { color: #222; background-color: #faf8f2; }
+p { text-align: justify; text-indent: 2em; line-height: 130%; }
+
+.percent-card { border: 1px solid #fff; background-color: rgba(202, 202, 202, .28); padding: 1em 2em; margin: 30% 10%; }
+.percent-card p, .bleed-box p { text-indent: 0; }
+.bleed-box { margin: auto -10%; border-left: 1px solid #777; border-right: 1px solid #777; }
+.percent-heading { padding: 15%; box-sizing: border-box; }
+
+img.emoji { height: .8em; vertical-align: -2px; }
+img.emoji-large { height: 1em; vertical-align: -2px; }
+
+.bg-stretch { width: 80%; margin: 1em auto; padding: 7px; background: url('../Images/frame.png') no-repeat top center / 100% 100%; }
+.bg-explicit { padding: 15%; background-image: url('../Images/ornament.png'); background-size: 3em 3em; background-position: center center; background-repeat: no-repeat; }
+.bg-repeat { width: 90%; margin: 1em auto; padding: 8px 6px; border: 1px solid #01faff; border-radius: 10px; background-color: rgba(1,250,255,.17); background-image: url('../Images/texture.png'); background-repeat: repeat; }
+
+.chat-list { page-break-inside: avoid; padding: 3px 7px; margin: 1em; }
+.chat-list p { margin: 0; text-indent: 0; line-height: 1; }
+.bubble-left, .bubble-right { display: inline-block; padding: 3px 7px; margin: 3px auto; }
+.bubble-left { float: left; border: 1px solid #000; border-radius: 0 10px 10px; background: #ff9; }
+.bubble-right { float: right; border: 1px solid #cacaca; border-radius: 10px 0 10px 10px; background: #a9ed7d; }
+
+.sample-table { width: 90%; margin: 1em auto; border: 1px solid #433624; border-collapse: collapse; }
+.sample-table th { color: #ede9e0; background: #433624; border: 0 solid #433624; padding: 4px; vertical-align: middle; }
+.sample-table td { color: #433624; border-width: 0 1px 0 0; border-style: solid; border-color: #433624; padding: 4px 7px 3px; vertical-align: top; }
+.sample-table td.fixed { width: 6em; text-align: center; }
+
+.dialog-card { width: 80%; page-break-inside: avoid; border: 1px solid #000; border-radius: 6px; margin: 1em auto; padding: 7px; background: rgba(255,255,255,.28); }
+.dialog-card p { margin: 0 1em; text-indent: 0; }
+
+a.duokan-footnote img { width: 1em; }
+li.duokan-footnote-item p { text-indent: 0; font-size: .85em; line-height: 1.35; }
+ol.duokan-footnote-content { border-top: 1px solid #000; margin-top: 1.5em; }
+
+h1 { color: #b50a02; margin: 1em 0; }
+h2 { color: #8b0000; margin: 1em 0; }
+h3 { color: #fff; font-size: 1em; text-align: center; margin: 0 auto; padding: 15%; box-sizing: border-box; background: url('../Images/ornament.png') no-repeat center / 3em 3em; }
+.Header-image-dk { text-align: right; text-indent: 0; margin: 0 0 -5%; margin-left: auto; page-break-before: always; }
+.Header-image-dk img { width: 100%; }
+
+.selector-target:first-child { color: rebeccapurple; }
+p + p { margin-top: .5em; }
+.selector-parent > p { background-color: hsl(120 40% 90%); }
+[epub\:type] { border-bottom: 1px solid currentColor; }
+.selector-target::first-letter { color: tomato; font-size: 1.5em; }
+.inherited { color: darkslateblue !important; }
+.inherited span { color: inherit; }
+@media screen and (min-width: 200px) { .media-screen { padding-left: 10%; } }
+@media print { .media-screen { display: none; } }
+
+ruby { ruby-align: center; }
+rt { font-size: .8em; }
+span.time { font-size: 1.2em; border: 1px solid transparent; border-radius: 6px; color: white; background: #b50a02; padding: 3px 7px; }
+
+.fullpage { height: 100vh; page-break-before: always; text-align: center; }
+.fullpage img { max-width: 100%; max-height: 100%; }
+body.artwork { background: url('../Images/paper.jpg') center / cover no-repeat; }

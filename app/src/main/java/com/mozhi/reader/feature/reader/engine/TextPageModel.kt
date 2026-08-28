@@ -31,7 +31,9 @@ class TextColumn(
     val opacity: Float = 1f,
     val sourceLength: Int = charData.length,
     val inlineMarkerKind: InlineMarkerKind? = null,
-    val inlineMarkerOffset: Int? = null
+    val inlineMarkerOffset: Int? = null,
+    /** EPUB 内部超链接；保留原 href（含 fragment），点击时再解析到章节坐标。 */
+    val linkHref: String? = null
 )
 
 enum class InlineMarkerKind { ANNOTATION, ILLUSTRATION }
@@ -58,6 +60,17 @@ data class InlineImagePlacement(
     val altText: String
 )
 
+enum class BackgroundSizeMode { AUTO, COVER, CONTAIN, STRETCH, EXPLICIT }
+
+data class PositionedInlineImagePlacement(
+    val imagePath: String,
+    val left: Float,
+    val topOffset: Float = 0f,
+    val width: Float,
+    val height: Float,
+    val altText: String
+)
+
 data class TextBlockDecoration(
     val left: Float,
     val top: Float,
@@ -65,6 +78,13 @@ data class TextBlockDecoration(
     val bottom: Float,
     val backgroundColorArgb: Int? = null,
     val backgroundImagePath: String? = null,
+    val backgroundSizeMode: BackgroundSizeMode = BackgroundSizeMode.COVER,
+    val backgroundSizeWidth: Float = 0f,
+    val backgroundSizeHeight: Float = 0f,
+    val backgroundRepeatX: Boolean = false,
+    val backgroundRepeatY: Boolean = false,
+    val backgroundPositionX: Float = 0.5f,
+    val backgroundPositionY: Float = 0.5f,
     val borderColorArgb: Int? = null,
     val borderWidth: Float = 0f,
     val borderTopColorArgb: Int? = null,
@@ -76,6 +96,10 @@ data class TextBlockDecoration(
     val borderBottomWidth: Float = borderWidth,
     val borderLeftWidth: Float = borderWidth,
     val borderRadius: Float = 0f,
+    val borderTopLeftRadius: Float = borderRadius,
+    val borderTopRightRadius: Float = borderRadius,
+    val borderBottomRightRadius: Float = borderRadius,
+    val borderBottomLeftRadius: Float = borderRadius,
     val boxShadows: List<TextBoxShadow> = emptyList(),
     val opacity: Float = 1f,
     val drawTopEdge: Boolean = true,
@@ -130,6 +154,10 @@ class TextLine(
     val justifyGapExtra: Float = 0f,
     /** Non-null when the source paragraph token is replaced by an EPUB image block. */
     val inlineImage: InlineImagePlacement? = null,
+    /** flex/grid 图片组，同一行可包含多张图片。 */
+    val inlineImages: List<PositionedInlineImagePlacement> = emptyList(),
+    /** Replaced elements participating in the inline formatting context. */
+    val inlineGlyphImages: List<PositionedInlineImagePlacement> = emptyList(),
     /** Synthetic horizontal separator; it carries no text offset. */
     val rule: TextRulePlacement? = null,
     /** CSS inline boxes such as badges, danmaku pills, and chat labels. */
@@ -149,6 +177,10 @@ class TextPage(
     val backgroundColorArgb: Int? = null,
     val backgroundImagePath: String? = null,
     val backgroundOpacity: Float = 1f,
+    /** 特殊封面/卷首页隐藏阅读器页眉页脚。 */
+    val immersive: Boolean = false,
+    /** 正文自带章标题时只隐藏阅读器页眉，并回收顶部标题栏空间。 */
+    val hideHeader: Boolean = false,
     /**
      * 本页最后一行之后已经应用、但被页切吞掉的纵向间隙（段距，或空行贡献的更大间隙）。
      * 滚动模式拼接条带时必须补回来，否则接缝会比页内段距紧。排版器写入，绘制不读。

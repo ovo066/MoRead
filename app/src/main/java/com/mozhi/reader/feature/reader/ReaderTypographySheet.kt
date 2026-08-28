@@ -108,6 +108,7 @@ data class ReaderTypographyActions(
     val onCustomFontSelect: (String) -> Unit,
     val onImportFont: () -> Unit,
     val onLineHeightChange: (Float) -> Unit,
+    val onPublisherStyleModeChange: (com.mozhi.reader.core.datastore.PublisherStyleMode) -> Unit,
     val onPageMarginLeftChange: (Float) -> Unit,
     val onPageMarginRightChange: (Float) -> Unit,
     val onPageMarginTopChange: (Float) -> Unit,
@@ -127,8 +128,12 @@ data class ReaderTypographyActions(
     val onThemeChange: (ReaderTheme, ReaderThemeSlot) -> Unit,
     val onCustomThemeSelect: (Long, ReaderThemeSlot) -> Unit,
     val onSaveCustomTheme: (CustomReaderTheme, ReaderThemeSlot) -> Unit,
+    val onSaveBookCustomTheme: (CustomReaderTheme, ReaderThemeSlot) -> Unit,
     val onDeleteCustomTheme: (Long) -> Unit,
     val onDayNightAutoChange: (Boolean) -> Unit,
+    val onBookThemeEnabledChange: (Boolean) -> Unit,
+    val onBookThemeChange: (ReaderTheme, ReaderThemeSlot) -> Unit,
+    val onBookCustomThemeSelect: (Long, ReaderThemeSlot) -> Unit,
     val onImportBackground: (ReaderThemeSlot) -> Unit,
     val onBackgroundImageSelect: (String, ReaderThemeSlot) -> Unit,
     val onClearBackground: (ReaderThemeSlot) -> Unit,
@@ -147,11 +152,13 @@ data class ReaderTypographyActions(
 private data class CustomThemeDraft(val theme: CustomReaderTheme, val slot: ReaderThemeSlot)
 
 /**
- * 排版面板。
+ * 排版面板（一级）。
  *
- * 一级页只放改得最勤的四项：字号、行距、主题、翻页，半高 sheet 一屏放得下，不必下滑；
- * 其余全进二级页，入口做成一排胶囊——列表行太占高，六行入口会把主题挤到屏幕外，
- * 而主题恰恰是最常改的那一项。
+ * 分三层，各司其职：
+ * - **本半屏弹层**：只放改得最勤的四项（字号、行距、主题、翻页），一屏放得下、不必下滑；
+ * - **弹层内二级页**：字体、主题与背景、语法高亮、阅读交互——设定完就走，不需要盯着正文；
+ * - **悬浮排版卡片**（[onOpenTypographyCard]）：字间距、段距、缩进、边距、标题这类**每改一格都要
+ *   看重排结果**的项。它们留在半屏弹层里就只能对着上半屏的旧内容猜效果，所以单独浮到屏幕中央。
  *
  * @param settings 原始设置（含日、夜两套配色），不是按当前明暗解析后的结果。
  * @param slot 此刻生效的配色槽；一级页改的就是它，所见即所改。
@@ -159,14 +166,17 @@ private data class CustomThemeDraft(val theme: CustomReaderTheme, val slot: Read
 @Composable
 fun ReaderTypographySheet(
     settings: ReaderSettings,
+    bookId: Long,
     slot: ReaderThemeSlot,
     palette: ReaderPalette,
-    actions: ReaderTypographyActions
+    actions: ReaderTypographyActions,
+    onOpenTypographyCard: () -> Unit
 ) {
     var editorDraft by remember { mutableStateOf<CustomThemeDraft?>(null) }
     var syntaxDraft by remember { mutableStateOf<ReaderSyntaxRule?>(null) }
     var secondaryPage by remember { mutableStateOf<TypographySecondaryPage?>(null) }
     val systemDark = isDarkTheme()
+    val bookThemeEnabled = settings.bookThemes[bookId]?.enabled == true
     // 新建主题时取目标槽当前的纸色做种子，配夜间方案时不会从白纸起步。
     val dayPalette = readerPalette(settings.resolveThemeSlot(ReaderThemeSlot.DAY), systemDark)
     val nightPalette = readerPalette(settings.resolveThemeSlot(ReaderThemeSlot.NIGHT), systemDark)
@@ -198,9 +208,11 @@ fun ReaderTypographySheet(
             TypographyMainPanel(
                 settings = settings,
                 slot = slot,
+                bookThemeEnabled = bookThemeEnabled,
                 palette = palette,
                 actions = actions,
                 onOpenPage = { secondaryPage = it },
+                onOpenTypographyCard = onOpenTypographyCard,
                 onEditCustomTheme = { theme -> editorDraft = CustomThemeDraft(theme, slot) },
                 onCreateCustomTheme = { editorDraft = createDraft(slot) }
             )
@@ -208,10 +220,10 @@ fun ReaderTypographySheet(
             TypographySecondaryHeader(page.title) { secondaryPage = null }
             when (page) {
                 TypographySecondaryPage.FONT -> FontPage(settings, palette, actions)
-                TypographySecondaryPage.MARGIN -> MarginPage(settings, palette, actions)
                 TypographySecondaryPage.THEME -> ThemePage(
                     settings = settings,
                     activeSlot = slot,
+                    bookThemeEnabled = bookThemeEnabled,
                     palette = palette,
                     actions = actions,
                     onEditCustomTheme = { theme, target ->
@@ -219,7 +231,6 @@ fun ReaderTypographySheet(
                     },
                     onCreateCustomTheme = { target -> editorDraft = createDraft(target) }
                 )
-                TypographySecondaryPage.ADVANCED -> AdvancedTypographyPage(settings, palette, actions)
                 TypographySecondaryPage.SYNTAX -> SyntaxHighlightEditor(
                     settings = settings,
                     palette = palette,
@@ -249,7 +260,8 @@ fun ReaderTypographySheet(
             onImportBackground = { actions.onImportBackground(draft.slot) },
             onDismiss = { editorDraft = null },
             onSave = { theme ->
-                actions.onSaveCustomTheme(theme, draft.slot)
+                if (bookThemeEnabled) actions.onSaveBookCustomTheme(theme, draft.slot)
+                else actions.onSaveCustomTheme(theme, draft.slot)
                 editorDraft = null
             },
             onDelete = if (draft.theme.id != 0L) {

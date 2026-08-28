@@ -1,0 +1,227 @@
+{
+    "fixture": "03-bg-paint",
+    "bodyLength": 62,
+    "pages": [
+        {
+            "index": 0,
+            "chapterPosition": 0,
+            "charLength": 60,
+            "height": 284.38638,
+            "backgroundColorArgb": -329486,
+            "backgroundImagePath": null,
+            "immersive": false,
+            "hideHeader": false,
+            "decorations": [
+                {
+                    "kind": "block",
+                    "left": 15.25,
+                    "top": 14.545454,
+                    "right": 224.75,
+                    "bottom": 81.645454,
+                    "backgroundColorArgb": 0,
+                    "backgroundImagePath": "fixture://OEBPS/Images/frame.png",
+                    "backgroundSizeMode": "STRETCH",
+                    "backgroundSize": [
+                        209.5,
+                        67.1
+                    ],
+                    "backgroundRepeat": [
+                        false,
+                        false
+                    ],
+                    "backgroundPosition": [
+                        0.5,
+                        0.0
+                    ],
+                    "borderWidths": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "borderColors": [
+                        null,
+                        null,
+                        null,
+                        null
+                    ],
+                    "radii": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "shadowCount": 0,
+                    "edges": [
+                        true,
+                        true,
+                        true,
+                        true
+                    ]
+                },
+                {
+                    "kind": "block",
+                    "left": 0.0,
+                    "top": 96.19091,
+                    "right": 240.0,
+                    "bottom": 217.79092,
+                    "backgroundColorArgb": null,
+                    "backgroundImagePath": "fixture://OEBPS/Images/ornament.png",
+                    "backgroundSizeMode": "EXPLICIT",
+                    "backgroundSize": [
+                        60.0,
+                        60.0
+                    ],
+                    "backgroundRepeat": [
+                        false,
+                        false
+                    ],
+                    "backgroundPosition": [
+                        0.5,
+                        0.5
+                    ],
+                    "borderWidths": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "borderColors": [
+                        null,
+                        null,
+                        null,
+                        null
+                    ],
+                    "radii": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "shadowCount": 0,
+                    "edges": [
+                        true,
+                        true,
+                        true,
+                        true
+                    ]
+                },
+                {
+                    "kind": "block",
+                    "left": 3.25,
+                    "top": 232.33638,
+                    "right": 236.75,
+                    "bottom": 304.43637,
+                    "backgroundColorArgb": 721550079,
+                    "backgroundImagePath": "fixture://OEBPS/Images/texture.png",
+                    "backgroundSizeMode": "AUTO",
+                    "backgroundSize": [
+                        0.0,
+                        0.0
+                    ],
+                    "backgroundRepeat": [
+                        true,
+                        true
+                    ],
+                    "backgroundPosition": [
+                        0.0,
+                        0.0
+                    ],
+                    "borderWidths": [
+                        1.25,
+                        1.25,
+                        1.25,
+                        1.25
+                    ],
+                    "borderColors": [
+                        -16748429,
+                        -16748429,
+                        -16748429,
+                        -16748429
+                    ],
+                    "radii": [
+                        12.5,
+                        12.5,
+                        12.5,
+                        12.5
+                    ],
+                    "shadowCount": 0,
+                    "edges": [
+                        true,
+                        true,
+                        true,
+                        true
+                    ]
+                }
+            ],
+            "lines": [
+                {
+                    "chapterPosition": 0,
+                    "charLength": 15,
+                    "lineTop": 23.295454,
+                    "lineBottom": 43.295456,
+                    "startX": 64.0,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                },
+                {
+                    "chapterPosition": 15,
+                    "charLength": 3,
+                    "lineTop": 44.095455,
+                    "lineBottom": 64.09546,
+                    "startX": 24.0,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                },
+                {
+                    "chapterPosition": 19,
+                    "charLength": 12,
+                    "lineTop": 132.19092,
+                    "lineBottom": 152.19092,
+                    "startX": 76.0,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                },
+                {
+                    "chapterPosition": 31,
+                    "charLength": 9,
+                    "lineTop": 152.99092,
+                    "lineBottom": 172.99092,
+                    "startX": 36.0,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                },
+                {
+                    "chapterPosition": 41,
+                    "charLength": 17,
+                    "lineTop": 243.58638,
+                    "lineBottom": 263.58636,
+                    "startX": 52.0,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                },
+                {
+                    "chapterPosition": 58,
+                    "charLength": 4,
+                    "lineTop": 264.38638,
+                    "lineBottom": 284.38638,
+                    "startX": 12.0,
+                    "image": null,
+                    "images": [],
+                    "glyphImages": [],
+                    "decorations": []
+                }
+            ]
+        }
+    ]
+}

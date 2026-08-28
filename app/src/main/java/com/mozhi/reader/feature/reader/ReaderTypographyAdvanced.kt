@@ -101,10 +101,8 @@ internal enum class TypographySecondaryPage(
     val title: String,
     val icon: ImageVector
 ) {
-    FONT("字体", "字体与字号", Icons.Outlined.TextFields),
-    MARGIN("边距", "版面留白", Icons.Outlined.Straighten),
+    FONT("字体", "正文字体", Icons.Outlined.TextFields),
     THEME("主题", "主题与背景", Icons.Outlined.Palette),
-    ADVANCED("细排版", "高级排版", Icons.Outlined.Tune),
     SYNTAX("高亮", "语法高亮", Icons.Outlined.Brush),
     BEHAVIOR("交互", "阅读交互", Icons.Outlined.TouchApp)
 }
@@ -128,112 +126,6 @@ internal fun TypographySecondaryHeader(title: String, onBack: () -> Unit) {
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Medium,
             modifier = Modifier.padding(start = 6.dp)
-        )
-    }
-}
-
-@Composable
-internal fun AdvancedTypographyPage(
-    settings: ReaderSettings,
-    palette: ReaderPalette,
-    actions: ReaderTypographyActions
-) {
-    TypographyValueSlider(
-        label = "字间距",
-        valueText = String.format(java.util.Locale.ROOT, "%.2f em", settings.letterSpacingEm),
-        value = settings.letterSpacingEm,
-        range = -0.05f..0.2f,
-        steps = 24,
-        palette = palette,
-        onValueChange = actions.onLetterSpacingChange
-    )
-    TypographyValueSlider(
-        label = "段落间距",
-        valueText = String.format(java.util.Locale.ROOT, "%.2f em", settings.paragraphSpacingEm),
-        value = settings.paragraphSpacingEm,
-        range = 0f..1.5f,
-        steps = 29,
-        palette = palette,
-        onValueChange = actions.onParagraphSpacingChange
-    )
-    TypographyValueSlider(
-        label = "段首缩进",
-        valueText = String.format(java.util.Locale.ROOT, "%.1f 字", settings.firstLineIndentEm),
-        value = settings.firstLineIndentEm,
-        range = 0f..4f,
-        steps = 15,
-        palette = palette,
-        onValueChange = actions.onFirstLineIndentChange
-    )
-    SheetRow(label = "对齐", palette = palette) {
-        SegChip(
-            text = "两端",
-            selected = settings.textJustification,
-            palette = palette,
-            modifier = Modifier.weight(1f)
-        ) { actions.onTextJustificationChange(true) }
-        SegChip(
-            text = "左对齐",
-            selected = !settings.textJustification,
-            palette = palette,
-            modifier = Modifier.weight(1f)
-        ) { actions.onTextJustificationChange(false) }
-    }
-    Text("标题", style = MaterialTheme.typography.labelMedium, color = palette.muted)
-    TypographyValueSlider(
-        label = "标题比例",
-        valueText = String.format(java.util.Locale.ROOT, "%.2f×", settings.titleScale),
-        value = settings.titleScale,
-        range = 1f..2f,
-        steps = 19,
-        palette = palette,
-        onValueChange = actions.onTitleScaleChange
-    )
-    TypographyValueSlider(
-        label = "标题上边距",
-        valueText = spacingLineText(settings.titleTopSpacing),
-        value = settings.titleTopSpacing,
-        range = 0f..3f,
-        steps = 29,
-        palette = palette,
-        onValueChange = actions.onTitleTopSpacingChange
-    )
-    TypographyValueSlider(
-        label = "标题下边距",
-        valueText = spacingLineText(settings.titleBottomSpacing),
-        value = settings.titleBottomSpacing,
-        range = 0f..3f,
-        steps = 29,
-        palette = palette,
-        onValueChange = actions.onTitleBottomSpacingChange
-    )
-}
-
-@Composable
-internal fun TypographyValueSlider(
-    label: String,
-    valueText: String,
-    value: Float,
-    range: ClosedFloatingPointRange<Float>,
-    steps: Int,
-    palette: ReaderPalette,
-    onValueChange: (Float) -> Unit
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Row {
-            Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-            Text(valueText, style = MaterialTheme.typography.labelMedium, color = palette.muted)
-        }
-        Slider(
-            value = value,
-            onValueChange = onValueChange,
-            valueRange = range,
-            steps = steps,
-            colors = SliderDefaults.colors(
-                thumbColor = palette.accent,
-                activeTrackColor = palette.accent,
-                inactiveTrackColor = palette.muted.copy(alpha = 0.18f)
-            )
         )
     }
 }

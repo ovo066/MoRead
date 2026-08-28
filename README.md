@@ -14,19 +14,26 @@
 
 墨知是一款纯本地、无账号、无数据采集的阅读应用：书籍由你自己导入，AI 功能使用你自己的 API Key（BYOK）直连服务商，不经任何中转服务器。没有网络、没有 Key 时，它就是一个完整可用的本地阅读器。
 
+## 1.0.3 更新
+
+- 重构原生 EPUB 精细排版：支持更完整的 CSS 层叠、选择器、块级/行内布局、浮动、表格、背景和图片尺寸，尽量还原出版物设计
+- 改进阅读排版设置与主题应用，修复多类 EPUB 图片、样式继承和分页兼容问题
+- 修复伴读多气泡回复在落库瞬间偶发重复、末段截断的问题
+- AI Provider Base URL 现在同时支持 HTTPS 与 HTTP，方便连接可信局域网中的本地模型服务
+
 ## 特性
 
 ### 阅读
 
 - TXT / EPUB 导入：编码自动探测，正则分章（Legado 同源规则集），导入前可预览并自定义分章规则
-- 自绘排版引擎：仿真 / 覆盖 / 滑动三种翻页，选词拖柄、段落批注与评论、书签、书内关键词搜索
+- 自绘排版引擎：仿真 / 覆盖 / 滑动三种翻页；原生 EPUB 精细解析 CSS、块级/行内、浮动、表格、背景与图片；支持选词拖柄、段落批注与评论、书签、书内关键词搜索
 - 排版自由：字号、行距、页边距、明暗主题、自定义三色阅读主题；无封面书籍自动生成直排文字封面
 - 连续听书：系统 TTS 或云端 AI TTS 逐句朗读，自动翻页与跨章续播，通知栏播放控制，当前句正文高亮
 - 阅读统计：阅读时长热力图、笔记与 AI 对话计量；笔记可导出 Markdown
 
 ### AI 伴读（自带 API Key）
 
-- 四协议客户端自实现：OpenAI 兼容 / OpenAI Responses / Claude / Gemini，全部流式输出；同一服务商可混配对话、向量、语音、生图模型
+- 四协议客户端自实现：OpenAI 兼容 / OpenAI Responses / Claude / Gemini，全部流式输出；同一服务商可混配对话、向量、语音、生图模型；Base URL 支持 HTTPS 与可信局域网 HTTP
 - 角色卡：兼容 SillyTavern PNG / JSON 卡导入，支持世界书与自定义头像
 - 陪读 Agent：知道你的阅读进度，能检索书中内容（向量 + 词法双路）、添加批注、写笔记、保存剧情梗概、生成插图、朗读文本
 - 防剧透硬约束：喂给 AI 的书籍内容永远不超过你当前的阅读进度
@@ -55,7 +62,6 @@
 - 要求 JDK 17 与 Android SDK 37；克隆后用 Android Studio 打开，或命令行执行 `./gradlew :app:assembleDebug`
 - Windows 下若仓库位于含中文的路径，可使用 `powershell -ExecutionPolicy Bypass -File scripts/gradle.ps1 <任务>` 规避路径问题
 - 正式签名：仓库不包含签名密钥。在根目录放置 `keystore.properties`（`storeFile` / `storePassword` / `keyAlias` / `keyPassword` 四项）后执行 `assembleRelease` 即自动签名；未提供时输出未签名包
-- 代码结构速查见 [docs/CODE_MAP.md](docs/CODE_MAP.md)
 
 ## 免责声明
 

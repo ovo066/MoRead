@@ -2,6 +2,8 @@ package com.mozhi.reader.feature.reader
 
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.Intent
+import android.net.Uri
 import android.view.WindowManager
 import java.util.Locale
 import androidx.activity.ComponentActivity
@@ -22,12 +24,14 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.MyLocation
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -59,6 +63,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -86,7 +91,8 @@ import com.mozhi.reader.core.datastore.ReaderSettings
 import com.mozhi.reader.core.datastore.ReaderTextReplacementRule
 import com.mozhi.reader.core.datastore.ReaderTheme
 import com.mozhi.reader.core.datastore.activeThemeSlot
-import com.mozhi.reader.core.datastore.resolveThemeSlot
+import com.mozhi.reader.core.datastore.resolveForBook
+import com.mozhi.reader.core.datastore.withBookThemeSelection
 import com.mozhi.reader.feature.reader.engine.ReaderAnnotationMark
 import com.mozhi.reader.feature.reader.engine.ReaderIllustrationMark
 import com.mozhi.reader.feature.reader.engine.InlineMarkerKind
@@ -104,6 +110,11 @@ private data class AnnotationThreadKey(
     val chapterIndex: Int,
     val startCharOffset: Int,
     val endCharOffset: Int
+)
+
+private data class ReaderReturnPosition(
+    val chapterIndex: Int,
+    val charOffset: Int
 )
 
 internal data class TextEditDraft(
@@ -145,9 +156,14 @@ fun ReaderScreen(
     val sleepTimer by listenViewModel.sleepTimer.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var activeSheet by remember { mutableStateOf<ReaderSheet?>(null) }
+    // 排版细调走屏幕中央的悬浮卡片，不是弹层里的又一张二级页：那一类设置每改一格都要看重排，
+    // 半屏弹层会把正文下半屏压掉。
+    var typographyCardVisible by remember { mutableStateOf(false) }
     var aiRequest by remember { mutableStateOf<ReaderAiRequest?>(null) }
     var inkFloater by remember { mutableStateOf<AnnotationInkFloater?>(null) }
     var annotationThread by remember { mutableStateOf<AnnotationThreadKey?>(null) }
+    var linkPreview by remember { mutableStateOf<EpubLinkPreview?>(null) }
+    var returnPosition by remember { mutableStateOf<ReaderReturnPosition?>(null) }
     var ttsDraft by remember { mutableStateOf<String?>(null) }
     var locateHighlight by remember {
         mutableStateOf<com.mozhi.reader.feature.reader.engine.TransientHighlightSpan?>(null)
@@ -162,7 +178,8 @@ fun ReaderScreen(
     var detailsVisible by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
     var listenTimerVisible by remember { mutableStateOf(false) }
     val systemDark = com.mozhi.reader.ui.theme.isDarkTheme()
-    val activity = LocalContext.current.findComponentActivity()
+    val context = LocalContext.current
+    val activity = context.findComponentActivity()
     val lifecycleOwner = LocalLifecycleOwner.current
     var readerStarted by remember {
         mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
@@ -171,7 +188,8 @@ fun ReaderScreen(
     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
     // 日夜各存一套配色：先定此刻用哪一槽，再把它解析到顶层字段，调色板与渲染只认解析结果。
     val themeSlot = state.settings.activeThemeSlot(systemDark)
-    val readerSettings = state.settings.resolveThemeSlot(themeSlot)
+    val bookThemeSettings = state.settings.withBookThemeSelection(bookId)
+    val readerSettings = state.settings.resolveForBook(bookId, themeSlot)
     val palette = readerPalette(readerSettings, systemDark)
     val listeningThisBook = listenState?.bookId == bookId
     // 滚动模式：听书「按页跳」与「翻页回写朗读位置」都不适用，跟读交给滚动面自己做。
@@ -248,7 +266,8 @@ fun ReaderScreen(
     val contentVisible = readerReady && state.isContentReady
     val canTurnWithVolume by rememberUpdatedState(
         contentVisible && activeSheet == null && !detailsVisible && aiRequest == null &&
-            inkFloater == null && annotationThread == null && ttsDraft == null
+            inkFloater == null && annotationThread == null && linkPreview == null && ttsDraft == null &&
+            !typographyCardVisible
     )
     DisposableEffect(activity, state.settings.volumeKeysPageTurn) {
         val host = activity as? MainActivity
@@ -419,6 +438,58 @@ fun ReaderScreen(
         chromeVisible = true
     }
 
+    BackHandler(enabled = typographyCardVisible) { typographyCardVisible = false }
+
+    // 半屏弹层与悬浮排版卡片共用同一份回调，所以提到两者之上装配一次。
+    val typographyActions = ReaderTypographyActions(
+        onFontScaleChange = viewModel::setFontScale,
+        onFontChange = viewModel::setFont,
+        onCustomFontSelect = viewModel::selectCustomFont,
+        onImportFont = { customFontLauncher.launch("*/*") },
+        onLineHeightChange = viewModel::setLineHeight,
+        onPublisherStyleModeChange = viewModel::setPublisherStyleMode,
+        onPageMarginLeftChange = viewModel::setPageMarginLeft,
+        onPageMarginRightChange = viewModel::setPageMarginRight,
+        onPageMarginTopChange = viewModel::setPageMarginTop,
+        onPageMarginBottomChange = viewModel::setPageMarginBottom,
+        onHeaderMarginTopChange = viewModel::setHeaderMarginTop,
+        onFooterMarginBottomChange = viewModel::setFooterMarginBottom,
+        onFontWeightChange = viewModel::setFontWeight,
+        onLetterSpacingChange = viewModel::setLetterSpacing,
+        onParagraphSpacingChange = viewModel::setParagraphSpacing,
+        onFirstLineIndentChange = viewModel::setFirstLineIndent,
+        onTitleScaleChange = viewModel::setTitleScale,
+        onTitleTopSpacingChange = viewModel::setTitleTopSpacing,
+        onTitleBottomSpacingChange = viewModel::setTitleBottomSpacing,
+        onTextJustificationChange = viewModel::setTextJustification,
+        onShowHeaderChange = viewModel::setShowHeader,
+        onShowFooterChange = viewModel::setShowFooter,
+        onThemeChange = viewModel::setTheme,
+        onCustomThemeSelect = viewModel::selectCustomTheme,
+        onSaveCustomTheme = viewModel::saveCustomTheme,
+        onSaveBookCustomTheme = viewModel::saveBookCustomTheme,
+        onDeleteCustomTheme = viewModel::deleteCustomTheme,
+        onDayNightAutoChange = viewModel::setDayNightThemeAuto,
+        onBookThemeEnabledChange = viewModel::setBookThemeEnabled,
+        onBookThemeChange = viewModel::setBookTheme,
+        onBookCustomThemeSelect = viewModel::selectBookCustomTheme,
+        onImportBackground = { slot ->
+            backgroundImportSlot = slot
+            backgroundImageLauncher.launch(arrayOf("image/*"))
+        },
+        onBackgroundImageSelect = viewModel::selectBackgroundImage,
+        onClearBackground = viewModel::clearBackgroundImage,
+        onBackgroundOpacityChange = viewModel::setBackgroundImageOpacity,
+        onSyntaxHighlightEnabledChange = viewModel::setSyntaxHighlightEnabled,
+        onSaveSyntaxRule = viewModel::saveSyntaxHighlightRule,
+        onDeleteSyntaxRule = viewModel::deleteSyntaxHighlightRule,
+        onAnimationChange = viewModel::setPageTurnAnimation,
+        onPageModeChange = viewModel::setPageMode,
+        onKeepScreenOnChange = viewModel::setKeepScreenOn,
+        onImmersiveReadingChange = viewModel::setImmersiveReading,
+        onVolumeKeysPageTurnChange = viewModel::setVolumeKeysPageTurn
+    )
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -433,7 +504,7 @@ fun ReaderScreen(
             readerReady -> {
                 val paneEnabled = contentVisible && activeSheet == null && !detailsVisible &&
                     aiRequest == null && inkFloater == null && annotationThread == null &&
-                    ttsDraft == null && textEditDraft == null
+                    linkPreview == null && ttsDraft == null && textEditDraft == null && !typographyCardVisible
                 // 听书当前句优先：正在朗读时它才是「此刻读到哪」，引文高亮已完成使命。
                 val paneListenHighlight = listenState?.takeIf { it.bookId == bookId }?.let { listen ->
                     com.mozhi.reader.feature.reader.engine.TransientHighlightSpan(
@@ -484,6 +555,13 @@ fun ReaderScreen(
                         )
                     }
                 }
+                val paneLinkAction: (com.mozhi.reader.feature.reader.engine.ReaderPageLink) -> Unit = { link ->
+                    coroutineScope.launch {
+                        val preview = viewModel.previewEpubLink(link)
+                        if (preview == null) snackbarHostState.showSnackbar("无法解析这个书内链接")
+                        else linkPreview = preview
+                    }
+                }
                 val paneTtsAction: (String) -> Unit = { selection -> ttsDraft = selection }
                 val paneEditText: (String, IntRange) -> Unit = { selection, range ->
                     textEditDraft = TextEditDraft(
@@ -522,6 +600,7 @@ fun ReaderScreen(
                         onAnnotationAction = paneAnnotationAction,
                         onAnnotationClick = paneAnnotationClick,
                         onIllustrationClick = paneIllustrationClick,
+                        onLinkClick = paneLinkAction,
                         onTtsAction = paneTtsAction,
                         onImageAction = paneImageAction,
                         onEditText = paneEditText,
@@ -543,6 +622,7 @@ fun ReaderScreen(
                         onAnnotationAction = paneAnnotationAction,
                         onAnnotationClick = paneAnnotationClick,
                         onIllustrationClick = paneIllustrationClick,
+                        onLinkClick = paneLinkAction,
                         onTtsAction = paneTtsAction,
                         onImageAction = paneImageAction,
                         onEditText = paneEditText,
@@ -576,7 +656,8 @@ fun ReaderScreen(
 
         if (!detailsVisible) {
             ReaderChrome(
-                visible = chromeVisible,
+                // 排版悬浮卡片浮出时收起上下工具栏：这一类设置就是要看正文，栏子占着两头没意义。
+                visible = chromeVisible && !typographyCardVisible,
                 bookTitle = state.book?.title ?: stringResource(R.string.app_name),
                 chapterTitle = chapterTitle.ifBlank { "正在载入" },
                 chapterProgress = state.chapterProgress,
@@ -695,6 +776,106 @@ fun ReaderScreen(
             }
         )
 
+        ReaderTypographyCard(
+            visible = typographyCardVisible,
+            settings = state.settings,
+            palette = palette,
+            actions = typographyActions,
+            onBack = {
+                typographyCardVisible = false
+                activeSheet = ReaderSheet.SETTINGS
+            },
+            onClose = { typographyCardVisible = false }
+        )
+
+        linkPreview?.let { preview ->
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(24.dp)
+                    .widthIn(max = 340.dp),
+                shape = RoundedCornerShape(18.dp),
+                color = palette.glassStrong.compositeOver(palette.background),
+                contentColor = palette.onBackground,
+                border = androidx.compose.foundation.BorderStroke(1.dp, palette.glassBorder),
+                shadowElevation = 12.dp
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        preview.label.ifBlank { "书内链接" },
+                        style = MaterialTheme.typography.titleMedium,
+                        color = palette.accent
+                    )
+                    if (preview.targetTitle.isNotBlank()) {
+                        Text(
+                            preview.targetTitle,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = palette.muted
+                        )
+                    }
+                    Text(
+                        preview.content,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 9
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        TextButton(onClick = { linkPreview = null }) { Text("关闭") }
+                        TextButton(onClick = {
+                            val externalUrl = preview.externalUrl
+                            val targetChapter = preview.targetChapterIndex
+                            linkPreview = null
+                            if (externalUrl != null) {
+                                runCatching {
+                                    context.startActivity(
+                                        Intent(Intent.ACTION_VIEW, Uri.parse(externalUrl))
+                                    )
+                                }
+                            } else if (targetChapter != null) {
+                                returnPosition = ReaderReturnPosition(
+                                    state.currentChapterIndex,
+                                    state.currentCharOffset
+                                )
+                                viewModel.goToPosition(targetChapter, preview.targetCharOffset)
+                            }
+                        }) { Text("跳转") }
+                    }
+                }
+            }
+        }
+
+        returnPosition?.let { origin ->
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = if (chromeVisible && !detailsVisible) 150.dp else 20.dp)
+                    .navigationBarsPadding(),
+                shape = RoundedCornerShape(14.dp),
+                color = palette.glassStrong.compositeOver(palette.background),
+                contentColor = palette.onBackground,
+                border = androidx.compose.foundation.BorderStroke(1.dp, palette.glassBorder),
+                shadowElevation = 8.dp
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = {
+                        viewModel.goToPosition(origin.chapterIndex, origin.charOffset)
+                        returnPosition = null
+                    }) { Text("返回原进度") }
+                    Box(
+                        modifier = Modifier
+                            .size(width = 1.dp, height = 22.dp)
+                            .background(palette.glassBorder)
+                    )
+                    TextButton(onClick = { returnPosition = null }) { Text("关闭") }
+                }
+            }
+        }
+
         SnackbarHost(
             hostState = snackbarHostState,
             modifier = Modifier
@@ -716,9 +897,9 @@ fun ReaderScreen(
                 tocEntries = state.tocEntries,
                 currentChapterIndex = state.currentChapterIndex,
                 palette = palette,
-                onChapterClick = { index ->
+                onChapterClick = { index, href ->
                     activeSheet = null
-                    viewModel.goToChapter(index)
+                    viewModel.goToTocEntry(index, href)
                 }
             )
         }
@@ -741,7 +922,9 @@ fun ReaderScreen(
         }
         ReaderSheet.SETTINGS -> ModalBottomSheet(
             onDismissRequest = { activeSheet = null },
-            containerColor = palette.glassStrong,
+            // 无遮罩＝正文透出来的只该是面板「外面」那部分；面板本体要不透明，
+            // 否则 5% 的玻璃透明度会在深色纸上透出一层幽灵正文。
+            containerColor = palette.glassStrong.compositeOver(palette.background),
             contentColor = palette.onBackground,
             // 不加遮罩：调字号/行距时正文必须看得见，否则「改完什么样」要关掉面板才知道。
             // 半高吸附让正文留在视野里，重排当场可见。
@@ -749,52 +932,15 @@ fun ReaderScreen(
             sheetState = rememberModalBottomSheetState()
         ) {
             ReaderTypographySheet(
-                settings = state.settings,
+                settings = bookThemeSettings,
+                bookId = bookId,
                 slot = themeSlot,
                 palette = palette,
-                actions = ReaderTypographyActions(
-                    onFontScaleChange = viewModel::setFontScale,
-                    onFontChange = viewModel::setFont,
-                    onCustomFontSelect = viewModel::selectCustomFont,
-                    onImportFont = { customFontLauncher.launch("*/*") },
-                    onLineHeightChange = viewModel::setLineHeight,
-                    onPageMarginLeftChange = viewModel::setPageMarginLeft,
-                    onPageMarginRightChange = viewModel::setPageMarginRight,
-                    onPageMarginTopChange = viewModel::setPageMarginTop,
-                    onPageMarginBottomChange = viewModel::setPageMarginBottom,
-                    onHeaderMarginTopChange = viewModel::setHeaderMarginTop,
-                    onFooterMarginBottomChange = viewModel::setFooterMarginBottom,
-                    onFontWeightChange = viewModel::setFontWeight,
-                    onLetterSpacingChange = viewModel::setLetterSpacing,
-                    onParagraphSpacingChange = viewModel::setParagraphSpacing,
-                    onFirstLineIndentChange = viewModel::setFirstLineIndent,
-                    onTitleScaleChange = viewModel::setTitleScale,
-                    onTitleTopSpacingChange = viewModel::setTitleTopSpacing,
-                    onTitleBottomSpacingChange = viewModel::setTitleBottomSpacing,
-                    onTextJustificationChange = viewModel::setTextJustification,
-                    onShowHeaderChange = viewModel::setShowHeader,
-                    onShowFooterChange = viewModel::setShowFooter,
-                    onThemeChange = viewModel::setTheme,
-                    onCustomThemeSelect = viewModel::selectCustomTheme,
-                    onSaveCustomTheme = viewModel::saveCustomTheme,
-                    onDeleteCustomTheme = viewModel::deleteCustomTheme,
-                    onDayNightAutoChange = viewModel::setDayNightThemeAuto,
-                    onImportBackground = { slot ->
-                        backgroundImportSlot = slot
-                        backgroundImageLauncher.launch(arrayOf("image/*"))
-                    },
-                    onBackgroundImageSelect = viewModel::selectBackgroundImage,
-                    onClearBackground = viewModel::clearBackgroundImage,
-                    onBackgroundOpacityChange = viewModel::setBackgroundImageOpacity,
-                    onSyntaxHighlightEnabledChange = viewModel::setSyntaxHighlightEnabled,
-                    onSaveSyntaxRule = viewModel::saveSyntaxHighlightRule,
-                    onDeleteSyntaxRule = viewModel::deleteSyntaxHighlightRule,
-                    onAnimationChange = viewModel::setPageTurnAnimation,
-                    onPageModeChange = viewModel::setPageMode,
-                    onKeepScreenOnChange = viewModel::setKeepScreenOn,
-                    onImmersiveReadingChange = viewModel::setImmersiveReading,
-                    onVolumeKeysPageTurnChange = viewModel::setVolumeKeysPageTurn
-                )
+                actions = typographyActions,
+                onOpenTypographyCard = {
+                    activeSheet = null
+                    typographyCardVisible = true
+                }
             )
         }
         ReaderSheet.REIDENTIFY_CHAPTERS -> ModalBottomSheet(
@@ -967,6 +1113,9 @@ fun ReaderScreen(
             },
             containerColor = palette.glassStrong,
             contentColor = palette.onBackground,
+            // 整高：面板自带输入框，半高吸附时键盘一弹就没有地方放输入行了
+            // （内容列表已改成 weight，压缩列表保输入区，前提是 sheet 有整屏可用）。
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
             scrimColor = palette.scrim
         ) {
             ReaderAiSheet(

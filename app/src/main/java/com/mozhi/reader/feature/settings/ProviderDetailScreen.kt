@@ -357,7 +357,9 @@ private fun ProviderForm(
                         value = baseUrl,
                         onValueChange = { baseUrl = it },
                         label = { Text("Base URL") },
-                        supportingText = { Text("示例：${dialect.defaultBaseUrl()}") },
+                        supportingText = {
+                            Text("支持 HTTP / HTTPS；HTTP 仅建议用于可信局域网。示例：${dialect.defaultBaseUrl()}")
+                        },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()

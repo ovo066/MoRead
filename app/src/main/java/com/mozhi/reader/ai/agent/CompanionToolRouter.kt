@@ -2,6 +2,24 @@ package com.mozhi.reader.ai.agent
 
 /** 按当前用户意图裁剪工具集合，避免每轮把整套 schema 都发送给模型。 */
 internal object CompanionToolRouter {
+    /**
+     * 伴读主会话实际可用的完整工具集。
+     *
+     * 角色编辑器里的“工具权限”表达的是能力白名单，不能再按单轮关键词二次裁掉；
+     * 否则模型在没命中硬编码词表时收到的就是空 tools，并会如实回答“没有工具”。
+     */
+    fun available(
+        personaEnabledTools: Set<String>,
+        requiredTools: Set<String> = emptySet(),
+        webSearchEnabled: Boolean,
+        longTermMemoryEnabled: Boolean
+    ): Set<String> = buildSet {
+        addAll(personaEnabledTools)
+        addAll(requiredTools)
+        if (webSearchEnabled) addAll(WEB_TOOLS)
+        if (!longTermMemoryEnabled) remove("recall_memory")
+    }
+
     fun select(
         userText: String,
         sceneAvailable: Boolean,
@@ -29,8 +47,12 @@ internal object CompanionToolRouter {
             if (webSearchEnabled && URL_REGEX.containsMatchIn(text)) candidates += "web_scrape"
         }
 
-        val globallyAvailable = if (webSearchEnabled) WEB_TOOLS else emptySet()
-        val allowed = personaEnabledTools + requiredTools + globallyAvailable
+        val allowed = available(
+            personaEnabledTools = personaEnabledTools,
+            requiredTools = requiredTools,
+            webSearchEnabled = webSearchEnabled,
+            longTermMemoryEnabled = longTermMemoryEnabled
+        )
         return candidates.filterTo(linkedSetOf()) { it in allowed }
     }
 

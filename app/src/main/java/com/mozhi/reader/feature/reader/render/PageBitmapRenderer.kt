@@ -136,11 +136,13 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         includeBackground: Boolean = true
     ): Bitmap {
         val bitmap = obtainBitmap(into)
+        // `into` 会在三页窗口中循环复用。无论纸面是否嵌入，都先彻底清掉上一页；
+        // 不能只依赖背景绘制覆盖，因为半透明背景/图片边缘会把旧字留在缓冲里，
+        // 页面第二次进入该缓冲后就会形成重影。
+        bitmap.eraseColor(Color.TRANSPARENT)
         val canvas = Canvas(bitmap)
         if (includeBackground) {
             drawBackdrop(canvas, bitmap.width.toFloat(), bitmap.height.toFloat())
-        } else {
-            bitmap.eraseColor(Color.TRANSPARENT)
         }
         drawHeader(canvas, page)
         when (page) {

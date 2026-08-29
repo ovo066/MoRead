@@ -33,6 +33,16 @@ internal fun <T> rotatePageWindow(
     )
 }
 
+/**
+ * 普通重绘在翻页期间必须延迟；已登记的提交刷新必须同步轮换位图窗口，
+ * 否则下一次快速翻页会读到上一轮的页面快照。
+ */
+internal fun shouldRefreshPageWindowImmediately(
+    turnRunning: Boolean,
+    relativePosition: Int,
+    hasPreparedTurn: Boolean
+): Boolean = !turnRunning || (relativePosition == 0 && hasPreparedTurn)
+
 /** 只有卷曲几何需要一张包含纸面的完整快照；其余模式复用静态背景层。 */
 internal fun PageTurnAnimation.usesEmbeddedPageBackground(): Boolean =
     this == PageTurnAnimation.SIMULATION

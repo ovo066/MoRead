@@ -853,12 +853,9 @@ class ReaderCompanionViewModel @Inject constructor(
                 val multiBubble = settingsRepository.companionMultiBubbleEnabled.first()
                 // 语音要「开关开着」且「这个角色真绑了音色」两个条件都成立才算有这项能力。
                 val voiceEnabled = autonomy.voiceRepliesEnabled && persona.voiceId.isNotBlank()
-                val enabledTools = CompanionToolRouter.select(
-                    userText = memoryQuery ?: session.value.messages
-                        .lastOrNull { it.role == "user" }
-                        ?.content
-                        .orEmpty(),
-                    sceneAvailable = sceneQuote.isNotBlank(),
+                // 主伴读会话始终把角色获准的完整工具集交给模型，让模型自己决定是否调用。
+                // 之前按关键词裁剪会让大量正常说法落成空 tools，模型只能回答“没有工具”。
+                val enabledTools = CompanionToolRouter.available(
                     personaEnabledTools = persona.enabledTools().toSet(),
                     requiredTools = requiredTools,
                     webSearchEnabled = webSearchEnabled,

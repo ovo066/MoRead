@@ -19,6 +19,32 @@ class CompanionToolRouterTest {
     )
 
     @Test
+    fun `main companion keeps persona tools without keyword match`() {
+        val tools = CompanionToolRouter.available(
+            personaEnabledTools = allTools,
+            webSearchEnabled = false,
+            longTermMemoryEnabled = true
+        )
+
+        assertEquals(allTools, tools)
+    }
+
+    @Test
+    fun `main companion applies runtime capability switches`() {
+        val tools = CompanionToolRouter.available(
+            personaEnabledTools = allTools,
+            requiredTools = setOf("generate_image"),
+            webSearchEnabled = true,
+            longTermMemoryEnabled = false
+        )
+
+        assertFalse("recall_memory" in tools)
+        assertTrue("web_search" in tools)
+        assertTrue("web_scrape" in tools)
+        assertTrue("generate_image" in tools)
+    }
+
+    @Test
     fun `scene question does not attach unrelated tools`() {
         val tools = CompanionToolRouter.select(
             userText = "这句话是什么意思？",

@@ -196,10 +196,17 @@ fun ReaderPane(
         PageTurnAnimation.NONE -> PageTurnDriver.Mode.INSTANT
     }
 
-    // 位图正被翻页合成器读取时绝不原地重绘；内容、批注或时钟更新等到手势落定后
-    // 再原子发布，避免偶发出现一帧透明页/旧邻页的闪烁。
+    // 位图正被翻页合成器读取时，普通内容/批注/时钟更新等到手势落定后再发布。
+    // 唯一例外是 fillPage 已登记的提交刷新：它只重画已经离窗的缓冲，而且必须在
+    // fillPage 返回前同步轮换窗口。若也延迟到下一协程，连续第二次翻页会先拿到上一轮
+    // 的 cur/next，仿真卷曲便会把新旧两页叠在一起，看起来像“重影”。
     val refreshSafely: (Int) -> Unit = { relativePosition ->
-        if (!driver.isRunning) {
+        val refreshImmediately = shouldRefreshPageWindowImmediately(
+            turnRunning = driver.isRunning,
+            relativePosition = relativePosition,
+            hasPreparedTurn = holder.hasPreparedTurn()
+        )
+        if (refreshImmediately) {
             holder.refresh(relativePosition)
             frameTick++
         } else {
@@ -1067,6 +1074,8 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
     fun cancelPreparedTurn() {
         preparedTurn = null
     }
+
+    fun hasPreparedTurn(): Boolean = preparedTurn != null
 
     fun refresh(relativePosition: Int) {
         val renderer = renderer ?: return

@@ -10,6 +10,9 @@ class CompanionToolRouterTest {
         "get_reading_progress",
         "search_book",
         "read_book_section",
+        "list_chapters",
+        "list_annotations",
+        "list_notes",
         "recall_memory",
         "add_annotation",
         "write_note",
@@ -42,6 +45,35 @@ class CompanionToolRouterTest {
         assertTrue("web_search" in tools)
         assertTrue("web_scrape" in tools)
         assertTrue("generate_image" in tools)
+    }
+
+    @Test
+    fun `read tools are always available even with empty persona whitelist`() {
+        val tools = CompanionToolRouter.available(
+            personaEnabledTools = emptySet(),
+            webSearchEnabled = false,
+            longTermMemoryEnabled = true
+        )
+
+        assertTrue("list_chapters" in tools)
+        assertTrue("list_annotations" in tools)
+        assertTrue("list_notes" in tools)
+        assertTrue("search_book" in tools)
+    }
+
+    @Test
+    fun `scene routing recognizes readback intents`() {
+        val tools = CompanionToolRouter.select(
+            userText = "看看目录和我划过的句子，再读一下旧梗概",
+            sceneAvailable = true,
+            personaEnabledTools = emptySet(),
+            webSearchEnabled = false,
+            longTermMemoryEnabled = false
+        )
+
+        assertTrue("list_chapters" in tools)
+        assertTrue("list_annotations" in tools)
+        assertTrue("list_notes" in tools)
     }
 
     @Test
@@ -83,6 +115,9 @@ class CompanionToolRouterTest {
             longTermMemoryEnabled = false
         )
 
-        assertEquals(setOf("get_reading_progress", "read_book_section", "save_plot_summary"), tools)
+        assertTrue("get_reading_progress" in tools)
+        assertTrue("read_book_section" in tools)
+        assertTrue("save_plot_summary" in tools)
+        assertFalse("generate_image" in tools)
     }
 }

@@ -43,7 +43,7 @@ class AnnotationDiscussionViewModel @Inject constructor(
     private var repliesJob: Job? = null
     private var respondJob: Job? = null
 
-    /** 流式正文真源；UI 快照按 [STREAM_UI_TICK_MS] 节拍发布，避免逐 token 重组。 */
+    /** 流式正文真源；UI 快照按 显示帧节拍发布，避免逐 token 重组。 */
     private val streamBuffer = StringBuilder()
 
     /** 弹层打开时绑定该讨论串（同锚点的全部批注 id）。 */

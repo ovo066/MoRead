@@ -22,7 +22,9 @@ class ApiCallLogInterceptor @Inject constructor(
 
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
-        if (!store.recordingEnabled) return chain.proceed(request)
+        if (!store.recordingEnabled || request.tag(SkipApiCallLogging::class.java) != null) {
+            return chain.proceed(request)
+        }
 
         val startedAt = System.currentTimeMillis()
         val startNanos = System.nanoTime()
@@ -76,9 +78,17 @@ class ApiCallLogInterceptor @Inject constructor(
 
     private fun requestSnapshot(request: Request): Pair<String?, Long> {
         val body = request.body ?: return null to 0L
-        val declared = runCatching { body.contentLength() }.getOrDefault(-1L)
+        val declared = try {
+            body.contentLength()
+        } catch (_: Exception) {
+            -1L
+        }
         if (body.isDuplex() || body.isOneShot()) return "（一次性请求体，未记录）" to declared
-        return runCatching {
+        if (!isTextLike(body.contentType()?.toString())) return "（二进制请求体，未记录）" to declared
+        if (declared < 0L || declared > MAX_SNAPSHOT_BODY_BYTES) {
+            return "（请求体过大，未记录）" to declared
+        }
+        return try {
             val buffer = Buffer()
             body.writeTo(buffer)
             val size = buffer.size
@@ -90,7 +100,9 @@ class ApiCallLogInterceptor @Inject constructor(
                 text
             }
             preview to size
-        }.getOrDefault(null to declared)
+        } catch (_: Exception) {
+            null to declared
+        }
     }
 
     private fun isTextLike(contentType: String?): Boolean {
@@ -108,7 +120,12 @@ class ApiCallLogInterceptor @Inject constructor(
 
     private companion object {
         const val REQUEST_PEEK_BYTES = 2048L
+        const val MAX_SNAPSHOT_BODY_BYTES = 1024L * 1024L
         const val RESPONSE_PEEK_BYTES = 8192L
         const val PREVIEW_CHARS = 4000
     }
 }
+
+
+/** 标记不应进入诊断日志的请求（备份、媒体等大体积流式传输）。 */
+object SkipApiCallLogging

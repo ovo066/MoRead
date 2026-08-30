@@ -1,5 +1,7 @@
 package com.mozhi.reader.ai.prompt
 
+import com.mozhi.reader.ai.agent.PromptAnnotation
+import com.mozhi.reader.ai.agent.formatPromptAnnotations
 import com.mozhi.reader.ai.client.AiClientFactory
 import com.mozhi.reader.core.database.entity.ModelRole
 import com.mozhi.reader.core.database.entity.PersonaEntity
@@ -8,6 +10,7 @@ import com.mozhi.reader.core.database.entity.worldBook
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
 import com.mozhi.reader.core.datastore.UserMask
 import com.mozhi.reader.core.datastore.UserMaskStore
+import com.mozhi.reader.core.library.AnnotationRepository
 import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.vector.Embeddings
 import com.mozhi.reader.core.vector.VectorQueries
@@ -24,7 +27,9 @@ data class BookProgress(
     val totalChapters: Int,
     /** 0 起的当前章节索引。 */
     val currentChapterIndex: Int,
-    val currentChapterTitle: String?
+    val currentChapterTitle: String?,
+    val previousChapterTitle: String? = null,
+    val currentChapterProgressPercent: Int? = null
 )
 
 /**
@@ -51,6 +56,7 @@ data class ConversationShape(
 @Singleton
 class CompanionContextBuilder @Inject constructor(
     private val libraryRepository: LibraryRepository,
+    private val annotationRepository: AnnotationRepository,
     private val clientFactory: dagger.Lazy<AiClientFactory>,
     private val vectorStore: dagger.Lazy<BoxStore>,
     private val userMaskStore: UserMaskStore,
@@ -71,15 +77,25 @@ class CompanionContextBuilder @Inject constructor(
     ): String {
         val progress = bookId?.let { id ->
             libraryRepository.getBook(id)?.let { book ->
+                val current = libraryRepository.getChapter(id, book.lastReadChapterIndex)
                 BookProgress(
                     title = book.title,
                     author = book.author,
                     totalChapters = book.totalChapters,
                     currentChapterIndex = book.lastReadChapterIndex,
-                    currentChapterTitle =
-                        libraryRepository.getChapterTitle(id, book.lastReadChapterIndex)
+                    currentChapterTitle = current?.title,
+                    previousChapterTitle = book.lastReadChapterIndex.takeIf { it > 0 }
+                        ?.let { libraryRepository.getChapterTitle(id, it - 1) },
+                    currentChapterProgressPercent = current?.charCount
+                        ?.takeIf { it > 0 }
+                        ?.let { total -> (book.lastReadCharOffset.coerceIn(0, total) * 100 / total) }
                 )
             }
+        }
+        val promptAnnotations = if (bookId != null && progress != null) {
+            formatPromptAnnotations(annotationRepository.getForChapter(bookId, progress.currentChapterIndex))
+        } else {
+            emptyList()
         }
         val userMask = userMaskStore.activeMask()
         val memorySettings = settingsRepository.companionMemorySettings.first()
@@ -105,6 +121,7 @@ class CompanionContextBuilder @Inject constructor(
             userMask = userMask,
             progress = progress,
             scene = scene,
+            annotations = promptAnnotations,
             memories = memories,
             userProfile = persona
                 ?.takeIf { it.memoryEnabled && memorySettings.longTermEnabled }
@@ -156,8 +173,9 @@ class CompanionContextBuilder @Inject constructor(
             progress: BookProgress?,
             scene: String?,
             memories: List<String>,
+            annotations: List<PromptAnnotation> = emptyList(),
             userProfile: String = "",
-                spoilerProtectionEnabled: Boolean = true,
+            spoilerProtectionEnabled: Boolean = true,
             conversationShape: ConversationShape = ConversationShape(),
             loreTrigger: String = "",
             budgetChars: Int = DEFAULT_BUDGET_CHARS
@@ -183,13 +201,15 @@ class CompanionContextBuilder @Inject constructor(
                 }
             }
             var memoryBlock = memoryBlock(memories)
+            var annotationBlock = annotationBlock(annotations)
             var sceneBlock = sceneBlock(scene, SCENE_MAX_CHARS)
 
             fun render(): String =
-                (fixedBlocks + listOfNotNull(memoryBlock, sceneBlock) + closing)
+                (fixedBlocks + listOfNotNull(memoryBlock, annotationBlock, sceneBlock) + closing)
                     .joinToString(SEPARATOR)
 
             if (render().length > budgetChars) memoryBlock = null
+            if (render().length > budgetChars) annotationBlock = null
             if (render().length > budgetChars && sceneBlock != null) {
                 val roomForScene = budgetChars -
                     (fixedBlocks + closing).sumOf { it.length + SEPARATOR.length } -
@@ -280,7 +300,11 @@ class CompanionContextBuilder @Inject constructor(
                 it.currentChapterTitle?.takeIf(String::isNotBlank)?.let { title ->
                     append("「").append(title).append("」")
                 }
+                it.currentChapterProgressPercent?.let { percent -> append("，本章已读 ").append(percent).append('%') }
                 append("。")
+                it.previousChapterTitle?.takeIf(String::isNotBlank)?.let { title ->
+                    append("上一章是「").append(title).append("」。")
+                }
             }
         }
 
@@ -320,6 +344,18 @@ class CompanionContextBuilder @Inject constructor(
             memories.takeIf { it.isNotEmpty() }?.let { list ->
                 "【长期记忆】你与用户过往交流中的相关记忆：\n" +
                     list.joinToString("\n") { "- $it" }
+            }
+
+
+        private fun annotationBlock(annotations: List<PromptAnnotation>): String? =
+            annotations.takeIf { it.isNotEmpty() }?.let { rows ->
+                buildString {
+                    append("【用户划线】当前章最近的用户划线：")
+                    rows.forEach { row ->
+                        append("\n- 「").append(row.quote).append("」")
+                        if (row.note.isNotBlank()) append("（想法：").append(row.note).append("）")
+                    }
+                }
             }
 
         private const val SCENE_HEADER = "【当前场景】用户所读位置附近的原文：\n"

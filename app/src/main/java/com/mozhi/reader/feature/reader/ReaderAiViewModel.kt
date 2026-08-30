@@ -53,7 +53,7 @@ class ReaderAiViewModel @Inject constructor(
     private var streamJob: Job? = null
     private var messagesJob: Job? = null
 
-    /** 流式正文真源；UI 快照按 [STREAM_UI_TICK_MS] 节拍发布，避免逐 token 重组。 */
+    /** 流式正文真源；UI 快照按 显示帧节拍发布，避免逐 token 重组。 */
     private val streamBuffer = StringBuilder()
 
     /** Idempotent per request instance; a new selection action starts a fresh conversation. */

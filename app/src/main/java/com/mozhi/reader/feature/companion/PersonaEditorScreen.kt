@@ -1,5 +1,6 @@
 package com.mozhi.reader.feature.companion
 
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -33,6 +34,7 @@ import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material.icons.outlined.FileOpen
 import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.PhotoCamera
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.RecordVoiceOver
@@ -95,6 +97,9 @@ fun PersonaEditorScreen(
     var worldBookExpanded by rememberSaveable { mutableStateOf(false) }
     var appearanceExpanded by rememberSaveable { mutableStateOf(false) }
     var voiceExpanded by rememberSaveable { mutableStateOf(false) }
+    var toolsPageVisible by rememberSaveable { mutableStateOf(false) }
+
+    BackHandler(enabled = toolsPageVisible) { toolsPageVisible = false }
 
     LaunchedEffect(viewModel) {
         viewModel.events.collect { event ->
@@ -119,6 +124,14 @@ fun PersonaEditorScreen(
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
             }
+            return@MoReadBackdrop
+        }
+        if (toolsPageVisible) {
+            ToolPermissionsPage(
+                state = state,
+                onBack = { toolsPageVisible = false },
+                onToggle = viewModel::toggleTool
+            )
             return@MoReadBackdrop
         }
         Box(Modifier.fillMaxSize()) {
@@ -292,8 +305,13 @@ fun PersonaEditorScreen(
                         )
                     }
                 }
-                item { SectionLabel(title = "工具权限") }
-                item { ToolsCard(state = state, onToggle = viewModel::toggleTool) }
+                item {
+                    NavigationEditorRow(
+                        title = "工具权限",
+                        summary = "${state.enabledTools.count { it in PersonaToolOptions.map { option -> option.first }.toSet() }}/${PersonaToolOptions.size} 项写入能力已启用",
+                        onClick = { toolsPageVisible = true }
+                    )
+                }
                 if (!state.isNew) {
                     item {
                         TextButton(
@@ -693,43 +711,150 @@ private fun DialogPairCard(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ToolsCard(state: PersonaEditorState, onToggle: (String) -> Unit) {
+private fun NavigationEditorRow(
+    title: String,
+    summary: String,
+    onClick: () -> Unit
+) {
     FrostedSurface(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 20.dp),
-        shape = RoundedCornerShape(24.dp),
-        shadowElevation = 4.dp
+        shape = RoundedCornerShape(20.dp),
+        shadowElevation = 3.dp
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = "允许该角色使用的工具",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onClick)
+                .padding(horizontal = 16.dp, vertical = 15.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleSmall)
+                Text(
+                    summary,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 3.dp)
+                )
+            }
+            Icon(
+                Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                contentDescription = "进入$title",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            FlowRow(
-                modifier = Modifier.padding(top = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+        }
+    }
+}
+
+@Composable
+private fun ToolPermissionsPage(
+    state: PersonaEditorState,
+    onBack: () -> Unit,
+    onToggle: (String) -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item { SubpageTopBar(title = "工具权限", onBack = onBack) }
+        item {
+            Text(
+                text = "控制这个角色可以写入哪些内容。查看目录、原文、已有划线和笔记属于基础阅读能力，无需单独开启。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp)
+            )
+        }
+        item {
+            FrostedSurface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp),
+                shape = RoundedCornerShape(24.dp),
+                shadowElevation = 4.dp
             ) {
-                PersonaToolOptions.forEach { (tool, label) ->
-                    FilterChip(
-                        selected = tool in state.enabledTools,
-                        onClick = { onToggle(tool) },
-                        leadingIcon = {
+                Column(modifier = Modifier.padding(vertical = 6.dp)) {
+                    PersonaToolOptions.forEach { (tool, label) ->
+                        val enabled = tool in state.enabledTools
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onToggle(tool) }
+                                .padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             Icon(
-                                toolIcon(tool),
+                                imageVector = toolIcon(tool),
                                 contentDescription = null,
-                                modifier = Modifier.size(FilterChipDefaults.IconSize)
+                                tint = if (enabled) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(22.dp)
                             )
-                        },
-                        label = { Text(label) }
-                    )
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .padding(horizontal = 14.dp)
+                            ) {
+                                Text(label, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    text = toolDescription(tool),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(checked = enabled, onCheckedChange = { onToggle(tool) })
+                        }
+                    }
                 }
             }
         }
+        item {
+            Text(
+                text = "修改会在返回角色页并保存后生效。关闭写入能力不会删除已有内容。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 20.dp)
+            )
+        }
     }
+}
+
+@Composable
+private fun SubpageTopBar(title: String, onBack: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        FrostedSurface(shape = CircleShape, shadowElevation = 6.dp) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回")
+            }
+        }
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleMedium,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.weight(1f)
+        )
+        Box(modifier = Modifier.size(48.dp))
+    }
+}
+
+private fun toolDescription(tool: String): String = when (tool) {
+    "add_annotation" -> "允许角色在原文上留下批注"
+    "write_note" -> "允许角色新建或更新自己的读书笔记"
+    "save_plot_summary" -> "允许角色维护本书的滚动剧情梗概"
+    "generate_image" -> "允许角色生成图片并保存到插图廊"
+    "synthesize_speech" -> "允许角色生成并缓存语音内容"
+    "create_reading_plan" -> "预留能力，阅读计划上线后生效"
+    else -> "允许角色使用此写入能力"
 }
 
 /**

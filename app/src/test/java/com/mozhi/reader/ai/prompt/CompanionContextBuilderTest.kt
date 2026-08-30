@@ -1,5 +1,6 @@
 package com.mozhi.reader.ai.prompt
 
+import com.mozhi.reader.ai.agent.PromptAnnotation
 import com.mozhi.reader.core.database.entity.PersonaEntity
 import com.mozhi.reader.core.database.entity.PersonaExampleDialog
 import com.mozhi.reader.core.database.entity.PersonaLoreEntry
@@ -74,6 +75,46 @@ class CompanionContextBuilderTest {
         assertTrue(prompt.contains("【防剧透铁律】仅讨论用户已读至第 12 章的内容"))
         assertTrue(prompt.contains("〔原文 第N章〕「逐字引文」"))
         assertTrue(prompt.contains("转述、概括、角色对白示例和普通强调不得使用此标记"))
+    }
+
+    @Test
+    fun progressIncludesPreviousChapterAndCurrentPercent() {
+        val prompt = CompanionContextBuilder.assemble(
+            persona = null,
+            progress = progress.copy(
+                previousChapterTitle = "巳初",
+                currentChapterProgressPercent = 63
+            ),
+            scene = null,
+            memories = emptyList()
+        )
+        assertTrue(prompt.contains("本章已读 63%"))
+        assertTrue(prompt.contains("上一章是「巳初」"))
+    }
+
+    @Test
+    fun userAnnotationsAreInjectedAndDroppedBeforeSceneUnderPressure() {
+        val annotations = listOf(PromptAnnotation("城门忽然关闭", "这里很反常"))
+        val full = CompanionContextBuilder.assemble(
+            persona = null,
+            progress = progress,
+            scene = "场景原文",
+            memories = emptyList(),
+            annotations = annotations
+        )
+        assertTrue(full.contains("【用户划线】"))
+        assertTrue(full.contains("这里很反常"))
+
+        val tight = CompanionContextBuilder.assemble(
+            persona = null,
+            progress = progress,
+            scene = "景".repeat(600),
+            memories = emptyList(),
+            annotations = annotations,
+            budgetChars = 650
+        )
+        assertFalse(tight.contains("【用户划线】"))
+        assertTrue(tight.contains("【当前场景】"))
     }
 
     @Test

@@ -11,9 +11,8 @@ import com.mozhi.reader.core.database.entity.MessageEntity
  * 全屏伴读聊天的扁平列表模型（正向 LazyColumn，业内 AI 聊天通用形态）。
  *
  * 列表自上而下：场景头 → 索引胶囊 → 开场白 → 历史（过程卡 / 气泡 / 媒体）→
- * 本轮过程卡 → 流式气泡 → 状态行 → 错误行。流式增长永远发生在列表尾部（视口下方），
- * 生成期间不做任何程序化滚动，用户怎么滑都不会被内容顶动——这是
- * ChatGPT/Claude 移动端「问题置顶、答案向下生长」模式的结构性保证。
+ * 本轮过程卡 → 流式气泡 → 状态行 → 错误行。流式增长发生在列表尾部；界面层会在
+ * 用户没有主动翻看历史时逐帧补偿新增高度，用户一旦下拉则立即停止自动跟随。
  *
  * 一条 AI 消息可以拆成多个 [ChatEntry.Bubble]（多气泡 / 语音行），
  * 气泡组的尖角、头像与时间戳在 [buildCompanionChatEntries] 里一次算清，
@@ -60,6 +59,8 @@ internal sealed interface ChatEntry {
         /** 组尾才显示时间；null = 不显示。 */
         val timestamp: Long? = null,
         val streaming: Boolean = false,
+        /** 多气泡流式组尚可能继续长出新条目，期间冻结所有尖角避免旧气泡改形。 */
+        val freezeGroupTail: Boolean = false,
         val canReroll: Boolean = false
     ) : ChatEntry {
         override val key: String = "bubble-$id"
@@ -96,7 +97,9 @@ internal fun buildCompanionChatEntries(
     embeddingProgress: BookEmbeddingProgress?,
     sceneQuote: String,
     multiBubble: Boolean,
-    lastAssistantMessageId: Long? = null
+    lastAssistantMessageId: Long? = null,
+    liveEntryId: String = "live",
+    messageKeyAliases: Map<Long, String> = emptyMap()
 ): List<ChatEntry> {
     val entries = buildList {
         add(ChatEntry.Scene(sceneQuote))
@@ -112,7 +115,8 @@ internal fun buildCompanionChatEntries(
                 // 过程卡在它所属消息的气泡之前：先看到「想了什么、查了什么」，再看到答案。
                 is CompanionTimelineItem.Process -> add(
                     ChatEntry.Process(
-                        id = item.sourceMessageId.toString(),
+                        id = messageKeyAliases[item.sourceMessageId]
+                            ?: item.sourceMessageId.toString(),
                         steps = item.steps,
                         reasoning = item.reasoning,
                         isLive = false
@@ -120,6 +124,8 @@ internal fun buildCompanionChatEntries(
                 )
                 is CompanionTimelineItem.Bubble -> {
                     val fromUser = item.message.role == "user"
+                    val messageUiId = messageKeyAliases[item.message.id]
+                        ?: item.message.id.toString()
                     val parts = if (fromUser) {
                         // 用户消息原样一条，不参与多气泡与语音标记解析。
                         listOf(CompanionBubblePart.Text(item.message.content))
@@ -129,7 +135,7 @@ internal fun buildCompanionChatEntries(
                     parts.forEachIndexed { index, part ->
                         add(
                             ChatEntry.Bubble(
-                                id = "${item.message.id}-$index",
+                                id = "$messageUiId-$index",
                                 part = part,
                                 fromUser = fromUser,
                                 message = item.message,
@@ -147,7 +153,7 @@ internal fun buildCompanionChatEntries(
         if (liveSteps.isNotEmpty() || !liveReasoning.isNullOrBlank()) {
             add(
                 ChatEntry.Process(
-                    id = "live",
+                    id = liveEntryId,
                     steps = liveSteps,
                     reasoning = liveReasoning,
                     isLive = true
@@ -158,22 +164,45 @@ internal fun buildCompanionChatEntries(
             ?.takeIf(String::isNotBlank)
             ?.takeUnless { text -> timeline.hasCommittedAssistantCovering(text) }
             ?.let { text ->
-                // 流式期间只把「已经换行落定」的段落切成稳定气泡，最后一段跟着 token 长；
-                // 否则每来一个字都会重排整条消息的气泡结构。
-                val settled = text.substringBeforeLast('\n', missingDelimiterValue = "")
-                val tailText = text.removePrefix(settled).removePrefix("\n")
-                parseCompanionParts(settled, multiBubble).forEachIndexed { index, part ->
-                    add(ChatEntry.Bubble(id = "live-$index", part = part, fromUser = false))
-                }
-                tailText.takeIf(String::isNotBlank)?.let { tail ->
+                if (!multiBubble) {
+                    // 单气泡模式从首个 token 到落库始终只有一个条目。不能为了稳定多气泡的
+                    // 尾段而在换行处临时拆项，否则用户会看到两个气泡，结束时再突然合并。
                     add(
                         ChatEntry.Bubble(
-                            id = "live-tail",
-                            part = CompanionBubblePart.Text(tail),
+                            id = "$liveEntryId-0",
+                            part = CompanionBubblePart.Text(text),
                             fromUser = false,
                             streaming = true
                         )
                     )
+                } else {
+                    // 多气泡模式只把「已经换行落定」的段落切成稳定气泡，最后一段跟着 token 长；
+                    // 否则每来一个字都会重排整条消息的气泡结构。
+                    val settled = text.substringBeforeLast('\n', missingDelimiterValue = "")
+                    val tailText = text.removePrefix(settled).removePrefix("\n")
+                    val settledParts = parseCompanionParts(settled, multiBubble = true)
+                    settledParts.forEachIndexed { index, part ->
+                        add(
+                            ChatEntry.Bubble(
+                                id = "$liveEntryId-$index",
+                                part = part,
+                                fromUser = false,
+                                freezeGroupTail = isStreaming
+                            )
+                        )
+                    }
+                    tailText.takeIf(String::isNotBlank)?.let { tail ->
+                        add(
+                            ChatEntry.Bubble(
+                                // 尾段转为已落定段后仍沿用同一序号，避免换行时 dispose/recreate。
+                                id = "$liveEntryId-${settledParts.size}",
+                                part = CompanionBubblePart.Text(tail),
+                                fromUser = false,
+                                streaming = true,
+                                freezeGroupTail = isStreaming
+                            )
+                        )
+                    }
                 }
             }
         if (isStreaming || toolStatus != null) {
@@ -204,12 +233,16 @@ private fun List<ChatEntry>.withBubbleGrouping(): List<ChatEntry> {
             if (next.fromUser != start.fromUser) break
             end++
         }
+        val freezeGroupTail = (index..end).any { position ->
+            (result[position] as ChatEntry.Bubble).freezeGroupTail
+        }
         for (position in index..end) {
             val bubble = result[position] as ChatEntry.Bubble
             result[position] = bubble.copy(
                 showAvatar = position == index,
-                isTail = position == end,
-                timestamp = bubble.timestamp.takeIf { position == end }
+                // 流式期间冻结组形状：新换行不会让上一条气泡反复长/丢尖角。
+                isTail = !freezeGroupTail && position == end,
+                timestamp = bubble.timestamp.takeIf { !freezeGroupTail && position == end }
             )
         }
         index = end + 1
@@ -267,6 +300,16 @@ internal fun LazyListState.isAtLatest(): Boolean {
         lastVisibleBottom = last?.let { it.offset + it.size } ?: 0,
         viewportBottom = info.viewportEndOffset - info.afterContentPadding
     )
+}
+
+/** 距离真实列表底部的像素数；最后一项未进入视口时视为无限远。 */
+internal fun LazyListState.distanceFromLatest(): Int {
+    val info = layoutInfo
+    if (info.totalItemsCount == 0) return 0
+    val last = info.visibleItemsInfo.lastOrNull()
+    if (last?.index != info.totalItemsCount - 1) return Int.MAX_VALUE
+    val viewportBottom = info.viewportEndOffset - info.afterContentPadding
+    return (last.offset + last.size - viewportBottom).coerceAtLeast(0)
 }
 
 /** 立即定位到列表真实底部（最后一项可能比视口还高，先进视口再补余量）。 */

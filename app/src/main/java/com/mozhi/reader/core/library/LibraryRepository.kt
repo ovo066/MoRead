@@ -159,6 +159,20 @@ class LibraryRepository @Inject constructor(
 
     suspend fun getChapters(bookId: Long): List<ChapterEntity> = bookDao.getChapters(bookId)
 
+    suspend fun getChapter(bookId: Long, chapterIndex: Int): ChapterEntity? =
+        bookDao.getChapter(bookId, chapterIndex)
+
+    suspend fun getTotalCharacterCount(bookId: Long): Long =
+        bookDao.getTotalCharacterCount(bookId)
+
+    suspend fun getCharacterCountBefore(bookId: Long, chapterIndex: Int): Long =
+        bookDao.getCharacterCountBefore(bookId, chapterIndex)
+
+    suspend fun getTagNames(bookId: Long): List<String> = bookDao.getTagNames(bookId)
+
+    suspend fun getReadingDays(bookId: Long): List<ReadingDailyEntity> =
+        bookDao.getReadingDays(bookId)
+
     suspend fun getTocEntries(bookId: Long): List<BookTocEntryEntity> =
         bookDao.getTocEntries(bookId)
 

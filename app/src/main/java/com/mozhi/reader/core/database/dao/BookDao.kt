@@ -190,6 +190,25 @@ interface BookDao {
     @Query("SELECT * FROM chapters WHERE bookId = :bookId ORDER BY chapterIndex")
     suspend fun getChapters(bookId: Long): List<ChapterEntity>
 
+    @Query("SELECT * FROM chapters WHERE bookId = :bookId AND chapterIndex = :chapterIndex LIMIT 1")
+    suspend fun getChapter(bookId: Long, chapterIndex: Int): ChapterEntity?
+
+    @Query("SELECT COALESCE(SUM(charCount), 0) FROM chapters WHERE bookId = :bookId")
+    suspend fun getTotalCharacterCount(bookId: Long): Long
+
+    @Query(
+        "SELECT COALESCE(SUM(charCount), 0) FROM chapters " +
+            "WHERE bookId = :bookId AND chapterIndex < :chapterIndex"
+    )
+    suspend fun getCharacterCountBefore(bookId: Long, chapterIndex: Int): Long
+
+    @Query(
+        "SELECT book_tags.name FROM book_tags " +
+            "INNER JOIN book_tag_refs ON book_tag_refs.tagId = book_tags.id " +
+            "WHERE book_tag_refs.bookId = :bookId ORDER BY book_tags.groupName, book_tags.sortOrder, book_tags.name"
+    )
+    suspend fun getTagNames(bookId: Long): List<String>
+
     @Insert
     suspend fun insertTocEntries(entries: List<BookTocEntryEntity>)
 
@@ -216,6 +235,9 @@ interface BookDao {
 
     @Query("SELECT * FROM reading_daily WHERE bookId = :bookId ORDER BY epochDay")
     fun observeReadingDays(bookId: Long): Flow<List<ReadingDailyEntity>>
+
+    @Query("SELECT * FROM reading_daily WHERE bookId = :bookId ORDER BY epochDay")
+    suspend fun getReadingDays(bookId: Long): List<ReadingDailyEntity>
 
     @Query("SELECT * FROM reading_daily ORDER BY epochDay")
     fun observeAllReadingDays(): Flow<List<ReadingDailyEntity>>

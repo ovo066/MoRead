@@ -248,6 +248,48 @@ class CompanionChatListTest {
     }
 
     @Test
+    fun `关闭多气泡时流式换行始终保持一个气泡`() {
+        val before = entries(
+            streamingText = "第一段",
+            isStreaming = true,
+            multiBubble = false
+        ).filterIsInstance<ChatEntry.Bubble>()
+        val after = entries(
+            streamingText = "第一段\n第二段\n第三段",
+            isStreaming = true,
+            multiBubble = false
+        ).filterIsInstance<ChatEntry.Bubble>()
+
+        assertEquals(1, before.size)
+        assertEquals(1, after.size)
+        assertEquals(before.single().key, after.single().key)
+        assertEquals("第一段\n第二段\n第三段", after.single().part.text)
+        assertTrue(after.single().streaming)
+        assertTrue(after.single().isTail)
+
+        val committed = buildCompanionChatEntries(
+            timeline = buildCompanionTimeline(
+                listOf(message(9, "assistant", "第一段\n第二段\n第三段"))
+            ),
+            liveSteps = emptyList(),
+            liveReasoning = null,
+            streamingText = null,
+            isStreaming = false,
+            toolStatus = null,
+            thinkingLabel = "小助手正在思考…",
+            error = null,
+            greeting = null,
+            embeddingProgress = null,
+            sceneQuote = "第一章",
+            multiBubble = false,
+            liveEntryId = "live",
+            messageKeyAliases = mapOf(9L to "live")
+        ).filterIsInstance<ChatEntry.Bubble>()
+        assertEquals(1, committed.size)
+        assertEquals(after.single().key, committed.single().key)
+    }
+
+    @Test
     fun `流式期间只有尾段是流式气泡`() {
         val result = entries(
             streamingText = "已经落定的一行\n正在长的这行",
@@ -258,6 +300,56 @@ class CompanionChatListTest {
         assertFalse(result[0].streaming)
         assertTrue(result[1].streaming)
         assertEquals("正在长的这行", result[1].part.text)
+    }
+
+    @Test
+    fun `流式换行后已有气泡 key 与形状保持稳定`() {
+        val before = entries(
+            streamingText = "第一行",
+            isStreaming = true,
+            multiBubble = true
+        ).filterIsInstance<ChatEntry.Bubble>()
+        val after = entries(
+            streamingText = "第一行\n第二行",
+            isStreaming = true,
+            multiBubble = true
+        ).filterIsInstance<ChatEntry.Bubble>()
+
+        assertEquals(before.single().key, after.first().key)
+        assertTrue(after.none { it.isTail })
+        assertTrue(after.none { it.timestamp != null })
+    }
+
+    @Test
+    fun `流式回复落库后沿用同一组 LazyColumn key`() {
+        val live = entries(
+            streamingText = "第一行\n第二行",
+            isStreaming = true,
+            multiBubble = true,
+            lastAssistantMessageId = null
+        ).filterIsInstance<ChatEntry.Bubble>().map(ChatEntry::key)
+
+        val timeline = buildCompanionTimeline(
+            listOf(message(9, "assistant", "第一行\n第二行"))
+        )
+        val committed = buildCompanionChatEntries(
+            timeline = timeline,
+            liveSteps = emptyList(),
+            liveReasoning = null,
+            streamingText = null,
+            isStreaming = false,
+            toolStatus = null,
+            thinkingLabel = "小助手正在思考…",
+            error = null,
+            greeting = null,
+            embeddingProgress = null,
+            sceneQuote = "第一章",
+            multiBubble = true,
+            liveEntryId = "live",
+            messageKeyAliases = mapOf(9L to "live")
+        ).filterIsInstance<ChatEntry.Bubble>().map(ChatEntry::key)
+
+        assertEquals(live, committed)
     }
 
     @Test
@@ -287,6 +379,22 @@ class CompanionChatListTest {
         )
     }
 
+
+    @Test
+    fun `突发流式文本会分多帧平滑吐出`() {
+        val target = "一".repeat(80)
+        val firstFrame = nextStreamingFrame("", target)
+        val secondFrame = nextStreamingFrame(firstFrame, target)
+
+        assertEquals(10, firstFrame.length)
+        assertTrue(secondFrame.length > firstFrame.length)
+        assertTrue(secondFrame.length < target.length)
+    }
+
+    @Test
+    fun `流式目标回退时直接重置快照`() {
+        assertEquals("新回复", nextStreamingFrame("旧回复内容", "新回复"))
+    }
     @Test
     fun `贴底判定 - 空列表视为在底部`() {
         assertTrue(isChatListAtBottom(0, -1, 0, 0))

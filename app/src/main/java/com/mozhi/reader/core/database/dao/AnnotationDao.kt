@@ -7,6 +7,11 @@ import com.mozhi.reader.core.database.entity.AnnotationEntity
 import com.mozhi.reader.core.database.entity.AnnotationReplyEntity
 import kotlinx.coroutines.flow.Flow
 
+data class AnnotationReplyCount(
+    val annotationId: Long,
+    val replyCount: Int
+)
+
 @Dao
 interface AnnotationDao {
     @Insert
@@ -39,6 +44,25 @@ interface AnnotationDao {
     )
     suspend fun getForChapter(bookId: Long, chapterIndex: Int): List<AnnotationEntity>
 
+    @Query(
+        "SELECT * FROM annotations WHERE bookId = :bookId " +
+            "AND chapterIndex BETWEEN :fromIndex AND :toIndex " +
+            "ORDER BY chapterIndex ASC, startCharOffset ASC"
+    )
+    suspend fun getForChapterRange(
+        bookId: Long,
+        fromIndex: Int,
+        toIndex: Int
+    ): List<AnnotationEntity>
+
+    @Query("SELECT COUNT(*) FROM annotations WHERE bookId = :bookId")
+    suspend fun getCountForBook(bookId: Long): Int
+
+    @Query(
+        "SELECT COUNT(*) FROM annotations WHERE bookId = :bookId AND chapterIndex = :chapterIndex"
+    )
+    suspend fun getCountForChapter(bookId: Long, chapterIndex: Int): Int
+
     @Query("SELECT COUNT(*) FROM annotations WHERE bookId = :bookId")
     fun observeCountForBook(bookId: Long): Flow<Int>
 
@@ -55,6 +79,12 @@ interface AnnotationDao {
 
     @Query("SELECT * FROM annotation_replies WHERE annotationId = :annotationId ORDER BY createdAt ASC, id ASC")
     suspend fun getReplies(annotationId: Long): List<AnnotationReplyEntity>
+
+    @Query(
+        "SELECT annotationId, COUNT(*) AS replyCount FROM annotation_replies " +
+            "WHERE annotationId IN (:annotationIds) GROUP BY annotationId"
+    )
+    suspend fun getReplyCounts(annotationIds: List<Long>): List<AnnotationReplyCount>
 
     @Query("DELETE FROM annotation_replies WHERE id = :replyId")
     suspend fun deleteReply(replyId: Long)

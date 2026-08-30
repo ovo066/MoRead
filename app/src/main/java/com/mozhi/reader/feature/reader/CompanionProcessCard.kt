@@ -1,6 +1,8 @@
 package com.mozhi.reader.feature.reader
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -10,6 +12,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -64,6 +68,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.withFrameNanos
 import com.mozhi.reader.ai.agent.ToolCallSummary
 import com.mozhi.reader.ai.embedding.BookEmbeddingProgress
 import com.mozhi.reader.ai.embedding.EmbeddingIndexStage
@@ -84,20 +89,25 @@ internal fun CompanionProcessCard(
     palette: ReaderPalette,
     isLive: Boolean,
     modifier: Modifier = Modifier,
-    stateKey: String = "process"
+    stateKey: String = "process",
+    onUserToggle: () -> Unit = {}
 ) {
     if (steps.isEmpty() && reasoning.isNullOrBlank()) return
 
-    var userToggled by rememberSaveable(stateKey) { mutableStateOf(false) }
-    var expanded by rememberSaveable(stateKey) { mutableStateOf(isLive) }
-    LaunchedEffect(isLive) {
-        if (!userToggled) expanded = isLive
-    }
+    // 流式时默认保持一行摘要；自动展开会让正文随着步骤增加不断被向下顶。
+    var expanded by rememberSaveable(stateKey) { mutableStateOf(false) }
     val chevronRotation by animateFloatAsState(
         targetValue = if (expanded) 180f else 0f,
-        animationSpec = tween(180),
+        animationSpec = if (isLive) tween(0) else tween(180),
         label = "process-chevron"
     )
+    val detailScroll = rememberScrollState()
+    LaunchedEffect(isLive, expanded, reasoning?.length, steps.size, steps.lastOrNull()?.detail) {
+        if (isLive && expanded) {
+            withFrameNanos { }
+            detailScroll.scrollTo(detailScroll.maxValue)
+        }
+    }
     val failed = steps.any { it.state == AgentStepState.FAILED }
     val headlineTool = steps.lastOrNull { it.state == AgentStepState.RUNNING }
         ?: steps.singleOrNull()
@@ -116,7 +126,9 @@ internal fun CompanionProcessCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable {
-                        userToggled = true
+                        // 展开会改变列表项高度。先通知宿主暂停贴底，避免流式自动滚动
+                        // 与用户触发的展开动画同时争夺视口，产生上下抽动。
+                        onUserToggle()
                         expanded = !expanded
                     }
                     .padding(horizontal = 11.dp, vertical = 7.dp),
@@ -157,14 +169,38 @@ internal fun CompanionProcessCard(
             }
             AnimatedVisibility(
                 visible = expanded,
-                enter = expandVertically(tween(180)) + fadeIn(tween(140)),
-                exit = shrinkVertically(tween(160)) + fadeOut(tween(100))
+                enter = if (isLive) {
+                    EnterTransition.None
+                } else {
+                    expandVertically(tween(180)) + fadeIn(tween(140))
+                },
+                exit = if (isLive) {
+                    ExitTransition.None
+                } else {
+                    shrinkVertically(tween(160)) + fadeOut(tween(100))
+                }
             ) {
                 Column(
-                    modifier = Modifier.padding(start = 11.dp, end = 11.dp, bottom = 10.dp),
+                    modifier = Modifier
+                        .then(
+                            if (isLive) {
+                                Modifier
+                                    .height(120.dp)
+                                    .verticalScroll(detailScroll)
+                            } else {
+                                Modifier
+                            }
+                        )
+                        .padding(start = 11.dp, end = 11.dp, bottom = 10.dp),
                     verticalArrangement = Arrangement.spacedBy(9.dp)
                 ) {
-                    reasoning?.takeIf(String::isNotBlank)?.let { ReasoningBlock(it, palette) }
+                    reasoning?.takeIf(String::isNotBlank)?.let {
+                        ReasoningBlock(
+                            reasoning = it,
+                            palette = palette,
+                            onUserToggle = onUserToggle
+                        )
+                    }
                     if (steps.isNotEmpty()) StepRail(steps, palette)
                 }
             }
@@ -174,9 +210,13 @@ internal fun CompanionProcessCard(
 
 /** 思维链正文：长推理先截到 8 行，愿意读的人再点开——它是佐证，不是内容。 */
 @Composable
-private fun ReasoningBlock(reasoning: String, palette: ReaderPalette) {
-    var fullyExpanded by rememberSaveable(reasoning.length) { mutableStateOf(false) }
-    var overflowing by remember(reasoning) { mutableStateOf(false) }
+private fun ReasoningBlock(
+    reasoning: String,
+    palette: ReaderPalette,
+    onUserToggle: () -> Unit
+) {
+    var fullyExpanded by rememberSaveable { mutableStateOf(false) }
+    var canExpand by rememberSaveable { mutableStateOf(false) }
     Column {
         Text(
             text = reasoning.trim(),
@@ -184,11 +224,16 @@ private fun ReasoningBlock(reasoning: String, palette: ReaderPalette) {
             color = palette.muted,
             maxLines = if (fullyExpanded) Int.MAX_VALUE else COLLAPSED_REASONING_LINES,
             overflow = TextOverflow.Ellipsis,
-            onTextLayout = { result -> overflowing = result.hasVisualOverflow || fullyExpanded }
+            onTextLayout = { result ->
+                if (!fullyExpanded) canExpand = result.hasVisualOverflow
+            }
         )
-        if (overflowing) {
+        if (canExpand || fullyExpanded) {
             TextButton(
-                onClick = { fullyExpanded = !fullyExpanded },
+                onClick = {
+                    onUserToggle()
+                    fullyExpanded = !fullyExpanded
+                },
                 contentPadding = PaddingValues(
                     horizontal = 0.dp,
                     vertical = 2.dp

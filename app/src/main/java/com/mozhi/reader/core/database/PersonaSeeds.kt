@@ -15,12 +15,8 @@ import com.mozhi.reader.core.database.entity.encodeExampleDialogs
  */
 object PersonaSeeds {
 
-    /** M2 全部工具名（DEVELOPMENT_PLAN §4.4）；与已注册工具的交集在 ai/agent 侧求。 */
+    /** 角色白名单只保存会写入用户资产的能力；只读工具由伴读运行时恒定授予。 */
     private val ALL_TOOLS = listOf(
-        "get_reading_progress",
-        "search_book",
-        "read_book_section",
-        "recall_memory",
         "add_annotation",
         "write_note",
         "save_plot_summary",

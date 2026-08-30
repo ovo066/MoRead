@@ -31,6 +31,24 @@ internal fun companionToolPresentation(
         description = "在已读范围内查找相关片段",
         icon = CompanionToolIcon.SEARCH
     )
+    "list_chapters" -> CompanionToolPresentation(
+        title = "查看章节目录",
+        action = "核对章节目录",
+        description = "确认卷部层级与准确章节号",
+        icon = CompanionToolIcon.BOOK
+    )
+    "list_annotations" -> CompanionToolPresentation(
+        title = "查看划线批注",
+        action = "读取划线批注",
+        description = "查看用户与伴读留下的划线",
+        icon = CompanionToolIcon.ANNOTATION
+    )
+    "list_notes" -> CompanionToolPresentation(
+        title = "查看笔记与梗概",
+        action = "读取笔记与梗概",
+        description = "查找已保存内容并按需续读",
+        icon = CompanionToolIcon.NOTE
+    )
     "read_book_section" -> CompanionToolPresentation(
         title = "读取章节正文",
         action = "读取命中段落",

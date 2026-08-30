@@ -1,9 +1,11 @@
 package com.mozhi.reader.feature.settings
 
+import android.Manifest
 import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.Process
 import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -30,6 +32,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -51,10 +54,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mozhi.reader.MainActivity
 import com.mozhi.reader.core.backup.BackupArchiveManager
 import com.mozhi.reader.core.backup.BackupManifest
+import com.mozhi.reader.core.backup.BackupMode
 import com.mozhi.reader.core.backup.BackupSettings
 import com.mozhi.reader.core.backup.RemoteBackup
 import com.mozhi.reader.ui.components.FrostedSurface
@@ -89,6 +94,12 @@ fun BackupSettingsScreen(
             directory = state.settings.remoteDirectory
         }
     }
+    val localExport = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/zip")
+    ) { uri -> uri?.let(viewModel::exportLocal) }
+    val localImport = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let(viewModel::restoreLocal)
+    }
     LaunchedEffect(viewModel) {
         viewModel.events.collect { event ->
             when (event) {
@@ -97,12 +108,10 @@ fun BackupSettingsScreen(
             }
         }
     }
-    val localExport = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("application/zip")
-    ) { uri -> uri?.let(viewModel::exportLocal) }
-    val localImport = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri?.let(viewModel::restoreLocal)
-    }
+    val notificationPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { }
+
     fun form() = BackupSettings(
         webDavUrl = url,
         username = username,
@@ -110,6 +119,16 @@ fun BackupSettingsScreen(
         autoBackup = state.settings.autoBackup,
         lastBackupAt = state.settings.lastBackupAt
     )
+    fun requestBackup(mode: BackupMode) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        viewModel.backupNow(form(), password, mode)
+    }
+    val busy = state.working || state.backupWork.running
 
     MoReadBackdrop {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
@@ -120,7 +139,7 @@ fun BackupSettingsScreen(
                 IconButton(onClick = onBack) {
                     Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回")
                 }
-                Text("数据备份", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Medium)
+                Text("备份与同步", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Medium)
             }
             LazyColumn(
                 modifier = Modifier.fillMaxSize().imePadding(),
@@ -129,16 +148,20 @@ fun BackupSettingsScreen(
             ) {
                 item {
                     Text(
-                        "备份包含书库、进度、批注、对话与书籍文件。API Key 和 WebDAV 密码不会写进备份。",
+                        "每日自动 WebDAV 备份使用轻量包（数据库、设置、封面与个性化资源）；完整备份还包含原始书籍、正文、媒体、插图和附件。API Key 与 WebDAV 密码不会写入备份。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 item {
                     LocalBackupCard(
-                        enabled = !state.working,
-                        onExport = { localExport.launch(BackupArchiveManager.backupFileName()) },
-                        onRestore = { localImport.launch(arrayOf("application/zip", "application/octet-stream")) }
+                        enabled = !busy,
+                        onExport = {
+                            localExport.launch(BackupArchiveManager.backupFileName(mode = BackupMode.FULL))
+                        },
+                        onRestore = {
+                            localImport.launch(arrayOf("application/zip", "application/octet-stream"))
+                        }
                     )
                 }
                 item {
@@ -148,13 +171,11 @@ fun BackupSettingsScreen(
                         password = password,
                         directory = directory,
                         hasPassword = state.hasPassword,
-                        autoBackup = state.settings.autoBackup,
-                        enabled = !state.working,
+                        enabled = !busy,
                         onUrl = { url = it; formDirty = true },
                         onUsername = { username = it; formDirty = true },
                         onPassword = { password = it; formDirty = true },
                         onDirectory = { directory = it; formDirty = true },
-                        onAutoBackup = viewModel::setAutoBackup,
                         onClearPassword = viewModel::clearPassword,
                         onSave = {
                             viewModel.save(form(), password)
@@ -165,30 +186,20 @@ fun BackupSettingsScreen(
                     )
                 }
                 item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        OutlinedButton(
-                            enabled = !state.working,
-                            onClick = { viewModel.backupNow(form(), password) },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Outlined.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Text("立即上传", modifier = Modifier.padding(start = 6.dp))
-                        }
-                        OutlinedButton(
-                            enabled = !state.working,
-                            onClick = viewModel::refreshRemote,
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Outlined.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Text("云端备份", modifier = Modifier.padding(start = 6.dp))
-                        }
-                    }
+                    WebDavBackupActions(
+                        autoBackup = state.settings.autoBackup,
+                        enabled = !busy,
+                        onAutoBackup = viewModel::setAutoBackup,
+                        onLightweight = { requestBackup(BackupMode.LIGHTWEIGHT) },
+                        onFull = { requestBackup(BackupMode.FULL) },
+                        onRefresh = viewModel::refreshRemote
+                    )
                 }
-                if (state.working) item { CircularProgressIndicator(Modifier.size(28.dp)) }
+                if (state.backupWork.running) {
+                    item { BackupProgressCard(state.backupWork) }
+                } else if (state.working) {
+                    item { CircularProgressIndicator(Modifier.size(28.dp)) }
+                }
                 items(state.remoteBackups, key = RemoteBackup::name) { backup ->
                     RemoteBackupRow(backup = backup, onRestore = { restoreCandidate = backup })
                 }
@@ -200,8 +211,10 @@ fun BackupSettingsScreen(
     restoreCandidate?.let { backup ->
         AlertDialog(
             onDismissRequest = { restoreCandidate = null },
-            title = { Text("恢复云端备份？") },
-            text = { Text("恢复后会替换当前书库与设置，并自动重启应用。建议先导出一份当前数据。") },
+            title = { Text("恢复 WebDAV 备份？") },
+            text = {
+                Text("恢复会替换数据库和备份中包含的文件。轻量包不会删除本机原始书籍；建议仍先导出一份完整备份。")
+            },
             confirmButton = {
                 TextButton(onClick = { restoreCandidate = null; viewModel.restoreRemote(backup) }) {
                     Text("继续恢复")
@@ -215,7 +228,10 @@ fun BackupSettingsScreen(
             onDismissRequest = {},
             title = { Text("备份已准备好") },
             text = {
-                Text("备份来自墨知 ${manifest.appVersion}。应用将重启并恢复数据，请勿在重启过程中强制关闭。")
+                Text(
+                    "备份来自墨知 ${manifest.appVersion}（${if (manifest.mode == BackupMode.FULL) "完整" else "轻量"}）。" +
+                        "数据已在后台校验并解压，应用重启后只执行文件替换。"
+                )
             },
             confirmButton = {
                 TextButton(onClick = { scheduleRestart(context) }) { Text("立即重启") }
@@ -228,10 +244,14 @@ fun BackupSettingsScreen(
 private fun LocalBackupCard(enabled: Boolean, onExport: () -> Unit, onRestore: () -> Unit) {
     FrostedSurface(Modifier.fillMaxWidth(), RoundedCornerShape(22.dp), shadowElevation = 5.dp) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("本地备份", style = MaterialTheme.typography.titleSmall)
+            Text("本地完整备份", style = MaterialTheme.typography.titleSmall)
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedButton(enabled = enabled, onClick = onExport, modifier = Modifier.weight(1f)) { Text("导出备份") }
-                OutlinedButton(enabled = enabled, onClick = onRestore, modifier = Modifier.weight(1f)) { Text("从文件恢复") }
+                OutlinedButton(enabled = enabled, onClick = onExport, modifier = Modifier.weight(1f)) {
+                    Text("导出完整包")
+                }
+                OutlinedButton(enabled = enabled, onClick = onRestore, modifier = Modifier.weight(1f)) {
+                    Text("从文件恢复")
+                }
             }
         }
     }
@@ -244,13 +264,11 @@ private fun WebDavConfigCard(
     password: String,
     directory: String,
     hasPassword: Boolean,
-    autoBackup: Boolean,
     enabled: Boolean,
     onUrl: (String) -> Unit,
     onUsername: (String) -> Unit,
     onPassword: (String) -> Unit,
     onDirectory: (String) -> Unit,
-    onAutoBackup: (Boolean) -> Unit,
     onClearPassword: () -> Unit,
     onSave: () -> Unit,
     onTest: () -> Unit
@@ -269,17 +287,76 @@ private fun WebDavConfigCard(
                 modifier = Modifier.fillMaxWidth()
             )
             OutlinedTextField(directory, onDirectory, label = { Text("远程目录") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("每日自动备份", modifier = Modifier.weight(1f))
-                Switch(checked = autoBackup, onCheckedChange = onAutoBackup)
-            }
             if (hasPassword) {
-                TextButton(onClick = onClearPassword, modifier = Modifier.align(Alignment.End)) { Text("清除已保存密码") }
+                TextButton(onClick = onClearPassword, modifier = Modifier.align(Alignment.End)) {
+                    Text("清除已保存密码")
+                }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedButton(enabled = enabled, onClick = onSave, modifier = Modifier.weight(1f)) { Text("保存") }
                 OutlinedButton(enabled = enabled, onClick = onTest, modifier = Modifier.weight(1f)) { Text("测试连接") }
             }
+        }
+    }
+}
+
+@Composable
+private fun WebDavBackupActions(
+    autoBackup: Boolean,
+    enabled: Boolean,
+    onAutoBackup: (Boolean) -> Unit,
+    onLightweight: () -> Unit,
+    onFull: () -> Unit,
+    onRefresh: () -> Unit
+) {
+    FrostedSurface(Modifier.fillMaxWidth(), RoundedCornerShape(22.dp), shadowElevation = 5.dp) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("每日自动轻量备份")
+                    Text(
+                        "仅在非计费网络、低存储和低电量条件允许时后台执行",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(checked = autoBackup, onCheckedChange = onAutoBackup, enabled = enabled)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedButton(enabled = enabled, onClick = onLightweight, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Outlined.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Text("轻量备份", modifier = Modifier.padding(start = 6.dp))
+                }
+                OutlinedButton(enabled = enabled, onClick = onFull, modifier = Modifier.weight(1f)) {
+                    Text("完整备份")
+                }
+            }
+            OutlinedButton(enabled = enabled, onClick = onRefresh, modifier = Modifier.fillMaxWidth()) {
+                Text("刷新 WebDAV 备份")
+            }
+        }
+    }
+}
+@Composable
+private fun BackupProgressCard(progress: BackupWorkUiState) {
+    FrostedSurface(Modifier.fillMaxWidth(), RoundedCornerShape(18.dp), shadowElevation = 3.dp) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(progress.phase.ifBlank { "后台备份进行中" }, style = MaterialTheme.typography.bodyMedium)
+            LinearProgressIndicator(
+                progress = { progress.progress.coerceIn(0, 100) / 100f },
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text(
+                buildString {
+                    append(progress.progress.coerceIn(0, 100)).append('%')
+                    if (progress.totalBytes > 0L) {
+                        append(" · ").append(formatBytes(progress.completedBytes))
+                        append(" / ").append(formatBytes(progress.totalBytes))
+                    }
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }

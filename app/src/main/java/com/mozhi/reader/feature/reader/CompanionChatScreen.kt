@@ -17,16 +17,19 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -59,6 +62,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -69,8 +74,10 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -91,6 +98,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 /**
@@ -164,18 +172,28 @@ fun CompanionChatScreen(
     }
 
     val messageListState = rememberLazyListState()
-    var renderedStreamingText by remember(state.conversationId) {
-        mutableStateOf(state.streamingText)
-    }
-    val latestStreamingText by rememberUpdatedState(state.streamingText)
-    LaunchedEffect(state.streamingText) {
-        if (!messageListState.isScrollInProgress) {
-            renderedStreamingText = state.streamingText
-        }
-    }
-    LaunchedEffect(messageListState) {
-        snapshotFlow { messageListState.isScrollInProgress }.collect { scrolling ->
-            if (!scrolling) renderedStreamingText = latestStreamingText
+    var autoFollowLatest by remember(state.conversationId) { mutableStateOf(true) }
+    var questionAnchorInProgress by remember(state.conversationId) { mutableStateOf(false) }
+    val followConnection = remember(messageListState, state.conversationId) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                // 只认真实手势。程序滚动也会令 isScrollInProgress=true，不能拿它判断用户意图。
+                if (source == NestedScrollSource.UserInput && available.y > 0.5f) {
+                    autoFollowLatest = false
+                }
+                return Offset.Zero
+            }
+
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource
+            ): Offset {
+                if (source == NestedScrollSource.UserInput && messageListState.isAtLatest()) {
+                    autoFollowLatest = true
+                }
+                return Offset.Zero
+            }
         }
     }
     val timeline = remember(state.messages) { buildCompanionTimeline(state.messages) }
@@ -193,7 +211,7 @@ fun CompanionChatScreen(
     val entries = remember(
         timeline,
         liveExecutionSteps,
-        renderedStreamingText,
+        state.streamingText,
         state.streamingReasoning,
         state.isStreaming,
         state.toolStatus,
@@ -201,6 +219,8 @@ fun CompanionChatScreen(
         state.embeddingProgress,
         state.conversationId,
         state.multiBubbleEnabled,
+        state.liveEntryId,
+        state.messageUiKeys,
         lastAssistantMessageId,
         persona?.name,
         persona?.greeting,
@@ -210,7 +230,7 @@ fun CompanionChatScreen(
             timeline = timeline,
             liveSteps = liveExecutionSteps,
             liveReasoning = state.streamingReasoning,
-            streamingText = renderedStreamingText,
+            streamingText = state.streamingText,
             isStreaming = state.isStreaming,
             toolStatus = state.toolStatus,
             thinkingLabel = "${persona?.name.orEmpty()}正在思考…",
@@ -219,72 +239,157 @@ fun CompanionChatScreen(
             embeddingProgress = state.embeddingProgress,
             sceneQuote = sceneQuote,
             multiBubble = state.multiBubbleEnabled,
-            lastAssistantMessageId = lastAssistantMessageId
+            lastAssistantMessageId = lastAssistantMessageId,
+            liveEntryId = state.liveEntryId,
+            messageKeyAliases = state.messageUiKeys
         )
     }
     val isAtBottom by remember(messageListState) {
         derivedStateOf { messageListState.isAtLatest() }
     }
 
-    var wasStreaming by remember(state.conversationId) { mutableStateOf(state.isStreaming) }
-    var keepBottomOnCompletion by remember(state.conversationId) { mutableStateOf(false) }
-    LaunchedEffect(state.isStreaming, isAtBottom) {
-        if (state.isStreaming) {
-            keepBottomOnCompletion = isAtBottom
-        } else if (wasStreaming) {
-            wasStreaming = false
-            if (keepBottomOnCompletion) {
-                withFrameNanos { }
-                messageListState.snapToLatest()
+    val density = LocalDensity.current
+    val returnButtonShowPx = with(density) { 200.dp.roundToPx() }
+    val returnButtonHidePx = with(density) { 48.dp.roundToPx() }
+    var showReturnToBottom by remember(state.conversationId) { mutableStateOf(false) }
+    LaunchedEffect(messageListState, state.conversationId, returnButtonShowPx, returnButtonHidePx) {
+        snapshotFlow { messageListState.distanceFromLatest() }
+            .distinctUntilChanged()
+            .collect { distance ->
+                showReturnToBottom = if (showReturnToBottom) {
+                    distance > returnButtonHidePx
+                } else {
+                    distance > returnButtonShowPx
+                }
             }
+    }
+
+    var wasStreaming by remember(state.conversationId) { mutableStateOf(state.isStreaming) }
+    LaunchedEffect(state.isStreaming, state.conversationId) {
+        if (wasStreaming && !state.isStreaming && autoFollowLatest) {
+            withFrameNanos { }
+            messageListState.snapToLatest()
         }
         wasStreaming = state.isStreaming
     }
 
     // 打开/切换会话，以及该会话的消息首次落地时，直接定位到最新消息。
-    // 之后生成期间没有任何自动滚动：回答只在视口下方生长，滑动永远不被顶动。
     LaunchedEffect(persona?.id, state.conversationId, timeline.isEmpty()) {
+        autoFollowLatest = true
         withFrameNanos { }
         messageListState.snapToLatest()
     }
 
     // 发送后把刚发的问题锚到视口顶部（业内 AI 聊天通用手感），回答从它下方展开。
-    var pendingQuestionAnchor by remember(state.conversationId) { mutableStateOf(false) }
+    var questionAnchorTicket by remember(state.conversationId) { mutableIntStateOf(0) }
+    var previousQuestionKey by remember(state.conversationId) { mutableStateOf<String?>(null) }
+    val latestEntries by rememberUpdatedState(entries)
     val questionAnchorOffsetPx = with(LocalDensity.current) { -8.dp.roundToPx() }
-    LaunchedEffect(entries) {
-        if (!pendingQuestionAnchor) return@LaunchedEffect
-        val index = entries.indexOfLast { entry ->
-            entry is ChatEntry.Bubble && entry.fromUser
-        }
-        if (index >= 0) {
-            pendingQuestionAnchor = false
-            messageListState.animateScrollToItem(index, questionAnchorOffsetPx)
+    LaunchedEffect(questionAnchorTicket) {
+        if (questionAnchorTicket == 0) return@LaunchedEffect
+        questionAnchorInProgress = true
+        try {
+            // 等 Room 把本次 user 行送到列表；effect 只由 ticket 启动，不会被每个 token 取消。
+            repeat(120) {
+                withFrameNanos { }
+                val currentEntries = latestEntries
+                val index = currentEntries.indexOfLast { entry ->
+                    entry is ChatEntry.Bubble && entry.fromUser && entry.key != previousQuestionKey
+                }
+                if (index >= 0) {
+                    messageListState.scrollToItem(index, questionAnchorOffsetPx)
+                    return@LaunchedEffect
+                }
+            }
+        } finally {
+            questionAnchorInProgress = false
         }
     }
 
-    // 键盘弹出时视口变矮，正向列表默认锚在顶部；按 IME 每帧增量同步滚动，
-    // 让输入条上方的内容跟着键盘上推（收起时由列表边界钳制自动回落）。
-    val density = LocalDensity.current
-    val imeInsets = WindowInsets.ime
-    LaunchedEffect(messageListState, density) {
-        var lastIme = imeInsets.getBottom(density)
-        snapshotFlow { imeInsets.getBottom(density) }.collect { ime ->
-            val delta = ime - lastIme
-            lastIme = ime
-            if (delta > 0) messageListState.scrollBy(delta.toFloat())
-        }
+    fun requestQuestionAnchor() {
+        previousQuestionKey = entries.asReversed()
+            .filterIsInstance<ChatEntry.Bubble>()
+            .firstOrNull { it.fromUser }
+            ?.key
+        autoFollowLatest = true
+        questionAnchorTicket++
     }
 
     fun send() {
         val clean = input.trim()
         if ((clean.isEmpty() && pendingAttachments.isEmpty()) || state.isStreaming) return
-        pendingQuestionAnchor = true
+        requestQuestionAnchor()
         companionViewModel.send(clean, sceneQuote, pendingAttachments)
         input = ""
         pendingAttachments = emptyList()
     }
 
     val chatFont = rememberChatFontFamily(state.appearance.fontId, state.fontLibrary)
+    val currentRoundKeys = remember(entries, state.isStreaming) {
+        if (!state.isStreaming) {
+            emptyList()
+        } else {
+            val questionIndex = entries.indexOfLast { entry ->
+                entry is ChatEntry.Bubble && entry.fromUser
+            }
+            if (questionIndex >= 0) entries.drop(questionIndex).map(ChatEntry::key) else emptyList()
+        }
+    }
+    val currentRoundKeySet = remember(currentRoundKeys) { currentRoundKeys.toSet() }
+    val measuredEntryHeights = remember(state.conversationId) { mutableStateMapOf<String, Int>() }
+    var listViewportHeightPx by remember(state.conversationId) { mutableIntStateOf(0) }
+    val listVerticalPaddingPx = with(density) { 22.dp.roundToPx() }
+    val listItemSpacingPx = with(density) { 8.dp.roundToPx() }
+    val currentRoundContentHeightPx by remember(currentRoundKeys) {
+        derivedStateOf { currentRoundKeys.sumOf { measuredEntryHeights[it] ?: 0 } }
+    }
+    val tailSpacerHeightPx by remember(
+        state.isStreaming,
+        currentRoundKeys,
+        currentRoundContentHeightPx,
+        listViewportHeightPx,
+        listVerticalPaddingPx,
+        listItemSpacingPx
+    ) {
+        derivedStateOf {
+            if (!state.isStreaming || currentRoundKeys.isEmpty() || listViewportHeightPx <= 0) {
+                0
+            } else {
+                val gaps = listItemSpacingPx * currentRoundKeys.size
+                (listViewportHeightPx - listVerticalPaddingPx - currentRoundContentHeightPx - gaps)
+                    .coerceAtLeast(0)
+            }
+        }
+    }
+    val tailSpacerHeight = with(density) { tailSpacerHeightPx.toDp() }
+
+    // 只在当前回合的实际高度变化时补偿滚动，不再每个显示帧都读布局并发起 scrollBy。
+    // 这样普通 token（尚未触发行换行）完全不碰滚动状态；用户展开过程卡时又会先关闭
+    // autoFollowLatest，避免展开动画与贴底逻辑互相拉扯。
+    LaunchedEffect(
+        state.isStreaming,
+        state.conversationId,
+        currentRoundKeys,
+        currentRoundContentHeightPx,
+        tailSpacerHeightPx,
+        autoFollowLatest,
+        questionAnchorInProgress
+    ) {
+        if (!state.isStreaming || !autoFollowLatest || questionAnchorInProgress) {
+            return@LaunchedEffect
+        }
+        withFrameNanos { }
+        val info = messageListState.layoutInfo
+        val last = info.visibleItemsInfo.lastOrNull() ?: return@LaunchedEffect
+        if (last.index == info.totalItemsCount - 1) {
+            val overflow = (last.offset + last.size) -
+                (info.viewportEndOffset - info.afterContentPadding)
+            if (overflow > 0) messageListState.scrollBy(overflow.toFloat())
+        } else if (tailSpacerHeightPx == 0) {
+            // 预留空白耗尽后答案才进入真正的贴底阶段；此前保持问题锚点不动。
+            messageListState.snapToLatest()
+        }
+    }
 
     val composerActions = companionComposerActions(
         isStreaming = state.isStreaming,
@@ -297,11 +402,11 @@ fun CompanionChatScreen(
         },
         onPickTextFile = { filePicker.launch(arrayOf("text/*")) },
         onGeneratePlotSummary = {
-            pendingQuestionAnchor = true
+            requestQuestionAnchor()
             companionViewModel.generatePlotSummary(sceneQuote)
         },
         onGenerateIllustration = {
-            pendingQuestionAnchor = true
+            requestQuestionAnchor()
             companionViewModel.requestIllustration(sceneQuote)
         },
         onToggleSpoilerProtection = {
@@ -363,6 +468,8 @@ fun CompanionChatScreen(
                     state = messageListState,
                     modifier = Modifier
                         .fillMaxSize()
+                        .nestedScroll(followConnection)
+                        .onSizeChanged { listViewportHeightPx = it.height }
                         .padding(horizontal = 16.dp),
                     contentPadding = PaddingValues(top = 8.dp, bottom = 14.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -372,89 +479,118 @@ fun CompanionChatScreen(
                         key = ChatEntry::key,
                         contentType = ChatEntry::contentType
                     ) { entry ->
-                        when (entry) {
-                            is ChatEntry.Scene -> ChatSceneDivider(entry.text, palette)
-                            is ChatEntry.Embedding -> EmbeddingProgressCapsule(
-                                progress = entry.progress,
-                                palette = palette,
-                                onRetry = companionViewModel::retryEmbedding
-                            )
-                            is ChatEntry.Process -> CompanionProcessCard(
-                                steps = entry.steps,
-                                reasoning = entry.reasoning,
-                                palette = palette,
-                                isLive = entry.isLive,
-                                stateKey = entry.key
-                            )
-                            is ChatEntry.Bubble -> CompanionChatBubble(
-                                entry = entry,
-                                palette = palette,
-                                personaName = persona?.name.orEmpty(),
-                                personaAvatarPath = persona?.avatarPath,
-                                appearance = state.appearance,
-                                fontFamily = chatFont,
-                                locatedCitations = entry.message
-                                    ?.let { state.locatedCitations[it.id] }
-                                    .orEmpty(),
-                                onLocateCitation = companionViewModel::locate,
-                                onEdit = {
-                                    entry.message?.let { message ->
-                                        editingMessage = message
-                                        editText = message.content
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .then(
+                                    if (entry.key in currentRoundKeySet) {
+                                        Modifier.onSizeChanged { measuredEntryHeights[entry.key] = it.height }
+                                    } else {
+                                        Modifier
                                     }
-                                },
-                                onDelete = {
-                                    entry.message?.let { companionViewModel.deleteMessage(it.id) }
-                                },
-                                onReroll = {
-                                    entry.message?.let {
-                                        companionViewModel.reroll(it.id, sceneQuote)
-                                    }
-                                },
-                                onBranch = {
-                                    entry.message?.let { companionViewModel.branchFrom(it.id) }
-                                },
-                                onSpeak = { text ->
-                                    companionViewModel.speak(text, mediaViewModel::playCachedSpeech)
-                                },
-                                voiceClip = state.voiceClips[entry.key],
-                                onPrepareVoice = {
-                                    companionViewModel.prepareVoiceClip(entry.key, entry.part.text)
-                                },
-                                onRegenerateVoice = {
-                                    companionViewModel.regenerateVoiceClip(entry.key, entry.part.text)
-                                },
-                                onPlayVoice = mediaViewModel::playCachedSpeech
-                            )
-                            is ChatEntry.Media -> CompanionMediaBubble(
-                                result = entry.result,
-                                palette = palette,
-                                onOpenImage = { path, _ -> previewImagePath = path },
-                                onPlayAudio = mediaViewModel::playCachedSpeech
-                            )
-                            is ChatEntry.Status -> Text(
-                                text = entry.text,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = palette.muted,
-                                modifier = Modifier.padding(
-                                    start = AVATAR_GUTTER,
-                                    top = 2.dp,
-                                    bottom = 2.dp
                                 )
-                            )
-                            is ChatEntry.ErrorLine -> Row(
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
+                        ) {
+                            when (entry) {
+                                is ChatEntry.Scene -> ChatSceneDivider(entry.text, palette)
+                                is ChatEntry.Embedding -> EmbeddingProgressCapsule(
+                                    progress = entry.progress,
+                                    palette = palette,
+                                    onRetry = companionViewModel::retryEmbedding
+                                )
+                                is ChatEntry.Process -> CompanionProcessCard(
+                                    steps = entry.steps,
+                                    reasoning = entry.reasoning,
+                                    palette = palette,
+                                    isLive = entry.isLive,
+                                    stateKey = entry.key,
+                                    onUserToggle = {
+                                        // 用户主动查看过程时让视口归用户控制；否则贴底协程会在
+                                        // 展开改变高度的同时反向滚动，造成明显抖动。
+                                        if (state.isStreaming) autoFollowLatest = false
+                                    }
+                                )
+                                is ChatEntry.Bubble -> CompanionChatBubble(
+                                    entry = entry,
+                                    palette = palette,
+                                    personaName = persona?.name.orEmpty(),
+                                    personaAvatarPath = persona?.avatarPath,
+                                    appearance = state.appearance,
+                                    fontFamily = chatFont,
+                                    locatedCitations = entry.message
+                                        ?.let { state.locatedCitations[it.id] }
+                                        .orEmpty(),
+                                    onLocateCitation = companionViewModel::locate,
+                                    onEdit = {
+                                        entry.message?.let { message ->
+                                            editingMessage = message
+                                            editText = message.content
+                                        }
+                                    },
+                                    onDelete = {
+                                        entry.message?.let { companionViewModel.deleteMessage(it.id) }
+                                    },
+                                    onReroll = {
+                                        entry.message?.let {
+                                            companionViewModel.reroll(it.id, sceneQuote)
+                                        }
+                                    },
+                                    onBranch = {
+                                        entry.message?.let { companionViewModel.branchFrom(it.id) }
+                                    },
+                                    onSpeak = { text ->
+                                        companionViewModel.speak(text, mediaViewModel::playCachedSpeech)
+                                    },
+                                    voiceClip = state.voiceClips[entry.key],
+                                    onPrepareVoice = {
+                                        companionViewModel.prepareVoiceClip(entry.key, entry.part.text)
+                                    },
+                                    onRegenerateVoice = {
+                                        companionViewModel.regenerateVoiceClip(entry.key, entry.part.text)
+                                    },
+                                    onPlayVoice = mediaViewModel::playCachedSpeech
+                                )
+                                is ChatEntry.Media -> CompanionMediaBubble(
+                                    result = entry.result,
+                                    palette = palette,
+                                    onOpenImage = { path, _ -> previewImagePath = path },
+                                    onPlayAudio = mediaViewModel::playCachedSpeech
+                                )
+                                is ChatEntry.Status -> Text(
                                     text = entry.text,
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.weight(1f)
+                                    color = palette.muted,
+                                    modifier = Modifier.padding(
+                                        start = AVATAR_GUTTER,
+                                        top = 2.dp,
+                                        bottom = 2.dp
+                                    )
                                 )
-                                TextButton(
-                                    onClick = { companionViewModel.retry(sceneQuote) }
-                                ) { Text("重试") }
+                                is ChatEntry.ErrorLine -> Row(
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = entry.text,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    TextButton(
+                                        onClick = { companionViewModel.retry(sceneQuote) }
+                                    ) { Text("重试") }
+                                }
                             }
+                        }
+                    }
+                    if (state.isStreaming) {
+                        item(
+                            key = "chat-tail-spacer-${state.liveEntryId}",
+                            contentType = "tail-spacer"
+                        ) {
+                            Spacer(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .height(tailSpacerHeight)
+                            )
                         }
                     }
                 }
@@ -462,7 +598,7 @@ fun CompanionChatScreen(
                 val followScope = rememberCoroutineScope()
                 var isReturningToBottom by remember { mutableStateOf(false) }
                 androidx.compose.animation.AnimatedVisibility(
-                    visible = !isAtBottom && entries.isNotEmpty(),
+                    visible = showReturnToBottom && entries.isNotEmpty(),
                     enter = fadeIn(),
                     exit = fadeOut(),
                     modifier = Modifier
@@ -474,6 +610,7 @@ fun CompanionChatScreen(
                         shape = RoundedCornerShape(18.dp),
                         border = BorderStroke(1.dp, palette.glassBorder),
                         modifier = Modifier.clickable(enabled = !isReturningToBottom) {
+                            autoFollowLatest = true
                             followScope.launch {
                                 isReturningToBottom = true
                                 try {
@@ -519,7 +656,7 @@ fun CompanionChatScreen(
                         suggestions = state.suggestions,
                         palette = palette,
                         onPick = { text ->
-                            pendingQuestionAnchor = true
+                            requestQuestionAnchor()
                             companionViewModel.send(text, sceneQuote)
                         },
                         onDismiss = companionViewModel::dismissSuggestions

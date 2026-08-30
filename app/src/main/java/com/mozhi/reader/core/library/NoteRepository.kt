@@ -19,6 +19,11 @@ class NoteRepository @Inject constructor(
 
     suspend fun getNote(noteId: Long): NoteEntity? = noteDao.getNote(noteId)
 
+    suspend fun getForBook(bookId: Long): List<NoteEntity> = noteDao.getForBook(bookId)
+
+    suspend fun latestByKind(bookId: Long, personaId: Long, kind: String): NoteEntity? =
+        noteDao.latestByKind(bookId, personaId, kind)
+
     suspend fun create(
         bookId: Long,
         personaId: Long?,
@@ -53,6 +58,24 @@ class NoteRepository @Inject constructor(
             noteId = noteId,
             title = title.trim(),
             contentMarkdown = contentMarkdown,
+            updatedAt = System.currentTimeMillis()
+        )
+    }
+
+    suspend fun updateContentAndPosition(
+        noteId: Long,
+        title: String,
+        contentMarkdown: String,
+        relatedChapterIndex: Int?,
+        relatedCharOffset: Int?
+    ) {
+        require(title.isNotBlank() || contentMarkdown.isNotBlank()) { "笔记内容不能为空" }
+        noteDao.updateContentAndPosition(
+            noteId = noteId,
+            title = title.trim(),
+            contentMarkdown = contentMarkdown,
+            relatedChapterIndex = relatedChapterIndex,
+            relatedCharOffset = relatedCharOffset,
             updatedAt = System.currentTimeMillis()
         )
     }

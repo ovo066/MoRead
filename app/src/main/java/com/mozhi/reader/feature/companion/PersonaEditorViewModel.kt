@@ -40,12 +40,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** 编辑器可选的工具白名单（M2 全集；未实现的工具注册时自然缺席，白名单是前向兼容的）。 */
+/** 编辑器只配置会写入用户资产的工具；目录、原文、笔记与批注读取是伴读基础能力。 */
 val PersonaToolOptions = listOf(
-    "get_reading_progress" to "查询阅读进度",
-    "search_book" to "检索书中原文",
-    "read_book_section" to "读取指定已读章节",
-    "recall_memory" to "回忆过往交流",
     "add_annotation" to "添加批注",
     "write_note" to "写读书笔记",
     "save_plot_summary" to "保存剧情梗概",

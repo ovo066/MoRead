@@ -1,9 +1,11 @@
 package com.mozhi.reader.core.backup
 
+import com.mozhi.reader.core.diag.SkipApiCallLogging
 import java.io.File
 import java.net.URLDecoder
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
+import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
@@ -14,8 +16,9 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.asRequestBody
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSink
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import org.jsoup.parser.Parser
@@ -28,7 +31,16 @@ data class RemoteBackup(
 
 /** OkHttp WebDAV 子集，沿用 Legado 的 PROPFIND/MKCOL/PUT/GET 方案。 */
 @Singleton
-class WebDavClient @Inject constructor(private val httpClient: OkHttpClient) {
+class WebDavClient @Inject constructor(httpClient: OkHttpClient) {
+    /**
+     * 备份传输独立放宽超时。newBuilder 仍复用连接池和线程池；所有请求再用 tag
+     * 绕过 API 诊断快照，避免把数百 MB 的 zip 写进内存。
+     */
+    private val transferClient = httpClient.newBuilder()
+        .readTimeout(10, TimeUnit.MINUTES)
+        .writeTimeout(10, TimeUnit.MINUTES)
+        .callTimeout(0, TimeUnit.MILLISECONDS)
+        .build()
     suspend fun test(credentials: WebDavCredentials) = withContext(Dispatchers.IO) {
         val root = credentials.baseHttpUrl()
         val response = execute(credentials, propFind(root, depth = 0))
@@ -55,25 +67,46 @@ class WebDavClient @Inject constructor(private val httpClient: OkHttpClient) {
         }
     }
 
-    suspend fun upload(credentials: WebDavCredentials, file: File, remoteName: String) =
-        withContext(Dispatchers.IO) {
-            require(file.isFile) { "本地备份文件不存在" }
-            val target = ensureDirectory(credentials).newBuilder().addPathSegment(remoteName).build()
-            val request = Request.Builder()
-                .url(target)
-                .put(file.asRequestBody("application/octet-stream".toMediaType()))
-                .build()
-            execute(credentials, request).close()
-        }
+    suspend fun upload(
+        credentials: WebDavCredentials,
+        file: File,
+        remoteName: String,
+        onProgress: (sentBytes: Long, totalBytes: Long) -> Unit = { _, _ -> }
+    ) = withContext(Dispatchers.IO) {
+        require(file.isFile) { "本地备份文件不存在" }
+        val target = ensureDirectory(credentials).newBuilder().addPathSegment(remoteName).build()
+        val request = Request.Builder()
+            .url(target)
+            .put(ProgressFileRequestBody(file, onProgress))
+            .build()
+        execute(credentials, request).close()
+    }
 
-    suspend fun download(credentials: WebDavCredentials, remoteName: String, output: File) =
-        withContext(Dispatchers.IO) {
-            val target = ensureDirectory(credentials).newBuilder().addPathSegment(remoteName).build()
-            execute(credentials, Request.Builder().url(target).get().build()).use { response ->
-                output.parentFile?.mkdirs()
-                output.outputStream().buffered().use { sink -> response.body.byteStream().copyTo(sink) }
+    suspend fun download(
+        credentials: WebDavCredentials,
+        remoteName: String,
+        output: File,
+        onProgress: (receivedBytes: Long, totalBytes: Long) -> Unit = { _, _ -> }
+    ) = withContext(Dispatchers.IO) {
+        val target = ensureDirectory(credentials).newBuilder().addPathSegment(remoteName).build()
+        execute(credentials, Request.Builder().url(target).get().build()).use { response ->
+            output.parentFile?.mkdirs()
+            val total = response.body.contentLength()
+            var received = 0L
+            response.body.byteStream().buffered().use { source ->
+                output.outputStream().buffered().use { sink ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    while (true) {
+                        val count = source.read(buffer)
+                        if (count < 0) break
+                        sink.write(buffer, 0, count)
+                        received += count
+                        onProgress(received, total)
+                    }
+                }
             }
         }
+    }
 
     suspend fun delete(credentials: WebDavCredentials, remoteName: String) =
         withContext(Dispatchers.IO) {
@@ -88,7 +121,7 @@ class WebDavClient @Inject constructor(private val httpClient: OkHttpClient) {
         var current = credentials.baseHttpUrl()
         credentials.remoteDirectory.split('/').map(String::trim).filter(String::isNotEmpty).forEach { segment ->
             current = current.newBuilder().addPathSegment(segment).addPathSegment("").build()
-            val exists = httpClient.newCall(authenticated(credentials, propFind(current, 0))).execute().use {
+            val exists = transferClient.newCall(authenticated(credentials, propFind(current, 0))).execute().use {
                 when {
                     it.isSuccessful -> true
                     it.code == 404 -> false
@@ -97,7 +130,7 @@ class WebDavClient @Inject constructor(private val httpClient: OkHttpClient) {
             }
             if (!exists) {
                 val request = Request.Builder().url(current).method("MKCOL", null).build()
-                httpClient.newCall(authenticated(credentials, request)).execute().use { response ->
+                transferClient.newCall(authenticated(credentials, request)).execute().use { response ->
                     if (!response.isSuccessful && response.code != 405) {
                         throw WebDavException("创建远程目录失败：${response.code} ${response.message}")
                     }
@@ -121,7 +154,7 @@ class WebDavClient @Inject constructor(private val httpClient: OkHttpClient) {
         .build()
 
     private fun execute(credentials: WebDavCredentials, request: Request): okhttp3.Response {
-        val response = httpClient.newCall(authenticated(credentials, request)).execute()
+        val response = transferClient.newCall(authenticated(credentials, request)).execute()
         if (!response.isSuccessful) {
             val code = response.code
             val message = response.message
@@ -137,6 +170,7 @@ class WebDavClient @Inject constructor(private val httpClient: OkHttpClient) {
         request.newBuilder()
             .header("Authorization", Credentials.basic(credentials.username, credentials.password))
             .header("User-Agent", "MoRead-WebDAV")
+            .tag(SkipApiCallLogging::class.java, SkipApiCallLogging)
             .build()
 
     private fun Element.toRemoteBackup(): RemoteBackup? {
@@ -155,6 +189,30 @@ class WebDavClient @Inject constructor(private val httpClient: OkHttpClient) {
     }
 
     private fun Element.localTag(): String = tagName().substringAfter(':').lowercase()
+
+    private class ProgressFileRequestBody(
+        private val file: File,
+        private val onProgress: (Long, Long) -> Unit
+    ) : RequestBody() {
+        override fun contentType() = "application/octet-stream".toMediaType()
+        override fun contentLength(): Long = file.length()
+        override fun isOneShot(): Boolean = true
+
+        override fun writeTo(sink: BufferedSink) {
+            val total = contentLength()
+            var sent = 0L
+            file.inputStream().buffered().use { source ->
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                while (true) {
+                    val count = source.read(buffer)
+                    if (count < 0) break
+                    sink.write(buffer, 0, count)
+                    sent += count
+                    onProgress(sent, total)
+                }
+            }
+        }
+    }
 
     companion object {
         const val BACKUP_EXTENSION = ".moread.zip"

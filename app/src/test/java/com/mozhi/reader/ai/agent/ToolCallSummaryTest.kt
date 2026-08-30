@@ -96,6 +96,22 @@ class ToolCallSummaryTest {
     }
 
     @Test
+    fun `readback tools summarize scope`() {
+        assertEquals(
+            "第 3-8 章 · 卷部",
+            ToolCallSummary.summarize("list_chapters", """{"from_chapter":3,"to_chapter":8,"level":"volume"}""")
+        )
+        assertEquals(
+            "当前章 · 主角",
+            ToolCallSummary.summarize("list_annotations", """{"query":"主角"}""")
+        )
+        assertEquals(
+            "第 12 条",
+            ToolCallSummary.summarize("list_notes", """{"note_id":12}""")
+        )
+    }
+
+    @Test
     fun `no-argument and malformed calls degrade to an empty summary`() {
         assertEquals("", ToolCallSummary.summarize("get_reading_progress", "{}"))
         assertEquals("", ToolCallSummary.summarize("search_book", "not json"))

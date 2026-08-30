@@ -28,6 +28,21 @@ class AnnotationRepository @Inject constructor(
     suspend fun getForChapter(bookId: Long, chapterIndex: Int): List<AnnotationEntity> =
         annotationDao.getForChapter(bookId, chapterIndex)
 
+    suspend fun getForChapterRange(
+        bookId: Long,
+        fromIndex: Int,
+        toIndex: Int
+    ): List<AnnotationEntity> = annotationDao.getForChapterRange(bookId, fromIndex, toIndex)
+
+    suspend fun getCountForBook(bookId: Long): Int = annotationDao.getCountForBook(bookId)
+
+    suspend fun getCountForChapter(bookId: Long, chapterIndex: Int): Int =
+        annotationDao.getCountForChapter(bookId, chapterIndex)
+
+    suspend fun getReplyCounts(annotationIds: List<Long>): Map<Long, Int> =
+        if (annotationIds.isEmpty()) emptyMap()
+        else annotationDao.getReplyCounts(annotationIds).associate { it.annotationId to it.replyCount }
+
     suspend fun getAnnotation(annotationId: Long): AnnotationEntity? =
         annotationDao.getAnnotation(annotationId)
 

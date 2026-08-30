@@ -37,6 +37,7 @@ import com.mozhi.reader.core.library.AttachmentStore
 import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.library.MessageAttachment
 import dagger.hilt.android.lifecycle.HiltViewModel
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import com.mozhi.reader.core.library.QuoteChapter
@@ -109,6 +110,9 @@ data class CompanionChatUiState(
     val conversationId: Long? = null,
     val conversations: List<ConversationEntity> = emptyList(),
     val messages: List<MessageEntity> = emptyList(),
+    /** 当前进程内给流式回复分配的稳定 UI key；落库后仍沿用，避免 LazyColumn 重建气泡。 */
+    val messageUiKeys: Map<Long, String> = emptyMap(),
+    val liveEntryId: String = "live-initial",
     /** 仅包含已在本书已读正文中实际命中的引用，按消息 id 索引。 */
     val locatedCitations: Map<Long, List<LocatedCompanionCitation>> = emptyMap(),
     val streamingText: String? = null,
@@ -170,12 +174,13 @@ class ReaderCompanionViewModel @Inject constructor(
     private var conversationsJob: Job? = null
     private var suggestionJob: Job? = null
     private var generationJob: Job? = null
+    private val nextLiveEntrySequence = AtomicLong(0L)
     private val eventChannel = Channel<CompanionChatEvent>(Channel.BUFFERED)
     val events = eventChannel.receiveAsFlow()
 
     /**
      * 流式正文的真源。SSE 增量只追加到这里（主线程独占），UI 快照由节拍器按
-     * [STREAM_UI_TICK_MS] 发布到 session，避免逐 token 重组整页与 O(n²) 拼串。
+     * 显示帧节拍发布到 session，避免逐 token 重组整页与 O(n²) 拼串。
      */
     private val streamBuffer = StringBuilder()
 
@@ -186,6 +191,8 @@ class ReaderCompanionViewModel @Inject constructor(
         val conversationId: Long? = null,
         val conversations: List<ConversationEntity> = emptyList(),
         val messages: List<MessageEntity> = emptyList(),
+        val messageUiKeys: Map<Long, String> = emptyMap(),
+        val liveEntryId: String = "live-initial",
         val locatedCitations: Map<Long, List<LocatedCompanionCitation>> = emptyMap(),
         val streamingText: String? = null,
         val streamingReasoning: String? = null,
@@ -264,6 +271,8 @@ class ReaderCompanionViewModel @Inject constructor(
             conversationId = session.conversationId,
             conversations = session.conversations,
             messages = session.messages,
+            messageUiKeys = session.messageUiKeys,
+            liveEntryId = session.liveEntryId,
             locatedCitations = session.locatedCitations,
             streamingText = session.streamingText,
             streamingReasoning = session.streamingReasoning,
@@ -712,6 +721,8 @@ class ReaderCompanionViewModel @Inject constructor(
         session.value = session.value.copy(
             conversationId = conversationId,
             messages = emptyList(),
+            messageUiKeys = emptyMap(),
+            liveEntryId = newLiveEntryId(conversationId),
             streamingText = null,
             streamingReasoning = null,
             // 上一次离开时这轮生成可能还在后台跑；接着显示等待态，也别让用户再发一条。
@@ -831,10 +842,12 @@ class ReaderCompanionViewModel @Inject constructor(
         // 生成挂在应用作用域而不是 viewModelScope：退出聊天页不该把已经流了一半的回复
         // 连同它一起取消。AgentLoop 完成时会把回复落库，用户回来就能在列表里看到它。
         streamJob = applicationScope.launch {
+            var currentLiveEntryId = newLiveEntryId(conversationId)
             session.value = session.value.copy(
                 isStreaming = true,
                 streamingText = "",
                 streamingReasoning = null,
+                liveEntryId = currentLiveEntryId,
                 toolStatus = null,
                 executionSteps = emptyList(),
                 suggestions = emptyList(),
@@ -906,12 +919,17 @@ class ReaderCompanionViewModel @Inject constructor(
                             streamBuffer.setLength(0)
                             reasoningBuffer.setLength(0)
                             val messages = session.value.messages
+                            val committedUiKeys = session.value.messageUiKeys +
+                                (event.message.id to currentLiveEntryId)
+                            currentLiveEntryId = newLiveEntryId(conversationId)
                             session.value = session.value.copy(
                                 messages = if (messages.any { it.id == event.message.id }) {
                                     messages
                                 } else {
                                     messages + event.message
                                 },
+                                messageUiKeys = committedUiKeys,
+                                liveEntryId = currentLiveEntryId,
                                 streamingText = "",
                                 streamingReasoning = null
                             )
@@ -1000,12 +1018,19 @@ class ReaderCompanionViewModel @Inject constructor(
     private fun publishStreamingSnapshot() {
         val current = session.value
         if (!current.isStreaming) return
-        val text = streamBuffer.toString()
-        val reasoning = reasoningBuffer.toString().takeIf(String::isNotBlank)
+        val text = nextStreamingFrame(current.streamingText.orEmpty(), streamBuffer.toString())
+        val reasoningTarget = reasoningBuffer.toString()
+        val reasoning = nextStreamingFrame(
+            current = current.streamingReasoning.orEmpty(),
+            target = reasoningTarget
+        ).takeIf(String::isNotBlank)
         if (current.streamingText != text || current.streamingReasoning != reasoning) {
             session.value = current.copy(streamingText = text, streamingReasoning = reasoning)
         }
     }
+
+    private fun newLiveEntryId(conversationId: Long): String =
+        "live-$conversationId-${nextLiveEntrySequence.incrementAndGet()}"
 
     override fun onCleared() {
         session.value.conversationId?.let(memoryScheduler::onConversationClosed)

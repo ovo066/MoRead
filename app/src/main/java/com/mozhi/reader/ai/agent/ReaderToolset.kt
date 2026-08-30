@@ -78,7 +78,26 @@ class ReaderToolset @Inject constructor(
             Embeddings.conformToIndex(resolved.client.embed(listOf(query)).first())
         }
         val tools = buildList {
-            add(GetReadingProgressTool(libraryRepository, bookId))
+            add(
+                GetReadingProgressTool(
+                    libraryRepository = libraryRepository,
+                    noteRepository = noteRepository,
+                    annotationRepository = annotationRepository,
+                    bookId = bookId,
+                    spoilerProtectionEnabled = spoilerProtectionEnabled
+                )
+            )
+            add(ListChaptersTool(libraryRepository, bookId, spoilerProtectionEnabled))
+            add(
+                ListAnnotationsTool(
+                    libraryRepository = libraryRepository,
+                    annotations = annotationRepository,
+                    bookId = bookId,
+                    currentPersonaId = personaId,
+                    spoilerProtectionEnabled = spoilerProtectionEnabled
+                )
+            )
+            add(ListNotesTool(noteRepository, bookId, personaId))
             add(
                 SearchBookTool(
                     bookId = bookId,
@@ -172,7 +191,7 @@ class ReaderToolset @Inject constructor(
             }
         }
         return enabledTools?.let { allowed ->
-            tools.filter { tool -> tool.spec.name in allowed }
+            tools.filter { tool -> tool.spec.name in READ_ONLY_BASE_TOOLS || tool.spec.name in allowed }
         } ?: tools
     }
 }
@@ -266,14 +285,17 @@ private class WebSearchTool(
 
 private class GetReadingProgressTool(
     private val libraryRepository: LibraryRepository,
-    private val bookId: Long
+    private val noteRepository: NoteRepository,
+    private val annotationRepository: AnnotationRepository,
+    private val bookId: Long,
+    private val spoilerProtectionEnabled: Boolean
 ) : AgentTool {
 
-    override val displayName: String = "查询阅读进度"
+    override val displayName: String = "查询书籍与阅读进度"
 
     override val spec: ToolSpec = ToolSpec(
         name = "get_reading_progress",
-        description = "获取当前书籍的阅读进度：书名、作者、总章数、当前读到的章节。回答与进度或剧情范围相关的问题前应先调用。",
+        description = "获取当前书籍、阅读进度、阅读统计及已有笔记/批注/书签概况；回答与进度、章节范围或存量素材相关的问题前应先调用。",
         parameters = buildJsonObject {
             put("type", "object")
             putJsonObject("properties") {}
@@ -281,18 +303,29 @@ private class GetReadingProgressTool(
     )
 
     override suspend fun execute(arguments: JsonObject): String {
-        val book = libraryRepository.getBook(bookId)
-            ?: return "未找到当前书籍"
-        val chapters = libraryRepository.getChapters(bookId)
-        val current = chapters.getOrNull(book.lastReadChapterIndex)
-        return buildString {
-            append("《").append(book.title).append("》")
-            if (book.author.isNotBlank()) append("，作者 ").append(book.author)
-            append("。全书共 ").append(book.totalChapters).append(" 章，")
-            append("当前读到第 ").append(book.lastReadChapterIndex + 1).append(" 章")
-            current?.title?.takeIf(String::isNotBlank)?.let { append("「").append(it).append("」") }
-            append("。用户尚未读到之后的章节，回答不要涉及后续剧情。")
-        }
+        val book = libraryRepository.getBook(bookId) ?: return "未找到当前书籍"
+        val currentIndex = book.lastReadChapterIndex.coerceAtLeast(0)
+        val notes = noteRepository.getForBook(bookId)
+        return formatProgressOverview(
+            overview = ProgressOverview(
+                book = book,
+                currentChapter = libraryRepository.getChapter(bookId, currentIndex),
+                previousChapter = currentIndex.takeIf { it > 0 }
+                    ?.let { libraryRepository.getChapter(bookId, it - 1) },
+                nextChapter = currentIndex.takeIf { it + 1 < book.totalChapters }
+                    ?.let { libraryRepository.getChapter(bookId, it + 1) },
+                totalCharacters = libraryRepository.getTotalCharacterCount(bookId),
+                charactersBeforeCurrent = libraryRepository.getCharacterCountBefore(bookId, currentIndex),
+                tags = libraryRepository.getTagNames(bookId),
+                readingDays = libraryRepository.getReadingDays(bookId),
+                noteCount = notes.count { it.kind == NoteRepository.KIND_NOTE },
+                plotSummaries = notes.filter { it.kind == NoteRepository.KIND_PLOT_SUMMARY },
+                annotationCount = annotationRepository.getCountForBook(bookId),
+                currentChapterAnnotationCount = annotationRepository.getCountForChapter(bookId, currentIndex),
+                bookmarkCount = libraryRepository.getBookmarks(bookId).size
+            ),
+            spoilerProtectionEnabled = spoilerProtectionEnabled
+        )
     }
 }
 
@@ -316,9 +349,9 @@ internal class ReadBookSectionTool(
     override val spec: ToolSpec = ToolSpec(
         name = "read_book_section",
         description = if (spoilerProtectionEnabled) {
-            "读取用户指定的已读章节或章节范围原文。概括第几章、第几章到第几章、某一部分时优先使用；不依赖向量索引。章节号从 1 开始，当前章内容只会返回到用户实际阅读位置。"
+            "读取用户指定的已读章节或章节范围原文。概括某章或某部分时使用；不确定章节号时先调用 list_chapters 核对，不要猜测。章节号从 1 开始，当前章内容只返回到实际阅读位置。"
         } else {
-            "读取用户指定的章节或章节范围原文。概括第几章、第几章到第几章、某一部分时优先使用；不依赖向量索引。章节号从 1 开始。"
+            "读取用户指定的章节或章节范围原文。概括某章或某部分时使用；不确定章节号时先调用 list_chapters 核对，不要猜测。章节号从 1 开始。"
         },
         parameters = buildJsonObject {
             put("type", "object")
@@ -710,7 +743,7 @@ private class WriteNoteTool(
 
     override val spec: ToolSpec = ToolSpec(
         name = "write_note",
-        description = "把用户明确要求保存的读书笔记写入本书笔记库。内容使用 Markdown；不要在用户没有要求保存时擅自调用。",
+        description = "把用户明确要求保存的读书笔记写入本书笔记库。给出 note_id 时更新该条，否则新建；用户手写和其他角色的笔记不可改写。内容使用 Markdown；不要在用户没有要求保存时擅自调用。",
         parameters = noteParameters("笔记标题", "笔记 Markdown 正文")
     )
 
@@ -730,17 +763,44 @@ private class WriteNoteTool(
         val book = getBook() ?: return "未找到当前书籍"
         val title = arguments["title"]?.jsonPrimitive?.contentOrNull?.trim()
             .orEmpty().ifBlank { defaultTitle }
-        val noteId = notes.create(
+        val requestedId = arguments["note_id"]?.jsonPrimitive?.contentOrNull?.toLongOrNull()
+        val requested = requestedId?.let { notes.getNote(it) }
+        if (requestedId != null && requested == null) return "未找到第 $requestedId 条笔记"
+        return when (val target = resolveNoteWriteTarget(
+            requested = requested,
+            latest = null,
             bookId = bookId,
             personaId = personaId,
-            title = title.take(120),
-            contentMarkdown = content.take(MAX_NOTE_CHARS),
             kind = kind,
-            sourceConversationId = conversationId,
-            relatedChapterIndex = book.lastReadChapterIndex,
-            relatedCharOffset = book.lastReadCharOffset
-        )
-        return "已保存到《${book.title}》的笔记（编号 $noteId），范围截至第 ${book.lastReadChapterIndex + 1} 章。"
+            asNew = false
+        )) {
+            NoteWriteTarget.Create -> {
+                val noteId = notes.create(
+                    bookId = bookId,
+                    personaId = personaId,
+                    title = title.take(120),
+                    contentMarkdown = content.take(MAX_NOTE_CHARS),
+                    kind = kind,
+                    sourceConversationId = conversationId,
+                    relatedChapterIndex = book.lastReadChapterIndex,
+                    relatedCharOffset = book.lastReadCharOffset
+                )
+                "已保存到《${book.title}》的笔记（编号 $noteId），范围截至第 ${book.lastReadChapterIndex + 1} 章。"
+            }
+            is NoteWriteTarget.Update -> {
+                val before = target.note.contentMarkdown.length
+                val updatedContent = content.take(MAX_NOTE_CHARS)
+                notes.updateContentAndPosition(
+                    noteId = target.note.id,
+                    title = title.take(120),
+                    contentMarkdown = updatedContent,
+                    relatedChapterIndex = book.lastReadChapterIndex,
+                    relatedCharOffset = book.lastReadCharOffset
+                )
+                "已更新第 ${target.note.id} 条读书笔记（$before → ${updatedContent.length} 字），范围截至第 ${book.lastReadChapterIndex + 1} 章。"
+            }
+            is NoteWriteTarget.Reject -> target.reason
+        }
     }
 }
 
@@ -755,7 +815,7 @@ private class SavePlotSummaryTool(
 
     override val spec: ToolSpec = ToolSpec(
         name = "save_plot_summary",
-        description = "把截至用户当前阅读进度的剧情梗概保存到「剧情梗概」库。用户要求生成并保存、更新或记录梗概时必须调用；严禁写入当前进度之后的剧情。",
+        description = "保存或更新截至当前阅读进度的剧情梗概。梗概是滚动文档，默认覆盖当前角色最新一条；先用 list_notes 读回旧稿，只有 as_new=true 才新建。严禁写入未读剧情或改写用户手写内容。",
         parameters = plotSummaryParameters()
     )
 
@@ -781,17 +841,49 @@ private class SavePlotSummaryTool(
         }
         val title = arguments["title"]?.jsonPrimitive?.contentOrNull?.trim()
             .orEmpty().ifBlank { defaultTitle }
-        val noteId = notes.create(
+        val requestedId = arguments["note_id"]?.jsonPrimitive?.contentOrNull?.toLongOrNull()
+        val requested = requestedId?.let { notes.getNote(it) }
+        if (requestedId != null && requested == null) return "未找到第 $requestedId 条笔记"
+        val asNew = arguments["as_new"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: false
+        val latest = if (requested == null && !asNew) {
+            notes.latestByKind(bookId, personaId, NoteRepository.KIND_PLOT_SUMMARY)
+        } else null
+        return when (val target = resolveNoteWriteTarget(
+            requested = requested,
+            latest = latest,
             bookId = bookId,
             personaId = personaId,
-            title = title.take(120),
-            contentMarkdown = content.take(MAX_NOTE_CHARS),
             kind = NoteRepository.KIND_PLOT_SUMMARY,
-            sourceConversationId = conversationId,
-            relatedChapterIndex = toChapter - 1,
-            relatedCharOffset = if (toChapter == currentChapter) book.lastReadCharOffset else null
-        )
-        return "第 $fromChapter-$toChapter 章剧情梗概已保存（编号 $noteId），可在书籍详情的「剧情梗概与笔记」中回顾。"
+            asNew = asNew
+        )) {
+            NoteWriteTarget.Create -> {
+                val noteId = notes.create(
+                    bookId = bookId,
+                    personaId = personaId,
+                    title = title.take(120),
+                    contentMarkdown = content.take(MAX_NOTE_CHARS),
+                    kind = NoteRepository.KIND_PLOT_SUMMARY,
+                    sourceConversationId = conversationId,
+                    relatedChapterIndex = toChapter - 1,
+                    relatedCharOffset = if (toChapter == currentChapter) book.lastReadCharOffset else null
+                )
+                "第 $fromChapter-$toChapter 章剧情梗概已保存（编号 $noteId），可在书籍详情的「剧情梗概与笔记」中回顾。"
+            }
+            is NoteWriteTarget.Update -> {
+                val previousTo = target.note.relatedChapterIndex?.plus(1)
+                val before = target.note.contentMarkdown.length
+                notes.updateContentAndPosition(
+                    noteId = target.note.id,
+                    title = title.take(120),
+                    contentMarkdown = content.take(MAX_NOTE_CHARS),
+                    relatedChapterIndex = toChapter - 1,
+                    relatedCharOffset = if (toChapter == currentChapter) book.lastReadCharOffset else null
+                )
+                val oldRange = previousTo?.let { "原覆盖至第 $it 章 → " }.orEmpty()
+                "已更新第 ${target.note.id} 条剧情梗概（${oldRange}现第 $fromChapter-$toChapter 章，$before → ${content.take(MAX_NOTE_CHARS).length} 字）。"
+            }
+            is NoteWriteTarget.Reject -> target.reason
+        }
     }
 }
 
@@ -806,6 +898,10 @@ private fun noteParameters(titleDescription: String, contentDescription: String)
             putJsonObject("content_md") {
                 put("type", "string")
                 put("description", contentDescription)
+            }
+            putJsonObject("note_id") {
+                put("type", "integer")
+                put("description", "要覆盖的笔记编号；省略则新建")
             }
         }
         putJsonArray("required") {
@@ -833,9 +929,27 @@ private fun plotSummaryParameters(): JsonObject = buildJsonObject {
             put("type", "integer")
             put("description", "梗概结束章节号（包含）；默认用户当前章节")
         }
+        putJsonObject("note_id") {
+            put("type", "integer")
+            put("description", "要覆盖的梗概编号；省略时默认更新当前角色最新梗概")
+        }
+        putJsonObject("as_new") {
+            put("type", "boolean")
+            put("description", "是否强制新建一条梗概，默认 false")
+        }
     }
     putJsonArray("required") { add(JsonPrimitive("content_md")) }
 }
+
+private val READ_ONLY_BASE_TOOLS = setOf(
+    "get_reading_progress",
+    "search_book",
+    "read_book_section",
+    "list_chapters",
+    "list_annotations",
+    "list_notes",
+    "recall_memory"
+)
 
 private const val MAX_NOTE_CHARS = 50_000
 

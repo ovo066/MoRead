@@ -23,6 +23,9 @@ object ToolCallSummary {
             "web_search" -> withCount(args.text("query"), args.int("limit"), "条")
             "web_scrape" -> args.text("url")
             "read_book_section" -> readSection(args)
+            "list_chapters" -> chapterList(args)
+            "list_annotations" -> annotationList(args)
+            "list_notes" -> noteList(args)
             "add_annotation" -> annotation(args)
             "write_note" -> args.text("title")
             "save_plot_summary" -> plotSummary(args)
@@ -40,6 +43,41 @@ object ToolCallSummary {
         val start = args.int("start_char")?.takeIf { it > 0 } ?: return range
         return "$range · 从 $start 字续读"
     }
+
+
+    private fun chapterList(args: JsonObject): String {
+        val from = args.int("from_chapter")
+        val to = args.int("to_chapter")
+        val range = when {
+            from != null && to != null && to > from -> "第 $from-$to 章"
+            from != null -> "第 $from 章起"
+            else -> "目录与当前章节"
+        }
+        val level = when (args.text("level").lowercase()) {
+            "volume" -> "卷部"
+            "chapter" -> "章节"
+            else -> ""
+        }
+        return listOf(range, level).filter(String::isNotBlank).joinToString(" · ")
+    }
+
+    private fun annotationList(args: JsonObject): String {
+        val from = args.int("from_chapter")
+        val to = args.int("to_chapter")
+        val range = when {
+            from != null && to != null && to > from -> "第 $from-$to 章"
+            from != null -> "第 $from 章"
+            else -> "当前章"
+        }
+        return listOf(range, args.text("query")).filter(String::isNotBlank).joinToString(" · ")
+    }
+
+    private fun noteList(args: JsonObject): String = args.int("note_id")?.let { "第 $it 条" }
+        ?: when (args.text("kind").lowercase()) {
+            "note" -> "读书笔记"
+            "plot_summary" -> "剧情梗概"
+            else -> "全部笔记"
+        }
 
     private fun annotation(args: JsonObject): String {
         val style = when (args.text("style").lowercase()) {

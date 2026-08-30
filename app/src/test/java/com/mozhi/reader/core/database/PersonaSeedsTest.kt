@@ -35,7 +35,7 @@ class PersonaSeedsTest {
         PersonaSeeds.templates.forEach { persona ->
             val tools = persona.enabledTools()
             assertTrue("${persona.name} 工具白名单为空", tools.isNotEmpty())
-            assertTrue(tools.contains("get_reading_progress"))
+            assertTrue(tools.contains("add_annotation"))
             val dialogs = persona.exampleDialogs()
             assertTrue("${persona.name} 缺少示例对话", dialogs.isNotEmpty())
             dialogs.forEach { dialog ->

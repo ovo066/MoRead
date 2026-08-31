@@ -65,7 +65,7 @@ import com.mozhi.reader.core.database.entity.TtsVoiceEntity
         AudiobookChapterEntity::class,
         BookTocEntryEntity::class
     ],
-    version = 21,
+    version = 22,
     exportSchema = true
 )
 @TypeConverters(DatabaseConverters::class)

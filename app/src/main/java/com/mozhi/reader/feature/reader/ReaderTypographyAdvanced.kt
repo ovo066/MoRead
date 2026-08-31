@@ -96,15 +96,19 @@ import java.io.File
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-internal enum class TypographySecondaryPage(
-    val chipLabel: String,
-    val title: String,
-    val icon: ImageVector
-) {
-    FONT("字体", "正文字体", Icons.Outlined.TextFields),
-    THEME("主题", "主题与背景", Icons.Outlined.Palette),
-    SYNTAX("高亮", "语法高亮", Icons.Outlined.Brush),
-    BEHAVIOR("交互", "阅读交互", Icons.Outlined.TouchApp)
+/**
+ * 弹层内的二级页。
+ *
+ * [FONT]/[THEME] 由一级页的控件旁入口直达；[PAGE_TURN]/[MORE] 由面板下沿两张大卡进入。
+ * 语法高亮与阅读交互不再各占一个一级入口——它们设一次就不再动，收进 [MORE] 更合适。
+ */
+internal enum class TypographySecondaryPage(val title: String) {
+    FONT("正文字体"),
+    THEME("主题与背景"),
+    PAGE_TURN("翻页方式"),
+    MORE("更多设置"),
+    SYNTAX("语法高亮"),
+    BEHAVIOR("阅读交互")
 }
 
 @Composable

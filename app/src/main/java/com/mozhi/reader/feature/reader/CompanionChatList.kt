@@ -217,10 +217,14 @@ internal fun buildCompanionChatEntries(
  * 气泡组语义：连续同一方向的气泡算一组，中间夹进过程卡/媒体卡即断组。
  * 只有组首显示头像、只有组尾带尖角与时间——这是 iMessage 的规则，
  * 也是让连着几条短消息看起来像「一个人连发」而不是「几个人各说一句」的关键。
+ *
+ * 时间戳还要再降一次噪：与上一枚**已显示**的时间戳相隔不到 [TIMESTAMP_GAP_MS] 就不再显示。
+ * 一来一回的连续对话里每组都盖一个「14:03」纯属噪声，只有真的隔了一段时间才值得标出来。
  */
 private fun List<ChatEntry>.withBubbleGrouping(): List<ChatEntry> {
     val result = toMutableList()
     var index = 0
+    var lastShownTimestamp: Long? = null
     while (index < result.size) {
         val start = result[index] as? ChatEntry.Bubble
         if (start == null) {
@@ -238,17 +242,47 @@ private fun List<ChatEntry>.withBubbleGrouping(): List<ChatEntry> {
         }
         for (position in index..end) {
             val bubble = result[position] as ChatEntry.Bubble
+            val isTail = !freezeGroupTail && position == end
+            val timestamp = bubble.timestamp
+                ?.takeIf { isTail }
+                ?.takeIf { shouldShowTimestamp(lastShownTimestamp, it) }
+            if (timestamp != null) lastShownTimestamp = timestamp
             result[position] = bubble.copy(
                 showAvatar = position == index,
                 // 流式期间冻结组形状：新换行不会让上一条气泡反复长/丢尖角。
-                isTail = !freezeGroupTail && position == end,
-                timestamp = bubble.timestamp.takeIf { !freezeGroupTail && position == end }
+                isTail = isTail,
+                timestamp = timestamp
             )
         }
         index = end + 1
     }
     return result
 }
+
+/** 相邻两枚时间戳的最小间隔；小于它就不再重复标注。 */
+internal const val TIMESTAMP_GAP_MS = 5 * 60 * 1000L
+
+internal fun shouldShowTimestamp(lastShown: Long?, candidate: Long): Boolean =
+    lastShown == null || candidate - lastShown >= TIMESTAMP_GAP_MS
+
+/**
+ * 条目之间的纵向间距。
+ *
+ * 改造前整条列表统一 `spacedBy(8.dp)`：同一个人连发的三条和「你问 / 它答」之间一样疏，
+ * 于是看不出哪几条是一组。这里把组内压到 [SPACING_WITHIN_GROUP]、组间与异类条目
+ * 拉到 [SPACING_BETWEEN_GROUPS]，分组关系靠留白自己说清楚。
+ */
+internal fun chatEntryTopSpacing(previous: ChatEntry?, current: ChatEntry): Int {
+    if (previous == null) return 0
+    val before = previous as? ChatEntry.Bubble ?: return SPACING_BETWEEN_GROUPS
+    val now = current as? ChatEntry.Bubble ?: return SPACING_BETWEEN_GROUPS
+    // showAvatar 就是「组首」标记（用户侧没有头像，但同样按组首置位）。
+    if (now.showAvatar) return SPACING_BETWEEN_GROUPS
+    return if (before.fromUser == now.fromUser) SPACING_WITHIN_GROUP else SPACING_BETWEEN_GROUPS
+}
+
+internal const val SPACING_WITHIN_GROUP = 3
+internal const val SPACING_BETWEEN_GROUPS = 12
 
 /**
  * 数据库 Flow 可能先于 RoundCommitted 抵达 UI。尤其在多气泡模式下，Room 已经给出完整

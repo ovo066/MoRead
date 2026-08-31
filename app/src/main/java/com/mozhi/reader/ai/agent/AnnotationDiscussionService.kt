@@ -10,6 +10,7 @@ import com.mozhi.reader.core.database.entity.PersonaEntity
 import com.mozhi.reader.core.database.entity.enabledTools
 import com.mozhi.reader.core.library.AnnotationRepository
 import com.mozhi.reader.core.library.LibraryRepository
+import com.mozhi.reader.core.retrieval.ReadingScope
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.cancellation.CancellationException
@@ -75,7 +76,8 @@ class AnnotationDiscussionService @Inject constructor(
             val tools = toolset.forBook(
                 bookId = bookId,
                 personaId = personaId,
-                enabledTools = enabledTools
+                enabledTools = enabledTools,
+                readingScope = ReadingScope.uptoProgress(book)
             )
             val history = listOf(
                 ChatMessage(ChatRole.SYSTEM, system),

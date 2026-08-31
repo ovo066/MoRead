@@ -18,6 +18,9 @@ public class MemoryEntry {
     public long sourceMessageId;
     /** 产出这条记忆时生效的用户面具 id；0 = 本人层，永远参与召回。 */
     public long maskId;
+    /** Retrieval boundary active when this memory was produced; -1 marks legacy/non-book data. */
+    public int sourceChapterIndex = -1;
+    public int sourceCharOffset = -1;
     public String summary;
     /** CHAT_SUMMARY | EVENT。 */
     public String sourceType;

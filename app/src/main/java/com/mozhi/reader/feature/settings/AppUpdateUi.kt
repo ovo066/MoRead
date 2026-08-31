@@ -30,7 +30,6 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mozhi.reader.BuildConfig
 import com.mozhi.reader.core.update.AppUpdateInstaller
-import com.mozhi.reader.ui.components.FrostedSurface
 
 @Composable
 fun AppUpdatePrompt(viewModel: AppUpdateViewModel = hiltViewModel()) {
@@ -105,7 +104,7 @@ internal fun AppUpdateCard(viewModel: AppUpdateViewModel = hiltViewModel()) {
         }
     }
     val update = state.update
-    // 外层玻璃卡由 SettingsGroup 提供，这里只出内容，免得卡中套卡。
+    // 外层素面卡由 MoReadSection 提供，这里只出内容，免得卡中套卡。
     Column(
         Modifier.padding(horizontal = 16.dp, vertical = 13.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)

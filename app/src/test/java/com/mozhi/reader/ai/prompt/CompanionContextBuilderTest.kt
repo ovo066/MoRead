@@ -7,12 +7,15 @@ import com.mozhi.reader.core.database.entity.PersonaLoreEntry
 import com.mozhi.reader.core.database.entity.encodeExampleDialogs
 import com.mozhi.reader.core.database.entity.encodeWorldBook
 import com.mozhi.reader.core.datastore.UserMask
+import com.mozhi.reader.core.retrieval.ReadingScope
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CompanionContextBuilderTest {
+
+    private val readingScope = ReadingScope.upto(11, 345)
 
     private val progress = BookProgress(
         title = "长安十二时辰",
@@ -37,6 +40,7 @@ class CompanionContextBuilderTest {
     @Test
     fun roleplayPersonaKeepsCharacterAndRendersFewShot() {
         val prompt = CompanionContextBuilder.assemble(
+            readingScope = readingScope,
             persona = persona(isRoleplay = true),
             progress = progress,
             scene = null,
@@ -52,6 +56,7 @@ class CompanionContextBuilderTest {
     @Test
     fun toolPersonaStaysAssistantToned() {
         val prompt = CompanionContextBuilder.assemble(
+            readingScope = readingScope,
             persona = persona(isRoleplay = false),
             progress = progress,
             scene = null,
@@ -65,6 +70,7 @@ class CompanionContextBuilderTest {
     @Test
     fun spoilerRuleStatesCurrentChapterBound() {
         val prompt = CompanionContextBuilder.assemble(
+            readingScope = readingScope,
             persona = null,
             progress = progress,
             scene = null,
@@ -72,14 +78,29 @@ class CompanionContextBuilderTest {
         )
         assertTrue(prompt.contains("《长安十二时辰》"))
         assertTrue(prompt.contains("当前读到第 12 章「午正」"))
-        assertTrue(prompt.contains("【防剧透铁律】仅讨论用户已读至第 12 章的内容"))
+        assertTrue(prompt.contains("【防剧透铁律】仅讨论用户已读水位内的内容（最远第 12 章，章内字符 345）"))
         assertTrue(prompt.contains("〔原文 第N章〕「逐字引文」"))
         assertTrue(prompt.contains("转述、概括、角色对白示例和普通强调不得使用此标记"))
     }
 
     @Test
+    fun wholeBookScopeRemovesSpoilerInstruction() {
+        val prompt = CompanionContextBuilder.assemble(
+            readingScope = ReadingScope.WholeBook,
+            persona = null,
+            progress = progress,
+            scene = null,
+            memories = emptyList()
+        )
+
+        assertFalse(prompt.contains("【防剧透铁律】"))
+        assertTrue(prompt.contains("当前读到第 12 章"))
+    }
+
+    @Test
     fun progressIncludesPreviousChapterAndCurrentPercent() {
         val prompt = CompanionContextBuilder.assemble(
+            readingScope = readingScope,
             persona = null,
             progress = progress.copy(
                 previousChapterTitle = "巳初",
@@ -96,6 +117,7 @@ class CompanionContextBuilderTest {
     fun userAnnotationsAreInjectedAndDroppedBeforeSceneUnderPressure() {
         val annotations = listOf(PromptAnnotation("城门忽然关闭", "这里很反常"))
         val full = CompanionContextBuilder.assemble(
+            readingScope = readingScope,
             persona = null,
             progress = progress,
             scene = "场景原文",
@@ -106,6 +128,7 @@ class CompanionContextBuilderTest {
         assertTrue(full.contains("这里很反常"))
 
         val tight = CompanionContextBuilder.assemble(
+            readingScope = readingScope,
             persona = null,
             progress = progress,
             scene = "景".repeat(600),
@@ -120,6 +143,7 @@ class CompanionContextBuilderTest {
     @Test
     fun noBookMeansNoProgressOrSpoilerBlocks() {
         val prompt = CompanionContextBuilder.assemble(
+            readingScope = readingScope,
             persona = null,
             progress = null,
             scene = null,
@@ -133,6 +157,7 @@ class CompanionContextBuilderTest {
     @Test
     fun userMaskDescribesUserWithoutReplacingAssistantPersona() {
         val prompt = CompanionContextBuilder.assemble(
+            readingScope = readingScope,
             persona = persona(isRoleplay = true),
             userMask = UserMask(
                 id = 2,
@@ -154,6 +179,7 @@ class CompanionContextBuilderTest {
     @Test
     fun memoriesRenderAsBulletList() {
         val prompt = CompanionContextBuilder.assemble(
+            readingScope = readingScope,
             persona = persona(isRoleplay = true),
             progress = progress,
             scene = null,
@@ -176,6 +202,7 @@ class CompanionContextBuilderTest {
             )
         )
         val prompt = CompanionContextBuilder.assemble(
+            readingScope = readingScope,
             persona = persona,
             progress = progress,
             scene = null,
@@ -196,6 +223,7 @@ class CompanionContextBuilderTest {
             )
         )
         val prompt = CompanionContextBuilder.assemble(
+            readingScope = readingScope,
             persona = persona,
             progress = progress,
             scene = null,
@@ -220,6 +248,7 @@ class CompanionContextBuilderTest {
             )
         )
         val hit = CompanionContextBuilder.assemble(
+            readingScope = readingScope,
             persona = persona,
             progress = progress,
             scene = "他抬头看见望楼上的旗语。",
@@ -229,6 +258,7 @@ class CompanionContextBuilderTest {
         assertTrue(hit.contains("- 望楼：望楼是长安的信息网络。"))
 
         val miss = CompanionContextBuilder.assemble(
+            readingScope = readingScope,
             persona = persona,
             progress = progress,
             scene = "街市喧闹如常。",
@@ -243,11 +273,13 @@ class CompanionContextBuilderTest {
         val scene = "场".repeat(1_000)
         val memories = List(5) { "记忆${it}".padEnd(200, '忆') }
         val fullLength = CompanionContextBuilder.assemble(
+            readingScope = readingScope,
             persona = null, progress = progress, scene = scene,
             memories = memories
         ).length
 
         val prompt = CompanionContextBuilder.assemble(
+            readingScope = readingScope,
             persona = null,
             progress = progress,
             scene = scene,
@@ -263,6 +295,7 @@ class CompanionContextBuilderTest {
     fun sceneTruncatesToFitTightBudget() {
         val scene = "景".repeat(3_000)
         val prompt = CompanionContextBuilder.assemble(
+            readingScope = readingScope,
             persona = null,
             progress = progress,
             scene = scene,
@@ -280,6 +313,7 @@ class CompanionContextBuilderTest {
     fun sceneCapsAtTwoThousandCharsEvenWithRoomySpace() {
         val scene = "多".repeat(5_000)
         val prompt = CompanionContextBuilder.assemble(
+            readingScope = readingScope,
             persona = null,
             progress = progress,
             scene = scene,
@@ -292,6 +326,7 @@ class CompanionContextBuilderTest {
     @Test
     fun userProfileIsInjectedRightAfterThePersona() {
         val prompt = CompanionContextBuilder.assemble(
+            readingScope = readingScope,
             persona = null,
             progress = progress,
             scene = null,
@@ -308,6 +343,7 @@ class CompanionContextBuilderTest {
     @Test
     fun blankProfileAddsNoBlock() {
         val prompt = CompanionContextBuilder.assemble(
+            readingScope = readingScope,
             persona = null,
             progress = progress,
             scene = null,
@@ -323,6 +359,7 @@ class CompanionContextBuilderTest {
     fun profileSurvivesEvenWhenSceneAndMemoriesAreSacrificed() {
         val profile = "称呼：老周。共读过《三体》与《活着》。"
         val prompt = CompanionContextBuilder.assemble(
+            readingScope = readingScope,
             persona = null,
             progress = progress,
             scene = "景".repeat(3_000),
@@ -340,6 +377,7 @@ class CompanionContextBuilderTest {
     @Test
     fun defaultShapeAddsNoConversationBlock() {
         val prompt = CompanionContextBuilder.assemble(
+            readingScope = readingScope,
             persona = null,
             progress = progress,
             scene = null,
@@ -352,6 +390,7 @@ class CompanionContextBuilderTest {
     @Test
     fun multiBubbleAloneNeverMentionsVoice() {
         val prompt = CompanionContextBuilder.assemble(
+            readingScope = readingScope,
             persona = null,
             progress = progress,
             scene = null,
@@ -371,6 +410,7 @@ class CompanionContextBuilderTest {
     @Test
     fun voiceAloneNeverForcesLineSplitting() {
         val prompt = CompanionContextBuilder.assemble(
+            readingScope = readingScope,
             persona = null,
             progress = progress,
             scene = null,
@@ -386,6 +426,7 @@ class CompanionContextBuilderTest {
     @Test
     fun conversationShapeSurvivesBudgetPressure() {
         val prompt = CompanionContextBuilder.assemble(
+            readingScope = readingScope,
             persona = null,
             progress = progress,
             scene = "景".repeat(3_000),

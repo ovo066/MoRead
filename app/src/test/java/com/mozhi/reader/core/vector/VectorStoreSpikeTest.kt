@@ -3,6 +3,7 @@ package com.mozhi.reader.core.vector
 import io.objectbox.BoxStore
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -76,6 +77,35 @@ class VectorStoreSpikeTest {
         assertEquals(1L, hits[0].get().personaId)
     }
 
+
+    @Test
+    fun memoriesRespectCurrentBookProvenanceAndWholeBookOverride() {
+        val box = store.boxFor(MemoryEntry::class.java)
+        box.put(
+            memory(personaId = 1, summary = "已读记忆", x = 1f, y = 0f, bookId = 1, sourceChapter = 2, sourceOffset = 20),
+            memory(personaId = 1, summary = "本章后半剧透", x = 1f, y = 0.001f, bookId = 1, sourceChapter = 3, sourceOffset = 100),
+            memory(personaId = 1, summary = "后文章节剧透", x = 1f, y = 0.002f, bookId = 1, sourceChapter = 9, sourceOffset = 10),
+            memory(personaId = 1, summary = "旧版无来源记忆", x = 1f, y = 0.003f, bookId = 1),
+            memory(personaId = 1, summary = "其他书记忆", x = 1f, y = 0.004f, bookId = 2, sourceChapter = 99, sourceOffset = 10)
+        )
+
+        val strict = VectorQueries.searchMemories(
+            store, 1, direction(1f, 0f), 10,
+            null, 0, 1, 3, 50
+        ).map { it.get().summary }
+        val wholeBook = VectorQueries.searchMemories(
+            store, 1, direction(1f, 0f), 10,
+            null, 0, 1, Int.MAX_VALUE, Int.MAX_VALUE
+        ).map { it.get().summary }
+
+        assertTrue(strict.contains("已读记忆"))
+        assertTrue(strict.contains("其他书记忆"))
+        assertFalse(strict.contains("本章后半剧透"))
+        assertFalse(strict.contains("后文章节剧透"))
+        assertFalse(strict.contains("旧版无来源记忆"))
+        assertEquals(5, wholeBook.size)
+    }
+
     /** 维度必须等于 [VectorDb.EMBEDDING_DIMENSIONS]，否则不进 HNSW 索引；前两维承载方向。 */
     private fun direction(x: Float, y: Float): FloatArray =
         FloatArray(VectorDb.EMBEDDING_DIMENSIONS).also {
@@ -98,12 +128,22 @@ class VectorStoreSpikeTest {
         it.embedding = direction(x, y)
     }
 
-    private fun memory(personaId: Long, summary: String, x: Float, y: Float): MemoryEntry =
-        MemoryEntry().also {
-            it.personaId = personaId
-            it.summary = summary
-            it.sourceType = "CHAT_SUMMARY"
-            it.createdAt = 1000
-            it.embedding = direction(x, y)
-        }
+    private fun memory(
+        personaId: Long,
+        summary: String,
+        x: Float,
+        y: Float,
+        bookId: Long? = null,
+        sourceChapter: Int = -1,
+        sourceOffset: Int = -1
+    ): MemoryEntry = MemoryEntry().also {
+        it.personaId = personaId
+        it.bookId = bookId
+        it.sourceChapterIndex = sourceChapter
+        it.sourceCharOffset = sourceOffset
+        it.summary = summary
+        it.sourceType = "CHAT_SUMMARY"
+        it.createdAt = 1000
+        it.embedding = direction(x, y)
+    }
 }

@@ -995,6 +995,10 @@ class ReaderViewModel @Inject constructor(
         viewModelScope.launch { settingsRepository.setVolumeKeysPageTurn(value) }
     }
 
+    fun setScreenBrightness(value: Float) {
+        viewModelScope.launch { settingsRepository.setScreenBrightness(value) }
+    }
+
     fun importBackgroundImage(uri: Uri, slot: ReaderThemeSlot = ReaderThemeSlot.DAY) {
         viewModelScope.launch {
             // 先只入库，再按槽选中——importer 只认全局背景，日夜两套得由这里指定去处。

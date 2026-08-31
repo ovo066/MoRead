@@ -14,6 +14,7 @@ import com.mozhi.reader.core.database.entity.readState
 import com.mozhi.reader.core.library.AnnotationRepository
 import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.library.NoteRepository
+import com.mozhi.reader.core.retrieval.ReadingScope
 import java.time.Instant
 import java.time.ZoneId
 import java.time.temporal.ChronoUnit
@@ -47,7 +48,7 @@ internal data class ProgressOverview(
 
 internal fun formatProgressOverview(
     overview: ProgressOverview,
-    spoilerProtectionEnabled: Boolean,
+    readingScope: ReadingScope,
     nowMillis: Long = System.currentTimeMillis()
 ): String = buildString {
     val book = overview.book
@@ -92,7 +93,7 @@ internal fun formatProgressOverview(
         previous.title.takeIf(String::isNotBlank)?.let { append("「").append(it).append("」") }
         append("。")
     }
-    if (!spoilerProtectionEnabled) {
+    if (readingScope.isWholeBook) {
         overview.nextChapter?.let { next ->
             append("\n下一章：第 ").append(next.chapterIndex + 1).append(" 章")
             next.title.takeIf(String::isNotBlank)?.let { append("「").append(it).append("」") }
@@ -120,7 +121,7 @@ internal fun formatProgressOverview(
     }
     append("｜书签 ").append(overview.bookmarkCount).append(" 个。")
 
-    if (spoilerProtectionEnabled && currentNumber > 0) {
+    if (!readingScope.isWholeBook && currentNumber > 0) {
         append("\n用户尚未读到第 ").append(currentNumber)
             .append(" 章之后的内容，回答不要涉及后续剧情。")
     }
@@ -129,7 +130,7 @@ internal fun formatProgressOverview(
 internal class ListChaptersTool(
     private val libraryRepository: LibraryRepository,
     private val bookId: Long,
-    private val spoilerProtectionEnabled: Boolean
+    private val readingScope: ReadingScope
 ) : AgentTool {
     override val displayName: String = "查看章节目录"
     override val spec = ToolSpec(
@@ -155,7 +156,7 @@ internal class ListChaptersTool(
         if (to != null && from != null && to < from) return "章节范围无效：$from-$to"
         val level = arguments.text("level").lowercase().ifBlank { "all" }
         if (level !in setOf("volume", "chapter", "all")) return "level 只能是 volume、chapter 或 all"
-        return formatChapterOutline(book, chapters, toc, from, to, level, spoilerProtectionEnabled)
+        return formatChapterOutline(book, chapters, toc, from, to, level, readingScope)
     }
 }
 
@@ -166,26 +167,24 @@ internal fun formatChapterOutline(
     fromChapter: Int? = null,
     toChapter: Int? = null,
     level: String = "all",
-    spoilerProtectionEnabled: Boolean = true
+    readingScope: ReadingScope
 ): String {
     if (chapters.isEmpty()) return "《${book.title}》还没有可用章节目录。"
-    val readableLast = if (spoilerProtectionEnabled) {
-        book.lastReadChapterIndex.coerceIn(0, chapters.last().chapterIndex)
-    } else chapters.last().chapterIndex
+    val readableLast = readingScope.clampLastChapter(chapters.last().chapterIndex + 1)
     val explicit = fromChapter != null || toChapter != null
     val lastChapterNumber = chapters.last().chapterIndex + 1
     val requestedFrom = (fromChapter ?: if (explicit) 1 else (book.lastReadChapterIndex - 20 + 1)).coerceAtLeast(1)
     if (requestedFrom > lastChapterNumber) return "起始章节号 $requestedFrom 超出全书范围（共 $lastChapterNumber 章）。"
     val requestedTo = (toChapter ?: if (explicit) lastChapterNumber else (book.lastReadChapterIndex + 20 + 1))
         .coerceIn(requestedFrom, lastChapterNumber)
-    val visibleTo = if (spoilerProtectionEnabled) minOf(requestedTo - 1, readableLast) else requestedTo - 1
+    val visibleTo = minOf(requestedTo - 1, readableLast)
     if (visibleTo < requestedFrom - 1) return "第 $requestedFrom 章超出当前已读范围。"
     val visibleFrom = requestedFrom - 1
     val lines = mutableListOf<String>()
     lines += buildString {
         append("《").append(book.title).append("》目录（共 ").append(chapters.size).append(" 章")
         if (book.lastReadAt > 0) append("，已读到第 ").append(book.lastReadChapterIndex + 1).append(" 章")
-        if (spoilerProtectionEnabled) append("；防剧透：只列出已读部分")
+        if (!readingScope.isWholeBook) append("；防剧透：只列出已读部分")
         append("）")
     }
 
@@ -213,7 +212,7 @@ internal fun formatChapterOutline(
             }
     }
     val unread = (chapters.last().chapterIndex - readableLast).coerceAtLeast(0)
-    if (spoilerProtectionEnabled && unread > 0) lines += "后面还有 $unread 章尚未读到，标题不予显示。"
+    if (!readingScope.isWholeBook && unread > 0) lines += "后面还有 $unread 章尚未读到，标题不予显示。"
     return capChapterOutline(lines, requestedTo)
 }
 
@@ -267,7 +266,7 @@ internal class ListAnnotationsTool(
     private val annotations: AnnotationRepository,
     private val bookId: Long,
     private val currentPersonaId: Long?,
-    private val spoilerProtectionEnabled: Boolean
+    private val readingScope: ReadingScope
 ) : AgentTool {
     override val displayName: String = "查看划线批注"
     override val spec = ToolSpec(
@@ -287,15 +286,22 @@ internal class ListAnnotationsTool(
     override suspend fun execute(arguments: JsonObject): String {
         val book = libraryRepository.getBook(bookId) ?: return "未找到当前书籍"
         val current = book.lastReadChapterIndex + 1
+        val visibleLast = readingScope.clampLastChapter(book.totalChapters) + 1
         val from = arguments.int("from_chapter") ?: current
         var to = arguments.int("to_chapter") ?: from
         if (from < 1 || to < from) return "章节范围无效：$from-$to"
-        if (spoilerProtectionEnabled) to = minOf(to, current)
+        to = minOf(to, visibleLast)
         if (from > to) return "第 $from 章超出当前已读范围。"
         val author = arguments.text("author").lowercase().ifBlank { "all" }
         if (author !in setOf("user", "companion", "all")) return "author 只能是 user、companion 或 all"
         val query = arguments.text("query")
         val rows = annotations.getForChapterRange(bookId, from - 1, to - 1)
+            .filter { row ->
+                row.personaId == null || readingScope.isWholeBook ||
+                    row.sourceScopeChapterIndex?.let { chapter ->
+                        readingScope.allowsPosition(chapter, row.sourceScopeCharOffset ?: Int.MAX_VALUE)
+                    } == true
+            }
         val counts = annotations.getReplyCounts(rows.map { it.id })
         return formatAnnotationList(book.title, from, to, rows, counts, author, query, currentPersonaId)
     }
@@ -340,7 +346,8 @@ internal fun formatAnnotationList(
 internal class ListNotesTool(
     private val notes: NoteRepository,
     private val bookId: Long,
-    private val currentPersonaId: Long?
+    private val currentPersonaId: Long?,
+    private val readingScope: ReadingScope
 ) : AgentTool {
     override val displayName: String = "查看笔记与梗概"
     override val spec = ToolSpec(
@@ -362,15 +369,22 @@ internal class ListNotesTool(
         if (noteId != null) {
             val note = notes.getNote(noteId) ?: return "未找到第 $noteId 条笔记"
             if (note.bookId != bookId) return "第 $noteId 条笔记不属于当前书籍"
+            if (!note.visibleIn(readingScope)) return "第 $noteId 条笔记产生于当前阅读水位之外，防剧透模式下不可读取。"
             val start = (arguments.int("start_char") ?: 0).coerceAtLeast(0)
             val maxChars = (arguments.int("max_chars") ?: DEFAULT_NOTE_READ_CHARS).coerceIn(1_000, MAX_NOTE_READ_CHARS)
             return formatNoteContent(note, start, maxChars, currentPersonaId)
         }
         val kind = arguments.text("kind").lowercase().ifBlank { "all" }
         if (kind !in setOf("note", "plot_summary", "all")) return "kind 只能是 note、plot_summary 或 all"
-        return formatNoteIndex(notes.getForBook(bookId), kind, currentPersonaId)
+        return formatNoteIndex(notes.getForBook(bookId).filter { it.visibleIn(readingScope) }, kind, currentPersonaId)
     }
 }
+
+
+private fun NoteEntity.visibleIn(scope: ReadingScope): Boolean =
+    personaId == null || scope.isWholeBook || sourceScopeChapterIndex?.let { chapter ->
+        scope.allowsPosition(chapter, sourceScopeCharOffset ?: Int.MAX_VALUE)
+    } == true
 
 internal fun formatNoteIndex(
     notes: List<NoteEntity>,

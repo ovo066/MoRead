@@ -15,7 +15,8 @@ import javax.inject.Singleton
  */
 @Singleton
 class WorkBatchImportScheduler @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val requestStore: BatchImportRequestStore
 ) : BatchImportScheduler {
     override fun enqueue(
         uris: List<Uri>,
@@ -23,10 +24,16 @@ class WorkBatchImportScheduler @Inject constructor(
         groupPathsByUri: Map<Uri, String>
     ) {
         if (uris.isEmpty()) return
-        WorkManager.getInstance(context).enqueueUniqueWork(
-            BatchImportWorker.UNIQUE_WORK_NAME,
-            ExistingWorkPolicy.APPEND_OR_REPLACE,
-            BatchImportWorker.request(uris, deleteSourceAfterImport, groupPathsByUri)
-        )
+        val requestId = requestStore.create(uris, deleteSourceAfterImport, groupPathsByUri)
+        try {
+            WorkManager.getInstance(context).enqueueUniqueWork(
+                BatchImportWorker.UNIQUE_WORK_NAME,
+                ExistingWorkPolicy.APPEND_OR_REPLACE,
+                BatchImportWorker.request(requestId)
+            )
+        } catch (error: Throwable) {
+            requestStore.delete(requestId)
+            throw error
+        }
     }
 }

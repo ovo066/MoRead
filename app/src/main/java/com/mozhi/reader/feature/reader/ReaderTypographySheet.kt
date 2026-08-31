@@ -145,7 +145,9 @@ data class ReaderTypographyActions(
     val onPageModeChange: (PageMode) -> Unit,
     val onKeepScreenOnChange: (Boolean) -> Unit,
     val onImmersiveReadingChange: (Boolean) -> Unit,
-    val onVolumeKeysPageTurnChange: (Boolean) -> Unit
+    val onVolumeKeysPageTurnChange: (Boolean) -> Unit,
+    /** [com.mozhi.reader.core.datastore.FOLLOW_SYSTEM_BRIGHTNESS] 或 0..1。 */
+    val onScreenBrightnessChange: (Float) -> Unit
 )
 
 /** 待编辑的自定义主题草稿；[slot] 决定保存后应用到日间还是夜间。 */
@@ -201,7 +203,9 @@ fun ReaderTypographySheet(
             .fillMaxWidth()
             .verticalScroll(rememberScrollState())
             .padding(start = 18.dp, end = 18.dp, top = 4.dp, bottom = 18.dp),
-        verticalArrangement = Arrangement.spacedBy(13.dp)
+        // 一级页六行（亮度/字号/行距/主题抬头/色卡/两张大卡）要在半高 sheet 里一屏放下，
+        // 行高已经压到触达下限 44dp，剩下的余量只能从行间距里省。
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         val page = secondaryPage
         if (page == null) {
@@ -217,9 +221,23 @@ fun ReaderTypographySheet(
                 onCreateCustomTheme = { editorDraft = createDraft(slot) }
             )
         } else {
-            TypographySecondaryHeader(page.title) { secondaryPage = null }
+            TypographySecondaryHeader(page.title) {
+                // 语法高亮与阅读交互是从「更多设置」进来的，返回该回到那一页而不是一路弹回一级页。
+                secondaryPage = when (page) {
+                    TypographySecondaryPage.SYNTAX,
+                    TypographySecondaryPage.BEHAVIOR -> TypographySecondaryPage.MORE
+                    else -> null
+                }
+            }
             when (page) {
                 TypographySecondaryPage.FONT -> FontPage(settings, palette, actions)
+                TypographySecondaryPage.PAGE_TURN -> PageTurnPage(settings, palette, actions)
+                TypographySecondaryPage.MORE -> MoreSettingsPage(
+                    settings = settings,
+                    palette = palette,
+                    actions = actions,
+                    onOpenPage = { secondaryPage = it }
+                )
                 TypographySecondaryPage.THEME -> ThemePage(
                     settings = settings,
                     activeSlot = slot,

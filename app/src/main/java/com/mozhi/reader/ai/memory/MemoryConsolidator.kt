@@ -53,6 +53,14 @@ internal data class MemoryBatch(
             .firstOrNull()
             ?.key
             ?: 0L
+
+    /** Furthest visibility boundary used by any user turn in this batch. */
+    val sourceScope: Pair<Int, Int>
+        get() = messages.asSequence()
+            .filter { it.role == ChatRole.USER.wire && it.sourceScopeChapterIndex >= 0 }
+            .map { it.sourceScopeChapterIndex to it.sourceScopeCharOffset }
+            .maxWithOrNull(compareBy<Pair<Int, Int>> { it.first }.thenBy { it.second })
+            ?: (-1 to -1)
 }
 
 /** §4.6：常规每 30 条；会话关闭时剩余至少 10 条也固化。 */
@@ -235,7 +243,10 @@ class MemoryConsolidator @Inject constructor(
                     vector,
                     NEIGHBOUR_TOP_K,
                     bookId,
-                    batch.maskId
+                    batch.maskId,
+                    bookId,
+                    batch.sourceScope.first,
+                    batch.sourceScope.second
                 ).map { it.get() }
             }.getOrDefault(emptyList())
         }.distinctBy(MemoryEntry::id)
@@ -267,7 +278,9 @@ class MemoryConsolidator @Inject constructor(
             bookId = bookId,
             conversationId = conversationId,
             sourceMessageId = batch.throughMessageId,
-            maskId = batch.maskId
+            maskId = batch.maskId,
+            sourceChapterIndex = batch.sourceScope.first,
+            sourceCharOffset = batch.sourceScope.second
         )
 
         // 画像只记本人：面具期间的批次不改写它（提示词也已声明，这里是第二道闸）。
@@ -287,7 +300,9 @@ class MemoryConsolidator @Inject constructor(
         bookId: Long?,
         conversationId: Long,
         sourceMessageId: Long,
-        maskId: Long
+        maskId: Long,
+        sourceChapterIndex: Int,
+        sourceCharOffset: Int
     ): Int {
         val box = vectorStore.boxFor(MemoryEntry::class.java)
         val now = System.currentTimeMillis()
@@ -307,6 +322,8 @@ class MemoryConsolidator @Inject constructor(
                         it.conversationId = conversationId
                         it.sourceMessageId = sourceMessageId
                         it.maskId = maskId
+                        it.sourceChapterIndex = sourceChapterIndex
+                        it.sourceCharOffset = sourceCharOffset
                         it.summary = operation.summary
                         it.sourceType = SOURCE_TYPE
                         it.createdAt = now + written
@@ -333,6 +350,16 @@ class MemoryConsolidator @Inject constructor(
                     // 被本批取代的旧条目改挂到本批，重跑同批时幂等检查才认得出它。
                     existing.conversationId = conversationId
                     existing.sourceMessageId = sourceMessageId
+                    if (isLaterScope(
+                            sourceChapterIndex,
+                            sourceCharOffset,
+                            existing.sourceChapterIndex,
+                            existing.sourceCharOffset
+                        )
+                    ) {
+                        existing.sourceChapterIndex = sourceChapterIndex
+                        existing.sourceCharOffset = sourceCharOffset
+                    }
                     val vector = summaryVectors[operation.summary]
                     if (vector != null) {
                         existing.embedding = vector
@@ -378,6 +405,14 @@ class MemoryConsolidator @Inject constructor(
         }
         return written.coerceAtLeast(0)
     }
+
+    private fun isLaterScope(
+        chapterIndex: Int,
+        charOffset: Int,
+        previousChapterIndex: Int,
+        previousCharOffset: Int
+    ): Boolean = chapterIndex > previousChapterIndex ||
+        (chapterIndex == previousChapterIndex && charOffset > previousCharOffset)
 
     private suspend fun summarize(
         batch: MemoryBatch,

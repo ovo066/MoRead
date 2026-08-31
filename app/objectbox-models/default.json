@@ -5,7 +5,7 @@
   "entities": [
     {
       "id": "1:7099831677170735472",
-      "lastPropertyId": "6:5685756075687868289",
+      "lastPropertyId": "8:4574323087005660709",
       "name": "BookChunk",
       "properties": [
         {
@@ -40,13 +40,23 @@
           "indexId": "1:3033982387288121715",
           "type": 28,
           "flags": 8
+        },
+        {
+          "id": "7:107784257472464973",
+          "name": "startCharOffset",
+          "type": 5
+        },
+        {
+          "id": "8:4574323087005660709",
+          "name": "endCharOffset",
+          "type": 5
         }
       ],
       "relations": []
     },
     {
       "id": "2:6440457849962055940",
-      "lastPropertyId": "10:4060345454505170008",
+      "lastPropertyId": "12:857614426614544686",
       "name": "MemoryEntry",
       "properties": [
         {
@@ -101,6 +111,16 @@
           "id": "10:4060345454505170008",
           "name": "maskId",
           "type": 6
+        },
+        {
+          "id": "11:4919395055895026065",
+          "name": "sourceChapterIndex",
+          "type": 5
+        },
+        {
+          "id": "12:857614426614544686",
+          "name": "sourceCharOffset",
+          "type": 5
         }
       ],
       "relations": []

@@ -367,6 +367,8 @@ class LibraryRepository @Inject constructor(
                     lastReadLocator = null,
                     lastReadChapterIndex = 0,
                     lastReadCharOffset = 0,
+                    maxReachedChapterIndex = 0,
+                    maxReachedCharOffset = 0,
                     textVersion = CURRENT_TEXT_VERSION
                 )
             )
@@ -381,6 +383,10 @@ class LibraryRepository @Inject constructor(
         textStore.readChapter(bookId, chapter.textByteOffset, chapter.textByteLength)
 
     suspend fun getBookmarks(bookId: Long): List<BookmarkEntity> = bookDao.getBookmarks(bookId)
+
+    suspend fun resetReadingHighWater(bookId: Long) {
+        bookDao.resetReadingHighWater(bookId)
+    }
 
     suspend fun updateReadPosition(bookId: Long, chapterIndex: Int, charOffset: Int) {
         bookDao.updateReadPosition(bookId, chapterIndex, charOffset)

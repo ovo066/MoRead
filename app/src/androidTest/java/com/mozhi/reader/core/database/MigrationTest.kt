@@ -948,6 +948,90 @@ class MigrationTest {
         }
     }
 
+
+    @Test
+    fun migrate21To22BackfillsHighWaterAndAddsProvenanceColumns() {
+        helper.createDatabase(DB_NAME, 21).use { db ->
+            db.execSQL(
+                """
+                INSERT INTO books (
+                    id, title, author, coverPath, epubPath, sourceType, importedAt,
+                    totalChapters, lastReadLocator, lastReadChapterIndex, lastReadCharOffset,
+                    lastReadAt, textVersion, tags, metadataEdited, manualReadState, pinnedAt, groupId
+                ) VALUES (
+                    1, '旧书', '作者', NULL, '/data/books/old.txt', 'TXT', 1000,
+                    20, NULL, 7, 321, 2000, 1, '', 0, NULL, 0, NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                INSERT INTO conversations (
+                    id, bookId, personaId, title, type, parentConversationId,
+                    branchedFromMessageId, memoryConsolidatedThroughMessageId,
+                    rollingSummary, summarizedThroughMessageId, createdAt, updatedAt
+                ) VALUES (1, 1, NULL, '旧会话', 'COMPANION', NULL, NULL, 0, '', 0, 1000, 1000)
+                """.trimIndent()
+            )
+            db.execSQL(
+                "INSERT INTO messages (id, conversationId, role, content, createdAt, maskId) " +
+                    "VALUES (1, 1, 'user', '旧消息', 1000, 0)"
+            )
+            db.execSQL(
+                """
+                INSERT INTO annotations (
+                    id, bookId, personaId, chapterIndex, startCharOffset, endCharOffset,
+                    selectedText, note, colorTag, style, mediaJson, createdAt
+                ) VALUES (1, 1, NULL, 2, 10, 20, '旧引文', '旧批注', '', 'HIGHLIGHT', '{}', 1000)
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                INSERT INTO notes (
+                    id, bookId, personaId, title, contentMarkdown, kind, sourceConversationId,
+                    relatedChapterIndex, relatedCharOffset, createdAt, updatedAt
+                ) VALUES (1, 1, NULL, '旧笔记', '正文', 'NOTE', NULL, 2, 10, 1000, 1000)
+                """.trimIndent()
+            )
+        }
+
+        val db = helper.runMigrationsAndValidate(
+            DB_NAME,
+            22,
+            true,
+            DatabaseMigrations.Migration21To22
+        )
+
+        db.query(
+            "SELECT maxReachedChapterIndex, maxReachedCharOffset FROM books WHERE id = 1"
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(7, cursor.getInt(0))
+            assertEquals(321, cursor.getInt(1))
+        }
+        db.query(
+            "SELECT sourceScopeChapterIndex, sourceScopeCharOffset FROM messages WHERE id = 1"
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(-1, cursor.getInt(0))
+            assertEquals(-1, cursor.getInt(1))
+        }
+        db.query(
+            "SELECT sourceScopeChapterIndex, sourceScopeCharOffset FROM annotations WHERE id = 1"
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue(cursor.isNull(0))
+            assertTrue(cursor.isNull(1))
+        }
+        db.query(
+            "SELECT sourceScopeChapterIndex, sourceScopeCharOffset FROM notes WHERE id = 1"
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue(cursor.isNull(0))
+            assertTrue(cursor.isNull(1))
+        }
+    }
+
     private companion object {
         const val DB_NAME = "migration-test.db"
     }

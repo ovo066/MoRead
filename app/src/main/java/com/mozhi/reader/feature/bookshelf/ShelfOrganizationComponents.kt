@@ -107,7 +107,7 @@ internal fun ShelfGroupDropdown(
         }
         MoReadMenuDivider()
         MoReadMenuItem(text = "新建分组", icon = Icons.Outlined.Add, onClick = onCreate)
-        MoReadMenuItem(text = "管理分组", icon = Icons.Outlined.Tune, onClick = onManage)
+        MoReadMenuItem(text = "管理分组（改名、删除）", icon = Icons.Outlined.Tune, onClick = onManage)
     }
 }
 

@@ -20,7 +20,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.mozhi.reader.core.database.entity.PersonaEntity
@@ -44,10 +43,11 @@ internal fun CompanionChatHeader(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 4.dp, vertical = 6.dp),
+            // 全 App 的顶栏都是 8~12dp 起步；这里原来是 4dp，切进聊天页时返回箭头会往左跳一下。
+            .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        IconButton(onClick = onBack) {
+        IconButton(onClick = onBack, modifier = Modifier.size(44.dp)) {
             Icon(
                 Icons.AutoMirrored.Outlined.ArrowBack,
                 contentDescription = "返回",
@@ -57,21 +57,23 @@ internal fun CompanionChatHeader(
         Row(
             modifier = Modifier
                 .weight(1f)
+                .padding(start = 4.dp)
                 .clickable(onClick = onOpenPersonaMenu),
             verticalAlignment = Alignment.CenterVertically
         ) {
             PersonaAvatarImage(
                 name = persona?.name.orEmpty(),
                 avatarPath = persona?.avatarPath,
-                modifier = Modifier.size(38.dp)
+                modifier = Modifier.size(36.dp)
             )
             Column(modifier = Modifier.padding(start = 10.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = persona?.name ?: "伴读",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Medium,
-                        color = palette.onBackground
+                        style = MaterialTheme.typography.titleMedium,
+                        color = palette.onBackground,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Icon(
                         Icons.Outlined.ExpandMore,
@@ -107,10 +109,14 @@ internal fun CompanionChatHeader(
                 }
             }
         }
-        IconButton(onClick = onNewConversation, enabled = !isStreaming) {
+        IconButton(
+            onClick = onNewConversation,
+            enabled = !isStreaming,
+            modifier = Modifier.size(44.dp)
+        ) {
             Icon(Icons.Outlined.Add, contentDescription = "新会话", tint = palette.accent)
         }
-        IconButton(onClick = onShowConversations) {
+        IconButton(onClick = onShowConversations, modifier = Modifier.size(44.dp)) {
             Icon(
                 Icons.Outlined.History,
                 contentDescription = "会话历史",

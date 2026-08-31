@@ -31,6 +31,7 @@ import kotlinx.coroutines.CancellationException
 interface BatchImportWorkerEntryPoint {
     fun bookImportGateway(): BookImportGateway
     fun shelfOrganizationRepository(): ShelfOrganizationRepository
+    fun batchImportRequestStore(): BatchImportRequestStore
 }
 
 /**
@@ -55,48 +56,80 @@ class BatchImportWorker(
             BatchImportWorkerEntryPoint::class.java
         ).shelfOrganizationRepository()
     }
-
-    override suspend fun doWork(): Result {
-        val uris = inputData.getStringArray(KEY_URIS).orEmpty()
-        val groupPaths = inputData.getStringArray(KEY_GROUP_PATHS).orEmpty()
-        // 局域网收件箱里的临时文件导完就删；SAF 选来的用户文件当然不能碰。
-        val deleteAfterImport = inputData.getBoolean(KEY_DELETE_SOURCE, false)
-        if (uris.isEmpty()) return Result.success(summaryData(0, 0, ""))
-
-        setForeground(foregroundInfo(0, uris.size, ""))
-        var succeeded = 0
-        val failures = mutableListOf<String>()
-
-        uris.forEachIndexed { index, raw ->
-            val uri = Uri.parse(raw)
-            val label = displayNameOf(uri)
-            setProgress(progressData(index, uris.size, label))
-            setForegroundAsync(foregroundInfo(index, uris.size, label))
-            try {
-                val bookId = gateway.importDirectly(uri)
-                groupPaths.getOrNull(index)?.takeIf(String::isNotBlank)?.let { path ->
-                    shelfRepository.createOrGetGroupPath(path)?.let { groupId ->
-                        shelfRepository.setBookGroup(listOf(bookId), groupId)
-                    }
-                }
-                succeeded++
-                if (deleteAfterImport) {
-                    runCatching { uri.path?.let { File(it).delete() } }
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Throwable) {
-                failures += "$label：${error.message ?: "导入失败"}"
-            }
-        }
-
-        return Result.success(
-            summaryData(succeeded, failures.size, failures.take(MAX_REPORTED_FAILURES).joinToString("\n"))
-        )
+    private val requestStore: BatchImportRequestStore by lazy {
+        EntryPointAccessors.fromApplication(
+            applicationContext,
+            BatchImportWorkerEntryPoint::class.java
+        ).batchImportRequestStore()
     }
 
-    override suspend fun getForegroundInfo(): ForegroundInfo =
-        foregroundInfo(0, inputData.getStringArray(KEY_URIS)?.size ?: 0, "")
+    override suspend fun doWork(): Result {
+        val requestId = inputData.getString(KEY_REQUEST_ID)
+        val storedRequest = requestId?.let(requestStore::read)
+        if (requestId != null && storedRequest == null) {
+            return Result.failure(summaryData(0, 1, "批量导入任务清单已丢失，请重新选择文件"))
+        }
+
+        // 保留旧字段读取，避免升级时丢掉已经排入 WorkManager 的历史任务。
+        val uris = storedRequest?.entries?.map(BatchImportRequestEntry::uri)
+            ?: inputData.getStringArray(KEY_URIS).orEmpty().toList()
+        val groupPaths = storedRequest?.entries?.map(BatchImportRequestEntry::groupPath)
+            ?: inputData.getStringArray(KEY_GROUP_PATHS).orEmpty().toList()
+        // 局域网收件箱里的临时文件导完就删；SAF 选来的用户文件当然不能碰。
+        val deleteAfterImport = storedRequest?.deleteSourceAfterImport
+            ?: inputData.getBoolean(KEY_DELETE_SOURCE, false)
+        if (uris.isEmpty()) {
+            requestId?.let(requestStore::delete)
+            return Result.success(summaryData(0, 0, ""))
+        }
+
+        return try {
+            setForeground(foregroundInfo(0, uris.size, ""))
+            var succeeded = 0
+            val failures = mutableListOf<String>()
+
+            uris.forEachIndexed { index, raw ->
+                val uri = Uri.parse(raw)
+                val label = displayNameOf(uri)
+                setProgress(progressData(index, uris.size, label))
+                setForegroundAsync(foregroundInfo(index, uris.size, label))
+                try {
+                    val bookId = gateway.importDirectly(uri)
+                    groupPaths.getOrNull(index)?.takeIf(String::isNotBlank)?.let { path ->
+                        shelfRepository.createOrGetGroupPath(path)?.let { groupId ->
+                            shelfRepository.setBookGroup(listOf(bookId), groupId)
+                        }
+                    }
+                    succeeded++
+                    if (deleteAfterImport) {
+                        runCatching { uri.path?.let { File(it).delete() } }
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Throwable) {
+                    failures += "$label：${error.message ?: "导入失败"}"
+                }
+            }
+
+            Result.success(
+                summaryData(
+                    succeeded,
+                    failures.size,
+                    failures.take(MAX_REPORTED_FAILURES).joinToString("\n")
+                )
+            )
+        } finally {
+            requestId?.let(requestStore::delete)
+        }
+    }
+
+    override suspend fun getForegroundInfo(): ForegroundInfo {
+        val storedCount = inputData.getString(KEY_REQUEST_ID)
+            ?.let(requestStore::read)
+            ?.entries
+            ?.size
+        return foregroundInfo(0, storedCount ?: inputData.getStringArray(KEY_URIS)?.size ?: 0, "")
+    }
 
     private fun displayNameOf(uri: Uri): String {
         val fromPath = uri.lastPathSegment?.substringAfterLast('/')?.substringAfterLast(':')
@@ -163,6 +196,7 @@ class BatchImportWorker(
     )
 
     companion object {
+        const val KEY_REQUEST_ID = "request_id"
         const val KEY_URIS = "uris"
         const val KEY_DELETE_SOURCE = "delete_source"
         const val KEY_GROUP_PATHS = "group_paths"
@@ -179,19 +213,9 @@ class BatchImportWorker(
         private const val MAX_REPORTED_FAILURES = 8
         private const val MAX_DETAIL_CHARS = 1_200
 
-        fun request(
-            uris: List<Uri>,
-            deleteSourceAfterImport: Boolean = false,
-            groupPathsByUri: Map<Uri, String> = emptyMap()
-        ) =
+        fun request(requestId: String) =
             OneTimeWorkRequestBuilder<BatchImportWorker>()
-                .setInputData(
-                    workDataOf(
-                        KEY_URIS to uris.map(Uri::toString).toTypedArray(),
-                        KEY_GROUP_PATHS to uris.map { groupPathsByUri[it].orEmpty() }.toTypedArray(),
-                        KEY_DELETE_SOURCE to deleteSourceAfterImport
-                    )
-                )
+                .setInputData(workDataOf(KEY_REQUEST_ID to requestId))
                 .build()
     }
 }

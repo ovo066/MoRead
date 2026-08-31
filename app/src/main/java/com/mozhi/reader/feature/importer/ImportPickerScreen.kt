@@ -17,14 +17,17 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.Clear
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.MenuBook
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -53,6 +56,9 @@ fun ImportPickerScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val selectedFiles = state.files.filter { it.uri in state.selected }
+    val visibleFiles = state.visibleFiles
+    val visibleSelectedCount = visibleFiles.count { it.uri in state.selected }
+    val allVisibleSelected = visibleFiles.isNotEmpty() && visibleSelectedCount == visibleFiles.size
 
     MoReadBackdrop {
         Box(Modifier.fillMaxSize()) {
@@ -74,19 +80,51 @@ fun ImportPickerScreen(
                             when {
                                 state.scanning -> "正在扫描文件夹…"
                                 state.files.isEmpty() -> state.error ?: "没有找到书籍文件"
+                                state.searchQuery.isNotBlank() ->
+                                    "找到 ${state.files.size} 本 · 显示 ${visibleFiles.size} 本 · 已选 ${state.selected.size} 本"
                                 else -> "找到 ${state.files.size} 本 · 已选 ${state.selected.size} 本"
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    if (state.files.isNotEmpty()) {
-                        TextButton(
-                            onClick = { viewModel.selectAll(state.selected.size < state.files.size) }
-                        ) {
-                            Text(if (state.selected.size < state.files.size) "全选" else "全不选")
+                    if (visibleFiles.isNotEmpty()) {
+                        TextButton(onClick = { viewModel.selectAll(!allVisibleSelected) }) {
+                            Text(
+                                when {
+                                    allVisibleSelected && state.searchQuery.isNotBlank() -> "取消结果"
+                                    allVisibleSelected -> "全不选"
+                                    state.searchQuery.isNotBlank() -> "全选结果"
+                                    else -> "全选"
+                                }
+                            )
                         }
                     }
+                }
+
+                if (state.files.isNotEmpty()) {
+                    OutlinedTextField(
+                        value = state.searchQuery,
+                        onValueChange = viewModel::setSearchQuery,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp, vertical = 6.dp),
+                        placeholder = { Text("搜索书名或文件夹") },
+                        leadingIcon = {
+                            Icon(Icons.Outlined.Search, contentDescription = null)
+                        },
+                        trailingIcon = if (state.searchQuery.isNotEmpty()) {
+                            {
+                                IconButton(onClick = { viewModel.setSearchQuery("") }) {
+                                    Icon(Icons.Outlined.Clear, contentDescription = "清除搜索")
+                                }
+                            }
+                        } else {
+                            null
+                        },
+                        singleLine = true,
+                        shape = RoundedCornerShape(18.dp)
+                    )
                 }
 
                 LazyColumn(
@@ -99,6 +137,16 @@ fun ImportPickerScreen(
                             Text(
                                 "文件很多，只列出前 ${state.files.size} 本；导完这批再扫一次即可继续。",
                                 style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    if (state.searchQuery.isNotBlank() && visibleFiles.isEmpty()) {
+                        item {
+                            Text(
+                                "没有匹配“${state.searchQuery.trim()}”的书籍",
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 28.dp),
+                                style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }

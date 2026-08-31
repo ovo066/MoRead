@@ -12,12 +12,14 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -26,8 +28,6 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material.icons.outlined.GraphicEq
-import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.VolumeUp
 import androidx.compose.material3.Icon
@@ -83,13 +83,11 @@ internal fun CompanionMediaBubble(
     onPlayAudio: (String) -> Unit
 ) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
-        // 头像位留白：与文字气泡组左缘对齐，媒体不会自己突出来一块。
-        Box(modifier = Modifier.size(AVATAR_GUTTER))
         Surface(
             color = palette.accentContainer.copy(alpha = 0.42f),
             shape = RoundedCornerShape(18.dp, 18.dp, 18.dp, 5.dp),
             border = BorderStroke(1.dp, palette.glassBorder),
-            modifier = Modifier.fillMaxWidth(0.78f)
+            modifier = Modifier.fillMaxWidth(0.86f)
         ) {
             if (result.mediaKind == "image") {
                 Column(
@@ -134,8 +132,14 @@ internal fun CompanionMediaBubble(
     }
 }
 
-/** AI 气泡左侧头像栏宽度：组首放头像，组内其余条目留同宽空白保持左缘对齐。 */
-internal val AVATAR_GUTTER = 32.dp
+/**
+ * 气泡最大宽度占行宽的比例。两侧共用同一个值，左右外边距才对称 ——
+ * 改造前 AI 侧是 `fillMaxWidth(0.80f)` 套在被头像栏挤窄的 Row 里，比用户气泡窄一整栏。
+ */
+private const val BUBBLE_MAX_WIDTH_FRACTION = 0.86f
+
+/** 组首头像直径。放在气泡上方，所以可以比并排时更小。 */
+private val AVATAR_SIZE = 22.dp
 
 internal sealed interface CompanionTimelineItem {
     val key: String
@@ -278,93 +282,108 @@ internal fun CompanionChatBubble(
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
     val style = chatBubbleStyleFor(appearance, fromUser, palette)
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = if (fromUser) Arrangement.End else Arrangement.Start,
-        verticalAlignment = Alignment.Bottom
-    ) {
-        if (!fromUser) {
-            // 组内非首条留同宽空白：几条连发的消息左缘对齐，看着才像一个人在说话。
-            Box(
-                modifier = Modifier.size(AVATAR_GUTTER),
-                contentAlignment = Alignment.BottomStart
-            ) {
-                if (entry.showAvatar) {
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val bubbleMaxWidth = maxWidth * BUBBLE_MAX_WIDTH_FRACTION
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // 头像与角色名摆在气泡**上方**：气泡因此能用满整行宽度，连发的几条也不再
+            // 被一条空头像栏顶着缩进；一组只在开头署一次名，中间几条直接贴着往下长。
+            if (!fromUser && entry.showAvatar) {
+                Row(
+                    modifier = Modifier.padding(start = 2.dp, bottom = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     PersonaAvatarImage(
                         name = personaName,
                         avatarPath = personaAvatarPath,
-                        modifier = Modifier.size(26.dp)
+                        modifier = Modifier.size(AVATAR_SIZE)
                     )
-                }
-            }
-        }
-        Column(
-            modifier = Modifier.fillMaxWidth(0.80f),
-            horizontalAlignment = if (fromUser) Alignment.End else Alignment.Start
-        ) {
-            Surface(
-                modifier = Modifier.combinedClickable(
-                    enabled = message != null,
-                    onClick = { showActions = !showActions },
-                    onLongClick = { showActions = true }
-                ),
-                color = style.container,
-                contentColor = style.content,
-                border = style.border,
-                shape = style.shape(fromUser, entry.isTail)
-            ) {
-                ChatTextStyling(appearance, fontFamily) {
-                    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-                        // 附件只挂在这条消息的第一个气泡上，多气泡时不会重复出现。
-                        if ((message != null && entry.showAvatar) || fromUser) {
-                            message?.let { BubbleAttachments(it, palette, context) }
-                        }
-                        BubbleBody(
-                            entry = entry,
-                            palette = palette,
-                            locatedCitations = locatedCitations,
-                            onLocateCitation = onLocateCitation,
-                            voiceClip = voiceClip,
-                            onPrepareVoice = onPrepareVoice,
-                            onRegenerateVoice = onRegenerateVoice,
-                            onPlayVoice = onPlayVoice
+                    if (personaName.isNotBlank()) {
+                        Text(
+                            text = personaName,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = palette.muted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(start = 7.dp)
                         )
-                        if (message?.editedAt != null && entry.isTail) {
-                            Text(
-                                "已编辑",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = style.content.copy(alpha = 0.65f),
-                                modifier = Modifier.padding(top = 3.dp)
-                            )
-                        }
                     }
                 }
             }
-            AnimatedVisibility(visible = showActions, enter = fadeIn(), exit = fadeOut()) {
-                BubbleActionBar(
-                    palette = palette,
-                    fromUser = fromUser,
-                    canReroll = entry.canReroll,
-                    onDismiss = { showActions = false },
-                    onCopy = {
-                        clipboard.setText(AnnotatedString(entry.part.text))
-                        Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
-                    },
-                    onSpeak = { onSpeak(entry.part.text) },
-                    onEdit = onEdit,
-                    onReroll = onReroll,
-                    onBranch = onBranch,
-                    onDelete = onDelete
-                )
-            }
-            entry.timestamp?.takeIf { !showActions }?.let { timestamp ->
-                val formatter = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
-                Text(
-                    text = formatter.format(Date(timestamp)),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = palette.muted.copy(alpha = 0.55f),
-                    modifier = Modifier.padding(top = 2.dp, start = 4.dp, end = 4.dp)
-                )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = if (fromUser) Arrangement.End else Arrangement.Start
+            ) {
+                Column(
+                    modifier = Modifier.widthIn(max = bubbleMaxWidth),
+                    horizontalAlignment = if (fromUser) Alignment.End else Alignment.Start
+                ) {
+                    Surface(
+                        modifier = Modifier.combinedClickable(
+                            enabled = message != null,
+                            onClick = { showActions = !showActions },
+                            onLongClick = { showActions = true }
+                        ),
+                        color = style.container,
+                        contentColor = style.content,
+                        border = style.border,
+                        shape = style.shape(fromUser, entry.isTail)
+                    ) {
+                        ChatTextStyling(appearance, fontFamily) {
+                            Column(
+                                modifier = Modifier.padding(horizontal = 13.dp, vertical = 10.dp)
+                            ) {
+                                // 附件只挂在这条消息的第一个气泡上，多气泡时不会重复出现。
+                                if ((message != null && entry.showAvatar) || fromUser) {
+                                    message?.let { BubbleAttachments(it, palette, context) }
+                                }
+                                BubbleBody(
+                                    entry = entry,
+                                    palette = palette,
+                                    locatedCitations = locatedCitations,
+                                    onLocateCitation = onLocateCitation,
+                                    voiceClip = voiceClip,
+                                    onPrepareVoice = onPrepareVoice,
+                                    onRegenerateVoice = onRegenerateVoice,
+                                    onPlayVoice = onPlayVoice
+                                )
+                                if (message?.editedAt != null && entry.isTail) {
+                                    Text(
+                                        "已编辑",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = style.content.copy(alpha = 0.65f),
+                                        modifier = Modifier.padding(top = 3.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    AnimatedVisibility(visible = showActions, enter = fadeIn(), exit = fadeOut()) {
+                        BubbleActionBar(
+                            palette = palette,
+                            fromUser = fromUser,
+                            canReroll = entry.canReroll,
+                            onDismiss = { showActions = false },
+                            onCopy = {
+                                clipboard.setText(AnnotatedString(entry.part.text))
+                                Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+                            },
+                            onSpeak = { onSpeak(entry.part.text) },
+                            onEdit = onEdit,
+                            onReroll = onReroll,
+                            onBranch = onBranch,
+                            onDelete = onDelete
+                        )
+                    }
+                    entry.timestamp?.takeIf { !showActions }?.let { timestamp ->
+                        val formatter = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
+                        Text(
+                            text = formatter.format(Date(timestamp)),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = palette.muted.copy(alpha = 0.55f),
+                            modifier = Modifier.padding(top = 4.dp, start = 4.dp, end = 4.dp)
+                        )
+                    }
+                }
             }
         }
     }

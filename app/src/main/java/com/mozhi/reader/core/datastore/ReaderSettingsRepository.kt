@@ -70,6 +70,14 @@ enum class ShelfLayout {
     LIST
 }
 
+/**
+ * 阅读页亮度的「跟随系统」哨兵值。
+ *
+ * 取 -1f 是为了和 `WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE` 对齐——
+ * 写回窗口属性时可以原样赋值，不必在两套语义之间来回换算。
+ */
+const val FOLLOW_SYSTEM_BRIGHTNESS = -1f
+
 data class ReaderSettings(
     val fontScale: Float = 1f,
     val font: ReaderFont = ReaderFont.SYSTEM,
@@ -123,6 +131,11 @@ data class ReaderSettings(
     val immersiveReading: Boolean = true,
     /** 音量加=上一页、音量减=下一页；仅阅读页消费按键。 */
     val volumeKeysPageTurn: Boolean = false,
+    /**
+     * 阅读页窗口亮度，0..1；[FOLLOW_SYSTEM_BRIGHTNESS] 表示跟随系统。
+     * 只作用于阅读页这一个窗口，不改系统全局亮度，退出阅读页即还原。
+     */
+    val screenBrightness: Float = FOLLOW_SYSTEM_BRIGHTNESS,
     /** 已导入到应用私有目录的阅读背景图片。 */
     val backgroundImagePath: String? = null,
     /** 可供阅读背景、书籍封面等位置复用的图片资产。 */
@@ -238,6 +251,7 @@ class ReaderSettingsRepository @Inject constructor(
             keepScreenOn = preferences[Keys.KeepScreenOn] ?: false,
             immersiveReading = preferences[Keys.ImmersiveReading] ?: true,
             volumeKeysPageTurn = preferences[Keys.VolumeKeysPageTurn] ?: false,
+            screenBrightness = preferences[Keys.ScreenBrightness] ?: FOLLOW_SYSTEM_BRIGHTNESS,
             backgroundImagePath = selectedBackground?.filePath ?: legacyBackgroundPath,
             imageLibrary = imageLibrary,
             selectedBackgroundImageId = selectedBackgroundId,
@@ -743,6 +757,12 @@ class ReaderSettingsRepository @Inject constructor(
         dataStore.edit { it[Keys.VolumeKeysPageTurn] = value }
     }
 
+    /** [FOLLOW_SYSTEM_BRIGHTNESS] 或 0..1；越界值一律钳回区间，避免写进一个点不亮的窗口。 */
+    suspend fun setScreenBrightness(value: Float) {
+        val stored = if (value < 0f) FOLLOW_SYSTEM_BRIGHTNESS else value.coerceIn(0f, 1f)
+        dataStore.edit { it[Keys.ScreenBrightness] = stored }
+    }
+
     suspend fun setBackgroundImagePath(path: String?, slot: ReaderThemeSlot = ReaderThemeSlot.DAY) {
         dataStore.edit { preferences ->
             if (path.isNullOrBlank()) {
@@ -1073,6 +1093,7 @@ class ReaderSettingsRepository @Inject constructor(
         val KeepScreenOn = booleanPreferencesKey("keep_screen_on")
         val ImmersiveReading = booleanPreferencesKey("reader_immersive_reading")
         val VolumeKeysPageTurn = booleanPreferencesKey("reader_volume_keys_page_turn")
+        val ScreenBrightness = floatPreferencesKey("reader_screen_brightness")
         val BackgroundImagePath = stringPreferencesKey("reader_background_image_path")
         val ImageLibrary = stringPreferencesKey("reader_image_library")
         val SelectedBackgroundImageId = stringPreferencesKey("reader_selected_background_image_id")

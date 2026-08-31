@@ -8,6 +8,7 @@ import com.mozhi.reader.core.database.entity.ChapterEntity
 import com.mozhi.reader.core.database.entity.NoteEntity
 import com.mozhi.reader.core.database.entity.ReadingDailyEntity
 import com.mozhi.reader.core.library.NoteRepository
+import com.mozhi.reader.core.retrieval.ReadingScope
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -32,7 +33,7 @@ class ReaderToolsetReadbackTest {
                 currentChapterAnnotationCount = 1,
                 bookmarkCount = 1
             ),
-            spoilerProtectionEnabled = true,
+            readingScope = ReadingScope.uptoProgress(book),
             nowMillis = 1_000
         )
 
@@ -56,7 +57,7 @@ class ReaderToolsetReadbackTest {
             toc(5, "章节4剧透", 1, 3, 3, false)
         )
 
-        val text = formatChapterOutline(book, chapters, toc, spoilerProtectionEnabled = true)
+        val text = formatChapterOutline(book, chapters, toc, readingScope = ReadingScope.uptoProgress(book))
 
         assertTrue(text.contains("【第一卷】#1-#2"))
         assertTrue(text.contains("后面还有 2 章尚未读到"))
@@ -73,7 +74,7 @@ class ReaderToolsetReadbackTest {
             emptyList(),
             fromChapter = 1,
             toChapter = 300,
-            spoilerProtectionEnabled = false
+            readingScope = ReadingScope.WholeBook
         )
         assertTrue(text.length <= 6_000)
         assertTrue(text.contains("目录内容未完"))

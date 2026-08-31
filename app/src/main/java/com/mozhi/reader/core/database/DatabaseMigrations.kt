@@ -714,4 +714,23 @@ object DatabaseMigrations {
             )
         }
     }
+
+    /** Adds monotonic reading watermarks and provenance for AI-generated persisted content. */
+    val Migration21To22 = object : Migration(21, 22) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `books` ADD COLUMN `maxReachedChapterIndex` INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE `books` ADD COLUMN `maxReachedCharOffset` INTEGER NOT NULL DEFAULT 0")
+            db.execSQL(
+                "UPDATE `books` SET `maxReachedChapterIndex` = `lastReadChapterIndex`, " +
+                    "`maxReachedCharOffset` = `lastReadCharOffset`"
+            )
+            db.execSQL("ALTER TABLE `messages` ADD COLUMN `sourceScopeChapterIndex` INTEGER NOT NULL DEFAULT -1")
+            db.execSQL("ALTER TABLE `messages` ADD COLUMN `sourceScopeCharOffset` INTEGER NOT NULL DEFAULT -1")
+            db.execSQL("ALTER TABLE `annotations` ADD COLUMN `sourceScopeChapterIndex` INTEGER")
+            db.execSQL("ALTER TABLE `annotations` ADD COLUMN `sourceScopeCharOffset` INTEGER")
+            db.execSQL("ALTER TABLE `notes` ADD COLUMN `sourceScopeChapterIndex` INTEGER")
+            db.execSQL("ALTER TABLE `notes` ADD COLUMN `sourceScopeCharOffset` INTEGER")
+        }
+    }
+
 }

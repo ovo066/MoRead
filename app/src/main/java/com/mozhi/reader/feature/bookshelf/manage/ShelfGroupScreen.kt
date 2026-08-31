@@ -1,5 +1,6 @@
 package com.mozhi.reader.feature.bookshelf.manage
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,6 +24,7 @@ import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.SubdirectoryArrowRight
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -102,6 +104,14 @@ fun ShelfGroupScreen(
                         ),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
+                        item(key = "group-management-hint") {
+                            Text(
+                                "点击分组可修改名称或层级；右侧菜单可删除。删除分组不会删除书籍。",
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                         state.groups.filter { it.parentId == null }.forEach { parent ->
                             item(key = parent.id) {
                                 GroupRow(
@@ -158,7 +168,7 @@ fun ShelfGroupScreen(
     }
     editing?.let { group ->
         GroupEditorDialog(
-            title = "编辑分组",
+            title = "重命名或调整分组",
             groups = state.groups,
             group = group,
             onDismiss = { editing = null },
@@ -172,13 +182,13 @@ fun ShelfGroupScreen(
         AlertDialog(
             onDismissRequest = { deleting = null },
             icon = { Icon(Icons.Outlined.Delete, contentDescription = null) },
-            title = { Text("删除“${group.name}”？") },
+            title = { Text("删除分组“${group.name}”？") },
             text = {
                 Text(
                     if (group.parentId == null) {
-                        "组内书籍将移到未分组；它的二级分组会提升为顶层。"
+                        "只删除分组，不会删除书籍。组内书籍将移到未分组；它的二级分组会提升为顶层。"
                     } else {
-                        "请选择把组内书籍移到父分组，或移到未分组。"
+                        "只删除分组，不会删除书籍。请选择把组内书籍移到父分组，或移到未分组。"
                     }
                 )
             },
@@ -186,7 +196,7 @@ fun ShelfGroupScreen(
                 TextButton(onClick = {
                     deleting = null
                     viewModel.deleteGroup(group, moveBooksToParent = group.parentId != null)
-                }) { Text(if (group.parentId == null) "删除" else "移到父分组") }
+                }) { Text(if (group.parentId == null) "删除分组" else "删除并移到父分组") }
             },
             dismissButton = {
                 Row {
@@ -226,8 +236,12 @@ private fun GroupRow(
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit
 ) {
+    var actionMenuExpanded by remember(group.id) { mutableStateOf(false) }
     FrostedSurface(
-        modifier = Modifier.fillMaxWidth().padding(start = if (isChild) 22.dp else 0.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = if (isChild) 22.dp else 0.dp)
+            .clickable(onClick = onEdit),
         shape = RoundedCornerShape(18.dp),
         shadowElevation = 2.dp
     ) {
@@ -243,7 +257,7 @@ private fun GroupRow(
             Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
                 Text(group.name, style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "$count 本",
+                    "$count 本 · 点击修改",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -254,8 +268,32 @@ private fun GroupRow(
             IconButton(onClick = onMoveDown) {
                 Icon(Icons.Outlined.KeyboardArrowDown, contentDescription = "下移")
             }
-            IconButton(onClick = onEdit) { Icon(Icons.Outlined.Edit, contentDescription = "编辑") }
-            IconButton(onClick = onDelete) { Icon(Icons.Outlined.Delete, contentDescription = "删除") }
+            Box {
+                IconButton(onClick = { actionMenuExpanded = true }) {
+                    Icon(Icons.Outlined.MoreVert, contentDescription = "分组操作")
+                }
+                DropdownMenu(
+                    expanded = actionMenuExpanded,
+                    onDismissRequest = { actionMenuExpanded = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("重命名 / 调整层级") },
+                        leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
+                        onClick = {
+                            actionMenuExpanded = false
+                            onEdit()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("删除分组") },
+                        leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null) },
+                        onClick = {
+                            actionMenuExpanded = false
+                            onDelete()
+                        }
+                    )
+                }
+            }
         }
     }
 }

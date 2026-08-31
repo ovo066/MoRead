@@ -121,6 +121,10 @@ internal fun ContentsSheet(
         currentChapterIndex = currentChapterIndex
     )
     val volumeCount = tocItems.count { it.depth == 0 && it.hasChildren }
+    val usesPublisherToc = tocEntries.isNotEmpty()
+    val displayCount = readerTocDisplayCount(tocItems)
+    val supplementaryCount = readerTocSupplementaryCount(tocItems)
+    val currentDisplayNumber = currentReaderTocDisplayNumber(tocItems, currentChapterIndex)
 
     val listState = androidx.compose.foundation.lazy.rememberLazyListState(
         initialFirstVisibleItemIndex = (currentListIndex - 2).coerceAtLeast(0)
@@ -141,9 +145,17 @@ internal fun ContentsSheet(
                 )
                 Text(
                     text = buildString {
-                        append("共 ${chapters.size} 章")
+                        when {
+                            !usesPublisherToc -> append("共 $displayCount 章")
+                            supplementaryCount > 0 -> {
+                                append("共 $displayCount 章 · 另 $supplementaryCount 项")
+                            }
+                            else -> append("共 $displayCount 个目录项")
+                        }
                         if (volumeCount > 0) append(" · $volumeCount 卷")
-                        append(" · 读到第 ${currentChapterIndex + 1} 章")
+                        currentDisplayNumber?.let { number ->
+                            append(" · 读到第 $number ${if (supplementaryCount > 0 || !usesPublisherToc) "章" else "项"}")
+                        }
                     },
                     style = MaterialTheme.typography.labelSmall,
                     color = palette.muted,
@@ -231,7 +243,7 @@ internal fun ContentsSheet(
                             )
                         } else {
                             Text(
-                                text = item.chapterIndex?.plus(1)?.toString()?.padStart(3, '0').orEmpty(),
+                                text = item.displayNumber?.toString()?.padStart(3, '0').orEmpty(),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = if (current) palette.accent else palette.muted
                             )

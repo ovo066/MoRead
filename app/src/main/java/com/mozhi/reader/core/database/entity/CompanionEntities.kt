@@ -154,6 +154,9 @@ data class AnnotationEntity(
     /** 随批注附带的语音/插图清单 JSON（见 AnnotationMedia）；'{}' = 纯文字批注。 */
     @ColumnInfo(defaultValue = "'{}'")
     val mediaJson: String = "{}",
+    /** Visibility boundary used by the AI that created this annotation; null for user/legacy rows. */
+    val sourceScopeChapterIndex: Int? = null,
+    val sourceScopeCharOffset: Int? = null,
     val createdAt: Long
 )
 
@@ -308,6 +311,9 @@ data class NoteEntity(
     /** 可选原文锚点：笔记出自某处时记录章内位置（UTF-16 字符偏移）。 */
     val relatedChapterIndex: Int? = null,
     val relatedCharOffset: Int? = null,
+    /** Visibility boundary used by the AI that created this note; null for user/legacy rows. */
+    val sourceScopeChapterIndex: Int? = null,
+    val sourceScopeCharOffset: Int? = null,
     val createdAt: Long,
     val updatedAt: Long
 )

@@ -385,6 +385,27 @@ fun ReaderScreen(
             }
         }
     }
+    // 阅读页窗口亮度。只改本窗口的 LayoutParams，不碰系统全局亮度（那需要写入设置的权限，
+    // 而且退出应用后还得还原，任何一次崩溃都会把用户的手机留在一个奇怪的亮度上）。
+    // onDispose 一律写回 BRIGHTNESS_OVERRIDE_NONE：退出阅读页立刻回到系统亮度。
+    DisposableEffect(activity, state.settings.screenBrightness) {
+        val window = activity?.window
+        window?.let {
+            it.attributes = it.attributes.apply {
+                screenBrightness = state.settings.screenBrightness.let { value ->
+                    if (value < 0f) WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                    else value.coerceIn(0f, 1f)
+                }
+            }
+        }
+        onDispose {
+            window?.let {
+                it.attributes = it.attributes.apply {
+                    screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                }
+            }
+        }
+    }
     val hideStatusBar = state.settings.immersiveReading && !chromeVisible
     DisposableEffect(activity, hideStatusBar) {
         val statusBars = WindowInsetsCompat.Type.statusBars()
@@ -487,7 +508,8 @@ fun ReaderScreen(
         onPageModeChange = viewModel::setPageMode,
         onKeepScreenOnChange = viewModel::setKeepScreenOn,
         onImmersiveReadingChange = viewModel::setImmersiveReading,
-        onVolumeKeysPageTurnChange = viewModel::setVolumeKeysPageTurn
+        onVolumeKeysPageTurnChange = viewModel::setVolumeKeysPageTurn,
+        onScreenBrightnessChange = viewModel::setScreenBrightness
     )
 
     Box(

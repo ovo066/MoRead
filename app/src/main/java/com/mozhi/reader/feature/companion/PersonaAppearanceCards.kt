@@ -1,7 +1,6 @@
 package com.mozhi.reader.feature.companion
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -18,15 +17,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Bookmarks
-import androidx.compose.material.icons.outlined.FormatColorFill
 import androidx.compose.material.icons.outlined.RestartAlt
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -36,91 +32,15 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.compose.ui.text.font.FontWeight
 import coil3.compose.AsyncImage
 import com.mozhi.reader.core.database.entity.ChatBubbleShape
 import com.mozhi.reader.core.database.entity.PersonaChatAppearance
 import com.mozhi.reader.core.datastore.ReaderFontAsset
 import com.mozhi.reader.core.datastore.ReaderImageAsset
-import com.mozhi.reader.ui.components.FrostedSurface
 import com.mozhi.reader.ui.components.rememberChatBubbleStyle
 import com.mozhi.reader.ui.components.rememberChatFontFamily
 import java.io.File
 import kotlin.math.roundToInt
-
-/**
- * 角色的「记忆」小节：一个开关 + 一条通往管理页的入口。
- * 条数摆在明面上，用户才知道这个角色到底记住了多少东西。
- */
-@Composable
-internal fun MemoryCard(
-    enabled: Boolean,
-    memoryCount: Long,
-    canManage: Boolean,
-    onEnabledChange: (Boolean) -> Unit,
-    onManage: () -> Unit
-) {
-    FrostedSurface(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
-        shape = RoundedCornerShape(22.dp),
-        shadowElevation = 4.dp
-    ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.Outlined.Bookmarks,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                    tint = MaterialTheme.colorScheme.primary
-                )
-                Column(Modifier.weight(1f).padding(start = 8.dp)) {
-                    Text("长期记忆", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        if (enabled) {
-                            "对话沉淀成记忆，下次见面它还记得你"
-                        } else {
-                            "已关闭：只做当次问答，已有记忆保留不删"
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Switch(checked = enabled, onCheckedChange = onEnabledChange)
-            }
-            if (canManage) {
-                Surface(
-                    onClick = onManage,
-                    shape = RoundedCornerShape(14.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            "管理记忆与画像",
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Text(
-                            "$memoryCount 条",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            } else {
-                Text(
-                    "保存角色后即可查看和整理它的记忆。",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-    }
-}
 
 /**
  * 聊天外观编辑：预览卡常驻在最上面，任何一项改动都立刻反映在它身上——
@@ -135,9 +55,10 @@ internal fun AppearanceCard(
     onChange: ((PersonaChatAppearance) -> PersonaChatAppearance) -> Unit,
     onReset: () -> Unit
 ) {
+    // 外层卡由调用方的 MoReadSection 提供，这里只出内容，免得卡中套卡。
     Column(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         ChatAppearancePreview(
             appearance = appearance,
@@ -145,36 +66,18 @@ internal fun AppearanceCard(
             images = images,
             fonts = fonts
         )
-
-        FrostedSurface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(22.dp),
-            shadowElevation = 4.dp
-        ) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+        if (!appearance.isDefault) {
+            Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                TextButton(onClick = onReset) {
                     Icon(
-                        Icons.Outlined.FormatColorFill,
+                        Icons.Outlined.RestartAlt,
                         contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                        tint = MaterialTheme.colorScheme.primary
+                        modifier = Modifier.size(16.dp)
                     )
-                    Text(
-                        "聊天外观",
-                        style = MaterialTheme.typography.titleSmall,
-                        modifier = Modifier.weight(1f).padding(start = 8.dp)
-                    )
-                    if (!appearance.isDefault) {
-                        TextButton(onClick = onReset) {
-                            Icon(
-                                Icons.Outlined.RestartAlt,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Text("恢复默认", Modifier.padding(start = 4.dp))
-                        }
-                    }
+                    Text("恢复默认", Modifier.padding(start = 4.dp))
                 }
+            }
+        }
 
                 AppearanceField(label = "气泡样式") {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -254,17 +157,15 @@ internal fun AppearanceCard(
                     }
                 }
 
-                AppearanceField(
-                    label = "字号 ${(appearance.fontScale * 100).roundToInt()}%"
-                ) {
-                    Slider(
-                        value = appearance.fontScale,
-                        onValueChange = { value -> onChange { it.copy(fontScale = value) } },
-                        valueRange = PersonaChatAppearance.MIN_FONT_SCALE..
-                            PersonaChatAppearance.MAX_FONT_SCALE
-                    )
-                }
-            }
+        AppearanceField(
+            label = "字号 ${(appearance.fontScale * 100).roundToInt()}%"
+        ) {
+            Slider(
+                value = appearance.fontScale,
+                onValueChange = { value -> onChange { it.copy(fontScale = value) } },
+                valueRange = PersonaChatAppearance.MIN_FONT_SCALE..
+                    PersonaChatAppearance.MAX_FONT_SCALE
+            )
         }
     }
 }

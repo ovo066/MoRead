@@ -358,6 +358,7 @@ internal fun ShelfGroupPickerSheet(
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
+        sheetGesturesEnabled = false,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).navigationBarsPadding()) {

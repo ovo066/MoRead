@@ -35,6 +35,7 @@ import com.mozhi.reader.core.di.ApplicationScope
 import com.mozhi.reader.core.datastore.UserMaskStore
 import com.mozhi.reader.core.library.AttachmentStore
 import com.mozhi.reader.core.library.LibraryRepository
+import com.mozhi.reader.core.retrieval.ReadingScopeResolver
 import com.mozhi.reader.core.library.MessageAttachment
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.util.concurrent.atomic.AtomicLong
@@ -605,12 +606,19 @@ class ReaderCompanionViewModel @Inject constructor(
                         attachmentStore.saveTextFile(conversationId, pending.uri, pending.name)
                     }
                 }
+                val bookEntity = libraryRepository.getBook(book) ?: error("未找到当前书籍")
+                val readingScope = ReadingScopeResolver.resolve(
+                    settingsRepository.companionSpoilerProtectionEnabled.first(),
+                    bookEntity
+                )
                 chatRepository.appendUserMessage(
                     conversationId = conversationId,
                     content = trimmed.ifEmpty { "（发来附件）" },
                     attachmentsJson = MessageAttachment.encode(saved),
-                    // 发送时就把面具钉在消息上：固化是异步的，那时面具可能已经切换。
-                    maskId = userMaskStore.activeMask()?.id ?: 0L
+                    // 发送时就把面具与可见水位钉在消息上：固化是异步的，届时状态可能已切换。
+                    maskId = userMaskStore.activeMask()?.id ?: 0L,
+                    sourceScopeChapterIndex = readingScope.maxChapterIndex,
+                    sourceScopeCharOffset = readingScope.maxCharOffset
                 )
                 stream(
                     book = book,
@@ -701,7 +709,12 @@ class ReaderCompanionViewModel @Inject constructor(
             systemPrompt = contextBuilder.build(
                 persona = persona,
                 bookId = book,
-                spoilerProtectionEnabled = settingsRepository.companionSpoilerProtectionEnabled.first()
+                readingScope = libraryRepository.getBook(book)?.let { entity ->
+                    ReadingScopeResolver.resolve(
+                        settingsRepository.companionSpoilerProtectionEnabled.first(),
+                        entity
+                    )
+                } ?: error("未找到当前书籍")
             ),
             firstUserMessage = null,
             personaId = persona.id
@@ -858,9 +871,12 @@ class ReaderCompanionViewModel @Inject constructor(
             val ticker = viewModelScope.launchStreamingTicker(::publishStreamingSnapshot)
             try {
                 val webSearchEnabled = webSearchSettingsStore.current().enabled
-                val spoilerProtectionEnabled = settingsRepository
-                    .companionSpoilerProtectionEnabled
-                    .first()
+                val readingScope = libraryRepository.getBook(book)?.let { entity ->
+                    ReadingScopeResolver.resolve(
+                        settingsRepository.companionSpoilerProtectionEnabled.first(),
+                        entity
+                    )
+                } ?: error("未找到当前书籍")
                 val memorySettings = settingsRepository.companionMemorySettings.first()
                 val autonomy = settingsRepository.companionAutonomySettings.first()
                 val multiBubble = settingsRepository.companionMultiBubbleEnabled.first()
@@ -887,7 +903,7 @@ class ReaderCompanionViewModel @Inject constructor(
                     personaId = persona.id,
                     conversationId = conversationId,
                     enabledTools = enabledTools,
-                    spoilerProtectionEnabled = spoilerProtectionEnabled,
+                    readingScope = readingScope,
                     memoryScope = MemoryScope(
                         longTermEnabled = memorySettings.longTermEnabled && persona.memoryEnabled,
                         crossBookChatSearch = memorySettings.crossBookChatSearchEnabled,
@@ -899,7 +915,7 @@ class ReaderCompanionViewModel @Inject constructor(
                     bookId = book,
                     scene = sceneQuote.takeIf(String::isNotBlank),
                     memoryQuery = memoryQuery,
-                    spoilerProtectionEnabled = spoilerProtectionEnabled,
+                    readingScope = readingScope,
                     conversationShape = ConversationShape(
                         multiBubble = multiBubble,
                         voiceEnabled = voiceEnabled

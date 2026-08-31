@@ -56,7 +56,9 @@ class AnnotationRepository @Inject constructor(
         note: String = "",
         colorTag: String = "",
         style: AnnotationStyle = AnnotationStyle.HIGHLIGHT,
-        mediaJson: String = "{}"
+        mediaJson: String = "{}",
+        sourceScopeChapterIndex: Int? = null,
+        sourceScopeCharOffset: Int? = null
     ): Long {
         require(chapterIndex >= 0) { "章节索引不合法" }
         require(startCharOffset in 0 until endCharOffset) { "批注选区为空" }
@@ -72,6 +74,8 @@ class AnnotationRepository @Inject constructor(
                 colorTag = colorTag,
                 style = style.wire,
                 mediaJson = mediaJson,
+                sourceScopeChapterIndex = sourceScopeChapterIndex,
+                sourceScopeCharOffset = sourceScopeCharOffset,
                 createdAt = System.currentTimeMillis()
             )
         )

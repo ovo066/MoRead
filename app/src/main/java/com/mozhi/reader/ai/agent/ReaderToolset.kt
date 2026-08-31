@@ -17,6 +17,13 @@ import com.mozhi.reader.core.library.QuoteChapter
 import com.mozhi.reader.core.library.QuoteLocation
 import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.library.NoteRepository
+import com.mozhi.reader.core.retrieval.Bm25LexicalRecall
+import com.mozhi.reader.core.retrieval.NeighborExpander
+import com.mozhi.reader.core.retrieval.ReadingScope
+import com.mozhi.reader.core.retrieval.RetrievalCandidate
+import com.mozhi.reader.core.retrieval.RetrievalPipeline
+import com.mozhi.reader.core.retrieval.RetrievalRecall
+import com.mozhi.reader.core.retrieval.RetrievalRequest
 import com.mozhi.reader.core.vector.ChapterChunker
 import com.mozhi.reader.core.vector.Embeddings
 import com.mozhi.reader.core.vector.VectorQueries
@@ -70,7 +77,7 @@ class ReaderToolset @Inject constructor(
         personaId: Long? = null,
         conversationId: Long? = null,
         enabledTools: Collection<String>? = null,
-        spoilerProtectionEnabled: Boolean = true,
+        readingScope: ReadingScope,
         memoryScope: MemoryScope = MemoryScope()
     ): List<AgentTool> {
         val embedQuery: suspend (String) -> FloatArray = { query ->
@@ -84,20 +91,20 @@ class ReaderToolset @Inject constructor(
                     noteRepository = noteRepository,
                     annotationRepository = annotationRepository,
                     bookId = bookId,
-                    spoilerProtectionEnabled = spoilerProtectionEnabled
+                    readingScope = readingScope
                 )
             )
-            add(ListChaptersTool(libraryRepository, bookId, spoilerProtectionEnabled))
+            add(ListChaptersTool(libraryRepository, bookId, readingScope))
             add(
                 ListAnnotationsTool(
                     libraryRepository = libraryRepository,
                     annotations = annotationRepository,
                     bookId = bookId,
                     currentPersonaId = personaId,
-                    spoilerProtectionEnabled = spoilerProtectionEnabled
+                    readingScope = readingScope
                 )
             )
-            add(ListNotesTool(noteRepository, bookId, personaId))
+            add(ListNotesTool(noteRepository, bookId, personaId, readingScope))
             add(
                 SearchBookTool(
                     bookId = bookId,
@@ -129,10 +136,10 @@ class ReaderToolset @Inject constructor(
                     store = { vectorStore.get() },
                     requestIndex = { embeddingScheduler.enqueueForBook(bookId) },
                     indexingEnabled = { embeddingSettingsStore.isEnabled(bookId) },
-                    spoilerProtectionEnabled = spoilerProtectionEnabled
+                    readingScope = readingScope
                 )
             )
-            add(ReadBookSectionTool(libraryRepository, bookId, spoilerProtectionEnabled))
+            add(ReadBookSectionTool(libraryRepository, bookId, readingScope))
             add(WebSearchTool(webSearchService))
             add(WebScrapeTool(webSearchService))
             if (personaId != null) {
@@ -144,7 +151,9 @@ class ReaderToolset @Inject constructor(
                             store = { vectorStore.get() },
                             // 关掉「跨书对话检索」＝ recall_memory 只在本书范围内回忆。
                             bookId = bookId.takeUnless { memoryScope.crossBookChatSearch },
-                            maskId = memoryScope.maskId
+                            currentBookId = bookId,
+                            maskId = memoryScope.maskId,
+                            readingScope = readingScope
                         )
                     )
                 }
@@ -153,7 +162,8 @@ class ReaderToolset @Inject constructor(
                         bookId = bookId,
                         personaId = personaId,
                         libraryRepository = libraryRepository,
-                        annotations = annotationRepository
+                        annotations = annotationRepository,
+                        readingScope = readingScope
                     )
                 )
                 add(
@@ -162,7 +172,8 @@ class ReaderToolset @Inject constructor(
                         personaId = personaId,
                         conversationId = conversationId,
                         getBook = { libraryRepository.getBook(bookId) },
-                        notes = noteRepository
+                        notes = noteRepository,
+                        readingScope = readingScope
                     )
                 )
                 add(
@@ -171,7 +182,8 @@ class ReaderToolset @Inject constructor(
                         personaId = personaId,
                         conversationId = conversationId,
                         getBook = { libraryRepository.getBook(bookId) },
-                        notes = noteRepository
+                        notes = noteRepository,
+                        readingScope = readingScope
                     )
                 )
                 add(
@@ -179,7 +191,8 @@ class ReaderToolset @Inject constructor(
                         bookId = bookId,
                         personaId = personaId,
                         getBook = { libraryRepository.getBook(bookId) },
-                        mediaService = mediaService
+                        mediaService = mediaService,
+                        readingScope = readingScope
                     )
                 )
                 add(
@@ -288,7 +301,7 @@ private class GetReadingProgressTool(
     private val noteRepository: NoteRepository,
     private val annotationRepository: AnnotationRepository,
     private val bookId: Long,
-    private val spoilerProtectionEnabled: Boolean
+    private val readingScope: ReadingScope
 ) : AgentTool {
 
     override val displayName: String = "查询书籍与阅读进度"
@@ -324,7 +337,7 @@ private class GetReadingProgressTool(
                 currentChapterAnnotationCount = annotationRepository.getCountForChapter(bookId, currentIndex),
                 bookmarkCount = libraryRepository.getBookmarks(bookId).size
             ),
-            spoilerProtectionEnabled = spoilerProtectionEnabled
+            readingScope = readingScope
         )
     }
 }
@@ -342,13 +355,13 @@ internal data class ChapterDocument(
 internal class ReadBookSectionTool(
     private val libraryRepository: LibraryRepository,
     private val bookId: Long,
-    private val spoilerProtectionEnabled: Boolean = true
+    private val readingScope: ReadingScope
 ) : AgentTool {
     override val displayName: String = "读取指定已读章节"
 
     override val spec: ToolSpec = ToolSpec(
         name = "read_book_section",
-        description = if (spoilerProtectionEnabled) {
+        description = if (!readingScope.isWholeBook) {
             "读取用户指定的已读章节或章节范围原文。概括某章或某部分时使用；不确定章节号时先调用 list_chapters 核对，不要猜测。章节号从 1 开始，当前章内容只返回到实际阅读位置。"
         } else {
             "读取用户指定的章节或章节范围原文。概括某章或某部分时使用；不确定章节号时先调用 list_chapters 核对，不要猜测。章节号从 1 开始。"
@@ -387,13 +400,9 @@ internal class ReadBookSectionTool(
         if (fromChapter < 1 || toChapter < fromChapter) return "章节范围无效：$fromChapter-$toChapter"
 
         val book = libraryRepository.getBook(bookId) ?: return "未找到当前书籍"
-        val maxReadableChapter = if (spoilerProtectionEnabled) {
-            book.lastReadChapterIndex + 1
-        } else {
-            book.totalChapters
-        }
+        val maxReadableChapter = readingScope.clampLastChapter(book.totalChapters) + 1
         if (toChapter > maxReadableChapter) {
-            return if (spoilerProtectionEnabled) {
+            return if (!readingScope.isWholeBook) {
                 "超出已读范围：用户只读到第 $maxReadableChapter 章，不能读取第 $toChapter 章。"
             } else {
                 "章节超出本书范围：本书共 $maxReadableChapter 章，不能读取第 $toChapter 章。"
@@ -409,8 +418,8 @@ internal class ReadBookSectionTool(
                     ChapterDocument(
                         chapterIndex = chapterIndex,
                         title = chapter.title,
-                        body = if (spoilerProtectionEnabled && chapterIndex == book.lastReadChapterIndex) {
-                            fullBody.take(book.lastReadCharOffset.coerceAtLeast(0))
+                        body = if (!readingScope.isWholeBook && chapterIndex == readingScope.maxChapterIndex) {
+                            fullBody.take(readingScope.maxCharOffset.coerceIn(0, fullBody.length))
                         } else {
                             fullBody
                         }
@@ -487,7 +496,8 @@ private class AddAnnotationTool(
     private val bookId: Long,
     private val personaId: Long,
     private val libraryRepository: LibraryRepository,
-    private val annotations: AnnotationRepository
+    private val annotations: AnnotationRepository,
+    private val readingScope: ReadingScope
 ) : AgentTool {
     override val displayName: String = "添加段落批注"
 
@@ -540,19 +550,20 @@ private class AddAnnotationTool(
         val style = AnnotationStyle.fromWire(arguments["style"]?.jsonPrimitive?.contentOrNull)
         val book = libraryRepository.getBook(bookId) ?: return "未找到当前书籍"
         val chapterNumber = arguments["chapter_number"]?.jsonPrimitive?.intOrNull
-        if (chapterNumber != null && chapterNumber !in 1..book.lastReadChapterIndex + 1) {
-            return "章节超出已读范围：用户只读到第 ${book.lastReadChapterIndex + 1} 章。"
+        val maxVisibleChapter = readingScope.clampLastChapter(book.totalChapters)
+        if (chapterNumber != null && chapterNumber !in 1..maxVisibleChapter + 1) {
+            return "章节超出当前可见范围：最多可访问第 ${maxVisibleChapter + 1} 章。"
         }
         val chapters = libraryRepository.getChapters(bookId)
-            .filter { it.chapterIndex <= book.lastReadChapterIndex }
+            .filter { it.chapterIndex <= maxVisibleChapter }
             .filter { chapterNumber == null || it.chapterIndex == chapterNumber - 1 }
             .map { chapter ->
                 val full = libraryRepository.readChapterText(bookId, chapter)
                 ChapterDocument(
                     chapter.chapterIndex,
                     chapter.title,
-                    if (chapter.chapterIndex == book.lastReadChapterIndex) {
-                        full.take(book.lastReadCharOffset.coerceAtLeast(0))
+                    if (!readingScope.isWholeBook && chapter.chapterIndex == readingScope.maxChapterIndex) {
+                        full.take(readingScope.maxCharOffset.coerceIn(0, full.length))
                     } else {
                         full
                     }
@@ -577,7 +588,9 @@ private class AddAnnotationTool(
             note = comment.take(MAX_ANNOTATION_COMMENT_CHARS),
             // 角色颜色不占用户色板：按 personaId 稳定散列，同角色永远同色
             colorTag = AnnotationColors.forPersona(personaId),
-            style = style
+            style = style,
+            sourceScopeChapterIndex = readingScope.maxChapterIndex,
+            sourceScopeCharOffset = readingScope.maxCharOffset
         )
         return "已在第 ${match.chapterIndex + 1} 章添加段落批注（编号 $id，样式 ${style.wire.lowercase()}），" +
             "读者点击正文旁的批注标记即可在讨论区看到。"
@@ -600,7 +613,8 @@ private class GenerateImageTool(
     private val bookId: Long,
     private val personaId: Long,
     private val getBook: suspend () -> BookEntity?,
-    private val mediaService: AiMediaGenerationService
+    private val mediaService: AiMediaGenerationService,
+    private val readingScope: ReadingScope
 ) : AgentTool {
     override val displayName: String = "生成并保存插图"
 
@@ -636,18 +650,23 @@ private class GenerateImageTool(
         if (prompt.isEmpty()) return "缺少生图提示词 prompt"
         val book = getBook() ?: return "未找到当前书籍"
         val chapterNumber = arguments["chapter_number"]?.jsonPrimitive?.intOrNull
-        if (chapterNumber != null && chapterNumber !in 1..book.lastReadChapterIndex + 1) {
-            return "插图锚点超出已读范围：用户只读到第 ${book.lastReadChapterIndex + 1} 章。"
+        val maxVisibleChapter = readingScope.clampLastChapter(book.totalChapters)
+        if (chapterNumber != null && chapterNumber !in 1..maxVisibleChapter + 1) {
+            return "插图锚点超出当前可见范围：最多可访问第 ${maxVisibleChapter + 1} 章。"
         }
-        val chapterIndex = (chapterNumber?.minus(1) ?: book.lastReadChapterIndex)
+        val chapterIndex = chapterNumber?.minus(1) ?: if (readingScope.isWholeBook) {
+            book.lastReadChapterIndex
+        } else {
+            readingScope.maxChapterIndex
+        }
         val requestedOffset = arguments["char_offset"]?.jsonPrimitive?.intOrNull
-        val charOffset = (requestedOffset ?: if (chapterIndex == book.lastReadChapterIndex) {
-            book.lastReadCharOffset
+        val charOffset = (requestedOffset ?: if (!readingScope.isWholeBook && chapterIndex == readingScope.maxChapterIndex) {
+            readingScope.maxCharOffset
         } else {
             0
         }).coerceAtLeast(0)
-        if (chapterIndex == book.lastReadChapterIndex && charOffset > book.lastReadCharOffset) {
-            return "插图锚点超出当前已读位置（最大字符偏移 ${book.lastReadCharOffset}）。"
+        if (!readingScope.isWholeBook && chapterIndex == readingScope.maxChapterIndex && charOffset > readingScope.maxCharOffset) {
+            return "插图锚点超出当前阅读水位（最大字符偏移 ${readingScope.maxCharOffset}）。"
         }
         val illustration = mediaService.generateIllustration(
             bookId = bookId,
@@ -737,7 +756,8 @@ private class WriteNoteTool(
     private val personaId: Long,
     private val conversationId: Long?,
     private val getBook: suspend () -> BookEntity?,
-    private val notes: NoteRepository
+    private val notes: NoteRepository,
+    private val readingScope: ReadingScope
 ) : AgentTool {
     override val displayName: String = "写读书笔记"
 
@@ -782,10 +802,12 @@ private class WriteNoteTool(
                     contentMarkdown = content.take(MAX_NOTE_CHARS),
                     kind = kind,
                     sourceConversationId = conversationId,
-                    relatedChapterIndex = book.lastReadChapterIndex,
-                    relatedCharOffset = book.lastReadCharOffset
+                    relatedChapterIndex = if (readingScope.isWholeBook) null else readingScope.maxChapterIndex,
+                    relatedCharOffset = if (readingScope.isWholeBook) null else readingScope.maxCharOffset,
+                    sourceScopeChapterIndex = readingScope.maxChapterIndex,
+                    sourceScopeCharOffset = readingScope.maxCharOffset
                 )
-                "已保存到《${book.title}》的笔记（编号 $noteId），范围截至第 ${book.lastReadChapterIndex + 1} 章。"
+                "已保存到《${book.title}》的笔记（编号 $noteId），来源范围：${scopeLabel(readingScope)}。"
             }
             is NoteWriteTarget.Update -> {
                 val before = target.note.contentMarkdown.length
@@ -794,10 +816,12 @@ private class WriteNoteTool(
                     noteId = target.note.id,
                     title = title.take(120),
                     contentMarkdown = updatedContent,
-                    relatedChapterIndex = book.lastReadChapterIndex,
-                    relatedCharOffset = book.lastReadCharOffset
+                    relatedChapterIndex = if (readingScope.isWholeBook) null else readingScope.maxChapterIndex,
+                    relatedCharOffset = if (readingScope.isWholeBook) null else readingScope.maxCharOffset,
+                    sourceScopeChapterIndex = readingScope.maxChapterIndex,
+                    sourceScopeCharOffset = readingScope.maxCharOffset
                 )
-                "已更新第 ${target.note.id} 条读书笔记（$before → ${updatedContent.length} 字），范围截至第 ${book.lastReadChapterIndex + 1} 章。"
+                "已更新第 ${target.note.id} 条读书笔记（$before → ${updatedContent.length} 字），来源范围：${scopeLabel(readingScope)}。"
             }
             is NoteWriteTarget.Reject -> target.reason
         }
@@ -809,7 +833,8 @@ private class SavePlotSummaryTool(
     private val personaId: Long,
     private val conversationId: Long?,
     private val getBook: suspend () -> BookEntity?,
-    private val notes: NoteRepository
+    private val notes: NoteRepository,
+    private val readingScope: ReadingScope
 ) : AgentTool {
     override val displayName: String = "保存剧情梗概"
 
@@ -823,7 +848,7 @@ private class SavePlotSummaryTool(
         val content = arguments["content_md"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
         if (content.isEmpty()) return "缺少梗概正文 content_md"
         val book = getBook() ?: return "未找到当前书籍"
-        val currentChapter = book.lastReadChapterIndex + 1
+        val currentChapter = readingScope.clampLastChapter(book.totalChapters) + 1
         val fromChapter = arguments["from_chapter"]?.jsonPrimitive?.intOrNull ?: 1
         val toChapter = arguments["to_chapter"]?.jsonPrimitive?.intOrNull ?: currentChapter
         if (fromChapter < 1 || toChapter < fromChapter) {
@@ -865,7 +890,9 @@ private class SavePlotSummaryTool(
                     kind = NoteRepository.KIND_PLOT_SUMMARY,
                     sourceConversationId = conversationId,
                     relatedChapterIndex = toChapter - 1,
-                    relatedCharOffset = if (toChapter == currentChapter) book.lastReadCharOffset else null
+                    relatedCharOffset = if (!readingScope.isWholeBook && toChapter == currentChapter) readingScope.maxCharOffset else null,
+                    sourceScopeChapterIndex = readingScope.maxChapterIndex,
+                    sourceScopeCharOffset = readingScope.maxCharOffset
                 )
                 "第 $fromChapter-$toChapter 章剧情梗概已保存（编号 $noteId），可在书籍详情的「剧情梗概与笔记」中回顾。"
             }
@@ -877,7 +904,9 @@ private class SavePlotSummaryTool(
                     title = title.take(120),
                     contentMarkdown = content.take(MAX_NOTE_CHARS),
                     relatedChapterIndex = toChapter - 1,
-                    relatedCharOffset = if (toChapter == currentChapter) book.lastReadCharOffset else null
+                    relatedCharOffset = if (!readingScope.isWholeBook && toChapter == currentChapter) readingScope.maxCharOffset else null,
+                    sourceScopeChapterIndex = readingScope.maxChapterIndex,
+                    sourceScopeCharOffset = readingScope.maxCharOffset
                 )
                 val oldRange = previousTo?.let { "原覆盖至第 $it 章 → " }.orEmpty()
                 "已更新第 ${target.note.id} 条剧情梗概（${oldRange}现第 $fromChapter-$toChapter 章，$before → ${content.take(MAX_NOTE_CHARS).length} 字）。"
@@ -886,6 +915,9 @@ private class SavePlotSummaryTool(
         }
     }
 }
+
+private fun scopeLabel(scope: ReadingScope): String =
+    if (scope.isWholeBook) "全书" else "第 ${scope.maxChapterIndex + 1} 章字符 ${scope.maxCharOffset}"
 
 private fun noteParameters(titleDescription: String, contentDescription: String): JsonObject =
     buildJsonObject {
@@ -964,21 +996,21 @@ internal class SearchBookTool(
     private val chapterTitle: suspend (Int) -> String?,
     private val embedQuery: suspend (String) -> FloatArray,
     private val store: () -> BoxStore,
+    private val readingScope: ReadingScope,
     private val loadChapter: suspend (Int) -> ChapterDocument? = { null },
     private val loadChaptersThrough: suspend (Int) -> List<ChapterDocument> = { emptyList() },
     private val requestIndex: () -> Unit = {},
-    private val indexingEnabled: suspend () -> Boolean = { true },
-    private val spoilerProtectionEnabled: Boolean = true
+    private val indexingEnabled: suspend () -> Boolean = { true }
 ) : AgentTool {
 
     override val displayName: String = "检索书中原文"
 
     override val spec: ToolSpec = ToolSpec(
         name = "search_book",
-        description = if (spoilerProtectionEnabled) {
-            "在用户已读范围内搜索人物、场景或情节。优先语义向量检索，向量服务不可用时会自动本地关键词检索；若用户指定明确章节范围并要求概括，应改用 read_book_section。"
+        description = if (readingScope.isWholeBook) {
+            "在整本书中搜索人物、场景或情节。使用向量与 BM25 混合检索，并补充相邻片段；若用户指定明确章节范围并要求概括，应改用 read_book_section。"
         } else {
-            "在整本书中搜索人物、场景或情节。优先语义向量检索，向量服务不可用时会自动本地关键词检索；若用户指定明确章节范围并要求概括，应改用 read_book_section。"
+            "在用户阅读进度水位内搜索人物、场景或情节。使用向量与 BM25 混合检索，并补充相邻片段；若用户指定明确章节范围并要求概括，应改用 read_book_section。"
         },
         parameters = buildJsonObject {
             put("type", "object")
@@ -1001,85 +1033,97 @@ internal class SearchBookTool(
         if (query.isEmpty()) return "缺少检索词 query"
         val topK = (arguments["top_k"]?.jsonPrimitive?.intOrNull ?: DEFAULT_TOP_K).coerceIn(1, 8)
         val book = getBook() ?: return "未找到当前书籍"
-        val maxChapterIndex = if (spoilerProtectionEnabled) {
-            book.lastReadChapterIndex
-        } else {
-            (book.totalChapters - 1).coerceAtLeast(0)
-        }
-        var vectorFailure: String? = null
-        val hasIndex = runCatching {
-            VectorQueries.chaptersWithChunks(store(), bookId).isNotEmpty()
-        }.getOrDefault(false)
-        // 升级兼容：旧版本已生成的单书索引继续可用，并在 UI 中视为已启用。
+        val maxChapterIndex = readingScope.clampLastChapter(book.totalChapters)
+        val hasIndex = runCatching { VectorQueries.chaptersWithChunks(store(), bookId).isNotEmpty() }
+            .getOrDefault(false)
         val allowVectorIndex = hasIndex || indexingEnabled()
         if (allowVectorIndex && !hasIndex) requestIndex()
 
-        val vectorResults = if (!allowVectorIndex || !hasIndex) {
-            emptyList()
-        } else try {
-            val vector = embedQuery(query)
-            val candidates = VectorQueries.searchChunks(
-                store(),
-                bookId,
-                vector,
-                topK * VECTOR_CANDIDATE_MULTIPLIER,
-                maxChapterIndex
-            ).map { it.get() }
-            val currentPrefix = if (
-                spoilerProtectionEnabled && candidates.any { it.chapterIndex == maxChapterIndex }
-            ) {
-                loadChapter(maxChapterIndex)?.body
-                    ?.take(book.lastReadCharOffset.coerceAtLeast(0))
-            } else {
-                null
+        suspend fun persistedCandidates(): List<RetrievalCandidate> =
+            VectorQueries.listChunks(store(), bookId, maxChapterIndex).map { chunk ->
+                chunk.toCandidate(resolveLegacyOffsets(chunk, readingScope, loadChapter))
             }
-            candidates.asSequence()
-                .filter { chunk ->
-                    !spoilerProtectionEnabled || chunk.chapterIndex < maxChapterIndex ||
-                        (chunk.chapterIndex == maxChapterIndex &&
-                            currentPrefix != null &&
-                            chunk.text?.takeIf(String::isNotBlank)?.let(currentPrefix::contains) == true)
-                }
-                .map { TextSearchHit(it.chapterIndex, it.text.orEmpty()) }
-                .filter { it.text.isNotBlank() }
-                .take(topK)
-                .toList()
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (error: Exception) {
-            vectorFailure = error.message ?: "embedding 失败"
-            emptyList()
-        }
 
-        val combined = vectorResults.toMutableList()
-        if (combined.size < topK) {
-            val documents = loadChaptersThrough(maxChapterIndex).map { document ->
-                if (spoilerProtectionEnabled && document.chapterIndex == maxChapterIndex) {
-                    document.copy(
-                        body = document.body.take(book.lastReadCharOffset.coerceAtLeast(0))
+        val pipeline = RetrievalPipeline(
+            vectorRecall = RetrievalRecall { request ->
+                if (!allowVectorIndex || !hasIndex) return@RetrievalRecall emptyList()
+                val vector = embedQuery(request.query)
+                VectorQueries.searchChunks(
+                    store(),
+                    bookId,
+                    vector,
+                    request.recallDepth,
+                    maxChapterIndex
+                ).map { hit ->
+                    val chunk = hit.get()
+                    chunk.toCandidate(resolveLegacyOffsets(chunk, readingScope, loadChapter)).copy(
+                        vectorDistance = hit.score.toDouble()
                     )
-                } else {
-                    document
                 }
+            },
+            lexicalRecall = RetrievalRecall { request ->
+                val candidates = if (hasIndex) {
+                    persistedCandidates()
+                } else {
+                    loadChaptersThrough(maxChapterIndex).flatMap { document ->
+                        ChapterChunker.chunkWithOffsets(document.body).mapIndexed { index, chunk ->
+                            RetrievalCandidate(
+                                bookId = bookId,
+                                chapterIndex = document.chapterIndex,
+                                chunkIndex = index,
+                                text = chunk.text,
+                                startCharOffset = chunk.startCharOffset,
+                                endCharOffset = chunk.endCharOffset
+                            )
+                        }
+                    }
+                }
+                Bm25LexicalRecall.rank(candidates, request.query, request.recallDepth)
+            },
+            expander = NeighborExpander { hits, radius, scope ->
+                if (radius == 0 || hits.isEmpty()) return@NeighborExpander hits
+                val corpus = if (hasIndex) persistedCandidates() else {
+                    loadChaptersThrough(maxChapterIndex).flatMap { document ->
+                        ChapterChunker.chunkWithOffsets(document.body).mapIndexed { index, chunk ->
+                            RetrievalCandidate(
+                                bookId = bookId,
+                                chapterIndex = document.chapterIndex,
+                                chunkIndex = index,
+                                text = chunk.text,
+                                startCharOffset = chunk.startCharOffset,
+                                endCharOffset = chunk.endCharOffset
+                            )
+                        }
+                    }
+                }
+                expandNeighborWindows(hits, corpus, radius, scope)
             }
-            rankLexicalChapters(documents, query, topK * 2)
-                .filterNot { local -> combined.any { it.chapterIndex == local.chapterIndex && it.text == local.text } }
-                .take(topK - combined.size)
-                .forEach(combined::add)
-        }
+        )
+        val result = pipeline.retrieve(
+            RetrievalRequest(
+                bookId = bookId,
+                query = query,
+                scope = readingScope,
+                topK = topK,
+                recallDepth = maxOf(topK * VECTOR_CANDIDATE_MULTIPLIER, DEFAULT_RECALL_DEPTH),
+                maxVectorDistance = DEFAULT_MAX_VECTOR_DISTANCE,
+                neighborRadius = DEFAULT_NEIGHBOR_RADIUS
+            )
+        )
+        val combined = result.hits
 
         if (combined.isEmpty()) {
             if (!allowVectorIndex) {
-                return "本书未启用 AI 索引；已使用本地关键词检索，但${searchRangeLabel(maxChapterIndex)}没有找到与「$query」相关的原文。"
+                return "本书未启用 AI 索引；已使用本地 BM25 关键词检索，但${searchRangeLabel(maxChapterIndex)}没有找到与「$query」相关的原文。"
             }
-            if (vectorFailure != null) {
-                return "向量检索不可用：$vectorFailure；已自动尝试本地关键词检索，但${searchRangeLabel(maxChapterIndex)}没有找到与「$query」相关的原文。"
+            if (result.vectorFailure != null) {
+                return "向量检索不可用：${result.vectorFailure.message ?: "embedding 失败"}；已自动尝试本地 BM25 关键词检索，但${searchRangeLabel(maxChapterIndex)}没有找到与「$query」相关的原文。"
             }
             val indexedInRange = runCatching {
                 VectorQueries.chaptersWithChunks(store(), bookId).any { it <= maxChapterIndex }
             }.getOrDefault(false)
             return if (!indexedInRange) {
-                "本书向量索引正在后台建立；已自动尝试本地关键词检索，但没有找到与「$query」相关的原文。"
+                "本书向量索引正在后台建立；已自动尝试本地 BM25 关键词检索，但没有找到与「$query」相关的原文。"
             } else {
                 "${searchRangeLabel(maxChapterIndex)}没有找到与「$query」相关的原文。"
             }
@@ -1087,19 +1131,20 @@ internal class SearchBookTool(
 
         return buildString {
             append(
-                if (spoilerProtectionEnabled) {
-                    "以下片段全部来自用户实际已读范围（第 1 至 ${maxChapterIndex + 1} 章）：\n"
-                } else {
+                if (readingScope.isWholeBook) {
                     "以下片段来自整本书（第 1 至 ${maxChapterIndex + 1} 章）：\n"
+                } else {
+                    "以下片段全部来自用户阅读进度水位（第 1 至 ${maxChapterIndex + 1} 章）：\n"
                 }
             )
             if (!allowVectorIndex) {
-                append("（本书未启用 AI 索引，本次为本地关键词检索结果。）\n")
-            } else if (vectorFailure != null) {
-                append("（向量服务当前不可用，已自动切换到本地关键词检索。）\n")
+                append("（本书未启用 AI 索引，本次为本地 BM25 关键词检索结果。）\n")
+            } else if (result.vectorFailure != null) {
+                append("（向量服务当前不可用，已自动切换到本地 BM25 关键词检索。）\n")
             } else if (!hasIndex) {
-                append("（本书向量索引正在后台建立，本次为本地关键词检索结果。）\n")
+                append("（本书向量索引正在后台建立，本次为本地 BM25 关键词检索结果。）\n")
             }
+            if (result.rerankFailure != null) append("（重排暂不可用，已按融合排序返回。）\n")
             combined.forEach { hit ->
                 append("\n【第 ").append(hit.chapterIndex + 1).append(" 章")
                 chapterTitle(hit.chapterIndex)
@@ -1110,82 +1155,112 @@ internal class SearchBookTool(
         }
     }
 
-    private fun searchRangeLabel(maxChapterIndex: Int): String = if (spoilerProtectionEnabled) {
-        "已读范围内"
-    } else {
+    private fun searchRangeLabel(maxChapterIndex: Int): String = if (readingScope.isWholeBook) {
         "全书（第 1 至 ${maxChapterIndex + 1} 章）中"
+    } else {
+        "阅读进度水位内"
     }
 
     private companion object {
         const val DEFAULT_TOP_K = 5
         const val VECTOR_CANDIDATE_MULTIPLIER = 8
+        const val DEFAULT_RECALL_DEPTH = 60
+        const val DEFAULT_NEIGHBOR_RADIUS = 1
+        const val DEFAULT_MAX_VECTOR_DISTANCE = 0.80
+    }
+}
+
+private suspend fun resolveLegacyOffsets(
+    chunk: com.mozhi.reader.core.vector.BookChunk,
+    scope: ReadingScope,
+    loadChapter: suspend (Int) -> ChapterDocument?
+): Pair<Int, Int> {
+    if (chunk.endCharOffset > chunk.startCharOffset) return chunk.startCharOffset to chunk.endCharOffset
+    if (scope.isWholeBook || chunk.chapterIndex < scope.maxChapterIndex) return 0 to Int.MAX_VALUE
+    val text = chunk.text?.takeIf(String::isNotBlank) ?: return -1 to -1
+    val body = loadChapter(chunk.chapterIndex)?.body ?: return -1 to -1
+    val rebuilt = ChapterChunker.chunkWithOffsets(body).getOrNull(chunk.chunkIndex)
+        ?: return -1 to -1
+    return if (rebuilt.text == text) {
+        rebuilt.startCharOffset to rebuilt.endCharOffset
+    } else {
+        -1 to -1
+    }
+}
+
+private fun com.mozhi.reader.core.vector.BookChunk.toCandidate(offsets: Pair<Int, Int>) = RetrievalCandidate(
+    bookId = bookId,
+    chapterIndex = chapterIndex,
+    chunkIndex = chunkIndex,
+    text = text.orEmpty(),
+    startCharOffset = offsets.first,
+    endCharOffset = offsets.second
+)
+
+internal fun expandNeighborWindows(
+    hits: List<RetrievalCandidate>,
+    corpus: List<RetrievalCandidate>,
+    radius: Int,
+    scope: ReadingScope
+): List<RetrievalCandidate> {
+    if (hits.isEmpty()) return emptyList()
+    val byChapter = corpus.filter { scope.allowsChunk(it.chapterIndex, it.startCharOffset, it.endCharOffset) }
+        .groupBy(RetrievalCandidate::chapterIndex)
+    return hits.groupBy(RetrievalCandidate::chapterIndex).flatMap { (chapterIndex, chapterHits) ->
+        val intervals = chapterHits.map { hit ->
+            (hit.chunkIndex - radius).coerceAtLeast(0)..(hit.chunkIndex + radius)
+        }.sortedBy(IntRange::first)
+        val merged = mutableListOf<IntRange>()
+        intervals.forEach { range ->
+            val previous = merged.lastOrNull()
+            if (previous != null && range.first <= previous.last + 1) {
+                merged[merged.lastIndex] = previous.first..maxOf(previous.last, range.last)
+            } else {
+                merged += range
+            }
+        }
+        val chapterChunks = byChapter[chapterIndex].orEmpty().associateBy(RetrievalCandidate::chunkIndex)
+        merged.mapNotNull { range ->
+            val chunks = range.mapNotNull(chapterChunks::get).sortedBy(RetrievalCandidate::chunkIndex)
+            if (chunks.isEmpty()) null else RetrievalCandidate(
+                bookId = chunks.first().bookId,
+                chapterIndex = chapterIndex,
+                chunkIndex = chunks.first().chunkIndex,
+                text = chunks.joinToString("\n") { it.text },
+                startCharOffset = chunks.first().startCharOffset,
+                endCharOffset = chunks.last().endCharOffset,
+                vectorDistance = chapterHits.mapNotNull(RetrievalCandidate::vectorDistance).minOrNull(),
+                lexicalScore = chapterHits.mapNotNull(RetrievalCandidate::lexicalScore).maxOrNull()
+            )
+        }
     }
 }
 
 internal data class TextSearchHit(val chapterIndex: Int, val text: String, val score: Int = 0)
 
-/** 纯本地降级排序，不需要 Key/网络/索引。 */
+/** Pure local fallback for books whose persisted chunk index does not exist yet. */
 internal fun rankLexicalChapters(
     chapters: List<ChapterDocument>,
     query: String,
     topK: Int
 ): List<TextSearchHit> {
-    val terms = lexicalTerms(query)
-    if (terms.isEmpty()) return emptyList()
-    val compactQuery = query.lowercase().filter(Char::isLetterOrDigit)
-    return chapters.asSequence()
-        .flatMap { chapter ->
-            ChapterChunker.chunk(chapter.body).asSequence().map { chunk -> chapter.chapterIndex to chunk }
+    val candidates = chapters.flatMap { chapter ->
+        ChapterChunker.chunkWithOffsets(chapter.body).mapIndexed { index, chunk ->
+            RetrievalCandidate(
+                bookId = 0,
+                chapterIndex = chapter.chapterIndex,
+                chunkIndex = index,
+                text = chunk.text,
+                startCharOffset = chunk.startCharOffset,
+                endCharOffset = chunk.endCharOffset
+            )
         }
-        .mapNotNull { (chapterIndex, chunk) ->
-            val lower = chunk.lowercase()
-            val compact = lower.filter(Char::isLetterOrDigit)
-            var score = if (compactQuery.length >= 2 && compact.contains(compactQuery)) 500 else 0
-            terms.forEach { term ->
-                var from = 0
-                while (true) {
-                    val found = lower.indexOf(term, from)
-                    if (found < 0) break
-                    score += term.length * term.length
-                    from = found + term.length.coerceAtLeast(1)
-                }
-            }
-            if (score > 0) TextSearchHit(chapterIndex, chunk, score) else null
-        }
-        .sortedWith(compareByDescending<TextSearchHit>(TextSearchHit::score).thenBy(TextSearchHit::chapterIndex))
-        .distinctBy { it.chapterIndex to it.text }
-        .take(topK.coerceAtLeast(1))
-        .toList()
-}
-
-private fun lexicalTerms(query: String): List<String> {
-    val groups = buildList {
-        val current = StringBuilder()
-        query.lowercase().forEach { char ->
-            if (char.isLetterOrDigit()) {
-                current.append(char)
-            } else if (current.isNotEmpty()) {
-                add(current.toString())
-                current.clear()
-            }
-        }
-        if (current.isNotEmpty()) add(current.toString())
     }
-    return buildSet {
-        groups.forEach { group ->
-            if (group.length >= 2) add(group)
-            if (group.length > 4) {
-                for (size in 2..minOf(4, group.length)) {
-                    for (start in 0..group.length - size) add(group.substring(start, start + size))
-                }
-            }
-        }
-    }.filterNot { it in LEXICAL_STOP_TERMS }.sortedByDescending(String::length)
+    return Bm25LexicalRecall.rank(candidates, query, topK).map { hit ->
+        TextSearchHit(hit.chapterIndex, hit.text, ((hit.lexicalScore ?: 0.0) * 1000).toInt())
+    }
 }
 
-private val LEXICAL_STOP_TERMS = setOf(
-    "什么", "为什么", "怎么", "如何", "请问", "一下", "关于", "内容", "情节", "概括", "总结"
-)
 
 /**
  * 角色长期记忆检索。记忆按 personaId 隔离，再按两条边界收窄：
@@ -1196,7 +1271,9 @@ internal class RecallMemoryTool(
     private val embedQuery: suspend (String) -> FloatArray,
     private val store: () -> BoxStore,
     private val bookId: Long? = null,
-    private val maskId: Long = 0L
+    private val currentBookId: Long? = bookId,
+    private val maskId: Long = 0L,
+    private val readingScope: ReadingScope
 ) : AgentTool {
 
     override val displayName: String = "回忆过往交流"
@@ -1226,7 +1303,10 @@ internal class RecallMemoryTool(
         } catch (error: Exception) {
             return "记忆检索不可用：${error.message ?: "embedding 失败"}"
         }
-        val hits = VectorQueries.searchMemories(store(), personaId, vector, TOP_K, bookId, maskId)
+        val hits = VectorQueries.searchMemories(
+            store(), personaId, vector, TOP_K, bookId, maskId,
+            currentBookId, readingScope.maxChapterIndex, readingScope.maxCharOffset
+        )
         if (hits.isEmpty()) return "还没有与此相关的长期记忆。"
         return "相关记忆（按相关度排序）：\n" +
             hits.joinToString("\n") { "- ${it.get().summary}" }

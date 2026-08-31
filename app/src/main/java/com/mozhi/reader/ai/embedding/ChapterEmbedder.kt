@@ -56,7 +56,7 @@ class ChapterEmbedder @Inject constructor(
         return try {
             pending.forEach { chapter ->
                 currentCoroutineContext().ensureActive()
-                val pieces = ChapterChunker.chunk(readText(chapter))
+                val pieces = ChapterChunker.chunkWithOffsets(readText(chapter))
                 if (pieces.isEmpty()) return@forEach
                 accumulators[chapter.chapterIndex] = ChapterAccumulator(pieces.size)
                 pieces.forEachIndexed { index, piece ->
@@ -93,7 +93,7 @@ class ChapterEmbedder @Inject constructor(
         embed: suspend (List<String>) -> List<FloatArray>
     ): Int {
         val batch = List(minOf(BATCH_SIZE, buffer.size)) { buffer.removeFirst() }
-        val vectors = embed(batch.map { embedInput(it.chapter.title, it.text) })
+        val vectors = embed(batch.map { embedInput(it.chapter.title, it.chunk.text) })
         check(vectors.size == batch.size) {
             "embedding 返回 ${vectors.size} 条，与输入 ${batch.size} 条不一致"
         }
@@ -104,7 +104,7 @@ class ChapterEmbedder @Inject constructor(
             val accumulator = accumulators.getValue(chapterIndex)
             accumulator.fill(
                 index = pendingChunk.chunkIndex,
-                text = pendingChunk.text,
+                chunk = pendingChunk.chunk,
                 vector = Embeddings.conformToIndex(vectors[i])
             )
             if (accumulator.isComplete) {
@@ -122,30 +122,33 @@ class ChapterEmbedder @Inject constructor(
     private class PendingChunk(
         val chapter: ChapterEntity,
         val chunkIndex: Int,
-        val text: String
+        val chunk: com.mozhi.reader.core.vector.ChapterChunk
     )
 
     private class ChapterAccumulator(size: Int) {
-        private val texts = arrayOfNulls<String>(size)
+        private val chunks = arrayOfNulls<com.mozhi.reader.core.vector.ChapterChunk>(size)
         private val vectors = arrayOfNulls<FloatArray>(size)
         private var filled = 0
 
-        val isComplete: Boolean get() = filled == texts.size
+        val isComplete: Boolean get() = filled == chunks.size
 
-        fun fill(index: Int, text: String, vector: FloatArray) {
-            check(texts[index] == null) { "切片 $index 重复回填" }
-            texts[index] = text
+        fun fill(index: Int, chunk: com.mozhi.reader.core.vector.ChapterChunk, vector: FloatArray) {
+            check(chunks[index] == null) { "切片 $index 重复回填" }
+            chunks[index] = chunk
             vectors[index] = vector
             filled++
         }
 
         fun toEntities(bookId: Long, chapterIndex: Int): List<BookChunk> =
-            texts.indices.map { i ->
+            chunks.indices.map { i ->
+                val chunk = checkNotNull(chunks[i])
                 BookChunk().also {
                     it.bookId = bookId
                     it.chapterIndex = chapterIndex
                     it.chunkIndex = i
-                    it.text = checkNotNull(texts[i])
+                    it.startCharOffset = chunk.startCharOffset
+                    it.endCharOffset = chunk.endCharOffset
+                    it.text = chunk.text
                     it.embedding = checkNotNull(vectors[i])
                 }
             }

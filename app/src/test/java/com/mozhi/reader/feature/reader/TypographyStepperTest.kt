@@ -80,4 +80,56 @@ class TypographyStepperTest {
             value += step
         }
     }
+
+    // ---- 屏幕亮度 ----
+
+    @Test
+    fun `follow system parks the thumb mid track instead of at zero`() {
+        // -1 直接当 0 会让拖柄贴在最左端，看起来像「亮度被调到了 0」。
+        assertEquals(FOLLOW_SYSTEM_ANCHOR, readerBrightnessFraction(-1f), 1e-4f)
+    }
+
+    @Test
+    fun `explicit brightness maps straight to the track`() {
+        assertEquals(0f, readerBrightnessFraction(0f), 1e-4f)
+        assertEquals(0.4f, readerBrightnessFraction(0.4f), 1e-4f)
+        assertEquals(1f, readerBrightnessFraction(1f), 1e-4f)
+    }
+
+    @Test
+    fun `out of range brightness is clamped rather than trusted`() {
+        assertEquals(1f, readerBrightnessFraction(3f), 1e-4f)
+    }
+
+    @Test
+    fun `dragging snaps brightness to five percent steps`() {
+        assertEquals(0.5f, readerBrightnessValueAt(0.5f), 1e-4f)
+        assertEquals(0.35f, readerBrightnessValueAt(0.34f), 1e-4f)
+        assertEquals(1f, readerBrightnessValueAt(2f), 1e-4f)
+    }
+
+    @Test
+    fun `dragging to the far left stops at a still-readable minimum`() {
+        // 0 亮度在不少机型上接近全黑，而排版面板本身就画在这块屏幕上——
+        // 真调到 0 用户就看不见滑条、没法拖回来了。
+        assertEquals(MIN_BRIGHTNESS, readerBrightnessValueAt(0f), 1e-4f)
+        assertEquals(MIN_BRIGHTNESS, readerBrightnessValueAt(-1f), 1e-4f)
+    }
+
+    @Test
+    fun `dragging always produces an explicit value never the follow-system sentinel`() {
+        // 任何拖动都必须落在下限..1；返回 -1 会让界面莫名其妙跳回「自动」。
+        listOf(-5f, 0f, 0.01f, 0.5f, 1f, 9f).forEach { fraction ->
+            val value = readerBrightnessValueAt(fraction)
+            assert(value in MIN_BRIGHTNESS..1f) { "brightness $value out of range for $fraction" }
+        }
+    }
+
+    @Test
+    fun `label says auto for follow system and a percentage otherwise`() {
+        assertEquals("自动", readerBrightnessLabel(-1f))
+        assertEquals("0%", readerBrightnessLabel(0f))
+        assertEquals("45%", readerBrightnessLabel(0.45f))
+        assertEquals("100%", readerBrightnessLabel(1f))
+    }
 }

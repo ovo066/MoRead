@@ -32,7 +32,9 @@ class NoteRepository @Inject constructor(
         kind: String = KIND_NOTE,
         sourceConversationId: Long? = null,
         relatedChapterIndex: Int? = null,
-        relatedCharOffset: Int? = null
+        relatedCharOffset: Int? = null,
+        sourceScopeChapterIndex: Int? = null,
+        sourceScopeCharOffset: Int? = null
     ): Long {
         require(title.isNotBlank() || contentMarkdown.isNotBlank()) { "笔记内容不能为空" }
         val now = System.currentTimeMillis()
@@ -46,6 +48,8 @@ class NoteRepository @Inject constructor(
                 sourceConversationId = sourceConversationId,
                 relatedChapterIndex = relatedChapterIndex,
                 relatedCharOffset = relatedCharOffset,
+                sourceScopeChapterIndex = sourceScopeChapterIndex,
+                sourceScopeCharOffset = sourceScopeCharOffset,
                 createdAt = now,
                 updatedAt = now
             )
@@ -67,7 +71,9 @@ class NoteRepository @Inject constructor(
         title: String,
         contentMarkdown: String,
         relatedChapterIndex: Int?,
-        relatedCharOffset: Int?
+        relatedCharOffset: Int?,
+        sourceScopeChapterIndex: Int? = null,
+        sourceScopeCharOffset: Int? = null
     ) {
         require(title.isNotBlank() || contentMarkdown.isNotBlank()) { "笔记内容不能为空" }
         noteDao.updateContentAndPosition(
@@ -76,6 +82,8 @@ class NoteRepository @Inject constructor(
             contentMarkdown = contentMarkdown,
             relatedChapterIndex = relatedChapterIndex,
             relatedCharOffset = relatedCharOffset,
+            sourceScopeChapterIndex = sourceScopeChapterIndex,
+            sourceScopeCharOffset = sourceScopeCharOffset,
             updatedAt = System.currentTimeMillis()
         )
     }

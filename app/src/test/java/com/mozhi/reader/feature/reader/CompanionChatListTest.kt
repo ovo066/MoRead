@@ -407,4 +407,74 @@ class CompanionChatListTest {
         assertFalse(isChatListAtBottom(10, 9, 1000 + CHAT_BOTTOM_SLACK_PX + 1, 1000))
         assertFalse(isChatListAtBottom(10, 8, 1000, 1000))
     }
+
+    // ---- 条目间距：组内紧、组间松 ----
+
+    private fun bubble(
+        id: String,
+        fromUser: Boolean,
+        groupStart: Boolean
+    ) = ChatEntry.Bubble(
+        id = id,
+        part = CompanionBubblePart.Text("正文"),
+        fromUser = fromUser,
+        showAvatar = groupStart
+    )
+
+    @Test
+    fun `间距 - 首条不加上间距`() {
+        assertEquals(0, chatEntryTopSpacing(null, bubble("a", fromUser = false, groupStart = true)))
+    }
+
+    @Test
+    fun `间距 - 同一组内的后续气泡贴得更紧`() {
+        val head = bubble("a", fromUser = false, groupStart = true)
+        val tail = bubble("b", fromUser = false, groupStart = false)
+        assertEquals(SPACING_WITHIN_GROUP, chatEntryTopSpacing(head, tail))
+    }
+
+    @Test
+    fun `间距 - 换人说话时拉开`() {
+        val ai = bubble("a", fromUser = false, groupStart = true)
+        val user = bubble("b", fromUser = true, groupStart = true)
+        assertEquals(SPACING_BETWEEN_GROUPS, chatEntryTopSpacing(ai, user))
+    }
+
+    @Test
+    fun `间距 - 过程卡等异类条目一律按组间处理`() {
+        val process = ChatEntry.Process(id = "p", steps = emptyList(), reasoning = "想", isLive = false)
+        val ai = bubble("a", fromUser = false, groupStart = true)
+        assertEquals(SPACING_BETWEEN_GROUPS, chatEntryTopSpacing(process, ai))
+        assertEquals(SPACING_BETWEEN_GROUPS, chatEntryTopSpacing(ai, process))
+    }
+
+    // ---- 时间戳降噪 ----
+
+    @Test
+    fun `时间戳 - 第一枚总是显示`() {
+        assertTrue(shouldShowTimestamp(lastShown = null, candidate = 1_000L))
+    }
+
+    @Test
+    fun `时间戳 - 五分钟内不重复标注`() {
+        assertFalse(shouldShowTimestamp(lastShown = 0L, candidate = TIMESTAMP_GAP_MS - 1))
+        assertTrue(shouldShowTimestamp(lastShown = 0L, candidate = TIMESTAMP_GAP_MS))
+    }
+
+    @Test
+    fun `时间戳 - 连续来回的对话只在真的隔开时才盖时间`() {
+        val base = 1_700_000_000_000L
+        val timeline = listOf(
+            CompanionTimelineItem.Bubble(message(1, "user").copy(createdAt = base)),
+            CompanionTimelineItem.Bubble(message(2, "assistant").copy(createdAt = base + 30_000)),
+            CompanionTimelineItem.Bubble(
+                message(3, "user").copy(createdAt = base + TIMESTAMP_GAP_MS + 30_000)
+            )
+        )
+        val stamps = entries(timeline = timeline)
+            .filterIsInstance<ChatEntry.Bubble>()
+            .mapNotNull { it.timestamp }
+        // 第一条与隔了五分钟之后的那条各一枚；中间那条 30 秒后的回复不再重复盖章。
+        assertEquals(listOf(base, base + TIMESTAMP_GAP_MS + 30_000), stamps)
+    }
 }

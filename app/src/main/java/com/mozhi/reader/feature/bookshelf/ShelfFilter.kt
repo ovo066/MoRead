@@ -19,6 +19,9 @@ data class ShelfFilter(
         get() = readState != null || groupId != null || ungroupedOnly || tagIds.isNotEmpty()
 }
 
+internal fun ShelfFilter.withExistingGroups(groupIds: Set<Long>): ShelfFilter =
+    if (groupId != null && groupId !in groupIds) copy(groupId = null) else this
+
 fun filterShelfBooks(
     books: List<BookEntity>,
     refs: List<BookTagRefEntity>,

@@ -12,17 +12,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowBack
-import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.AutoAwesome
@@ -54,20 +49,13 @@ import androidx.compose.material.icons.outlined.RecordVoiceOver
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -81,18 +69,23 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mozhi.reader.BuildConfig
 import com.mozhi.reader.core.datastore.ShelfLayout
-import com.mozhi.reader.ui.components.FrostedSurface
+import com.mozhi.reader.ui.components.MoReadBlock
+import com.mozhi.reader.ui.components.MoReadRootPage
+import com.mozhi.reader.ui.components.MoReadRow
+import com.mozhi.reader.ui.components.MoReadRowAction
+import com.mozhi.reader.ui.components.MoReadRowDivider
+import com.mozhi.reader.ui.components.MoReadSecondaryPage
+import com.mozhi.reader.ui.components.MoReadSection
+import com.mozhi.reader.ui.components.MoReadSegmented
+import com.mozhi.reader.ui.components.MoReadSwitchRow
 import com.mozhi.reader.ui.components.NoteStyleColorPalette
 import com.mozhi.reader.ui.theme.AccentPreset
 import com.mozhi.reader.ui.theme.AppearanceSettings
-import com.mozhi.reader.ui.theme.MoReadTokens
 import com.mozhi.reader.ui.theme.ThemeMode
 import com.mozhi.reader.ui.theme.accentColor
 import com.mozhi.reader.ui.theme.isDarkTheme
@@ -113,75 +106,67 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    Box(Modifier.fillMaxSize().padding(contentPadding)) {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 20.dp, top = 18.dp, end = 20.dp, bottom = 124.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            item {
-                Text("设置", style = MaterialTheme.typography.headlineLarge)
+    MoReadRootPage(title = "设置", contentPadding = contentPadding) {
+        item {
+            MoReadSection(title = "阅读体验", icon = Icons.AutoMirrored.Outlined.MenuBook) {
+                MoReadRow(
+                    icon = Icons.Outlined.Palette,
+                    title = "阅读与外观",
+                    subtitle = "主题、字体、背景、书架与图像",
+                    onClick = onOpenReading
+                )
+                MoReadRowDivider()
+                MoReadRow(
+                    icon = Icons.Outlined.RecordVoiceOver,
+                    title = "朗读与音色",
+                    subtitle = "朗读引擎、参数、音色与缓存",
+                    onClick = onOpenTts
+                )
             }
-            item {
-                SettingsGroup(title = "阅读体验", icon = Icons.AutoMirrored.Outlined.MenuBook) {
-                    SettingsRow(
-                        icon = Icons.Outlined.Palette,
-                        title = "阅读与外观",
-                        subtitle = "主题、字体、背景、书架与图像",
-                        onClick = onOpenReading
-                    )
-                    SettingsRowDivider()
-                    SettingsRow(
-                        icon = Icons.Outlined.RecordVoiceOver,
-                        title = "朗读与音色",
-                        subtitle = "朗读引擎、参数、音色与缓存",
-                        onClick = onOpenTts
-                    )
-                }
+        }
+        item {
+            MoReadSection(title = "智能服务", icon = Icons.Outlined.AutoAwesome) {
+                MoReadRow(
+                    icon = Icons.Outlined.Hub,
+                    title = "AI 服务",
+                    subtitle = aiServiceSummary(state.providers.size, state.models.size),
+                    onClick = onOpenAiServices
+                )
+                MoReadRowDivider()
+                MoReadRow(
+                    icon = Icons.Outlined.Psychology,
+                    title = "伴读与联网",
+                    subtitle = "记忆、多气泡、主动行为与联网",
+                    onClick = onOpenAi
+                )
             }
-            item {
-                SettingsGroup(title = "智能服务", icon = Icons.Outlined.AutoAwesome) {
-                    SettingsRow(
-                        icon = Icons.Outlined.Hub,
-                        title = "AI 服务",
-                        subtitle = aiServiceSummary(state.providers.size, state.models.size),
-                        onClick = onOpenAiServices
-                    )
-                    SettingsRowDivider()
-                    SettingsRow(
-                        icon = Icons.Outlined.Psychology,
-                        title = "伴读与联网",
-                        subtitle = "记忆、多气泡、主动行为与联网",
-                        onClick = onOpenAi
-                    )
-                }
+        }
+        item {
+            MoReadSection(title = "数据管理", icon = Icons.Outlined.Storage) {
+                MoReadRow(
+                    icon = Icons.Outlined.CloudSync,
+                    title = "备份与恢复",
+                    subtitle = "本地、WebDAV 与自动备份",
+                    onClick = onOpenBackup
+                )
+                MoReadRowDivider()
+                MoReadRow(
+                    icon = Icons.Outlined.Storage,
+                    title = "存储与缓存",
+                    subtitle = state.bookStorageBytes?.let { "书籍已占用 ${formatBytes(it)}" }
+                        ?: "查看书籍与封面缓存",
+                    onClick = onOpenData
+                )
             }
-            item {
-                SettingsGroup(title = "数据管理", icon = Icons.Outlined.Storage) {
-                    SettingsRow(
-                        icon = Icons.Outlined.CloudSync,
-                        title = "备份与恢复",
-                        subtitle = "本地、WebDAV 与自动备份",
-                        onClick = onOpenBackup
-                    )
-                    SettingsRowDivider()
-                    SettingsRow(
-                        icon = Icons.Outlined.Storage,
-                        title = "存储与缓存",
-                        subtitle = state.bookStorageBytes?.let { "书籍已占用 ${formatBytes(it)}" } ?: "查看书籍与封面缓存",
-                        onClick = onOpenData
-                    )
-                }
-            }
-            item {
-                SettingsGroup(title = "应用", icon = Icons.Outlined.Info) {
-                    SettingsRow(
-                        icon = Icons.Outlined.Info,
-                        title = "关于与诊断",
-                        subtitle = "版本 ${BuildConfig.VERSION_NAME} · 更新、日志与许可",
-                        onClick = onOpenAbout
-                    )
-                }
+        }
+        item {
+            MoReadSection(title = "应用", icon = Icons.Outlined.Info) {
+                MoReadRow(
+                    icon = Icons.Outlined.Info,
+                    title = "关于与诊断",
+                    subtitle = "版本 ${BuildConfig.VERSION_NAME} · 更新、日志与许可",
+                    onClick = onOpenAbout
+                )
             }
         }
     }
@@ -199,34 +184,34 @@ fun AiAndCompanionSettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    SettingsSecondaryPage(title = "AI 与伴读", onBack = onBack) {
+    MoReadSecondaryPage(title = "AI 与伴读", onBack = onBack) {
         item {
-            SettingsGroup(title = "AI 服务", icon = Icons.Outlined.AutoAwesome) {
-                SettingsRow(Icons.Outlined.Hub, "AI 服务", subtitle = aiServiceSummary(state.providers.size, state.models.size), onClick = onOpenAiServices)
-                SettingsRowDivider()
-                SettingsRow(Icons.Outlined.Language, "网络搜索", subtitle = "搜索服务与兼容接口", onClick = onOpenWebSearch)
-                SettingsRowDivider()
-                SettingsRow(Icons.Outlined.Tune, "全局预设", subtitle = "按场景注入自定义提示词", onClick = onOpenGlobalPresets)
-                SettingsRowDivider()
-                SettingsRow(Icons.Outlined.PersonOutline, "用户面具", subtitle = "管理对话中的用户人设", onClick = onOpenUserMasks)
-                SettingsRowDivider()
-                SettingsSwitchRow(
+            MoReadSection(title = "AI 服务", icon = Icons.Outlined.AutoAwesome) {
+                MoReadRow(icon = Icons.Outlined.Hub, title = "AI 服务", subtitle = aiServiceSummary(state.providers.size, state.models.size), onClick = onOpenAiServices)
+                MoReadRowDivider()
+                MoReadRow(icon = Icons.Outlined.Language, title = "网络搜索", subtitle = "搜索服务与兼容接口", onClick = onOpenWebSearch)
+                MoReadRowDivider()
+                MoReadRow(icon = Icons.Outlined.Tune, title = "全局预设", subtitle = "按场景注入自定义提示词", onClick = onOpenGlobalPresets)
+                MoReadRowDivider()
+                MoReadRow(icon = Icons.Outlined.PersonOutline, title = "用户面具", subtitle = "管理对话中的用户人设", onClick = onOpenUserMasks)
+                MoReadRowDivider()
+                MoReadSwitchRow(
                     icon = Icons.Outlined.Bolt,
                     title = "AI 建议回复",
                     subtitle = "回复后生成快捷建议",
                     checked = state.suggestionRepliesEnabled,
                     onCheckedChange = viewModel::setSuggestionReplies
                 )
-                SettingsRowDivider()
-                SettingsSwitchRow(
+                MoReadRowDivider()
+                MoReadSwitchRow(
                     icon = Icons.Outlined.BorderColor,
                     title = "显示 AI 批注",
                     subtitle = "阅读页显示角色划线与评论标记",
                     checked = state.showAiAnnotations,
                     onCheckedChange = viewModel::setShowAiAnnotations
                 )
-                SettingsRowDivider()
-                SettingsSwitchRow(
+                MoReadRowDivider()
+                MoReadSwitchRow(
                     icon = Icons.Outlined.ChatBubbleOutline,
                     title = "多气泡回复",
                     subtitle = "让角色像真人一样分条发消息",
@@ -236,51 +221,46 @@ fun AiAndCompanionSettingsScreen(
             }
         }
         item {
-            SettingsGroup(title = "语音与图像", icon = Icons.Outlined.GraphicEq) {
-                SettingsRow(Icons.Outlined.RecordVoiceOver, "朗读引擎与音色", subtitle = "系统 TTS 或云端 AI 语音", onClick = onOpenTtsSettings)
-                SettingsRowDivider()
-                SettingsRow(Icons.Outlined.LibraryMusic, "音色库", subtitle = "管理听书与有声书音色", onClick = onOpenVoiceLibrary)
-                SettingsRowDivider()
-                SettingsRow(Icons.Outlined.Brush, "生图 API", subtitle = "管理插图与封面生成服务", onClick = onOpenImageGenSettings)
+            MoReadSection(title = "语音与图像", icon = Icons.Outlined.GraphicEq) {
+                MoReadRow(icon = Icons.Outlined.RecordVoiceOver, title = "朗读引擎与音色", subtitle = "系统 TTS 或云端 AI 语音", onClick = onOpenTtsSettings)
+                MoReadRowDivider()
+                MoReadRow(icon = Icons.Outlined.LibraryMusic, title = "音色库", subtitle = "管理听书与有声书音色", onClick = onOpenVoiceLibrary)
+                MoReadRowDivider()
+                MoReadRow(icon = Icons.Outlined.Brush, title = "生图 API", subtitle = "管理插图与封面生成服务", onClick = onOpenImageGenSettings)
             }
         }
         item {
             // 这一组专收「应用替用户掏钱」的行为：每一项都默认关，副标题写清代价。
-            SettingsGroup(title = "AI 主动行为", icon = Icons.Outlined.Bolt) {
-                SettingsBlock {
-                    Text(
-                        "以下都是伴读自己决定发起的调用，会消耗你的 API 额度。" +
-                            "默认全部关闭，需要哪项再开哪项。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                SettingsRowDivider()
-                SettingsSwitchRow(
+            MoReadSection(
+                title = "AI 主动行为",
+                icon = Icons.Outlined.Bolt,
+                footer = "以上都是伴读自己决定发起的调用，会消耗你的 API 额度。默认全部关闭，需要哪项再开哪项。"
+            ) {
+                MoReadSwitchRow(
                     icon = Icons.Outlined.GraphicEq,
                     title = "自主发语音",
                     subtitle = "角色可选择某句以语音发出，每段都会调用一次 TTS",
                     checked = state.autonomy.voiceRepliesEnabled,
                     onCheckedChange = viewModel::setVoiceReplies
                 )
-                SettingsRowDivider()
-                SettingsSwitchRow(
+                MoReadRowDivider()
+                MoReadSwitchRow(
                     icon = Icons.Outlined.Brush,
                     title = "自主生图",
                     subtitle = "角色可主动生成插图，单张成本高于一次对话",
                     checked = state.autonomy.imageRepliesEnabled,
                     onCheckedChange = viewModel::setImageReplies
                 )
-                SettingsRowDivider()
-                SettingsSwitchRow(
+                MoReadRowDivider()
+                MoReadSwitchRow(
                     icon = Icons.Outlined.BorderColor,
                     title = "随读段评",
                     subtitle = "读完一章后自动留下不超过 2 条批注（每日上限 10 条）",
                     checked = state.autonomy.proactiveAnnotationsEnabled,
                     onCheckedChange = viewModel::setProactiveAnnotations
                 )
-                SettingsRowDivider()
-                SettingsSwitchRow(
+                MoReadRowDivider()
+                MoReadSwitchRow(
                     icon = Icons.Outlined.RecordVoiceOver,
                     title = "段评附语音",
                     subtitle = "批注可带一段语音，每日上限 3 条",
@@ -288,8 +268,8 @@ fun AiAndCompanionSettingsScreen(
                     enabled = state.autonomy.proactiveAnnotationsEnabled,
                     onCheckedChange = viewModel::setProactiveAnnotationVoice
                 )
-                SettingsRowDivider()
-                SettingsSwitchRow(
+                MoReadRowDivider()
+                MoReadSwitchRow(
                     icon = Icons.Outlined.Image,
                     title = "段评附插图",
                     subtitle = "批注可带一张插图，每日上限 3 张",
@@ -300,16 +280,16 @@ fun AiAndCompanionSettingsScreen(
             }
         }
         item {
-            SettingsGroup(title = "伴读记忆", icon = Icons.Outlined.Psychology) {
-                SettingsSwitchRow(
+            MoReadSection(title = "伴读记忆", icon = Icons.Outlined.Psychology) {
+                MoReadSwitchRow(
                     icon = Icons.Outlined.Bookmarks,
                     title = "长期记忆",
                     subtitle = "让角色记住偏好与约定",
                     checked = state.memory.longTermEnabled,
                     onCheckedChange = viewModel::setLongTermMemory
                 )
-                SettingsRowDivider()
-                SettingsSwitchRow(
+                MoReadRowDivider()
+                MoReadSwitchRow(
                     icon = Icons.AutoMirrored.Outlined.MenuBook,
                     title = "跨书记忆",
                     subtitle = "允许回忆其他书籍中的交流",
@@ -317,8 +297,8 @@ fun AiAndCompanionSettingsScreen(
                     enabled = state.memory.longTermEnabled,
                     onCheckedChange = viewModel::setCrossBookMemory
                 )
-                SettingsRowDivider()
-                SettingsSwitchRow(
+                MoReadRowDivider()
+                MoReadSwitchRow(
                     icon = Icons.Outlined.Search,
                     title = "跨书对话检索",
                     subtitle = "主动检索其他书籍的相关记忆",
@@ -339,34 +319,30 @@ fun ReadingAppearanceSettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    SettingsSecondaryPage(title = "阅读与外观", onBack = onBack) {
+    MoReadSecondaryPage(title = "阅读与外观", onBack = onBack) {
         item {
-            SettingsGroup(title = "应用外观", icon = Icons.Outlined.Palette) {
+            MoReadSection(title = "应用外观", icon = Icons.Outlined.Palette) {
                 AppearanceCard(
                     appearance = state.appearance,
                     onThemeModeChange = viewModel::setThemeMode,
                     onAccentChange = viewModel::setAccentPreset,
                     onCustomAccent = viewModel::setCustomAccent
                 )
-                SettingsRowDivider()
-                SettingsRow(Icons.Outlined.FontDownload, "字体库", subtitle = "阅读字体与语法样式字体", onClick = onOpenFontLibrary)
-                SettingsRowDivider()
-                SettingsRow(Icons.Outlined.PhotoLibrary, "图片库", subtitle = "阅读背景与书籍封面素材", onClick = onOpenImageLibrary)
+                MoReadRowDivider()
+                MoReadRow(icon = Icons.Outlined.FontDownload, title = "字体库", subtitle = "阅读字体与语法样式字体", onClick = onOpenFontLibrary)
+                MoReadRowDivider()
+                MoReadRow(icon = Icons.Outlined.PhotoLibrary, title = "图片库", subtitle = "阅读背景与书籍封面素材", onClick = onOpenImageLibrary)
             }
         }
         item {
-            SettingsGroup(title = "书架", icon = Icons.Outlined.AutoStories) {
-                SettingsBlock(title = "默认布局") {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        ShelfLayout.entries.forEach { layout ->
-                            FilterChip(
-                                selected = state.shelfLayout == layout,
-                                onClick = { viewModel.setShelfLayout(layout) },
-                                shape = MoReadTokens.CapsuleShape,
-                                label = { Text(layout.label()) }
-                            )
-                        }
-                    }
+            MoReadSection(title = "书架", icon = Icons.Outlined.AutoStories) {
+                MoReadBlock(title = "默认布局") {
+                    MoReadSegmented(
+                        options = ShelfLayout.entries,
+                        selected = state.shelfLayout,
+                        onSelect = viewModel::setShelfLayout,
+                        label = { it.label() }
+                    )
                 }
             }
         }
@@ -387,29 +363,29 @@ fun DataSettingsScreen(
         }
     }
     Box(Modifier.fillMaxSize()) {
-        SettingsSecondaryPage(title = "存储与数据", onBack = onBack) {
+        MoReadSecondaryPage(title = "存储与数据", onBack = onBack) {
             item {
-                SettingsGroup(title = "本地存储", icon = Icons.Outlined.Storage) {
-                    SettingsRow(
+                MoReadSection(title = "本地存储", icon = Icons.Outlined.Storage) {
+                    MoReadRow(
                         icon = Icons.AutoMirrored.Outlined.MenuBook,
                         title = "书籍存储",
                         subtitle = state.bookStorageBytes?.let { "已占用 ${formatBytes(it)}" } ?: "统计中…"
                     )
-                    SettingsRowDivider()
-                    SettingsRow(
+                    MoReadRowDivider()
+                    MoReadRow(
                         icon = Icons.Outlined.Image,
                         title = "封面缓存",
                         subtitle = state.coverCacheBytes?.let { "已占用 ${formatBytes(it)}" } ?: "统计中…",
                         trailing = {
-                            OutlinedButton(
+                            MoReadRowAction(
+                                text = "清理",
                                 onClick = viewModel::clearCoverCache,
-                                shape = MoReadTokens.CapsuleShape,
                                 enabled = (state.coverCacheBytes ?: 0L) > 0L
-                            ) { Text("清理") }
+                            )
                         }
                     )
-                    SettingsRowDivider()
-                    SettingsRow(Icons.Outlined.CloudSync, "数据备份", subtitle = "本地、WebDAV 与自动备份", onClick = onOpenBackup)
+                    MoReadRowDivider()
+                    MoReadRow(icon = Icons.Outlined.CloudSync, title = "数据备份", subtitle = "本地、WebDAV 与自动备份", onClick = onOpenBackup)
                 }
             }
         }
@@ -423,60 +399,21 @@ fun AboutSettingsScreen(
     onBack: () -> Unit,
     onOpenApiLog: () -> Unit
 ) {
-    SettingsSecondaryPage(title = "关于与诊断", onBack = onBack) {
+    MoReadSecondaryPage(title = "关于与诊断", onBack = onBack) {
         item {
-            SettingsGroup(title = "应用", icon = Icons.Outlined.Info) {
+            MoReadSection(title = "应用", icon = Icons.Outlined.Info) {
                 AppUpdateCard()
-                SettingsRowDivider()
-                SettingsRow(
+                MoReadRowDivider()
+                MoReadRow(
                     icon = Icons.Outlined.BugReport,
                     title = "API 调用日志",
                     subtitle = "查看请求地址、状态与耗时",
                     onClick = onOpenApiLog
                 )
-                SettingsRowDivider()
+                MoReadRowDivider()
                 AboutCard()
             }
         }
-    }
-}
-
-@Composable
-private fun SettingsSecondaryPage(
-    title: String,
-    onBack: () -> Unit,
-    content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit
-) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .statusBarsPadding()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回")
-            }
-            Text(
-                title,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier.padding(start = 4.dp)
-            )
-        }
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(top = 56.dp)
-                .navigationBarsPadding(),
-            contentPadding = PaddingValues(start = 20.dp, top = 8.dp, end = 20.dp, bottom = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp),
-            content = content
-        )
     }
 }
 /** 外观卡：主题模式三选段 + 强调色圆点色板 + 自定义取色。 */
@@ -489,22 +426,18 @@ private fun AppearanceCard(
 ) {
     var showColorPicker by remember { mutableStateOf(false) }
 
-    // 外层玻璃卡由 SettingsGroup 提供，这里只出内容。
+    // 外层素面卡由 MoReadSection 提供，这里只出内容。
     Column(
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 13.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
             Text("主题模式", style = MaterialTheme.typography.titleSmall)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ThemeMode.entries.forEach { mode ->
-                    FilterChip(
-                        selected = appearance.themeMode == mode,
-                        onClick = { onThemeModeChange(mode) },
-                        shape = MoReadTokens.CapsuleShape,
-                        label = { Text(mode.label()) }
-                    )
-                }
-            }
+            MoReadSegmented(
+                options = ThemeMode.entries,
+                selected = appearance.themeMode,
+                onSelect = onThemeModeChange,
+                label = { it.label() }
+            )
 
             Column {
                 Text("强调色", style = MaterialTheme.typography.titleSmall)
@@ -691,7 +624,7 @@ private const val REPO_URL = "https://github.com/ovo066/MoRead"
 @Composable
 private fun AboutCard() {
     val uriHandler = LocalUriHandler.current
-    // 外层玻璃卡由 SettingsGroup 提供，这里只出内容。
+    // 外层素面卡由 MoReadSection 提供，这里只出内容。
     Column(
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 13.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)

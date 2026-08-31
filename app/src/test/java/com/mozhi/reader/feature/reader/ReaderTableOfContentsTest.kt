@@ -52,6 +52,57 @@ class ReaderTableOfContentsTest {
         assertEquals(0, currentReaderTocListIndex(items, visible, currentChapterIndex = 1))
     }
 
+
+    @Test
+    fun `publisher toc numbers follow logical entries instead of spine indexes`() {
+        val items = buildReaderTocItems(
+            chapters = emptyList(),
+            entries = listOf(
+                entry(order = 0, title = "制作说明", depth = 0, parent = null, chapter = 0),
+                entry(order = 1, title = "第一回", depth = 0, parent = null, chapter = 4),
+                entry(order = 2, title = "第二回", depth = 0, parent = null, chapter = 6),
+                entry(order = 3, title = "第三回", depth = 0, parent = null, chapter = 8)
+            )
+        )
+
+        assertEquals(listOf(null, 1, 2, 3), items.map { it.displayNumber })
+        assertEquals(3, readerTocDisplayCount(items))
+        assertEquals(1, readerTocSupplementaryCount(items))
+    }
+
+    @Test
+    fun `current toc entry covers following unlinked spine document`() {
+        val items = buildReaderTocItems(
+            chapters = emptyList(),
+            entries = listOf(
+                entry(order = 0, title = "第一回", depth = 0, parent = null, chapter = 4),
+                entry(order = 1, title = "第二回", depth = 0, parent = null, chapter = 6)
+            )
+        )
+
+        assertEquals(0, currentReaderTocOrder(items, currentChapterIndex = 5))
+        assertEquals(1, currentReaderTocDisplayNumber(items, currentChapterIndex = 5))
+        assertEquals(1, currentReaderTocOrder(items, currentChapterIndex = 6))
+        assertEquals(2, currentReaderTocDisplayNumber(items, currentChapterIndex = 6))
+    }
+
+    @Test
+    fun `numbering skips volume containers but keeps their leaf chapters`() {
+        val items = buildReaderTocItems(
+            chapters = emptyList(),
+            entries = listOf(
+                entry(order = 0, title = "卷一", depth = 0, parent = null, chapter = 0, children = true),
+                entry(order = 1, title = "第一章", depth = 1, parent = 0, chapter = 0),
+                entry(order = 2, title = "第二章", depth = 1, parent = 0, chapter = 2)
+            )
+        )
+
+        assertEquals(listOf(null, 1, 2), items.map { it.displayNumber })
+        assertEquals(2, readerTocDisplayCount(items))
+        assertEquals(0, readerTocSupplementaryCount(items))
+        assertEquals(1, currentReaderTocDisplayNumber(items, currentChapterIndex = 1))
+    }
+
     private fun entry(
         order: Int,
         title: String,

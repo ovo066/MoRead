@@ -23,10 +23,16 @@ data class ImportPickerState(
     val alreadyImported: Set<Uri> = emptySet(),
     val selected: Set<Uri> = emptySet(),
     val createGroupsFromFolders: Boolean = true,
+    val searchQuery: String = "",
     val error: String? = null
 ) {
+    val visibleFiles: List<ScannedBookFile>
+        get() = files.filter { file ->
+            matchesImportSearch(file.name, file.relativeDirectory, searchQuery)
+        }
+
     val groups: List<Pair<String, List<ScannedBookFile>>>
-        get() = FolderScanner.groupByDirectory(files, ScannedBookFile::relativeDirectory)
+        get() = FolderScanner.groupByDirectory(visibleFiles, ScannedBookFile::relativeDirectory)
 
     val truncated: Boolean get() = files.size >= FolderScanner.MAX_FILES
 }
@@ -89,18 +95,27 @@ class ImportPickerViewModel @Inject constructor(
 
     fun toggleGroup(directory: String) {
         val current = _uiState.value
-        val inGroup = current.files.filter { it.relativeDirectory == directory }.map(ScannedBookFile::uri)
-        val allSelected = inGroup.all { it in current.selected }
+        val inGroup = current.visibleFiles
+            .filter { it.relativeDirectory == directory }
+            .map(ScannedBookFile::uri)
+            .toSet()
+        val allSelected = inGroup.isNotEmpty() && inGroup.all { it in current.selected }
         _uiState.value = current.copy(
-            selected = if (allSelected) current.selected - inGroup.toSet() else current.selected + inGroup
+            selected = if (allSelected) current.selected - inGroup else current.selected + inGroup
         )
     }
 
+    /** 搜索时只改变当前结果的勾选，避免隐藏条目被意外取消。 */
     fun selectAll(selected: Boolean) {
         val current = _uiState.value
+        val visible = current.visibleFiles.map(ScannedBookFile::uri).toSet()
         _uiState.value = current.copy(
-            selected = if (selected) current.files.map(ScannedBookFile::uri).toSet() else emptySet()
+            selected = if (selected) current.selected + visible else current.selected - visible
         )
+    }
+
+    fun setSearchQuery(query: String) {
+        _uiState.value = _uiState.value.copy(searchQuery = query)
     }
 
     fun setCreateGroupsFromFolders(enabled: Boolean) {
@@ -126,4 +141,17 @@ class ImportPickerViewModel @Inject constructor(
     companion object {
         const val ARG_TREE_URI = "treeUri"
     }
+}
+
+internal fun matchesImportSearch(
+    fileName: String,
+    relativeDirectory: String,
+    query: String
+): Boolean {
+    val keywords = query.trim().lowercase(java.util.Locale.ROOT)
+        .split(Regex("\\s+"))
+        .filter(String::isNotEmpty)
+    if (keywords.isEmpty()) return true
+    val searchable = "$fileName $relativeDirectory".lowercase(java.util.Locale.ROOT)
+    return keywords.all(searchable::contains)
 }

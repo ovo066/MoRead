@@ -63,6 +63,11 @@ data class BookEntity(
     val lastReadLocator: String? = null,
     val lastReadChapterIndex: Int = 0,
     val lastReadCharOffset: Int = 0,
+    /** Furthest position ever reached; rereading an older chapter must not shrink spoiler scope. */
+    @ColumnInfo(defaultValue = "0")
+    val maxReachedChapterIndex: Int = lastReadChapterIndex,
+    @ColumnInfo(defaultValue = "0")
+    val maxReachedCharOffset: Int = lastReadCharOffset,
     val lastReadAt: Long = 0,
     /** 0 = no `text.mz` on disk yet, 1 = current plain-text format. */
     val textVersion: Int = 0,
@@ -346,7 +351,12 @@ data class MessageEntity(
      * 面具内经历，面具删除后此列悬空留存（同 personaId 不设 FK 的惯例）。
      */
     @ColumnInfo(defaultValue = "0")
-    val maskId: Long = 0
+    val maskId: Long = 0,
+    /** Retrieval boundary active when this user turn was sent; -1 means non-book/legacy. */
+    @ColumnInfo(defaultValue = "-1")
+    val sourceScopeChapterIndex: Int = -1,
+    @ColumnInfo(defaultValue = "-1")
+    val sourceScopeCharOffset: Int = -1
 )
 
 /** RikkaHub-style assignment: a role points at one concrete model, not a whole provider. */

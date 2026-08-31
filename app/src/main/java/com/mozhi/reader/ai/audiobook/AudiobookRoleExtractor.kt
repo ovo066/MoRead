@@ -11,6 +11,7 @@ import com.mozhi.reader.core.database.entity.TtsVoiceEntity
 import com.mozhi.reader.core.library.AudiobookEngine
 import com.mozhi.reader.core.library.AudiobookRoleKind
 import com.mozhi.reader.core.library.LibraryRepository
+import com.mozhi.reader.core.retrieval.ReadingScope
 import com.mozhi.reader.core.speech.TtsVoiceRepository
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -91,7 +92,7 @@ class AudiobookRoleExtractor @Inject constructor(
             tools = readerToolset.forBook(
                 bookId = bookId,
                 enabledTools = SAFE_TOOL_NAMES,
-                spoilerProtectionEnabled = false
+                readingScope = ReadingScope.WholeBook
             ),
             modelRole = ModelRole.CHEAP
         ).collect { event ->

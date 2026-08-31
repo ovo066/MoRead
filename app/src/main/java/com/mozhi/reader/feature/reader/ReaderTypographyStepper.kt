@@ -99,6 +99,33 @@ private fun snapTypographyValue(
 private const val STEP_EPSILON = 1e-4f
 
 /**
+ * 亮度滑条的取值规则。
+ *
+ * 存储里 -1 表示「跟随系统」，但滑条必须给它一个位置，否则拖柄会跳到最左端、
+ * 看起来像「亮度已被调到 0」。约定：跟随系统时拖柄停在 [FOLLOW_SYSTEM_ANCHOR]，
+ * 一旦用户拖动就变成显式值。
+ */
+internal fun readerBrightnessFraction(stored: Float): Float =
+    if (stored < 0f) FOLLOW_SYSTEM_ANCHOR else stored.coerceIn(0f, 1f)
+
+/** 滑条落点 → 落库值。步长 5%，与参考产品的手感一致（够细但不会滑不准）。 */
+internal fun readerBrightnessValueAt(fraction: Float): Float =
+    (Math.round(fraction.coerceIn(0f, 1f) / BRIGHTNESS_STEP).toFloat() * BRIGHTNESS_STEP)
+        // 不允许调到 0：Android 的 screenBrightness=0 在不少机型上接近全黑，而面板本身也画在
+        // 这块屏幕上——用户会看不见滑条，只能杀进程才能救回来。留一个能看清界面的下限。
+        .coerceIn(MIN_BRIGHTNESS, 1f)
+
+/** 右侧数值文案：跟随系统时不报百分比，报「自动」——报数字会让人以为已经手动定死了。 */
+internal fun readerBrightnessLabel(stored: Float): String =
+    if (stored < 0f) "自动" else "${Math.round(stored.coerceIn(0f, 1f) * 100)}%"
+
+internal const val FOLLOW_SYSTEM_ANCHOR = 0.5f
+
+/** 手动亮度的下限：再暗下去面板自己也看不见了。 */
+internal const val MIN_BRIGHTNESS = 0.05f
+private const val BRIGHTNESS_STEP = 0.05f
+
+/**
  * 胶囊步进器：一条胶囊里左 `−`、右 `＋`、中间可拖的圆钮，右侧显示当前值。
  *
  * 取代原来的 Material `Slider`：滑条又高又只能拖，微调一格全靠手准；胶囊把「点一下走一格」

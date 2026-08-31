@@ -109,7 +109,9 @@ class AiChatRepository @Inject constructor(
         conversationId: Long,
         content: String,
         attachmentsJson: String? = null,
-        maskId: Long = 0L
+        maskId: Long = 0L,
+        sourceScopeChapterIndex: Int = -1,
+        sourceScopeCharOffset: Int = -1
     ) {
         val clean = content.trim()
         require(clean.isNotEmpty() || attachmentsJson != null) { "消息不能为空" }
@@ -122,7 +124,9 @@ class AiChatRepository @Inject constructor(
                     content = clean,
                     createdAt = now,
                     attachmentsJson = attachmentsJson,
-                    maskId = maskId
+                    maskId = maskId,
+                    sourceScopeChapterIndex = sourceScopeChapterIndex,
+                    sourceScopeCharOffset = sourceScopeCharOffset
                 )
             )
             val conversation = chatDao.getConversation(conversationId)

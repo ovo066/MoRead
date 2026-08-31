@@ -2,6 +2,8 @@ package com.mozhi.reader.core.vector;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Comparator;
+import java.util.function.Predicate;
 
 import io.objectbox.Box;
 import io.objectbox.BoxStore;
@@ -52,7 +54,10 @@ public final class VectorQueries {
             float[] queryVector,
             int topK
     ) {
-        return searchMemories(store, personaId, queryVector, topK, null, 0L);
+        return searchMemories(
+                store, personaId, queryVector, topK, null, 0L,
+                null, Integer.MAX_VALUE, Integer.MAX_VALUE
+        );
     }
 
     /**
@@ -71,21 +76,49 @@ public final class VectorQueries {
             Long bookId,
             long maskId
     ) {
+        return searchMemories(
+                store, personaId, queryVector, topK, bookId, maskId,
+                bookId, Integer.MAX_VALUE, Integer.MAX_VALUE
+        );
+    }
+
+    /**
+     * Memory search with a provenance boundary for the currently open book. When protection is
+     * active, legacy book memories without provenance fail closed; global and other-book memories
+     * remain governed by the existing book/mask switches.
+     */
+    public static List<ObjectWithScore<MemoryEntry>> searchMemories(
+            BoxStore store,
+            long personaId,
+            float[] queryVector,
+            int topK,
+            Long bookId,
+            long maskId,
+            Long scopeBookId,
+            int maxChapterIndex,
+            int maxCharOffset
+    ) {
         Box<MemoryEntry> box = store.boxFor(MemoryEntry.class);
-        return adaptiveSearch(box.count(), topK, fetchCount -> {
+        Predicate<MemoryEntry> scopeFilter = entry -> {
+            if (scopeBookId == null || maxChapterIndex == Integer.MAX_VALUE) return true;
+            if (entry.bookId == null || entry.bookId.longValue() != scopeBookId.longValue()) return true;
+            if (entry.sourceChapterIndex < 0) return false;
+            return entry.sourceChapterIndex < maxChapterIndex ||
+                    (entry.sourceChapterIndex == maxChapterIndex &&
+                            entry.sourceCharOffset >= 0 && entry.sourceCharOffset <= maxCharOffset);
+        };
+        return adaptiveSearchFiltered(box.count(), topK, fetchCount -> {
             QueryCondition<MemoryEntry> condition =
                     MemoryEntry_.embedding.nearestNeighbors(queryVector, fetchCount)
                             .and(MemoryEntry_.personaId.equal(personaId));
-            if (bookId != null) {
-                condition = condition.and(MemoryEntry_.bookId.equal(bookId));
-            }
+            if (bookId != null) condition = condition.and(MemoryEntry_.bookId.equal(bookId));
             condition = condition.and(
                     maskId == 0L
                             ? MemoryEntry_.maskId.equal(0L)
                             : MemoryEntry_.maskId.equal(0L).or(MemoryEntry_.maskId.equal(maskId))
             );
             return box.query(condition).build();
-        });
+        }, scopeFilter);
     }
 
     /** 记忆管理页用：按时间倒序分页列出某角色的全部记忆。 */
@@ -130,6 +163,25 @@ public final class VectorQueries {
                 .build();
         try {
             return query.property(BookChunk_.chapterIndex).distinct().findInts();
+        } finally {
+            query.close();
+        }
+    }
+
+
+    /** All persisted chunks in a chapter range, used by BM25 recall and neighbour expansion. */
+    public static List<BookChunk> listChunks(BoxStore store, long bookId, int maxChapterIndex) {
+        Query<BookChunk> query = store.boxFor(BookChunk.class)
+                .query(
+                        BookChunk_.bookId.equal(bookId)
+                                .and(BookChunk_.chapterIndex.lessOrEqual(maxChapterIndex))
+                )
+                .build();
+        try {
+            List<BookChunk> chunks = query.find();
+            chunks.sort(Comparator.comparingInt((BookChunk item) -> item.chapterIndex)
+                    .thenComparingInt(item -> item.chunkIndex));
+            return chunks;
         } finally {
             query.close();
         }
@@ -197,6 +249,33 @@ public final class VectorQueries {
 
     private interface VectorQueryFactory<T> {
         Query<T> build(int fetchCount);
+    }
+
+
+    private static <T> List<ObjectWithScore<T>> adaptiveSearchFiltered(
+            long totalCandidates,
+            int topK,
+            VectorQueryFactory<T> factory,
+            Predicate<T> filter
+    ) {
+        int fetch = Math.max(topK * 4, 32);
+        while (true) {
+            Query<T> query = factory.build(fetch);
+            List<ObjectWithScore<T>> raw;
+            try {
+                raw = query.findWithScores();
+            } finally {
+                query.close();
+            }
+            List<ObjectWithScore<T>> hits = new ArrayList<>();
+            for (ObjectWithScore<T> hit : raw) {
+                if (filter.test(hit.get())) hits.add(hit);
+                if (hits.size() == topK) break;
+            }
+            boolean exhausted = fetch >= totalCandidates || fetch >= MAX_FETCH;
+            if (hits.size() >= topK || exhausted) return hits;
+            fetch = (int) Math.min((long) fetch * 4, MAX_FETCH);
+        }
     }
 
     private static <T> List<ObjectWithScore<T>> adaptiveSearch(

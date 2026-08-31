@@ -79,4 +79,29 @@ class ChapterChunkerTest {
         val text = "第一段。\r\n第二段。\r\n"
         assertEquals(listOf("第一段。\n第二段。"), ChapterChunker.chunk(text))
     }
+    @Test
+    fun offsetsUseOriginalUtf16CoordinatesIncludingEmojiAndWhitespace() {
+        val text = "  开头😀结尾  \r\n\r\n第二段。"
+        val chunks = ChapterChunker.chunkWithOffsets(text)
+
+        assertEquals(1, chunks.size)
+        assertEquals("开头😀结尾\n第二段。", chunks.single().text)
+        assertEquals(text.indexOf("开头"), chunks.single().startCharOffset)
+        assertEquals(text.indexOf("第二段。") + "第二段。".length, chunks.single().endCharOffset)
+    }
+
+    @Test
+    fun hardSplitOffsetsRemainContiguousUtf16Ranges() {
+        val text = "😀" + "长".repeat(1_400)
+        val chunks = ChapterChunker.chunkWithOffsets(text)
+
+        assertEquals(listOf(640, 640, 122), chunks.map { it.text.length })
+        assertEquals(0, chunks.first().startCharOffset)
+        assertEquals(text.length, chunks.last().endCharOffset)
+        assertTrue(chunks.zipWithNext().all { (left, right) -> left.endCharOffset == right.startCharOffset })
+        chunks.forEach { chunk ->
+            assertEquals(chunk.text, text.substring(chunk.startCharOffset, chunk.endCharOffset))
+        }
+    }
+
 }

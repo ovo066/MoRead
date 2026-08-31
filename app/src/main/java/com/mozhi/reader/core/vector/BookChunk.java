@@ -22,6 +22,9 @@ public class BookChunk {
     public int chapterIndex;
     /** 章内切片序号。 */
     public int chunkIndex;
+    /** UTF-16 source range, end-exclusive. Legacy rows have 0/0. */
+    public int startCharOffset;
+    public int endCharOffset;
     public String text;
     /** 归一化后的向量；维度不等于 {@link VectorDb#EMBEDDING_DIMENSIONS} 的记录不会进索引。 */
     @HnswIndex(dimensions = VectorDb.EMBEDDING_DIMENSIONS, distanceType = VectorDistanceType.COSINE)

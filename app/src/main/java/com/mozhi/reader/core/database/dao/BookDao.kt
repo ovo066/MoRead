@@ -120,6 +120,15 @@ interface BookDao {
         SET lastReadLocator = :locatorJson,
             lastReadChapterIndex = :chapterIndex,
             lastReadCharOffset = :charOffset,
+            maxReachedChapterIndex = CASE
+                WHEN :chapterIndex > maxReachedChapterIndex THEN :chapterIndex
+                ELSE maxReachedChapterIndex
+            END,
+            maxReachedCharOffset = CASE
+                WHEN :chapterIndex > maxReachedChapterIndex THEN :charOffset
+                WHEN :chapterIndex = maxReachedChapterIndex AND :charOffset > maxReachedCharOffset THEN :charOffset
+                ELSE maxReachedCharOffset
+            END,
             lastReadAt = :readAt
         WHERE id = :bookId
         """
@@ -142,11 +151,30 @@ interface BookDao {
         """
         UPDATE books
         SET lastReadChapterIndex = :chapterIndex,
-            lastReadCharOffset = :charOffset
+            lastReadCharOffset = :charOffset,
+            maxReachedChapterIndex = CASE
+                WHEN :chapterIndex > maxReachedChapterIndex THEN :chapterIndex
+                ELSE maxReachedChapterIndex
+            END,
+            maxReachedCharOffset = CASE
+                WHEN :chapterIndex > maxReachedChapterIndex THEN :charOffset
+                WHEN :chapterIndex = maxReachedChapterIndex AND :charOffset > maxReachedCharOffset THEN :charOffset
+                ELSE maxReachedCharOffset
+            END
         WHERE id = :bookId
         """
     )
     suspend fun updateReadPosition(bookId: Long, chapterIndex: Int, charOffset: Int)
+
+    @Query(
+        """
+        UPDATE books
+        SET maxReachedChapterIndex = lastReadChapterIndex,
+            maxReachedCharOffset = lastReadCharOffset
+        WHERE id = :bookId
+        """
+    )
+    suspend fun resetReadingHighWater(bookId: Long)
 
     @Query(
         """

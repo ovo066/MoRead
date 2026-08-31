@@ -2,6 +2,7 @@ package com.mozhi.reader.ai.agent
 
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.BookSourceType
+import com.mozhi.reader.core.retrieval.ReadingScope
 import com.mozhi.reader.core.vector.BookChunk
 import com.mozhi.reader.core.vector.MemoryEntry
 import com.mozhi.reader.core.vector.VectorDb
@@ -47,7 +48,7 @@ class ReaderToolsetToolsTest {
             buildJsonObject { put("query", "张小敬在哪里") }
         )
 
-        assertTrue(result.contains("已读范围（第 1 至 4 章）"))
+        assertTrue(result.contains("用户阅读进度水位（第 1 至 4 章）"))
         assertTrue(result.contains("西市追查狼卫"))
         assertFalse(result.contains("花萼楼"))
         assertTrue(result, result.contains("【第 3 章「章题2」】"))
@@ -63,7 +64,7 @@ class ReaderToolsetToolsTest {
         )
 
         assertTrue(result.contains("向量索引正在后台建立"))
-        assertTrue(result.contains("已自动尝试本地关键词检索"))
+        assertTrue(result.contains("已自动尝试本地 BM25 关键词检索"))
     }
 
     @Test
@@ -97,13 +98,14 @@ class ReaderToolsetToolsTest {
 
     @Test
     fun searchBookFallsBackToLocalChineseKeywordSearchWhenEmbeddingFails() = runTest {
-        store.boxFor(BookChunk::class.java).put(chunk(chapterIndex = 0, text = "已有索引占位"))
+        store.boxFor(BookChunk::class.java).put(chunk(chapterIndex = 2, text = "张小敬在西市追查狼卫，并找到了关键线索。"))
         val tool = SearchBookTool(
             bookId = 1,
             getBook = { book(lastReadChapterIndex = 3) },
             chapterTitle = { "章题$it" },
             embedQuery = { error("未配置 Embedding 模型") },
             store = { store },
+            readingScope = ReadingScope.upto(3, Int.MAX_VALUE),
             loadChaptersThrough = {
                 listOf(
                     ChapterDocument(0, "开端", "长安城里风声鹤唳。"),
@@ -114,7 +116,7 @@ class ReaderToolsetToolsTest {
 
         val result = tool.execute(buildJsonObject { put("query", "张小敬在哪里追查狼卫") })
 
-        assertTrue(result, result.contains("已自动切换到本地关键词检索"))
+        assertTrue(result, result.contains("已自动切换到本地 BM25 关键词检索"))
         assertTrue(result, result.contains("西市追查狼卫"))
     }
 
@@ -130,6 +132,7 @@ class ReaderToolsetToolsTest {
             chapterTitle = { "章题$it" },
             embedQuery = { vector(1f, 0f) },
             store = { store },
+            readingScope = ReadingScope.upto(3, 10),
             loadChapter = { ChapterDocument(3, "当前章", currentBody) }
         )
 
@@ -147,7 +150,8 @@ class ReaderToolsetToolsTest {
             getBook = { book(lastReadChapterIndex = 3) },
             chapterTitle = { null },
             embedQuery = { error("未配置 Embedding 模型") },
-            store = { store }
+            store = { store },
+            readingScope = ReadingScope.upto(3, Int.MAX_VALUE)
         )
         val result = tool.execute(buildJsonObject { put("query", "任意") })
         assertTrue(result.startsWith("向量检索不可用"))
@@ -162,6 +166,7 @@ class ReaderToolsetToolsTest {
             chapterTitle = { null },
             embedQuery = { error("索引缺失时也可能没有模型") },
             store = { store },
+            readingScope = ReadingScope.upto(3, Int.MAX_VALUE),
             requestIndex = { requested++ }
         )
 
@@ -185,6 +190,7 @@ class ReaderToolsetToolsTest {
                 vector(1f, 0f)
             },
             store = { store },
+            readingScope = ReadingScope.upto(3, Int.MAX_VALUE),
             loadChaptersThrough = {
                 listOf(ChapterDocument(1, "追查", "张小敬在西市追查狼卫。"))
             },
@@ -263,7 +269,8 @@ class ReaderToolsetToolsTest {
         val tool = RecallMemoryTool(
             personaId = 7,
             embedQuery = { vector(1f, 0f) },
-            store = { store }
+            store = { store },
+            readingScope = ReadingScope.upto(3, Int.MAX_VALUE)
         )
         val result = tool.execute(buildJsonObject { put("query", "用户喜欢谁") })
 
@@ -276,7 +283,8 @@ class ReaderToolsetToolsTest {
         val tool = RecallMemoryTool(
             personaId = 7,
             embedQuery = { vector(1f, 0f) },
-            store = { store }
+            store = { store },
+            readingScope = ReadingScope.upto(3, Int.MAX_VALUE)
         )
         assertEquals(
             "还没有与此相关的长期记忆。",
@@ -289,7 +297,8 @@ class ReaderToolsetToolsTest {
         getBook = { book(lastReadChapterIndex) },
         chapterTitle = { index -> "章题$index" },
         embedQuery = { vector(1f, 0f) },
-        store = { store }
+        store = { store },
+        readingScope = ReadingScope.upto(lastReadChapterIndex, Int.MAX_VALUE)
     )
 
     private fun book(

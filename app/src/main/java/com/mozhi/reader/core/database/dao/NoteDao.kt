@@ -20,6 +20,8 @@ interface NoteDao {
     @Query(
         "UPDATE notes SET title = :title, contentMarkdown = :contentMarkdown, " +
             "relatedChapterIndex = :relatedChapterIndex, relatedCharOffset = :relatedCharOffset, " +
+            "sourceScopeChapterIndex = :sourceScopeChapterIndex, " +
+            "sourceScopeCharOffset = :sourceScopeCharOffset, " +
             "updatedAt = :updatedAt WHERE id = :noteId"
     )
     suspend fun updateContentAndPosition(
@@ -28,6 +30,8 @@ interface NoteDao {
         contentMarkdown: String,
         relatedChapterIndex: Int?,
         relatedCharOffset: Int?,
+        sourceScopeChapterIndex: Int?,
+        sourceScopeCharOffset: Int?,
         updatedAt: Long
     )
 

@@ -125,10 +125,13 @@ class BookshelfViewModel @Inject constructor(
 
     val uiState = combine(baseState, shelfRepository.snapshot, selectedBookIds, selectionActive) {
             base, organization, selected, isSelectionActive ->
+        val effectiveFilter = base.filter.withExistingGroups(
+            organization.groups.map(ShelfGroupEntity::id).toSet()
+        )
         BookshelfUiState(
-            books = filterShelfBooks(base.books, organization.tagRefs, base.filter).sortedForShelf(),
+            books = filterShelfBooks(base.books, organization.tagRefs, effectiveFilter).sortedForShelf(),
             layout = base.layout,
-            filter = base.filter,
+            filter = effectiveFilter,
             tags = organization.tags,
             groups = organization.groups,
             groupCounts = organization.groupCounts,

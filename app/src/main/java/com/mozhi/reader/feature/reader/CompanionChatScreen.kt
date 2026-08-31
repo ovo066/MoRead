@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
@@ -339,7 +340,9 @@ fun CompanionChatScreen(
     val measuredEntryHeights = remember(state.conversationId) { mutableStateMapOf<String, Int>() }
     var listViewportHeightPx by remember(state.conversationId) { mutableIntStateOf(0) }
     val listVerticalPaddingPx = with(density) { 22.dp.roundToPx() }
-    val listItemSpacingPx = with(density) { 8.dp.roundToPx() }
+    // 条目间距已经移进条目自身的 top padding（组内 3dp / 组间 12dp，见 chatEntryTopSpacing），
+    // onSizeChanged 量到的高度自带间距，这里不能再另算一份，否则预留空白会多算一截。
+    val listItemSpacingPx = 0
     val currentRoundContentHeightPx by remember(currentRoundKeys) {
         derivedStateOf { currentRoundKeys.sumOf { measuredEntryHeights[it] ?: 0 } }
     }
@@ -471,17 +474,24 @@ fun CompanionChatScreen(
                         .nestedScroll(followConnection)
                         .onSizeChanged { listViewportHeightPx = it.height }
                         .padding(horizontal = 16.dp),
-                    contentPadding = PaddingValues(top = 8.dp, bottom = 14.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    contentPadding = PaddingValues(top = 8.dp, bottom = 14.dp)
                 ) {
-                    items(
+                    itemsIndexed(
                         items = entries,
-                        key = ChatEntry::key,
-                        contentType = ChatEntry::contentType
-                    ) { entry ->
+                        key = { _, entry -> entry.key },
+                        contentType = { _, entry -> entry.contentType }
+                    ) { index, entry ->
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                // 间距按「是不是同一组」给：组内 3dp、组间 12dp。统一 spacedBy
+                                // 会让连发的三条和「你问它答」一样疏，看不出哪几条是一组。
+                                .padding(
+                                    top = chatEntryTopSpacing(
+                                        previous = entries.getOrNull(index - 1),
+                                        current = entry
+                                    ).dp
+                                )
                                 .then(
                                     if (entry.key in currentRoundKeySet) {
                                         Modifier.onSizeChanged { measuredEntryHeights[entry.key] = it.height }
@@ -560,7 +570,7 @@ fun CompanionChatScreen(
                                     style = MaterialTheme.typography.labelSmall,
                                     color = palette.muted,
                                     modifier = Modifier.padding(
-                                        start = AVATAR_GUTTER,
+                                        start = 4.dp,
                                         top = 2.dp,
                                         bottom = 2.dp
                                     )

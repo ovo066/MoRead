@@ -40,6 +40,17 @@ class ShelfFilterTest {
     }
 
     @Test
+    fun `删除当前分组后自动回到全部`() {
+        val filter = ShelfFilter(groupId = 10, tagIds = setOf(2))
+
+        assertEquals(filter, filter.withExistingGroups(setOf(10, 20)))
+        assertEquals(
+            ShelfFilter(tagIds = setOf(2)),
+            filter.withExistingGroups(setOf(20))
+        )
+    }
+
+    @Test
     fun `未分组筛选独立表达`() {
         assertEquals(
             listOf(3L),

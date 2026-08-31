@@ -12,6 +12,7 @@ import com.mozhi.reader.core.datastore.UserMask
 import com.mozhi.reader.core.datastore.UserMaskStore
 import com.mozhi.reader.core.library.AnnotationRepository
 import com.mozhi.reader.core.library.LibraryRepository
+import com.mozhi.reader.core.retrieval.ReadingScope
 import com.mozhi.reader.core.vector.Embeddings
 import com.mozhi.reader.core.vector.VectorQueries
 import io.objectbox.BoxStore
@@ -71,7 +72,7 @@ class CompanionContextBuilder @Inject constructor(
         bookId: Long?,
         scene: String? = null,
         memoryQuery: String? = null,
-        spoilerProtectionEnabled: Boolean = true,
+        readingScope: ReadingScope,
         conversationShape: ConversationShape = ConversationShape(),
         budgetChars: Int = DEFAULT_BUDGET_CHARS
     ): String {
@@ -111,7 +112,9 @@ class CompanionContextBuilder @Inject constructor(
                 // 关闭跨书记忆＝把召回收窄到当前书；跨书的全局记忆（bookId 为 null）
                 // 同样不参与，这正是该开关的语义。
                 bookId = bookId.takeUnless { memorySettings.crossBookEnabled },
-                maskId = userMask?.id ?: 0L
+                currentBookId = bookId,
+                maskId = userMask?.id ?: 0L,
+                readingScope = readingScope
             )
         } else {
             emptyList()
@@ -127,7 +130,7 @@ class CompanionContextBuilder @Inject constructor(
                 ?.takeIf { it.memoryEnabled && memorySettings.longTermEnabled }
                 ?.userProfile
                 .orEmpty(),
-            spoilerProtectionEnabled = spoilerProtectionEnabled,
+            readingScope = readingScope,
             conversationShape = conversationShape,
             // 关键词触发的世界书条目拿「场景原文 + 用户最新输入」当命中材料。
             loreTrigger = listOfNotNull(scene, memoryQuery).joinToString("\n"),
@@ -140,7 +143,9 @@ class CompanionContextBuilder @Inject constructor(
         personaId: Long,
         query: String,
         bookId: Long?,
-        maskId: Long
+        currentBookId: Long?,
+        maskId: Long,
+        readingScope: ReadingScope
     ): List<String> = try {
         val resolved = clientFactory.get().forRole(ModelRole.EMBEDDING)
         val vector = Embeddings.conformToIndex(resolved.client.embed(listOf(query)).first())
@@ -150,7 +155,10 @@ class CompanionContextBuilder @Inject constructor(
             vector,
             MEMORY_TOP_K,
             bookId,
-            maskId
+            maskId,
+            currentBookId,
+            readingScope.maxChapterIndex,
+            readingScope.maxCharOffset
         ).map { it.get().summary }
     } catch (cancelled: CancellationException) {
         throw cancelled
@@ -175,7 +183,7 @@ class CompanionContextBuilder @Inject constructor(
             memories: List<String>,
             annotations: List<PromptAnnotation> = emptyList(),
             userProfile: String = "",
-            spoilerProtectionEnabled: Boolean = true,
+            readingScope: ReadingScope,
             conversationShape: ConversationShape = ConversationShape(),
             loreTrigger: String = "",
             budgetChars: Int = DEFAULT_BUDGET_CHARS
@@ -186,7 +194,7 @@ class CompanionContextBuilder @Inject constructor(
                 userProfileBlock(userProfile),
                 userMaskBlock(userMask),
                 progressBlock(progress),
-                spoilerBlock(progress, spoilerProtectionEnabled),
+                spoilerBlock(progress, readingScope),
                 // 形态说明和人设同属「怎么说话」，永不参与预算裁剪——
                 // 裁掉它模型就会写回长段落，用户看到的是开关时灵时不灵。
                 conversationShapeBlock(conversationShape, progress)
@@ -310,9 +318,9 @@ class CompanionContextBuilder @Inject constructor(
 
         private fun spoilerBlock(
             progress: BookProgress?,
-            spoilerProtectionEnabled: Boolean
-        ): String? = progress?.takeIf { spoilerProtectionEnabled }?.let {
-            "【防剧透铁律】仅讨论用户已读至第 ${it.currentChapterIndex + 1} 章的内容，不得透露或暗示后续情节。"
+            readingScope: ReadingScope
+        ): String? = progress?.takeUnless { readingScope.isWholeBook }?.let {
+            "【防剧透铁律】仅讨论用户已读水位内的内容（最远第 ${readingScope.maxChapterIndex + 1} 章，章内字符 ${readingScope.maxCharOffset}），不得透露或暗示后续情节。"
         }
 
         /**

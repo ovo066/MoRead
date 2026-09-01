@@ -861,7 +861,7 @@ fun ReaderScreen(
                                     state.currentChapterIndex,
                                     state.currentCharOffset
                                 )
-                                viewModel.goToPosition(targetChapter, preview.targetCharOffset)
+                                viewModel.goToEpubLink(preview)
                             }
                         }) { Text("跳转") }
                     }

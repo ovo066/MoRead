@@ -110,7 +110,8 @@ data class EpubLinkPreview(
     val targetCharOffset: Int,
     val targetTitle: String,
     val content: String,
-    val externalUrl: String? = null
+    val externalUrl: String? = null,
+    val presentedMode: ChineseConversionMode? = null
 )
 
 data class ReaderStatistics(
@@ -410,12 +411,7 @@ class ReaderViewModel @Inject constructor(
     // ---- ReaderContentController.Listener ----
 
     override fun onContentChanged(relativePosition: Int) {
-        contentHook?.invoke(relativePosition)
-        if (relativePosition != 0) {
-            mutableState.update { it.copy(contentRevision = it.contentRevision + 1) }
-            return
-        }
-        if (contentController.isReady) {
+        if (relativePosition == 0 && contentController.isReady) {
             val pending = pendingAnchorJump
             if (pending != null && pending.chapterIndex == contentController.chapterIndex) {
                 pendingAnchorJump = null
@@ -431,6 +427,13 @@ class ReaderViewModel @Inject constructor(
                     return
                 }
             }
+        }
+        contentHook?.invoke(relativePosition)
+        if (relativePosition != 0) {
+            mutableState.update { it.copy(contentRevision = it.contentRevision + 1) }
+            return
+        }
+        if (contentController.isReady) {
             mutableState.update {
                 it.copy(
                     isContentReady = true,
@@ -490,7 +493,7 @@ class ReaderViewModel @Inject constructor(
     /** The pane registers here so content changes re-render its bitmaps synchronously. */
     fun setContentHook(hook: ((Int) -> Unit)?) {
         contentHook = hook
-        if (hook != null && contentController.isReady) hook(0)
+        if (hook != null && contentController.isReady) onContentChanged(0)
     }
 
     fun onBoundaryHit(direction: PageTurnDirection) {
@@ -534,14 +537,23 @@ class ReaderViewModel @Inject constructor(
     // ---- navigation ----
 
     fun goToChapter(chapterIndex: Int) {
+        pendingAnchorJump = null
         contentController.jumpToChapter(chapterIndex)
     }
 
     /** 目录项可能指向章内 fragment，不能只跳到章节首页。 */
     fun goToTocEntry(chapterIndex: Int, href: String) {
+        pendingAnchorJump = null
+        val mode = conversionMode
         viewModelScope.launch {
             val target = resolveEpubTarget(chapterIndex, href, chapterIndex)
-            contentController.jumpToChapter(chapterIndex, target?.offset ?: 0)
+            if (target == null) {
+                if (mode == conversionMode) contentController.jumpToChapter(chapterIndex)
+                return@launch
+            }
+            if (target.mode != conversionMode) return@launch
+            pendingAnchorJump = null
+            contentController.jumpToChapter(target.chapterIndex, target.offset)
         }
     }
 
@@ -560,13 +572,7 @@ class ReaderViewModel @Inject constructor(
             )
         }
         val target = resolveEpubTarget(link.sourceChapterIndex, link.href) ?: return null
-        val presented = contentController.chapterBody(target.chapterIndex)?.let { body ->
-            ReaderChapterContent(
-                body = body,
-                epubLayout = contentController.chapterLayout(target.chapterIndex)
-            )
-        } ?: loadPresentedChapter(target.chapterIndex)
-        val body = presented?.body.orEmpty()
+        val body = target.presented.body
         val start = target.offset.coerceIn(0, body.length)
         val end = target.endOffset.coerceIn(start, body.length)
         val previewEnd = if (end > start) end.coerceAtMost(start + LINK_PREVIEW_MAX_CHARS)
@@ -583,14 +589,31 @@ class ReaderViewModel @Inject constructor(
             targetCharOffset = start,
             targetTitle = mutableState.value.chapters
                 .getOrNull(target.chapterIndex)?.title.orEmpty(),
-            content = content
+            content = content,
+            presentedMode = target.mode
         )
+    }
+
+    fun goToEpubLink(preview: EpubLinkPreview) {
+        val chapterIndex = preview.targetChapterIndex ?: return
+        pendingAnchorJump = null
+        if (preview.presentedMode == conversionMode) {
+            contentController.jumpToChapter(chapterIndex, preview.targetCharOffset)
+            return
+        }
+        viewModelScope.launch {
+            val target = resolveEpubTarget(preview.sourceChapterIndex, preview.href) ?: return@launch
+            if (target.mode != conversionMode) return@launch
+            pendingAnchorJump = null
+            contentController.jumpToChapter(target.chapterIndex, target.offset)
+        }
     }
 
     private suspend fun resolveEpubTarget(
         sourceChapterIndex: Int,
         href: String,
-        hintedChapterIndex: Int? = null
+        hintedChapterIndex: Int? = null,
+        retryOnModeChange: Boolean = true
     ): EpubTarget? {
         val raw = href.trim()
         if (raw.isEmpty() || raw.startsWith("http://", true) || raw.startsWith("https://", true)) {
@@ -618,15 +641,25 @@ class ReaderViewModel @Inject constructor(
                 }?.chapterIndex ?: return null
             }
         }
-        if (fragment == null) return EpubTarget(targetChapterIndex, 0, 0)
+        val mode = conversionMode
         val presented = contentController.chapterBody(targetChapterIndex)?.let { body ->
             ReaderChapterContent(
                 body = body,
                 epubLayout = contentController.chapterLayout(targetChapterIndex)
             )
-        } ?: loadPresentedChapter(targetChapterIndex)
-        val bundle = presented?.epubLayout
-            ?: return EpubTarget(targetChapterIndex, 0, 0)
+        } ?: loadPresentedChapter(targetChapterIndex) ?: return null
+        if (mode != conversionMode) {
+            return if (retryOnModeChange) {
+                resolveEpubTarget(sourceChapterIndex, href, hintedChapterIndex, false)
+            } else {
+                null
+            }
+        }
+        if (fragment == null) {
+            return EpubTarget(targetChapterIndex, 0, 0, mode, presented)
+        }
+        val bundle = presented.epubLayout
+            ?: return EpubTarget(targetChapterIndex, 0, 0, mode, presented)
         val matches = bundle.document.blocks.filter { block ->
             block.element.id == fragment || block.ancestors.any { it.id == fragment } ||
                 block.spans.any { span -> span.elements.any { it.id == fragment } }
@@ -636,7 +669,7 @@ class ReaderViewModel @Inject constructor(
                 ?: block.textStart
         } ?: 0
         val end = matches.maxOfOrNull { it.textEnd } ?: start
-        return EpubTarget(targetChapterIndex, start, end)
+        return EpubTarget(targetChapterIndex, start, end, mode, presented)
     }
 
     fun goToPrevChapter() {
@@ -645,6 +678,7 @@ class ReaderViewModel @Inject constructor(
             onBoundaryHit(PageTurnDirection.PREVIOUS)
             return
         }
+        pendingAnchorJump = null
         contentController.jumpToChapter(target)
     }
 
@@ -654,20 +688,23 @@ class ReaderViewModel @Inject constructor(
             onBoundaryHit(PageTurnDirection.NEXT)
             return
         }
+        pendingAnchorJump = null
         contentController.jumpToChapter(target)
     }
 
     fun seekWithinChapter(fraction: Float) {
+        pendingAnchorJump = null
         contentController.seekWithinChapter(fraction)
     }
 
     fun goToProgress(progress: Float) {
+        pendingAnchorJump = null
         contentController.jumpToProgress(progress)
     }
 
     fun goToBookmark(bookmark: BookmarkEntity) {
-        ReaderTextAnchorCodec.decode(bookmark.locatorJson)?.let { anchor ->
-            pendingAnchorJump = PendingAnchorJump(
+        pendingAnchorJump = ReaderTextAnchorCodec.decode(bookmark.locatorJson)?.let { anchor ->
+            PendingAnchorJump(
                 bookmark.chapterIndex,
                 anchor,
                 bookmark.charOffset
@@ -678,6 +715,7 @@ class ReaderViewModel @Inject constructor(
 
     /** 书内搜索命中跳转：charOffset 为章内 UTF-16 偏移，与书签同轨。 */
     fun goToPosition(chapterIndex: Int, charOffset: Int) {
+        pendingAnchorJump = null
         contentController.jumpToChapter(chapterIndex, charOffset)
     }
 
@@ -784,7 +822,17 @@ class ReaderViewModel @Inject constructor(
                 ratio = annotation.startCharOffset.toFloat() /
                     chapterEntities[annotation.chapterIndex].charCount.coerceAtLeast(1)
             )
-        return ReaderTextAnchors.resolve(body, anchor, conversionMode, chineseTextConverter)
+        val resolved = ReaderTextAnchors.resolve(body, anchor, conversionMode, chineseTextConverter)
+        if (annotation.selectedText.isEmpty() ||
+            (resolved != null && resolved.end > resolved.start)
+        ) {
+            return resolved
+        }
+        val start = annotation.startCharOffset.coerceIn(0, body.length)
+        return ResolvedTextAnchor(
+            start,
+            annotation.endCharOffset.coerceIn(start, body.length)
+        )
     }
 
     fun resolveIllustrationRange(illustration: IllustrationEntity): ResolvedTextAnchor? {
@@ -802,7 +850,17 @@ class ReaderViewModel @Inject constructor(
                 ratio = (illustration.charOffset ?: 0).toFloat() /
                     chapterEntities[chapter].charCount.coerceAtLeast(1)
             )
-        return ReaderTextAnchors.resolve(body, anchor, conversionMode, chineseTextConverter)
+        val resolved = ReaderTextAnchors.resolve(body, anchor, conversionMode, chineseTextConverter)
+        if (illustration.sourceText.isEmpty() ||
+            (resolved != null && resolved.end > resolved.start)
+        ) {
+            return resolved
+        }
+        val start = (illustration.charOffset ?: 0).coerceIn(0, body.length)
+        return ResolvedTextAnchor(
+            start,
+            (start + illustration.sourceText.length).coerceAtMost(body.length)
+        )
     }
 
     fun textAnchorJsonFor(chapterIndex: Int, range: IntRange): String =
@@ -963,6 +1021,7 @@ class ReaderViewModel @Inject constructor(
             (chapters.firstOrNull { it.chapterIndex == targetChapter }?.charCount ?: 0)
         )
         chapterEntities = chapters
+        pendingAnchorJump = null
         val shownChapters = displayChapters()
         contentController.setChapters(
             shownChapters.map { ChapterMeta(it.chapterIndex, it.title, it.charCount) }
@@ -988,7 +1047,7 @@ class ReaderViewModel @Inject constructor(
         conversionMode = mode
         val shownChapters = displayChapters(mode)
         val shownTocEntries = displayTocEntries(mode)
-        anchor?.let { pendingAnchorJump = PendingAnchorJump(chapter, it, fallback) }
+        pendingAnchorJump = anchor?.let { PendingAnchorJump(chapter, it, fallback) }
         mutableState.update { state ->
             state.copy(
                 settings = state.settings.copy(
@@ -1283,7 +1342,9 @@ class ReaderViewModel @Inject constructor(
 private data class EpubTarget(
     val chapterIndex: Int,
     val offset: Int,
-    val endOffset: Int
+    val endOffset: Int,
+    val mode: ChineseConversionMode,
+    val presented: ReaderChapterContent
 )
 
 private data class ReaderPositionSnapshot(

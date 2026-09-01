@@ -3,6 +3,7 @@ package com.mozhi.reader.core.library
 import com.mozhi.reader.core.datastore.ChineseConversionMode
 import com.mozhi.reader.core.text.ChineseTextConverter
 import kotlin.math.abs
+import kotlin.math.roundToInt
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -57,24 +58,49 @@ object ReaderTextAnchors {
         mode: ChineseConversionMode,
         converter: ChineseTextConverter
     ): ResolvedTextAnchor? {
-        val prefix = converter.retarget(anchor.prefix, anchor.mode, mode)
-        val quote = converter.retarget(anchor.quote, anchor.mode, mode)
-        val suffix = converter.retarget(anchor.suffix, anchor.mode, mode)
-        occurrences(body, prefix + quote + suffix).closest(body.length, anchor.ratio)?.let { hit ->
-            val start = hit + prefix.length
-            return ResolvedTextAnchor(start, start + quote.length)
+        val source = anchor.prefix + anchor.quote + anchor.suffix
+        val full = converter.retarget(source, anchor.mode, mode)
+        val fullStart = convertedBoundary(source, full, anchor.prefix.length)
+        val fullEnd = convertedBoundary(source, full, anchor.prefix.length + anchor.quote.length)
+        occurrences(body, full).closest(body.length, anchor.ratio)?.let { hit ->
+            return ResolvedTextAnchor(hit + fullStart, hit + fullEnd)
         }
+        val quote = converter.retarget(anchor.quote, anchor.mode, mode)
         if (quote.isNotEmpty()) {
             occurrences(body, quote).closest(body.length, anchor.ratio)?.let { hit ->
                 return ResolvedTextAnchor(hit, hit + quote.length)
             }
         }
-        val left = prefix.takeLast(12)
-        val right = suffix.take(12)
-        return occurrences(body, left + right).closest(body.length, anchor.ratio)?.let { hit ->
-            val point = hit + left.length
+        val left = anchor.prefix.takeLast(12)
+        val boundarySource = left + anchor.suffix.take(12)
+        val boundary = converter.retarget(boundarySource, anchor.mode, mode)
+        val boundaryOffset = convertedBoundary(boundarySource, boundary, left.length)
+        return occurrences(body, boundary).closest(body.length, anchor.ratio)?.let { hit ->
+            val point = hit + boundaryOffset
             ResolvedTextAnchor(point, point)
         }
+    }
+
+    private fun convertedBoundary(source: String, target: String, boundary: Int): Int {
+        val sourceBoundary = boundary.coerceIn(0, source.length)
+        val commonPrefix = source.indices
+            .takeWhile { it < target.length && source[it] == target[it] }
+            .count()
+        val commonSuffix = (0 until minOf(source.length, target.length) - commonPrefix)
+            .takeWhile { offset ->
+                source[source.lastIndex - offset] == target[target.lastIndex - offset]
+            }
+            .count()
+        if (sourceBoundary <= commonPrefix) return sourceBoundary
+        val sourceChangedEnd = source.length - commonSuffix
+        if (sourceBoundary >= sourceChangedEnd) {
+            return (target.length - (source.length - sourceBoundary)).coerceIn(0, target.length)
+        }
+        val sourceChangedLength = sourceChangedEnd - commonPrefix
+        val targetChangedLength = target.length - commonPrefix - commonSuffix
+        return commonPrefix + (
+            (sourceBoundary - commonPrefix).toFloat() / sourceChangedLength * targetChangedLength
+        ).roundToInt()
     }
 
     private fun occurrences(body: String, needle: String): List<Int> {

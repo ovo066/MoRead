@@ -23,6 +23,28 @@ class ReaderTextAnchorTest {
             ResolvedTextAnchor(offset, offset),
             ReaderTextAnchors.resolve(body, anchor, ChineseConversionMode.OFF, converter)
         )
+
+        val regionalSource = "程式碼。滑鼠。"
+        val regionalOffset = regionalSource.indexOf('鼠')
+        val regionalAnchor = ReaderTextAnchors.create(
+            regionalSource,
+            regionalOffset,
+            regionalOffset,
+            ChineseConversionMode.OFF
+        )
+        val regionalShown = converter.convert(regionalSource, ChineseConversionMode.TW2SP)
+        assertEquals(
+            ResolvedTextAnchor(
+                regionalShown.indexOf('标'),
+                regionalShown.indexOf('标')
+            ),
+            ReaderTextAnchors.resolve(
+                regionalShown,
+                regionalAnchor,
+                ChineseConversionMode.TW2SP,
+                converter
+            )
+        )
     }
 
     @Test

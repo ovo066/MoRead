@@ -288,16 +288,41 @@ class ReaderViewModel @Inject constructor(
             }
             chapterEntities = chapters
             rawInlineImages = imagesAsync.await()
-            val shownChapters = displayChapters()
+            val mode = conversionMode
+            val shownChapters = displayChapters(mode)
             contentController.setChapters(
                 shownChapters.map { ChapterMeta(it.chapterIndex, it.title, it.charCount) }
             )
+            val sourceOffset = resolved.lastReadCharOffset.coerceAtLeast(0)
+            val displayFallback = if (mode == ChineseConversionMode.OFF) {
+                sourceOffset
+            } else {
+                val chapter = chapters.firstOrNull {
+                    it.chapterIndex == resolved.lastReadChapterIndex
+                }
+                if (chapter == null) {
+                    0
+                } else {
+                    val sourceBody = libraryRepository.readChapterText(bookId, chapter)
+                    val layout = layoutStore.readChapter(bookId, chapter.chapterIndex)
+                    val images = rawInlineImages[chapter.chapterIndex].orEmpty()
+                    withContext(Dispatchers.Default) {
+                        chapterPresenter.resolveDisplayedPoint(
+                            body = sourceBody,
+                            layout = layout,
+                            images = images,
+                            sourceOffset = sourceOffset,
+                            mode = mode
+                        )
+                    } ?: 0
+                }
+            }
             mutableState.update {
                 it.copy(
                     book = resolved,
                     chapters = shownChapters,
                     currentChapterIndex = resolved.lastReadChapterIndex,
-                    currentCharOffset = resolved.lastReadCharOffset,
+                    currentCharOffset = displayFallback,
                     isLoading = false
                 )
             }
@@ -305,13 +330,13 @@ class ReaderViewModel @Inject constructor(
                 pendingAnchorJump = PendingAnchorJump(
                     resolved.lastReadChapterIndex,
                     anchor,
-                    resolved.lastReadCharOffset
+                    displayFallback
                 )
             }
             hasOpenedPosition = true
             contentController.openPosition(
                 chapterIndex = resolved.lastReadChapterIndex,
-                charOffset = resolved.lastReadCharOffset
+                charOffset = displayFallback
             )
             if (resolved.sourceType == BookSourceType.EPUB ||
                 resolved.textVersion < LibraryRepository.CURRENT_TEXT_VERSION
@@ -457,8 +482,22 @@ class ReaderViewModel @Inject constructor(
         val mode = conversionMode
         val point = displayOffset.coerceIn(0, displayed.length)
         val displayedAnchor = ReaderTextAnchors.create(displayed, point, point, mode)
-        if (mode == ChineseConversionMode.OFF) return point
         val images = rawInlineImages[chapterIndex].orEmpty()
+        return sourceOffsetForCapturedPresentation(
+            chapterIndex,
+            point,
+            displayedAnchor,
+            images
+        )
+    }
+
+    private suspend fun sourceOffsetForCapturedPresentation(
+        chapterIndex: Int,
+        displayOffset: Int,
+        displayedAnchor: ReaderTextAnchor,
+        images: List<InlineImageSource>
+    ): Int? {
+        if (displayedAnchor.mode == ChineseConversionMode.OFF) return displayOffset
         val chapter = chapterEntities.firstOrNull { it.chapterIndex == chapterIndex }
             ?: return null
         val source = libraryRepository.readChapterText(bookId, chapter)
@@ -588,14 +627,22 @@ class ReaderViewModel @Inject constructor(
         // Never write from a session that failed to open (e.g. text still materializing) —
         // clearing locatorJson would permanently break the pending legacy migration.
         if (!hasOpenedPosition || !contentController.isReady) return
-        val locatorJson = currentAnchor(chapterIndex, charOffset)
-            ?.let(ReaderTextAnchorCodec::encode)
-            .orEmpty()
+        if (!mutableState.value.isContentReady) return
+        val displayed = contentController.chapterBody(chapterIndex) ?: return
+        val point = charOffset.coerceIn(0, displayed.length)
+        val anchor = ReaderTextAnchors.create(displayed, point, point, conversionMode)
+        val images = rawInlineImages[chapterIndex].orEmpty()
+        val sourceOffset = sourceOffsetForCapturedPresentation(
+            chapterIndex,
+            point,
+            anchor,
+            images
+        ) ?: return
         libraryRepository.saveProgress(
             bookId = bookId,
-            locatorJson = locatorJson,
+            locatorJson = ReaderTextAnchorCodec.encode(anchor),
             chapterIndex = chapterIndex,
-            charOffset = charOffset
+            charOffset = sourceOffset
         )
     }
 

@@ -147,5 +147,25 @@ class ChineseChapterPresenterTest {
             6,
             presenter.resolveSourcePoint(body, layout, listOf(image), boundaryAnchor)
         )
+        assertEquals(
+            5,
+            presenter.resolveDisplayedPoint(
+                body,
+                layout,
+                listOf(image),
+                sourceOffset = 5,
+                mode = ChineseConversionMode.TW2SP
+            )
+        )
+        assertEquals(
+            6,
+            presenter.resolveDisplayedPoint(
+                body,
+                layout,
+                listOf(image),
+                sourceOffset = 6,
+                mode = ChineseConversionMode.TW2SP
+            )
+        )
     }
 }

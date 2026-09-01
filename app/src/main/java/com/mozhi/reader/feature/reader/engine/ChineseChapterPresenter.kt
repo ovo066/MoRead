@@ -79,6 +79,39 @@ class ChineseChapterPresenter @Inject constructor(
         )?.start?.plus(sourceStart)
     }
 
+    fun resolveDisplayedPoint(
+        body: String,
+        layout: EpubLayoutChapterBundle?,
+        images: List<InlineImageSource>,
+        sourceOffset: Int,
+        mode: ChineseConversionMode
+    ): Int? {
+        val sourcePoint = sourceOffset.coerceIn(0, body.length)
+        if (mode == ChineseConversionMode.OFF) return sourcePoint
+        val boundaries = presentationBoundaries(body, layout, images)
+        val rewritten = rewrite(body, boundaries, mode)
+        rewritten.positions[sourcePoint]?.let { return it }
+        val (sourceStart, sourceEnd) = boundaries.zipWithNext().firstOrNull { (start, end) ->
+            sourcePoint > start && sourcePoint < end
+        } ?: return null
+        val displayStart = rewritten.positions.getValue(sourceStart)
+        val displayEnd = rewritten.positions.getValue(sourceEnd)
+        val sourceLeaf = body.substring(sourceStart, sourceEnd)
+        val localPoint = sourcePoint - sourceStart
+        val localAnchor = ReaderTextAnchors.create(
+            sourceLeaf,
+            localPoint,
+            localPoint,
+            ChineseConversionMode.OFF
+        )
+        return ReaderTextAnchors.resolve(
+            rewritten.body.substring(displayStart, displayEnd),
+            localAnchor,
+            mode,
+            converter
+        )?.start?.plus(displayStart)
+    }
+
     private fun presentationBoundaries(
         body: String,
         layout: EpubLayoutChapterBundle?,

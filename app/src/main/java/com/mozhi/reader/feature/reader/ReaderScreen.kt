@@ -120,8 +120,30 @@ private data class PresentedListenRange(
     val chapterIndex: Int,
     val sourceStart: Int,
     val sourceEnd: Int,
+    val contentRevision: Int,
     val range: ResolvedTextAnchor
 )
+
+internal data class PendingReaderListenFollow(
+    val chapterIndex: Int,
+    val displayOffset: Int
+)
+
+internal data class ReaderListenPositionOwnership(
+    val pending: PendingReaderListenFollow?,
+    val isManualSeek: Boolean
+)
+
+internal fun readerListenPositionOwnership(
+    pending: PendingReaderListenFollow?,
+    chapterIndex: Int,
+    displayOffset: Int
+): ReaderListenPositionOwnership = when {
+    pending == null -> ReaderListenPositionOwnership(null, isManualSeek = true)
+    pending.chapterIndex == chapterIndex && pending.displayOffset == displayOffset ->
+        ReaderListenPositionOwnership(null, isManualSeek = false)
+    else -> ReaderListenPositionOwnership(pending, isManualSeek = false)
+}
 
 internal data class TextEditDraft(
     val chapterIndex: Int,
@@ -200,17 +222,23 @@ fun ReaderScreen(
     val listeningThisBook = listenState?.bookId == bookId
     val conversionMode = state.settings.chineseConversionModeFor(bookId)
     var presentedListenRange by remember { mutableStateOf<PresentedListenRange?>(null) }
+    var pendingListenFollow by remember(bookId, conversionMode) {
+        mutableStateOf<PendingReaderListenFollow?>(null)
+    }
     LaunchedEffect(
         listenState?.bookId,
         listenState?.chapterIndex,
         listenState?.sentenceStart,
         listenState?.sentenceEnd,
         conversionMode,
-        state.isLoading
+        state.isContentReady,
+        state.contentRevision
     ) {
         val listen = listenState
         presentedListenRange = null
-        if (listen == null || listen.bookId != bookId) return@LaunchedEffect
+        if (!state.isContentReady || listen == null || listen.bookId != bookId) {
+            return@LaunchedEffect
+        }
         val range = viewModel.resolveSourceRange(
             listen.chapterIndex,
             listen.sentenceStart,
@@ -220,12 +248,14 @@ fun ReaderScreen(
             listen.chapterIndex,
             listen.sentenceStart,
             listen.sentenceEnd,
+            state.contentRevision,
             range
         )
     }
     val currentListenRange = presentedListenRange?.takeIf { presented ->
         val listen = listenState
         listen != null && listen.bookId == bookId &&
+            state.isContentReady && presented.contentRevision == state.contentRevision &&
             presented.chapterIndex == listen.chapterIndex &&
             presented.sourceStart == listen.sentenceStart &&
             presented.sourceEnd == listen.sentenceEnd
@@ -247,12 +277,28 @@ fun ReaderScreen(
     ) { uri -> uri?.let(viewModel::importCustomFont) }
 
     // 听书自动翻页：朗读句越过当前页边界时，直接跳到句首所在页（无翻页动画）。
-    LaunchedEffect(listeningThisBook, scrollMode, currentListenRange, listenState?.isPlaying) {
-        if (!listeningThisBook || scrollMode || listenState?.isPlaying != true) {
+    LaunchedEffect(
+        listeningThisBook,
+        scrollMode,
+        currentListenRange,
+        listenState?.isPlaying,
+        pendingListenFollow
+    ) {
+        if (!listeningThisBook) {
+            pendingListenFollow = null
             return@LaunchedEffect
         }
+        if (scrollMode || listenState?.isPlaying != true) {
+            pendingListenFollow = null
+            return@LaunchedEffect
+        }
+        if (pendingListenFollow != null) return@LaunchedEffect
         currentListenRange?.let { presented ->
             if (!viewModel.isShowingPosition(presented.chapterIndex, presented.range.start)) {
+                pendingListenFollow = PendingReaderListenFollow(
+                    chapterIndex = presented.chapterIndex,
+                    displayOffset = presented.range.start
+                )
                 viewModel.goToPosition(presented.chapterIndex, presented.range.start)
             }
         }
@@ -265,21 +311,48 @@ fun ReaderScreen(
             // 页面从沉浸播放页返回时会先发一次旧阅读位置；这不是用户 seek。
             .drop(1)
             .collect { (chapterIndex, charOffset) ->
+                val ownership = readerListenPositionOwnership(
+                    pendingListenFollow,
+                    chapterIndex,
+                    charOffset
+                )
+                pendingListenFollow = ownership.pending
+                if (!ownership.isManualSeek) return@collect
                 val listen = listenViewModel.state.value ?: return@collect
                 if (listen.bookId != bookId) return@collect
+                val sourceChapter = listen.chapterIndex
+                val sourceStart = listen.sentenceStart
+                val sourceEnd = listen.sentenceEnd
                 val sentence = viewModel.resolveSourceRange(
-                    listen.chapterIndex,
-                    listen.sentenceStart,
-                    listen.sentenceEnd
+                    sourceChapter,
+                    sourceStart,
+                    sourceEnd
                 )
-                val withinSentence = chapterIndex == listen.chapterIndex &&
+                val currentListen = listenViewModel.state.value ?: return@collect
+                if (currentListen.bookId != bookId ||
+                    currentListen.chapterIndex != sourceChapter ||
+                    currentListen.sentenceStart != sourceStart ||
+                    currentListen.sentenceEnd != sourceEnd
+                ) {
+                    return@collect
+                }
+                val withinSentence = chapterIndex == sourceChapter &&
                     sentence != null && charOffset >= sentence.start &&
                     charOffset < maxOf(sentence.end, sentence.start + 1)
                 if (!withinSentence) {
-                    listenViewModel.seekTo(
+                    val sourceOffset = viewModel.sourceOffsetForDisplayed(
                         chapterIndex,
-                        viewModel.sourceOffsetForDisplayed(chapterIndex, charOffset)
-                    )
+                        charOffset
+                    ) ?: return@collect
+                    val latestListen = listenViewModel.state.value ?: return@collect
+                    if (pendingListenFollow == null &&
+                        latestListen.bookId == bookId &&
+                        latestListen.chapterIndex == sourceChapter &&
+                        latestListen.sentenceStart == sourceStart &&
+                        latestListen.sentenceEnd == sourceEnd
+                    ) {
+                        listenViewModel.seekTo(chapterIndex, sourceOffset)
+                    }
                 }
             }
     }
@@ -290,9 +363,15 @@ fun ReaderScreen(
     val contextQuote = chapterTitle.ifBlank { state.book?.title.orEmpty() }
     val readerReady = !state.isLoading && state.errorMessage == null
 
-    LaunchedEffect(pendingLocate, readerReady) {
+    LaunchedEffect(
+        pendingLocate,
+        readerReady,
+        state.isContentReady,
+        state.contentRevision,
+        conversionMode
+    ) {
         val request = pendingLocate ?: return@LaunchedEffect
-        if (!readerReady) return@LaunchedEffect
+        if (!readerReady || !state.isContentReady) return@LaunchedEffect
         val range = viewModel.resolveSourceRange(
             request.chapterIndex,
             request.startCharOffset,
@@ -768,14 +847,16 @@ fun ReaderScreen(
                             )
                         }
                         coroutineScope.launch {
-                            listenViewModel.start(
-                                bookId,
+                            viewModel.sourceOffsetForDisplayed(
                                 state.currentChapterIndex,
-                                viewModel.sourceOffsetForDisplayed(
+                                state.currentCharOffset
+                            )?.let { sourceOffset ->
+                                listenViewModel.start(
+                                    bookId,
                                     state.currentChapterIndex,
-                                    state.currentCharOffset
+                                    sourceOffset
                                 )
-                            )
+                            }
                         }
                     }
                 },

@@ -102,6 +102,74 @@ object ReaderTextAnchors {
         }
     }
 
+    fun resolveSourcePoint(
+        sourceBody: String,
+        displayedBody: String,
+        displayedAnchor: ReaderTextAnchor,
+        converter: ChineseTextConverter
+    ): ResolvedTextAnchor? {
+        val target = resolve(
+            displayedBody,
+            displayedAnchor,
+            displayedAnchor.mode,
+            converter
+        )?.start ?: return null
+        val estimate = (displayedAnchor.ratio * sourceBody.length)
+            .roundToInt()
+            .coerceIn(0, sourceBody.length)
+
+        fun boundaryAt(sourceOffset: Int): Int = convertedBoundary(
+            sourceBody,
+            displayedBody,
+            sourceOffset,
+            ChineseConversionMode.OFF,
+            displayedAnchor.mode,
+            converter
+        )
+
+        fun firstBoundaryAtLeast(displayOffset: Int): Int {
+            var low = 0
+            var high = sourceBody.length
+            while (low < high) {
+                val middle = (low + high) ushr 1
+                if (boundaryAt(middle) >= displayOffset) high = middle else low = middle + 1
+            }
+            return if (boundaryAt(low) >= displayOffset) low else sourceBody.length + 1
+        }
+
+        val first = firstBoundaryAtLeast(target)
+        if (first > sourceBody.length) return null
+        val after = firstBoundaryAtLeast(target + 1)
+        val last = (after - 1).coerceIn(first, sourceBody.length)
+        val candidates = buildSet {
+            add(estimate.coerceIn(first, last))
+            add(first)
+            add(last)
+            for (candidate in (first - 2)..(first + 2)) {
+                if (candidate in 0..sourceBody.length) add(candidate)
+            }
+            for (candidate in (last - 2)..(last + 2)) {
+                if (candidate in 0..sourceBody.length) add(candidate)
+            }
+        }.sortedBy { candidate -> abs(candidate - estimate) }
+        return candidates.firstOrNull { sourceOffset ->
+            val sourceAnchor = create(
+                sourceBody,
+                sourceOffset,
+                sourceOffset,
+                ChineseConversionMode.OFF
+            )
+            resolve(
+                displayedBody,
+                sourceAnchor,
+                displayedAnchor.mode,
+                converter
+            )?.start == target
+        }?.let { sourceOffset ->
+            ResolvedTextAnchor(sourceOffset, sourceOffset)
+        }
+    }
+
     private fun convertedBoundary(
         source: String,
         target: String,

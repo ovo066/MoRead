@@ -67,6 +67,26 @@ class ReaderTextAnchorTest {
                 converter
             )
         )
+
+        val mixedSource = "程式碼" + "甲".repeat(40) + "长目标" + "乙".repeat(40)
+        val mixedShown = converter.convert(mixedSource, ChineseConversionMode.TW2SP)
+        val displayOffset = mixedShown.indexOf("目标")
+        val displayAnchor = ReaderTextAnchors.create(
+            mixedShown,
+            displayOffset,
+            displayOffset,
+            ChineseConversionMode.TW2SP
+        )
+        assertEquals(43, displayOffset)
+        assertEquals(
+            44,
+            ReaderTextAnchors.resolveSourcePoint(
+                mixedSource,
+                mixedShown,
+                displayAnchor,
+                converter
+            )!!.start
+        )
     }
 
     @Test

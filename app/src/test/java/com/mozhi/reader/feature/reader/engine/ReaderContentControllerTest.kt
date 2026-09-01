@@ -7,9 +7,12 @@ import com.mozhi.reader.core.library.EpubLayoutBlockKind
 import com.mozhi.reader.core.library.EpubLayoutChapter
 import com.mozhi.reader.core.library.EpubLayoutChapterBundle
 import com.mozhi.reader.core.library.EpubTextAlign
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.job
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -355,6 +358,65 @@ class ReaderContentControllerTest {
         coroutineContext.job.children.forEach { it.join() }
 
         assertEquals("new", controller.chapterBody(0))
+    }
+
+    @Test
+    fun `stale relayout does not clear the new source loading registration`() = runTest {
+        var loads = 0
+        var holdLoads = false
+        val newStarted = CompletableDeferred<Unit>()
+        val releaseNew = CompletableDeferred<Unit>()
+        val relayoutStarted = CountDownLatch(1)
+        val releaseRelayout = CountDownLatch(1)
+        val controller = ReaderContentController(
+            scope = this,
+            chapterLoader = {
+                loads++
+                if (holdLoads) {
+                    newStarted.complete(Unit)
+                    releaseNew.await()
+                }
+                ReaderChapterContent("content")
+            },
+            listener = RecordingListener()
+        )
+        controller.setChapters(listOf(ChapterMeta(0, "", 7)))
+        controller.updateEnvironment(spec(), FakeMeasure())
+        controller.openPosition(0, 0)
+        advanceUntilIdle()
+        coroutineContext.job.children.forEach { it.join() }
+
+        val blockingMeasure = object : TextMeasure by FakeMeasure() {
+            override fun breakLines(
+                text: String,
+                isTitle: Boolean,
+                availableWidth: Float,
+                firstLineIndent: Float
+            ): IntArray {
+                relayoutStarted.countDown()
+                releaseRelayout.await()
+                return FakeMeasure().breakLines(text, isTitle, availableWidth, firstLineIndent)
+            }
+        }
+        controller.updateEnvironment(spec(), blockingMeasure)
+        val oldRelayout = coroutineContext.job.children.single()
+        runCurrent()
+        assertTrue(relayoutStarted.await(5, TimeUnit.SECONDS))
+
+        holdLoads = true
+        controller.reloadFromSource()
+        newStarted.await()
+        releaseRelayout.countDown()
+        oldRelayout.join()
+        controller.openPosition(0, 0)
+        runCurrent()
+
+        assertEquals(2, loads)
+
+        releaseNew.complete(Unit)
+        advanceUntilIdle()
+        coroutineContext.job.children.forEach { it.join() }
+        assertEquals("content", controller.chapterBody(0))
     }
 
     @Test

@@ -107,14 +107,12 @@ class ListenService : Service() {
                 stopSelfResult(startId)
                 return@launch
             }
-            val started = engine.startFromSavedProgress(
+            engine.start(
                 bookId = bookId,
                 chapterIndex = book.lastReadChapterIndex.takeIf { it >= 0 } ?: fallbackChapter,
-                fallbackOffset = book.lastReadCharOffset.takeIf { it >= 0 } ?: fallbackOffset,
-                locatorJson = book.lastReadLocator,
+                charOffset = book.lastReadCharOffset.takeIf { it >= 0 } ?: fallbackOffset,
                 playbackMode = playbackMode
             )
-            if (!started) stopSelfResult(startId)
         }
     }
 

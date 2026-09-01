@@ -138,12 +138,11 @@ class ListenPlayerViewModel @Inject constructor(
                             ?: ready.firstOrNull()
                         if (start != null) engine.start(bookId, start, 0, playbackMode)
                     } else {
-                        engine.startFromSavedProgress(
-                            bookId = bookId,
-                            chapterIndex = current.lastReadChapterIndex,
-                            fallbackOffset = current.lastReadCharOffset,
-                            locatorJson = current.lastReadLocator,
-                            playbackMode = playbackMode
+                        engine.start(
+                            bookId,
+                            current.lastReadChapterIndex,
+                            current.lastReadCharOffset,
+                            playbackMode
                         )
                     }
                 }

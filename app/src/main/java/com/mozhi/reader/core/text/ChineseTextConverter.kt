@@ -18,13 +18,16 @@ class ChineseTextConverter @Inject constructor() {
         text: String,
         from: ChineseConversionMode,
         to: ChineseConversionMode
-    ): String = when (to) {
-        ChineseConversionMode.TW2SP -> convert(text, ChineseConversionMode.TW2SP)
-        ChineseConversionMode.S2TWP -> convert(text, ChineseConversionMode.S2TWP)
-        ChineseConversionMode.OFF -> when (from) {
-            ChineseConversionMode.OFF -> text
-            ChineseConversionMode.TW2SP -> convert(text, ChineseConversionMode.S2TWP)
-            ChineseConversionMode.S2TWP -> convert(text, ChineseConversionMode.TW2SP)
+    ): String {
+        if (from == to) return text
+        return when (to) {
+            ChineseConversionMode.TW2SP -> convert(text, ChineseConversionMode.TW2SP)
+            ChineseConversionMode.S2TWP -> convert(text, ChineseConversionMode.S2TWP)
+            ChineseConversionMode.OFF -> when (from) {
+                ChineseConversionMode.OFF -> text
+                ChineseConversionMode.TW2SP -> convert(text, ChineseConversionMode.S2TWP)
+                ChineseConversionMode.S2TWP -> convert(text, ChineseConversionMode.TW2SP)
+            }
         }
     }
 

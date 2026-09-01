@@ -5,6 +5,7 @@ import com.mozhi.reader.core.epub.dom.EpubDomNode
 import com.mozhi.reader.core.library.EpubLayoutChapterBundle
 import com.mozhi.reader.core.library.ReaderTextAnchor
 import com.mozhi.reader.core.library.ReaderTextAnchors
+import com.mozhi.reader.core.library.ResolvedTextAnchor
 import com.mozhi.reader.core.text.ChineseTextConverter
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -85,11 +86,42 @@ class ChineseChapterPresenter @Inject constructor(
         images: List<InlineImageSource>,
         sourceOffset: Int,
         mode: ChineseConversionMode
-    ): Int? {
-        val sourcePoint = sourceOffset.coerceIn(0, body.length)
-        if (mode == ChineseConversionMode.OFF) return sourcePoint
+    ): Int? = resolveDisplayedRange(
+        body,
+        layout,
+        images,
+        sourceOffset,
+        sourceOffset,
+        mode
+    )?.start
+
+    fun resolveDisplayedRange(
+        body: String,
+        layout: EpubLayoutChapterBundle?,
+        images: List<InlineImageSource>,
+        sourceStart: Int,
+        sourceEnd: Int,
+        mode: ChineseConversionMode
+    ): ResolvedTextAnchor? {
+        val start = sourceStart.coerceIn(0, body.length)
+        val end = sourceEnd.coerceIn(start, body.length)
+        if (mode == ChineseConversionMode.OFF) return ResolvedTextAnchor(start, end)
         val boundaries = presentationBoundaries(body, layout, images)
         val rewritten = rewrite(body, boundaries, mode)
+        val displayStart = resolveDisplayedBoundary(body, boundaries, rewritten, start, mode)
+            ?: return null
+        val displayEnd = resolveDisplayedBoundary(body, boundaries, rewritten, end, mode)
+            ?: return null
+        return ResolvedTextAnchor(displayStart, displayEnd)
+    }
+
+    private fun resolveDisplayedBoundary(
+        body: String,
+        boundaries: List<Int>,
+        rewritten: RewrittenText,
+        sourcePoint: Int,
+        mode: ChineseConversionMode
+    ): Int? {
         rewritten.positions[sourcePoint]?.let { return it }
         val (sourceStart, sourceEnd) = boundaries.zipWithNext().firstOrNull { (start, end) ->
             sourcePoint > start && sourcePoint < end

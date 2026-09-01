@@ -14,6 +14,7 @@ import com.mozhi.reader.core.library.EpubResolvedFontFace
 import com.mozhi.reader.core.library.EpubStylesheetText
 import com.mozhi.reader.core.library.EpubTextAlign
 import com.mozhi.reader.core.library.ReaderTextAnchors
+import com.mozhi.reader.core.library.ResolvedTextAnchor
 import com.mozhi.reader.core.text.ChineseTextConverter
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -164,6 +165,40 @@ class ChineseChapterPresenterTest {
                 layout,
                 listOf(image),
                 sourceOffset = 6,
+                mode = ChineseConversionMode.TW2SP
+            )
+        )
+
+        val rangeBody = "程式碼程式碼"
+        val rangeLayout = layout.copy(
+            document = layout.document.copy(
+                blocks = listOf(
+                    block.copy(
+                        textEnd = rangeBody.length,
+                        spans = listOf(span.copy(textStart = 3, textEnd = 5))
+                    )
+                ),
+                textLength = rangeBody.length
+            ),
+            dom = null
+        )
+        assertEquals(
+            "代码程序码",
+            presenter.present(
+                rangeBody,
+                rangeLayout,
+                emptyList(),
+                ChineseConversionMode.TW2SP
+            ).body
+        )
+        assertEquals(
+            ResolvedTextAnchor(2, 5),
+            presenter.resolveDisplayedRange(
+                rangeBody,
+                rangeLayout,
+                emptyList(),
+                sourceStart = 3,
+                sourceEnd = 6,
                 mode = ChineseConversionMode.TW2SP
             )
         )

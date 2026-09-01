@@ -441,13 +441,18 @@ class ReaderViewModel @Inject constructor(
         end: Int,
         sourceAnchorJson: String = ""
     ): ResolvedTextAnchor? {
-        val anchor = ReaderTextAnchorCodec.decode(sourceAnchorJson) ?: run {
-            val chapter = chapterEntities.firstOrNull { it.chapterIndex == chapterIndex }
-                ?: return null
-            val source = libraryRepository.readChapterText(bookId, chapter)
-            ReaderTextAnchors.create(source, start, end, ChineseConversionMode.OFF)
-        }
-        return resolveSourceAnchor(chapterIndex, anchor, start, end)
+        val chapter = chapterEntities.firstOrNull { it.chapterIndex == chapterIndex }
+            ?: return null
+        val source = libraryRepository.readChapterText(bookId, chapter)
+        val anchor = ReaderTextAnchorCodec.decode(sourceAnchorJson)
+            ?.takeIf { it.mode == ChineseConversionMode.OFF }
+            ?: ReaderTextAnchors.create(
+                source,
+                start,
+                end,
+                ChineseConversionMode.OFF
+            )
+        return resolveSourceAnchor(chapterIndex, anchor, start, end, source)
     }
 
     private suspend fun resolveSourceAnchor(
@@ -455,24 +460,47 @@ class ReaderViewModel @Inject constructor(
         anchor: ReaderTextAnchor,
         fallbackStart: Int,
         fallbackEnd: Int,
+        sourceBody: String,
         retryOnModeChange: Boolean = true
     ): ResolvedTextAnchor? {
         val mode = conversionMode
-        val body = contentController.chapterBody(chapterIndex)
-            ?.takeIf { mutableState.value.isContentReady }
-            ?: loadPresentedChapter(chapterIndex)?.body
-            ?: return null
+        val images = rawInlineImages[chapterIndex].orEmpty()
+        val layout = layoutStore.readChapter(bookId, chapterIndex)
+        val resolved = withContext(Dispatchers.Default) {
+            val sourceStart = fallbackStart.coerceIn(0, sourceBody.length)
+            val sourceRange = ReaderTextAnchors.resolve(
+                sourceBody,
+                anchor,
+                ChineseConversionMode.OFF,
+                chineseTextConverter
+            ) ?: ResolvedTextAnchor(
+                sourceStart,
+                fallbackEnd.coerceIn(sourceStart, sourceBody.length)
+            )
+            chapterPresenter.resolveDisplayedRange(
+                body = sourceBody,
+                layout = layout,
+                images = images,
+                sourceStart = sourceRange.start,
+                sourceEnd = sourceRange.end,
+                mode = mode
+            )
+        }
         if (mode != conversionMode) {
             return if (retryOnModeChange) {
-                resolveSourceAnchor(chapterIndex, anchor, fallbackStart, fallbackEnd, false)
+                resolveSourceAnchor(
+                    chapterIndex,
+                    anchor,
+                    fallbackStart,
+                    fallbackEnd,
+                    sourceBody,
+                    false
+                )
             } else {
                 null
             }
         }
-        return ReaderTextAnchors.resolve(body, anchor, mode, chineseTextConverter) ?: run {
-            val start = fallbackStart.coerceIn(0, body.length)
-            ResolvedTextAnchor(start, fallbackEnd.coerceIn(start, body.length))
-        }
+        return resolved
     }
 
     /** Converts one displayed reader boundary back to the raw source used by ListenEngine. */

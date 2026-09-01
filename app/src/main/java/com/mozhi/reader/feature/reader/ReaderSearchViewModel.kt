@@ -10,6 +10,7 @@ import com.mozhi.reader.core.text.ChineseTextConverter
 import com.mozhi.reader.feature.reader.engine.ChineseChapterPresenter
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,15 +27,52 @@ data class ReaderSearchUiState(
     val completed: Boolean = false
 )
 
-/** 书内关键词搜索：IO 上逐章扫描、边扫边出结果；新查询取消旧任务。 */
+internal typealias ReaderSearchScan = suspend (
+    bookId: Long,
+    query: String,
+    publish: (List<BookSearchHit>) -> Boolean
+) -> Unit
+
+/** 书内关键词搜索：逐章扫描、边扫边出结果；新查询取消旧任务。 */
 @HiltViewModel
-class ReaderSearchViewModel @Inject constructor(
-    private val libraryRepository: LibraryRepository,
-    private val settingsRepository: ReaderSettingsRepository,
-    private val layoutStore: BookLayoutStore,
-    private val chapterPresenter: ChineseChapterPresenter,
-    private val chineseTextConverter: ChineseTextConverter
+class ReaderSearchViewModel internal constructor(
+    private val scanBook: ReaderSearchScan
 ) : ViewModel() {
+
+    @Inject
+    constructor(
+        libraryRepository: LibraryRepository,
+        settingsRepository: ReaderSettingsRepository,
+        layoutStore: BookLayoutStore,
+        chapterPresenter: ChineseChapterPresenter,
+        chineseTextConverter: ChineseTextConverter
+    ) : this(
+        scanBook = { bookId, query, publish ->
+            val mode = settingsRepository.settings.first().chineseConversionModeFor(bookId)
+            val chapters = libraryRepository.getChapters(bookId)
+            for (chapter in chapters) {
+                val raw = searchChapterOrNull {
+                    libraryRepository.readChapterText(bookId, chapter)
+                } ?: continue
+                val layout = layoutStore.readChapter(bookId, chapter.chapterIndex)
+                val hits = withContext(Dispatchers.Default) {
+                    val body = chapterPresenter.present(
+                        body = raw,
+                        layout = layout,
+                        images = emptyList(),
+                        mode = mode
+                    ).body
+                    searchChapterText(
+                        chapterIndex = chapter.chapterIndex,
+                        chapterTitle = chineseTextConverter.convert(chapter.title, mode),
+                        body = body,
+                        query = query
+                    )
+                }
+                if (hits.isNotEmpty() && !publish(hits)) break
+            }
+        }
+    )
 
     private val _uiState = MutableStateFlow(ReaderSearchUiState())
     val uiState = _uiState.asStateFlow()
@@ -52,32 +90,10 @@ class ReaderSearchViewModel @Inject constructor(
         _uiState.value = ReaderSearchUiState(query = query)
         if (clean.length < MIN_QUERY_CHARS || bookId <= 0) return
         _uiState.value = _uiState.value.copy(isSearching = true)
-        searchJob = viewModelScope.launch(Dispatchers.IO) {
-            val mode = settingsRepository.settings.first().chineseConversionModeFor(bookId)
-            val chapters = libraryRepository.getChapters(bookId)
-            for (chapter in chapters) {
-                val raw = runCatching {
-                    libraryRepository.readChapterText(bookId, chapter)
-                }.getOrNull() ?: continue
-                val layout = layoutStore.readChapter(bookId, chapter.chapterIndex)
-                val body = withContext(Dispatchers.Default) {
-                    chapterPresenter.present(
-                        body = raw,
-                        layout = layout,
-                        images = emptyList(),
-                        mode = mode
-                    ).body
-                }
-                val hits = searchChapterText(
-                    chapterIndex = chapter.chapterIndex,
-                    chapterTitle = chineseTextConverter.convert(chapter.title, mode),
-                    body = body,
-                    query = clean
-                )
-                if (hits.isNotEmpty()) {
-                    _uiState.value = _uiState.value.copy(hits = _uiState.value.hits + hits)
-                }
-                if (_uiState.value.hits.size >= MAX_TOTAL_HITS) break
+        searchJob = viewModelScope.launch {
+            scanBook(bookId, clean) { hits ->
+                _uiState.value = _uiState.value.copy(hits = _uiState.value.hits + hits)
+                _uiState.value.hits.size < MAX_TOTAL_HITS
             }
             _uiState.value = _uiState.value.copy(isSearching = false, completed = true)
         }
@@ -92,4 +108,12 @@ class ReaderSearchViewModel @Inject constructor(
         const val MIN_QUERY_CHARS = 1
         const val MAX_TOTAL_HITS = 300
     }
+}
+
+internal suspend fun <T> searchChapterOrNull(block: suspend () -> T): T? = try {
+    block()
+} catch (cancelled: CancellationException) {
+    throw cancelled
+} catch (_: Throwable) {
+    null
 }

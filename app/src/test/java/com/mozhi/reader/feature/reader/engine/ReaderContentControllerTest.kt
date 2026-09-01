@@ -7,6 +7,7 @@ import com.mozhi.reader.core.library.EpubLayoutBlockKind
 import com.mozhi.reader.core.library.EpubLayoutChapter
 import com.mozhi.reader.core.library.EpubLayoutChapterBundle
 import com.mozhi.reader.core.library.EpubTextAlign
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.job
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -67,7 +68,11 @@ class ReaderContentControllerTest {
     @Test
     fun `opens at the stored position and derives the page`() = runTest {
         val listener = RecordingListener()
-        val controller = ReaderContentController(this, { chapterBody(it) }, listener)
+        val controller = ReaderContentController(
+            this,
+            { ReaderChapterContent(chapterBody(it)) },
+            listener
+        )
         controller.setChapters(metas(3))
         controller.updateEnvironment(spec(), FakeMeasure())
         controller.openPosition(1, 40)
@@ -85,7 +90,11 @@ class ReaderContentControllerTest {
     @Test
     fun `turning past the last page crosses into the next chapter`() = runTest {
         val listener = RecordingListener()
-        val controller = ReaderContentController(this, { chapterBody(it) }, listener)
+        val controller = ReaderContentController(
+            this,
+            { ReaderChapterContent(chapterBody(it)) },
+            listener
+        )
         controller.setChapters(metas(3))
         controller.updateEnvironment(spec(), FakeMeasure())
         controller.openPosition(0, 0)
@@ -105,7 +114,11 @@ class ReaderContentControllerTest {
     @Test
     fun `moving back across the boundary lands on the previous chapter's last page`() = runTest {
         val listener = RecordingListener()
-        val controller = ReaderContentController(this, { chapterBody(it) }, listener)
+        val controller = ReaderContentController(
+            this,
+            { ReaderChapterContent(chapterBody(it)) },
+            listener
+        )
         controller.setChapters(metas(3))
         controller.updateEnvironment(spec(), FakeMeasure())
         controller.openPosition(1, 0)
@@ -121,7 +134,11 @@ class ReaderContentControllerTest {
     @Test
     fun `boundaries refuse at the very start and end`() = runTest {
         val listener = RecordingListener()
-        val controller = ReaderContentController(this, { chapterBody(it) }, listener)
+        val controller = ReaderContentController(
+            this,
+            { ReaderChapterContent(chapterBody(it)) },
+            listener
+        )
         controller.setChapters(metas(2))
         controller.updateEnvironment(spec(), FakeMeasure())
         controller.openPosition(0, 0)
@@ -149,7 +166,7 @@ class ReaderContentControllerTest {
             this,
             { index ->
                 gate.await()
-                chapterBody(index)
+                ReaderChapterContent(chapterBody(index))
             },
             listener
         )
@@ -172,7 +189,11 @@ class ReaderContentControllerTest {
     @Test
     fun `progress jump resolves through cumulative char counts`() = runTest {
         val listener = RecordingListener()
-        val controller = ReaderContentController(this, { chapterBody(it) }, listener)
+        val controller = ReaderContentController(
+            this,
+            { ReaderChapterContent(chapterBody(it)) },
+            listener
+        )
         controller.setChapters(metas(4))
         controller.updateEnvironment(spec(), FakeMeasure())
         controller.openPosition(0, 0)
@@ -194,12 +215,11 @@ class ReaderContentControllerTest {
         val listener = RecordingListener()
         val controller = ReaderContentController(
             scope = this,
-            bodyLoader = { body },
-            listener = listener,
-            layoutLoader = {
+            chapterLoader = {
                 layoutLoads++
-                availableLayout
-            }
+                ReaderChapterContent(body, availableLayout)
+            },
+            listener = listener
         )
         controller.setChapters(listOf(ChapterMeta(0, "", body.length)))
         controller.updateEnvironment(spec(), FakeMeasure())
@@ -234,7 +254,7 @@ class ReaderContentControllerTest {
             resourcePaths = emptyMap(),
             fontPaths = emptyMap()
         )
-        controller.invalidateEpubLayouts()
+        controller.reloadFromSource()
         advanceUntilIdle()
         coroutineContext.job.children.forEach { it.join() }
 
@@ -276,9 +296,8 @@ class ReaderContentControllerTest {
         )
         val controller = ReaderContentController(
             scope = this,
-            bodyLoader = { body },
-            listener = listener,
-            layoutLoader = { bundle }
+            chapterLoader = { ReaderChapterContent(body, bundle) },
+            listener = listener
         )
         controller.setChapters(listOf(ChapterMeta(0, "", body.length)))
         controller.updateEnvironment(spec(), throwingMeasure)
@@ -289,5 +308,36 @@ class ReaderContentControllerTest {
         assertTrue(controller.isReady)
         assertTrue(controller.curPage() is RenderPage.Laid)
         assertEquals(0, listener.contentErrors)
+    }
+
+    @Test
+    fun `reload ignores content returned by the previous source version`() = runTest {
+        var source = "old"
+        val oldStarted = CompletableDeferred<Unit>()
+        val releaseOld = CompletableDeferred<Unit>()
+        val controller = ReaderContentController(
+            scope = this,
+            chapterLoader = {
+                val captured = source
+                if (captured == "old") {
+                    oldStarted.complete(Unit)
+                    releaseOld.await()
+                }
+                ReaderChapterContent(captured)
+            },
+            listener = RecordingListener()
+        )
+        controller.setChapters(listOf(ChapterMeta(0, "", 3)))
+        controller.updateEnvironment(spec(), FakeMeasure())
+        controller.openPosition(0, 0)
+        oldStarted.await()
+
+        source = "new"
+        controller.reloadFromSource()
+        releaseOld.complete(Unit)
+        advanceUntilIdle()
+        coroutineContext.job.children.forEach { it.join() }
+
+        assertEquals("new", controller.chapterBody(0))
     }
 }

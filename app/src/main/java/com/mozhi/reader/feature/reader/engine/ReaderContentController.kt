@@ -19,6 +19,12 @@ data class ChapterMeta(
     val charCount: Int
 )
 
+data class ReaderChapterContent(
+    val body: String,
+    val epubLayout: EpubLayoutChapterBundle? = null,
+    val inlineImages: List<InlineImageSource> = emptyList()
+)
+
 /**
  * A page handed to the render layer. Real pages carry layout; placeholder pages appear when the
  * user outruns loading, and are drawn as a centered message exactly like Legado's `format()` page.
@@ -57,9 +63,8 @@ sealed interface RenderPage {
  */
 class ReaderContentController(
     private val scope: CoroutineScope,
-    private val bodyLoader: suspend (chapterIndex: Int) -> String?,
-    private val listener: Listener,
-    private val layoutLoader: suspend (chapterIndex: Int) -> EpubLayoutChapterBundle? = { null }
+    private val chapterLoader: suspend (chapterIndex: Int) -> ReaderChapterContent?,
+    private val listener: Listener
 ) {
     interface Listener {
         /** -1: only the previous page changed; 1: only the next; 0: everything. */
@@ -76,17 +81,20 @@ class ReaderContentController(
         fun onContentError(chapterIndex: Int, error: Throwable) = Unit
     }
 
-    private class Slot(val index: Int, val body: String, var chapter: TextChapter?)
+    private class Slot(
+        val index: Int,
+        val content: ReaderChapterContent,
+        var chapter: TextChapter?
+    )
 
     private var chapters: List<ChapterMeta> = emptyList()
-    private var inlineImagesByChapter: Map<Int, List<InlineImageSource>> = emptyMap()
     private var inlineMarkersByChapter: Map<Int, List<InlineMarkerReservation>> = emptyMap()
-    private val layoutBundles = mutableMapOf<Int, EpubLayoutChapterBundle>()
     private var cumulativeChars: LongArray = LongArray(0)
     private var totalChars: Long = 0
 
     private var typesetter: ChapterTypesetter? = null
     private var environmentVersion = 0
+    private var sourceVersion = 0
 
     var chapterIndex: Int = 0
         private set
@@ -102,27 +110,14 @@ class ReaderContentController(
 
     val isReady: Boolean get() = curSlot?.chapter != null
 
-    fun setInlineImages(images: Map<Int, List<InlineImageSource>>) {
-        if (images == inlineImagesByChapter) return
-        inlineImagesByChapter = images
-        relayoutVisibleSlots()
-    }
-
     fun setInlineMarkers(markers: Map<Int, List<InlineMarkerReservation>>) {
         if (markers == inlineMarkersByChapter) return
         inlineMarkersByChapter = markers
         relayoutVisibleSlots()
     }
 
-    /** Drops missing/stale EPUB sidecars and re-typesets the visible chapter window in place. */
-    fun invalidateEpubLayouts() {
-        layoutBundles.clear()
-        relayoutVisibleSlots()
-    }
-
     fun setChapters(list: List<ChapterMeta>) {
         chapters = list
-        layoutBundles.clear()
         cumulativeChars = LongArray(list.size + 1)
         for (i in list.indices) {
             cumulativeChars[i + 1] = cumulativeChars[i] + list[i].charCount
@@ -143,6 +138,7 @@ class ReaderContentController(
         if (typesetter == null) return
         environmentVersion++
         val version = environmentVersion
+        val relayoutSourceVersion = sourceVersion
         val slots = listOfNotNull(curSlot, nextSlot, prevSlot)
         slots.forEach { it.chapter = null }
         if (slots.isEmpty()) {
@@ -158,19 +154,25 @@ class ReaderContentController(
                 for (slot in slots) {
                     currentCoroutineContext().ensureActive()
                     val laid = try {
-                        typesetChapter(slot.index, slot.body)
+                        typesetChapter(slot.index, slot.content)
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (error: Throwable) {
-                        if (slot.index == chapterIndex) listener.onContentError(slot.index, error)
+                        if (relayoutSourceVersion == sourceVersion && slot.index == chapterIndex) {
+                            listener.onContentError(slot.index, error)
+                        }
                         continue
                     } ?: continue
-                    if (version != environmentVersion) return@launch
+                    if (version != environmentVersion || relayoutSourceVersion != sourceVersion) {
+                        return@launch
+                    }
                     slot.chapter = laid
                     notifySlotChanged(slot.index)
                 }
             } finally {
-                registered.forEach { loadingIndices.remove(it.index) }
+                if (relayoutSourceVersion == sourceVersion) {
+                    registered.forEach { loadingIndices.remove(it.index) }
+                }
             }
         }
     }
@@ -193,6 +195,7 @@ class ReaderContentController(
         chapterIndex: Int = this.chapterIndex,
         charOffset: Int = this.charOffset
     ) {
+        sourceVersion++
         relayoutJob?.cancel()
         environmentVersion++
         this.chapterIndex = chapterIndex.coerceIn(0, (chapters.size - 1).coerceAtLeast(0))
@@ -208,25 +211,27 @@ class ReaderContentController(
     fun jumpToProgress(progress: Float) {
         if (chapters.isEmpty() || totalChars <= 0) return
         val target = (progress.coerceIn(0f, 1f) * totalChars).toLong()
-        var index = cumulativeChars.indexOfLast { it <= target }.coerceIn(0, chapters.size - 1)
-        if (index >= chapters.size) index = chapters.size - 1
-        val within = (target - cumulativeChars[index]).toInt()
-            .coerceIn(0, (chapters[index].charCount - 1).coerceAtLeast(0))
-        jumpToChapter(index, within)
+        val index = cumulativeChars.indexOfLast { it <= target }
+            .coerceIn(0, chapters.size - 1)
+        val rawLength = chapters[index].charCount.coerceAtLeast(1)
+        val rawWithin = (target - cumulativeChars[index]).coerceIn(0, rawLength.toLong())
+        val shownLength = displayedCharCount(index)
+        val shownWithin = (rawWithin.toDouble() / rawLength * shownLength).toInt()
+            .coerceIn(0, (shownLength - 1).coerceAtLeast(0))
+        jumpToChapter(index, shownWithin)
     }
 
     /** Fraction of the current chapter that lies before the reading position. */
     fun chapterProgress(): Float {
-        val charCount = chapters.getOrNull(chapterIndex)?.charCount ?: 0
-        if (charCount <= 0) return 0f
-        return (charOffset.toFloat() / charCount).coerceIn(0f, 1f)
+        val length = displayedCharCount(chapterIndex)
+        return if (length <= 0) 0f else (charOffset.toFloat() / length).coerceIn(0f, 1f)
     }
 
     /** Jump within the current chapter by fraction of its characters (章内跳页). */
     fun seekWithinChapter(fraction: Float) {
-        val charCount = chapters.getOrNull(chapterIndex)?.charCount ?: return
-        val within = (fraction.coerceIn(0f, 1f) * charCount).toInt()
-            .coerceIn(0, (charCount - 1).coerceAtLeast(0))
+        val length = displayedCharCount(chapterIndex)
+        val within = (fraction.coerceIn(0f, 1f) * length).toInt()
+            .coerceIn(0, (length - 1).coerceAtLeast(0))
         jumpToChapter(chapterIndex, within)
     }
 
@@ -373,22 +378,25 @@ class ReaderContentController(
     private fun ensureLoaded(index: Int) {
         if (index < 0 || index >= chapters.size) return
         val existing = slotFor(index)
-        if (existing?.chapter != null) return
-        if (!loadingIndices.add(index)) return
+        if (existing?.chapter != null || !loadingIndices.add(index)) return
+        val requestedSourceVersion = sourceVersion
         scope.launch {
             try {
-                // A slot without layout already caches its body; only hit disk for new chapters.
-                val body = existing?.body ?: bodyLoader(index) ?: ""
+                val content = existing?.content
+                    ?: chapterLoader(index)
+                    ?: ReaderChapterContent("")
+                if (requestedSourceVersion != sourceVersion) return@launch
                 // Re-typeset if the environment moved underneath us (viewport/typography change
                 // while the chapter was loading), so a stale spec never reaches a slot.
                 var laid: TextChapter?
                 do {
                     currentCoroutineContext().ensureActive()
                     val version = environmentVersion
-                    laid = typesetChapter(index, body)
-                } while (version != environmentVersion)
+                    laid = typesetChapter(index, content)
+                } while (version != environmentVersion && requestedSourceVersion == sourceVersion)
+                if (requestedSourceVersion != sourceVersion) return@launch
                 if (index !in (chapterIndex - 1)..(chapterIndex + 1)) return@launch
-                val slot = Slot(index, body, laid)
+                val slot = Slot(index, content, laid)
                 when (index) {
                     chapterIndex - 1 -> prevSlot = slot
                     chapterIndex -> curSlot = slot
@@ -398,57 +406,50 @@ class ReaderContentController(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {
-                if (index == chapterIndex) listener.onContentError(index, error)
+                if (requestedSourceVersion == sourceVersion && index == chapterIndex) {
+                    listener.onContentError(index, error)
+                }
             } finally {
-                loadingIndices.remove(index)
+                if (requestedSourceVersion == sourceVersion) loadingIndices.remove(index)
             }
         }
     }
 
-    private suspend fun typesetChapter(index: Int, body: String): TextChapter? {
+    private suspend fun typesetChapter(
+        index: Int,
+        content: ReaderChapterContent
+    ): TextChapter? {
         val typesetter = typesetter ?: return null
         val title = chapters.getOrNull(index)?.title.orEmpty()
         return layoutMutex.withLock {
-            val epubLayout = layoutBundles[index] ?: try {
-                layoutLoader(index)?.also { layoutBundles[index] = it }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Throwable) {
-                null
-            }
-            val result = withContext(Dispatchers.Default) {
+            withContext(Dispatchers.Default) {
                 val context = currentCoroutineContext()
                 val cancellationCheck = { context.ensureActive() }
                 try {
                     typesetter.typeset(
                         chapterIndex = index,
                         title = title,
-                        body = body,
-                        inlineImages = inlineImagesByChapter[index].orEmpty(),
+                        body = content.body,
+                        inlineImages = content.inlineImages,
                         inlineMarkers = inlineMarkersByChapter[index].orEmpty(),
-                        epubLayout = epubLayout,
+                        epubLayout = content.epubLayout,
                         cancellationCheck = cancellationCheck
-                    ) to false
+                    )
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (nativeError: Throwable) {
-                    if (epubLayout == null) throw nativeError
-                    // Native-layout support is best effort per chapter. A malformed/unsupported
-                    // style must never strand the reader; immediately fall back to the stable text
-                    // path and forget this bundle for the rest of the session.
+                    if (content.epubLayout == null) throw nativeError
                     typesetter.typeset(
                         chapterIndex = index,
                         title = title,
-                        body = body,
-                        inlineImages = inlineImagesByChapter[index].orEmpty(),
+                        body = content.body,
+                        inlineImages = content.inlineImages,
                         inlineMarkers = inlineMarkersByChapter[index].orEmpty(),
                         epubLayout = null,
                         cancellationCheck = cancellationCheck
-                    ) to true
+                    )
                 }
             }
-            if (result.second) layoutBundles.remove(index)
-            result.first
         }
     }
 
@@ -544,7 +545,7 @@ class ReaderContentController(
      * Cuts at the nearest paragraph break within reach so the slice starts and ends cleanly.
      */
     fun contextAround(range: IntRange, radius: Int = 240): String {
-        val body = curSlot?.body ?: return ""
+        val body = curSlot?.content?.body ?: return ""
         if (body.isEmpty()) return ""
         var from = (range.first - radius).coerceIn(0, body.length)
         var to = (range.last + 1 + radius).coerceIn(from, body.length)
@@ -560,7 +561,9 @@ class ReaderContentController(
     }
 
     /** Body text for a chapter currently held by the three-chapter window. */
-    fun chapterBody(index: Int): String? = slotFor(index)?.body
+    fun chapterBody(index: Int): String? = slotFor(index)?.content?.body
+
+    fun chapterLayout(index: Int): EpubLayoutChapterBundle? = slotFor(index)?.content?.epubLayout
 
     fun bookProgress(): Float = progressAt(chapterIndex, charOffset)
 
@@ -572,11 +575,16 @@ class ReaderContentController(
     }
 
     fun progressAt(chapterIndex: Int, charOffset: Int): Float {
-        if (totalChars <= 0 || chapterIndex !in 0 until cumulativeChars.size - 1) return 0f
-        return ((cumulativeChars[chapterIndex] + charOffset).toDouble() / totalChars)
+        if (totalChars <= 0 || chapterIndex !in chapters.indices) return 0f
+        val shownLength = displayedCharCount(chapterIndex).coerceAtLeast(1)
+        val rawWithin = charOffset.toDouble() / shownLength * chapters[chapterIndex].charCount
+        return ((cumulativeChars[chapterIndex] + rawWithin) / totalChars)
             .toFloat()
             .coerceIn(0f, 1f)
     }
+
+    private fun displayedCharCount(index: Int): Int =
+        slotFor(index)?.content?.body?.length ?: chapters.getOrNull(index)?.charCount ?: 0
 
     private fun laidPage(page: TextPage, chapter: TextChapter): RenderPage.Laid = RenderPage.Laid(
         chapterIndex = chapter.chapterIndex,

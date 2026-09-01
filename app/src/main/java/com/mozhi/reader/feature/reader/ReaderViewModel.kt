@@ -15,29 +15,34 @@ import com.mozhi.reader.core.database.entity.BookTocEntryEntity
 import com.mozhi.reader.core.database.entity.ChapterEntity
 import com.mozhi.reader.core.database.entity.IllustrationEntity
 import com.mozhi.reader.core.database.entity.ReadingDailyEntity
+import com.mozhi.reader.core.datastore.ChineseConversionMode
 import com.mozhi.reader.core.datastore.PageTurnAnimation
 import com.mozhi.reader.core.datastore.PendingReaderFont
+import com.mozhi.reader.core.datastore.PublisherStyleMode
 import com.mozhi.reader.core.datastore.ReaderFont
 import com.mozhi.reader.core.datastore.ReaderFontImporter
 import com.mozhi.reader.core.datastore.ReaderImageImporter
 import com.mozhi.reader.core.datastore.ReaderSettings
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
-import com.mozhi.reader.core.datastore.PublisherStyleMode
 import com.mozhi.reader.core.datastore.ReaderTextReplacementRule
+import com.mozhi.reader.core.datastore.ReaderTheme
 import com.mozhi.reader.core.datastore.ReaderThemeSlot
+import com.mozhi.reader.core.datastore.chineseConversionModeFor
 import com.mozhi.reader.core.datastore.validationError
+import com.mozhi.reader.core.library.AnnotationRepository
+import com.mozhi.reader.core.library.BookLayoutStore
+import com.mozhi.reader.core.library.BookMediaStore
 import com.mozhi.reader.core.library.EditableChapterDraft
 import com.mozhi.reader.core.library.EpubResourcePath
-import com.mozhi.reader.core.datastore.ReaderTheme
-import com.mozhi.reader.core.library.AnnotationRepository
-import com.mozhi.reader.core.library.BookMediaStore
-import com.mozhi.reader.core.library.BookLayoutStore
-import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.library.IllustrationRepository
+import com.mozhi.reader.core.library.LibraryRepository
+import com.mozhi.reader.core.text.ChineseTextConverter
 import com.mozhi.reader.feature.importer.TxtChapterSplitter
 import com.mozhi.reader.feature.importer.TxtTocRuleLoader
 import com.mozhi.reader.feature.reader.engine.ChapterMeta
+import com.mozhi.reader.feature.reader.engine.ChineseChapterPresenter
 import com.mozhi.reader.feature.reader.engine.InlineImageSource
+import com.mozhi.reader.feature.reader.engine.ReaderChapterContent
 import com.mozhi.reader.feature.reader.engine.ReaderContentController
 import com.mozhi.reader.feature.reader.engine.ReaderPageLink
 import com.mozhi.reader.feature.reader.engine.RenderPage
@@ -57,6 +62,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class ReaderUiState(
     val book: BookEntity? = null,
@@ -134,7 +140,9 @@ class ReaderViewModel @Inject constructor(
     private val chapterSplitter: TxtChapterSplitter,
     private val tocRuleLoader: TxtTocRuleLoader,
     private val textReplacementRuleAgent: TextReplacementRuleAgent,
-    private val proactiveAnnotationService: ProactiveAnnotationService
+    private val proactiveAnnotationService: ProactiveAnnotationService,
+    private val chapterPresenter: ChineseChapterPresenter,
+    private val chineseTextConverter: ChineseTextConverter
 ) : ViewModel(), ReaderContentController.Listener {
     private val bookId: Long = when (val value: Any? = savedStateHandle["bookId"]) {
         is Long -> value
@@ -153,12 +161,14 @@ class ReaderViewModel @Inject constructor(
 
     val contentController = ReaderContentController(
         scope = viewModelScope,
-        bodyLoader = ::loadChapterBody,
-        listener = this,
-        layoutLoader = { chapterIndex -> layoutStore.readChapter(bookId, chapterIndex) }
+        chapterLoader = ::loadPresentedChapter,
+        listener = this
     )
 
     private var chapterEntities: List<ChapterEntity> = emptyList()
+    private var conversionMode = ChineseConversionMode.OFF
+    private var rawInlineImages: Map<Int, List<InlineImageSource>> = emptyMap()
+    private var rawTocEntries: List<BookTocEntryEntity> = emptyList()
     private var contentHook: ((Int) -> Unit)? = null
     private var progressSaveJob: Job? = null
     private var readingResumedAt: Long? = null
@@ -175,7 +185,8 @@ class ReaderViewModel @Inject constructor(
         }
         viewModelScope.launch {
             libraryRepository.observeTocEntries(bookId).collect { entries ->
-                mutableState.update { it.copy(tocEntries = entries) }
+                rawTocEntries = entries
+                mutableState.update { it.copy(tocEntries = displayTocEntries()) }
             }
         }
         viewModelScope.launch {
@@ -235,7 +246,11 @@ class ReaderViewModel @Inject constructor(
                 mutableState.update { it.copy(isLoading = false, errorMessage = "书籍不存在") }
                 return@launch
             }
-            mutableState.update { it.copy(book = book, settings = settingsAsync.await()) }
+            val settings = settingsAsync.await()
+            conversionMode = settings.chineseConversionModeFor(bookId)
+            mutableState.update {
+                it.copy(book = book, settings = settings, tocEntries = displayTocEntries())
+            }
             var resolved = book
             if (book.textVersion < 1) {
                 // Imported before plain text existed; the backfill worker runs at app start.
@@ -257,17 +272,15 @@ class ReaderViewModel @Inject constructor(
                 return@launch
             }
             chapterEntities = chapters
+            rawInlineImages = imagesAsync.await()
+            val shownChapters = displayChapters()
             contentController.setChapters(
-                chapters.map { ChapterMeta(it.chapterIndex, it.title, it.charCount) }
+                shownChapters.map { ChapterMeta(it.chapterIndex, it.title, it.charCount) }
             )
-            // Install image anchors before opening the three-chapter window. Opening first laid
-            // every visible chapter as text and immediately discarded that work when images
-            // arrived, which was the main source of the post-import stutter on illustrated EPUBs.
-            contentController.setInlineImages(imagesAsync.await())
             mutableState.update {
                 it.copy(
                     book = resolved,
-                    chapters = chapters,
+                    chapters = shownChapters,
                     currentChapterIndex = resolved.lastReadChapterIndex,
                     currentCharOffset = resolved.lastReadCharOffset,
                     isLoading = false
@@ -294,8 +307,8 @@ class ReaderViewModel @Inject constructor(
                         return@launch
                     }
                     if (awaitMaterializedAssets(resolved.sourceType, chapterTextLengths)) {
-                        contentController.setInlineImages(loadInlineImages())
-                        contentController.invalidateEpubLayouts()
+                        rawInlineImages = loadInlineImages()
+                        contentController.reloadFromSource()
                     }
                 }
             }
@@ -341,9 +354,29 @@ class ReaderViewModel @Inject constructor(
         return false
     }
 
-    private suspend fun loadChapterBody(chapterIndex: Int): String? {
+    private fun displayChapters(mode: ChineseConversionMode = conversionMode) =
+        chapterEntities.map { chapter ->
+            chapter.copy(title = chineseTextConverter.convert(chapter.title, mode))
+        }
+
+    private fun displayTocEntries(mode: ChineseConversionMode = conversionMode) =
+        rawTocEntries.map { entry ->
+            entry.copy(title = chineseTextConverter.convert(entry.title, mode))
+        }
+
+    private suspend fun loadPresentedChapter(chapterIndex: Int): ReaderChapterContent? {
         val chapter = chapterEntities.getOrNull(chapterIndex) ?: return null
-        return libraryRepository.readChapterText(bookId, chapter)
+        val mode = conversionMode
+        val body = libraryRepository.readChapterText(bookId, chapter)
+        val layout = layoutStore.readChapter(bookId, chapterIndex)
+        return withContext(Dispatchers.Default) {
+            chapterPresenter.present(
+                body = body,
+                layout = layout,
+                images = rawInlineImages[chapterIndex].orEmpty(),
+                mode = mode
+            )
+        }
     }
 
     // ---- ReaderContentController.Listener ----
@@ -473,7 +506,8 @@ class ReaderViewModel @Inject constructor(
             )
         }
         val target = resolveEpubTarget(link.sourceChapterIndex, link.href) ?: return null
-        val body = loadChapterBody(target.chapterIndex).orEmpty()
+        val targetChapter = chapterEntities.getOrNull(target.chapterIndex)
+        val body = targetChapter?.let { libraryRepository.readChapterText(bookId, it) }.orEmpty()
         val start = target.offset.coerceIn(0, body.length)
         val end = target.endOffset.coerceIn(start, body.length)
         val previewEnd = if (end > start) end.coerceAtMost(start + LINK_PREVIEW_MAX_CHARS)
@@ -488,7 +522,10 @@ class ReaderViewModel @Inject constructor(
             label = link.label,
             targetChapterIndex = target.chapterIndex,
             targetCharOffset = start,
-            targetTitle = chapterEntities.getOrNull(target.chapterIndex)?.title.orEmpty(),
+            targetTitle = chineseTextConverter.convert(
+                chapterEntities.getOrNull(target.chapterIndex)?.title.orEmpty(),
+                conversionMode
+            ),
             content = content
         )
     }
@@ -796,14 +833,15 @@ class ReaderViewModel @Inject constructor(
             (chapters.firstOrNull { it.chapterIndex == targetChapter }?.charCount ?: 0)
         )
         chapterEntities = chapters
+        val shownChapters = displayChapters()
         contentController.setChapters(
-            chapters.map { ChapterMeta(it.chapterIndex, it.title, it.charCount) }
+            shownChapters.map { ChapterMeta(it.chapterIndex, it.title, it.charCount) }
         )
         contentController.reloadFromSource(targetChapter, targetOffset)
         mutableState.update {
             it.copy(
                 book = book ?: it.book,
-                chapters = chapters,
+                chapters = shownChapters,
                 currentChapterIndex = targetChapter,
                 currentCharOffset = targetOffset
             )

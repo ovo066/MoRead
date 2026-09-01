@@ -97,7 +97,7 @@ internal fun Modifier.collectionDragSource(
     state: ShelfCollectionDragState,
     onDrop: (BookEntity, ShelfDropTarget) -> Unit,
     onLongPressOnly: (Rect) -> Unit
-): Modifier = pointerInput(book.id, enabled) {
+): Modifier = pointerInput(book, enabled) {
     if (!enabled) return@pointerInput
     detectDragGesturesAfterLongPress(
         onDragStart = { local -> state.begin(book, bounds().topLeft + local) },

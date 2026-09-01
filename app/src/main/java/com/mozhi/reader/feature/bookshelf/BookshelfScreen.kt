@@ -1379,10 +1379,12 @@ private fun GridBookItem(
                 bounds = it.boundsInRoot()
                 collectionDragState.register(target, bounds)
             }
-            .border(
-                if (collectionDragState.activeTarget == target) 2.dp else 0.dp,
-                MaterialTheme.colorScheme.primary,
-                RoundedCornerShape(12.dp)
+            .then(
+                if (collectionDragState.activeTarget == target) Modifier.border(
+                    2.dp,
+                    MaterialTheme.colorScheme.primary,
+                    RoundedCornerShape(12.dp)
+                ) else Modifier
             )
             .clickable(onClick = onOpen)
             .collectionDragSource(
@@ -1453,10 +1455,12 @@ private fun ListBookItem(
                 bounds = it.boundsInRoot()
                 collectionDragState.register(target, bounds)
             }
-            .border(
-                if (collectionDragState.activeTarget == target) 2.dp else 0.dp,
-                MaterialTheme.colorScheme.primary,
-                RoundedCornerShape(24.dp)
+            .then(
+                if (collectionDragState.activeTarget == target) Modifier.border(
+                    2.dp,
+                    MaterialTheme.colorScheme.primary,
+                    RoundedCornerShape(24.dp)
+                ) else Modifier
             )
             .clickable(onClick = onOpen)
             .collectionDragSource(

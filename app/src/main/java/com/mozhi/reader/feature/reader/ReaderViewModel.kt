@@ -409,6 +409,71 @@ class ReaderViewModel @Inject constructor(
         ReaderTextAnchors.create(body, start, end, conversionMode)
     }
 
+    /** Source-backed consumers (listen/citations) cross into the current presentation here. */
+    suspend fun resolveSourceRange(
+        chapterIndex: Int,
+        start: Int,
+        end: Int,
+        sourceAnchorJson: String = ""
+    ): ResolvedTextAnchor? {
+        val anchor = ReaderTextAnchorCodec.decode(sourceAnchorJson) ?: run {
+            val chapter = chapterEntities.firstOrNull { it.chapterIndex == chapterIndex }
+                ?: return null
+            val source = libraryRepository.readChapterText(bookId, chapter)
+            ReaderTextAnchors.create(source, start, end, ChineseConversionMode.OFF)
+        }
+        return resolveSourceAnchor(chapterIndex, anchor, start, end)
+    }
+
+    private suspend fun resolveSourceAnchor(
+        chapterIndex: Int,
+        anchor: ReaderTextAnchor,
+        fallbackStart: Int,
+        fallbackEnd: Int,
+        retryOnModeChange: Boolean = true
+    ): ResolvedTextAnchor? {
+        val mode = conversionMode
+        val body = contentController.chapterBody(chapterIndex)
+            ?: loadPresentedChapter(chapterIndex)?.body
+            ?: return null
+        if (mode != conversionMode) {
+            return if (retryOnModeChange) {
+                resolveSourceAnchor(chapterIndex, anchor, fallbackStart, fallbackEnd, false)
+            } else {
+                null
+            }
+        }
+        return ReaderTextAnchors.resolve(body, anchor, mode, chineseTextConverter) ?: run {
+            val start = fallbackStart.coerceIn(0, body.length)
+            ResolvedTextAnchor(start, fallbackEnd.coerceIn(start, body.length))
+        }
+    }
+
+    /** Converts one displayed reader boundary back to the raw source used by ListenEngine. */
+    suspend fun sourceOffsetForDisplayed(chapterIndex: Int, displayOffset: Int): Int {
+        val mode = conversionMode
+        if (mode == ChineseConversionMode.OFF) return displayOffset.coerceAtLeast(0)
+        val displayed = contentController.chapterBody(chapterIndex)
+            ?: loadPresentedChapter(chapterIndex)?.body
+            ?: return displayOffset.coerceAtLeast(0)
+        val chapter = chapterEntities.firstOrNull { it.chapterIndex == chapterIndex }
+            ?: return displayOffset.coerceAtLeast(0)
+        val source = libraryRepository.readChapterText(bookId, chapter)
+        if (mode != conversionMode) return sourceOffsetForDisplayed(chapterIndex, displayOffset)
+        val point = displayOffset.coerceIn(0, displayed.length)
+        val anchor = ReaderTextAnchors.create(displayed, point, point, mode)
+        return ReaderTextAnchors.resolve(
+            source,
+            anchor,
+            ChineseConversionMode.OFF,
+            chineseTextConverter
+        )?.start ?: if (displayed.isEmpty()) {
+            0
+        } else {
+            (point.toLong() * source.length / displayed.length).toInt()
+        }
+    }
+
     // ---- ReaderContentController.Listener ----
 
     override fun onContentChanged(relativePosition: Int) {
@@ -780,6 +845,14 @@ class ReaderViewModel @Inject constructor(
             conversionMode,
             chineseTextConverter
         )?.start ?: bookmark.charOffset.coerceIn(0, body.length)
+    }
+
+    fun isCurrentPositionBookmarked(): Boolean {
+        val chapterIndex = contentController.chapterIndex
+        val charOffset = contentController.charOffset
+        return mutableState.value.bookmarks.any {
+            it.chapterIndex == chapterIndex && bookmarkDisplayOffset(it) == charOffset
+        }
     }
 
     fun deleteBookmark(bookmarkId: Long) {

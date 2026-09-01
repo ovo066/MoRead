@@ -89,6 +89,20 @@ class ReaderTextAnchorTest {
         )!!
 
         assertEquals("鼠标里面的代码", shown.substring(resolved.start, resolved.end))
+
+        val displayAnchor = ReaderTextAnchors.create(
+            shown,
+            resolved.start,
+            resolved.end,
+            ChineseConversionMode.TW2SP
+        )
+        val sourceResolved = ReaderTextAnchors.resolve(
+            source,
+            displayAnchor,
+            ChineseConversionMode.OFF,
+            converter
+        )!!
+        assertEquals("滑鼠裡面的程式碼", source.substring(sourceResolved.start, sourceResolved.end))
     }
 
     @Test

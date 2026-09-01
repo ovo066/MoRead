@@ -2,8 +2,7 @@ package com.mozhi.reader.feature.reader
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.mozhi.reader.core.datastore.ReaderSettingsRepository
-import com.mozhi.reader.core.datastore.chineseConversionModeFor
+import com.mozhi.reader.core.datastore.ChineseConversionMode
 import com.mozhi.reader.core.library.BookLayoutStore
 import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.text.ChineseTextConverter
@@ -15,7 +14,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -29,9 +27,16 @@ data class ReaderSearchUiState(
 
 internal typealias ReaderSearchScan = suspend (
     bookId: Long,
+    mode: ChineseConversionMode,
     query: String,
     publish: (List<BookSearchHit>) -> Boolean
 ) -> Unit
+
+private data class ReaderSearchIdentity(
+    val bookId: Long,
+    val mode: ChineseConversionMode,
+    val query: String
+)
 
 /** 书内关键词搜索：逐章扫描、边扫边出结果；新查询取消旧任务。 */
 @HiltViewModel
@@ -42,13 +47,11 @@ class ReaderSearchViewModel internal constructor(
     @Inject
     constructor(
         libraryRepository: LibraryRepository,
-        settingsRepository: ReaderSettingsRepository,
         layoutStore: BookLayoutStore,
         chapterPresenter: ChineseChapterPresenter,
         chineseTextConverter: ChineseTextConverter
     ) : this(
-        scanBook = { bookId, query, publish ->
-            val mode = settingsRepository.settings.first().chineseConversionModeFor(bookId)
+        scanBook = { bookId, mode, query, publish ->
             val chapters = libraryRepository.getChapters(bookId)
             for (chapter in chapters) {
                 val raw = searchChapterOrNull {
@@ -78,29 +81,46 @@ class ReaderSearchViewModel internal constructor(
     val uiState = _uiState.asStateFlow()
 
     private var bookId: Long = -1
+    private var mode = ChineseConversionMode.OFF
     private var searchJob: Job? = null
+    private var activeScan: ReaderSearchIdentity? = null
 
-    fun bind(bookId: Long) {
+    fun bind(bookId: Long, mode: ChineseConversionMode) {
+        if (this.bookId == bookId && this.mode == mode) return
+        searchJob?.cancel()
+        activeScan = null
         this.bookId = bookId
+        this.mode = mode
+        _uiState.value = ReaderSearchUiState()
     }
 
     fun search(query: String) {
         searchJob?.cancel()
         val clean = query.trim()
+        activeScan = null
         _uiState.value = ReaderSearchUiState(query = query)
         if (clean.length < MIN_QUERY_CHARS || bookId <= 0) return
+        val identity = ReaderSearchIdentity(bookId, mode, clean)
+        activeScan = identity
         _uiState.value = _uiState.value.copy(isSearching = true)
         searchJob = viewModelScope.launch {
-            scanBook(bookId, clean) { hits ->
-                _uiState.value = _uiState.value.copy(hits = _uiState.value.hits + hits)
-                _uiState.value.hits.size < MAX_TOTAL_HITS
+            scanBook(identity.bookId, identity.mode, identity.query) { hits ->
+                if (activeScan != identity) {
+                    false
+                } else {
+                    _uiState.value = _uiState.value.copy(hits = _uiState.value.hits + hits)
+                    _uiState.value.hits.size < MAX_TOTAL_HITS
+                }
             }
-            _uiState.value = _uiState.value.copy(isSearching = false, completed = true)
+            if (activeScan == identity) {
+                _uiState.value = _uiState.value.copy(isSearching = false, completed = true)
+            }
         }
     }
 
     fun clear() {
         searchJob?.cancel()
+        activeScan = null
         _uiState.value = ReaderSearchUiState()
     }
 

@@ -1,6 +1,10 @@
 package com.mozhi.reader.feature.reader
 
+import com.mozhi.reader.core.datastore.ChineseConversionMode
 import com.mozhi.reader.core.library.QuoteChapter
+import com.mozhi.reader.core.library.ReaderTextAnchorCodec
+import com.mozhi.reader.core.library.ReaderTextAnchors
+import com.mozhi.reader.core.text.ChineseTextConverter
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -138,6 +142,20 @@ class CompanionCitationParserTest {
         assertEquals("风从山谷里穿过来", located.single().citation.quote)
         assertEquals(2, located.single().citation.chapterNumber)
         assertEquals(1, located.single().chapterIndex)
+
+        val regionalBody = "前面的程式碼很长。滑鼠裡面的程式碼。后文。"
+        val regional = CompanionCitationVerifier.locate(
+            listOf(CompanionCitation(1, "滑鼠裡面的程式碼")),
+            listOf(QuoteChapter(0, regionalBody))
+        ).single()
+        val shown = ChineseTextConverter().convert(regionalBody, ChineseConversionMode.TW2SP)
+        val resolved = ReaderTextAnchors.resolve(
+            shown,
+            ReaderTextAnchorCodec.decode(regional.sourceAnchorJson)!!,
+            ChineseConversionMode.TW2SP,
+            ChineseTextConverter()
+        )!!
+        assertEquals("鼠标里面的代码", shown.substring(resolved.start, resolved.end))
     }
 
     @Test

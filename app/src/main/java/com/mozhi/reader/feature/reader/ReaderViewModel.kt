@@ -461,12 +461,14 @@ class ReaderViewModel @Inject constructor(
         val chapter = chapterEntities.firstOrNull { it.chapterIndex == chapterIndex }
             ?: return null
         val source = libraryRepository.readChapterText(bookId, chapter)
-        return ReaderTextAnchors.resolveSourcePoint(
-            sourceBody = source,
-            displayedBody = displayed,
-            displayedAnchor = displayedAnchor,
-            converter = chineseTextConverter
-        )?.start
+        return withContext(Dispatchers.Default) {
+            ReaderTextAnchors.resolveSourcePoint(
+                sourceBody = source,
+                displayedBody = displayed,
+                displayedAnchor = displayedAnchor,
+                converter = chineseTextConverter
+            )?.start
+        }
     }
 
     // ---- ReaderContentController.Listener ----

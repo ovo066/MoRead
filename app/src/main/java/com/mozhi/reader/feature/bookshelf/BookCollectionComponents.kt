@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -22,9 +23,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.CreateNewFolder
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
@@ -53,6 +58,8 @@ import coil3.compose.AsyncImage
 import com.mozhi.reader.core.database.entity.BookCollectionEntity
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.ui.components.FrostedSurface
+import com.mozhi.reader.ui.components.MoReadMenuItem
+import com.mozhi.reader.ui.components.MoReadStableDropdownMenu
 import java.io.File
 import kotlin.math.roundToInt
 
@@ -330,14 +337,16 @@ internal fun CollectionContentsSheet(
     onDissolve: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    var moreExpanded by remember(entry.collection.id) { mutableStateOf(false) }
     ModalBottomSheet(
         onDismissRequest = onDismiss,
+        modifier = Modifier.fillMaxHeight(),
         sheetGesturesEnabled = false,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxSize()
                 .padding(horizontal = 20.dp)
                 .navigationBarsPadding()
         ) {
@@ -351,12 +360,32 @@ internal fun CollectionContentsSheet(
                         modifier = Modifier.padding(top = 2.dp)
                     )
                 }
-                TextButton(onClick = onRename) { Text("重命名") }
-                TextButton(onClick = onDissolve) { Text("解散") }
+                Box {
+                    IconButton(onClick = { moreExpanded = true }) {
+                        Icon(Icons.Outlined.MoreVert, contentDescription = "合集操作")
+                    }
+                    MoReadStableDropdownMenu(
+                        expanded = moreExpanded,
+                        onDismissRequest = { moreExpanded = false },
+                        width = 200.dp
+                    ) {
+                        MoReadMenuItem(
+                            text = "重命名",
+                            icon = Icons.Outlined.Edit,
+                            onClick = { moreExpanded = false; onRename() }
+                        )
+                        MoReadMenuItem(
+                            text = "解散合集",
+                            icon = Icons.Outlined.Delete,
+                            destructive = true,
+                            onClick = { moreExpanded = false; onDissolve() }
+                        )
+                    }
+                }
             }
             LazyVerticalGrid(
                 columns = GridCells.Fixed(3),
-                modifier = Modifier.fillMaxWidth().height(480.dp),
+                modifier = Modifier.fillMaxWidth().weight(1f),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
                 verticalArrangement = Arrangement.spacedBy(20.dp)

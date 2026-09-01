@@ -187,6 +187,7 @@ class ReaderViewModel @Inject constructor(
     )
 
     private var pendingAnchorJump: PendingAnchorJump? = null
+    private var suspendedNavigationJob: Job? = null
 
     /** Guards against overwriting stored progress from a session that never opened a position. */
     private var hasOpenedPosition = false
@@ -536,23 +537,28 @@ class ReaderViewModel @Inject constructor(
 
     // ---- navigation ----
 
-    fun goToChapter(chapterIndex: Int) {
+    fun supersedePendingNavigation() {
         pendingAnchorJump = null
+        suspendedNavigationJob?.cancel()
+        suspendedNavigationJob = null
+    }
+
+    fun goToChapter(chapterIndex: Int) {
+        supersedePendingNavigation()
         contentController.jumpToChapter(chapterIndex)
     }
 
     /** 目录项可能指向章内 fragment，不能只跳到章节首页。 */
     fun goToTocEntry(chapterIndex: Int, href: String) {
-        pendingAnchorJump = null
+        supersedePendingNavigation()
         val mode = conversionMode
-        viewModelScope.launch {
+        suspendedNavigationJob = viewModelScope.launch {
             val target = resolveEpubTarget(chapterIndex, href, chapterIndex)
             if (target == null) {
                 if (mode == conversionMode) contentController.jumpToChapter(chapterIndex)
                 return@launch
             }
             if (target.mode != conversionMode) return@launch
-            pendingAnchorJump = null
             contentController.jumpToChapter(target.chapterIndex, target.offset)
         }
     }
@@ -596,15 +602,14 @@ class ReaderViewModel @Inject constructor(
 
     fun goToEpubLink(preview: EpubLinkPreview) {
         val chapterIndex = preview.targetChapterIndex ?: return
-        pendingAnchorJump = null
+        supersedePendingNavigation()
         if (preview.presentedMode == conversionMode) {
             contentController.jumpToChapter(chapterIndex, preview.targetCharOffset)
             return
         }
-        viewModelScope.launch {
+        suspendedNavigationJob = viewModelScope.launch {
             val target = resolveEpubTarget(preview.sourceChapterIndex, preview.href) ?: return@launch
             if (target.mode != conversionMode) return@launch
-            pendingAnchorJump = null
             contentController.jumpToChapter(target.chapterIndex, target.offset)
         }
     }
@@ -678,7 +683,7 @@ class ReaderViewModel @Inject constructor(
             onBoundaryHit(PageTurnDirection.PREVIOUS)
             return
         }
-        pendingAnchorJump = null
+        supersedePendingNavigation()
         contentController.jumpToChapter(target)
     }
 
@@ -688,21 +693,22 @@ class ReaderViewModel @Inject constructor(
             onBoundaryHit(PageTurnDirection.NEXT)
             return
         }
-        pendingAnchorJump = null
+        supersedePendingNavigation()
         contentController.jumpToChapter(target)
     }
 
     fun seekWithinChapter(fraction: Float) {
-        pendingAnchorJump = null
+        supersedePendingNavigation()
         contentController.seekWithinChapter(fraction)
     }
 
     fun goToProgress(progress: Float) {
-        pendingAnchorJump = null
+        supersedePendingNavigation()
         contentController.jumpToProgress(progress)
     }
 
     fun goToBookmark(bookmark: BookmarkEntity) {
+        supersedePendingNavigation()
         pendingAnchorJump = ReaderTextAnchorCodec.decode(bookmark.locatorJson)?.let { anchor ->
             PendingAnchorJump(
                 bookmark.chapterIndex,
@@ -715,7 +721,7 @@ class ReaderViewModel @Inject constructor(
 
     /** 书内搜索命中跳转：charOffset 为章内 UTF-16 偏移，与书签同轨。 */
     fun goToPosition(chapterIndex: Int, charOffset: Int) {
-        pendingAnchorJump = null
+        supersedePendingNavigation()
         contentController.jumpToChapter(chapterIndex, charOffset)
     }
 
@@ -1021,7 +1027,7 @@ class ReaderViewModel @Inject constructor(
             (chapters.firstOrNull { it.chapterIndex == targetChapter }?.charCount ?: 0)
         )
         chapterEntities = chapters
-        pendingAnchorJump = null
+        supersedePendingNavigation()
         val shownChapters = displayChapters()
         contentController.setChapters(
             shownChapters.map { ChapterMeta(it.chapterIndex, it.title, it.charCount) }
@@ -1041,6 +1047,7 @@ class ReaderViewModel @Inject constructor(
 
     fun setChineseConversionMode(mode: ChineseConversionMode) {
         if (mode == conversionMode) return
+        supersedePendingNavigation()
         val chapter = contentController.chapterIndex
         val fallback = contentController.charOffset
         val anchor = currentAnchor(chapter, fallback)

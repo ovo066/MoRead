@@ -609,6 +609,7 @@ fun ReaderScreen(
                         palette = palette,
                         enabled = paneEnabled,
                         registerContentHook = viewModel::setContentHook,
+                        onScrollSupersedesNavigation = viewModel::supersedePendingNavigation,
                         onCenterTap = { chromeVisible = !chromeVisible },
                         onBoundary = viewModel::onBoundaryHit,
                         onNotice = paneNotice,

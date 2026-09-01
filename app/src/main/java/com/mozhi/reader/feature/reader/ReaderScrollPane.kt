@@ -96,6 +96,7 @@ fun ReaderScrollPane(
     palette: ReaderPalette,
     enabled: Boolean,
     registerContentHook: (((Int) -> Unit)?) -> Unit,
+    onScrollSupersedesNavigation: () -> Unit,
     onCenterTap: () -> Unit,
     onBoundary: (PageTurnDirection) -> Unit,
     onNotice: (String) -> Unit,
@@ -142,7 +143,8 @@ fun ReaderScrollPane(
     }
 
     /** 平滑滚动 [distance]（正向下阅读方向），逐帧走 applyScroll 保持跨章语义。 */
-    fun animateScrollBy(distance: Float) {
+    fun animateScrollBy(distance: Float, supersedesNavigation: Boolean = true) {
+        if (supersedesNavigation) onScrollSupersedesNavigation()
         holder.interruptScroll()
         holder.scrollJob = scope.launch {
             holder.flinging = true
@@ -280,7 +282,9 @@ fun ReaderScrollPane(
         if (!listenPlaying) return@LaunchedEffect
         val highlight = transientHighlight ?: return@LaunchedEffect
         if (holder.dragging || selection.isActive) return@LaunchedEffect
-        holder.listenFollowDelta(highlight)?.let { delta -> animateScrollBy(delta) }
+        holder.listenFollowDelta(highlight)?.let { delta ->
+            animateScrollBy(delta, supersedesNavigation = false)
+        }
     }
 
     DisposableEffect(controller) {
@@ -406,6 +410,7 @@ fun ReaderScrollPane(
                                     deltaX * deltaX + deltaY * deltaY > slop * slop
                                 ) {
                                     slopCrossed = true
+                                    onScrollSupersedesNavigation()
                                     holder.dragging = true
                                     // 起步吃掉 slop：从跨过阈值那一刻起内容一比一跟手。
                                     lastY = change.position.y

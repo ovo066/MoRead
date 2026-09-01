@@ -45,6 +45,28 @@ class ReaderTextAnchorTest {
                 converter
             )
         )
+
+        val reverseSource = "代码。鼠标。鼠标鼠标。"
+        val reverseOffset = reverseSource.indexOf('标')
+        val reverseAnchor = ReaderTextAnchors.create(
+            reverseSource,
+            reverseOffset,
+            reverseOffset,
+            ChineseConversionMode.OFF
+        )
+        val reverseShown = converter.convert(reverseSource, ChineseConversionMode.S2TWP)
+        assertEquals(
+            ResolvedTextAnchor(
+                reverseShown.indexOf('鼠'),
+                reverseShown.indexOf('鼠')
+            ),
+            ReaderTextAnchors.resolve(
+                reverseShown,
+                reverseAnchor,
+                ChineseConversionMode.S2TWP,
+                converter
+            )
+        )
     }
 
     @Test

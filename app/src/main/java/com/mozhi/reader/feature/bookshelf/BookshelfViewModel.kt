@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mozhi.reader.core.database.entity.BookEntity
+import com.mozhi.reader.core.database.entity.BookCollectionEntity
 import com.mozhi.reader.core.database.entity.BookReadState
 import com.mozhi.reader.core.database.entity.BookTagEntity
 import com.mozhi.reader.core.database.entity.BookTagRefEntity
@@ -31,6 +32,7 @@ import kotlinx.coroutines.launch
 
 data class BookshelfUiState(
     val books: List<BookEntity> = emptyList(),
+    val allBooks: List<BookEntity> = emptyList(),
     val layout: ShelfLayout = ShelfLayout.GRID,
     val filter: ShelfFilter = ShelfFilter(),
     val tags: List<BookTagEntity> = emptyList(),
@@ -38,6 +40,7 @@ data class BookshelfUiState(
     val groupCounts: Map<Long?, Int> = emptyMap(),
     val tagCounts: Map<Long, Int> = emptyMap(),
     val tagRefs: List<BookTagRefEntity> = emptyList(),
+    val collections: List<BookCollectionEntity> = emptyList(),
     /** 未经筛选的书籍总数，用于工具栏「N 本中的 M 本」这类文案。 */
     val totalBooks: Int = 0,
     /** 「正在阅读」卡的书；取全量最近阅读，不受筛选影响——筛选是给下面的书格用的。 */
@@ -130,6 +133,7 @@ class BookshelfViewModel @Inject constructor(
         )
         BookshelfUiState(
             books = filterShelfBooks(base.books, organization.tagRefs, effectiveFilter).sortedForShelf(),
+            allBooks = base.books,
             layout = base.layout,
             filter = effectiveFilter,
             tags = organization.tags,
@@ -137,6 +141,7 @@ class BookshelfViewModel @Inject constructor(
             groupCounts = organization.groupCounts,
             tagCounts = organization.tagCounts,
             tagRefs = organization.tagRefs,
+            collections = organization.collections,
             totalBooks = base.books.size,
             recentBook = base.recentBook,
             recentChapterTitle = base.recentChapterTitle,
@@ -194,7 +199,10 @@ class BookshelfViewModel @Inject constructor(
 
     fun deleteBook(book: BookEntity) {
         viewModelScope.launch {
-            runCatching { libraryRepository.deleteBook(book) }
+            runCatching {
+                libraryRepository.deleteBook(book)
+                shelfRepository.deleteEmptyCollections()
+            }
                 .onFailure {
                     eventChannel.send(BookshelfEvent.ShowMessage("删除失败，请稍后重试"))
                 }
@@ -275,8 +283,12 @@ class BookshelfViewModel @Inject constructor(
     }
 
     fun toggleSelection(bookId: Long) {
+        toggleSelection(setOf(bookId))
+    }
+
+    fun toggleSelection(bookIds: Set<Long>) {
         selectedBookIds.value = selectedBookIds.value.toMutableSet().apply {
-            if (!add(bookId)) remove(bookId)
+            if (bookIds.all(::contains)) removeAll(bookIds) else addAll(bookIds)
         }
     }
 
@@ -286,8 +298,12 @@ class BookshelfViewModel @Inject constructor(
     }
 
     fun selectAllVisible() {
-        val visible = uiState.value.books.map(BookEntity::id).toSet()
-        selectedBookIds.value = if (selectedBookIds.value.containsAll(visible)) emptySet() else visible
+        selectAllVisible(uiState.value.books.map(BookEntity::id).toSet())
+    }
+
+    fun selectAllVisible(bookIds: Set<Long>) {
+        selectedBookIds.value =
+            if (selectedBookIds.value.containsAll(bookIds)) emptySet() else bookIds
     }
 
     fun moveSelectedToGroup(groupId: Long?) {
@@ -328,6 +344,7 @@ class BookshelfViewModel @Inject constructor(
         viewModelScope.launch {
             ids.mapNotNull { libraryRepository.getBook(it) }
                 .forEach { libraryRepository.deleteBook(it) }
+            shelfRepository.deleteEmptyCollections()
             eventChannel.send(BookshelfEvent.ShowMessage("已移除 ${ids.size} 本书"))
             exitSelection()
         }
@@ -356,6 +373,34 @@ class BookshelfViewModel @Inject constructor(
             )
             exitSelection()
         }
+    }
+
+    fun createCollection(name: String, bookIds: Set<Long>) {
+        viewModelScope.launch {
+            shelfRepository.createCollection(name, bookIds)
+            eventChannel.send(BookshelfEvent.ShowMessage("已创建合集"))
+            exitSelection()
+        }
+    }
+
+    fun addBooksToCollection(collectionId: Long, bookIds: Set<Long>) {
+        viewModelScope.launch {
+            shelfRepository.addBooksToCollection(collectionId, bookIds)
+            eventChannel.send(BookshelfEvent.ShowMessage("已加入合集"))
+            exitSelection()
+        }
+    }
+
+    fun removeBooksFromCollection(bookIds: Set<Long>) {
+        viewModelScope.launch { shelfRepository.removeBooksFromCollection(bookIds) }
+    }
+
+    fun renameCollection(id: Long, name: String) {
+        viewModelScope.launch { shelfRepository.renameCollection(id, name) }
+    }
+
+    fun dissolveCollection(id: Long) {
+        viewModelScope.launch { shelfRepository.dissolveCollection(id) }
     }
 }
 

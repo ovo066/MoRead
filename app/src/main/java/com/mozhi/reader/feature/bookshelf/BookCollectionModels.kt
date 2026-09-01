@@ -35,9 +35,10 @@ fun buildShelfEntries(
     return buildList {
         visibleBooks.forEach { book ->
             val collectionId = book.collectionId
-            if (collectionId == null) add(ShelfEntry.Book(book))
-            else if (emitted.add(collectionId)) {
-                add(ShelfEntry.Collection(collectionsById.getValue(collectionId), membersByCollection.getValue(collectionId)))
+            val collection = collectionId?.let(collectionsById::get)
+            if (collection == null) add(ShelfEntry.Book(book))
+            else if (emitted.add(collection.id)) {
+                add(ShelfEntry.Collection(collection, membersByCollection.getValue(collection.id)))
             }
         }
     }

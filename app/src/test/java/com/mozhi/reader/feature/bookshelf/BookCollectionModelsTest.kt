@@ -39,6 +39,32 @@ class BookCollectionModelsTest {
         assertEquals(setOf(1L, 3L), entry.bookIds)
     }
 
+    @Test
+    fun inconsistentRoomSnapshotsKeepEveryBookVisible() {
+        val assignmentArrivedFirst = listOf(
+            book(1, collectionId = 7),
+            book(3, collectionId = 7)
+        )
+        val collectionArrivedFirst = book(2)
+
+        assertEquals(
+            listOf("book:1", "book:3"),
+            buildShelfEntries(
+                visibleBooks = assignmentArrivedFirst,
+                allBooks = assignmentArrivedFirst,
+                collections = emptyList()
+            ).map(ShelfEntry::key)
+        )
+        assertEquals(
+            listOf("book:2"),
+            buildShelfEntries(
+                visibleBooks = listOf(collectionArrivedFirst),
+                allBooks = listOf(collectionArrivedFirst),
+                collections = listOf(collection)
+            ).map(ShelfEntry::key)
+        )
+    }
+
     private fun book(id: Long, collectionId: Long? = null, order: Int = 0) = BookEntity(
         id = id,
         title = "书$id",

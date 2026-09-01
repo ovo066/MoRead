@@ -297,10 +297,6 @@ class BookshelfViewModel @Inject constructor(
         selectedBookIds.value = emptySet()
     }
 
-    fun selectAllVisible() {
-        selectAllVisible(uiState.value.books.map(BookEntity::id).toSet())
-    }
-
     fun selectAllVisible(bookIds: Set<Long>) {
         selectedBookIds.value =
             if (selectedBookIds.value.containsAll(bookIds)) emptySet() else bookIds

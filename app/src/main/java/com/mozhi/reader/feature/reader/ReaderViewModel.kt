@@ -36,6 +36,10 @@ import com.mozhi.reader.core.library.EditableChapterDraft
 import com.mozhi.reader.core.library.EpubResourcePath
 import com.mozhi.reader.core.library.IllustrationRepository
 import com.mozhi.reader.core.library.LibraryRepository
+import com.mozhi.reader.core.library.ReaderTextAnchor
+import com.mozhi.reader.core.library.ReaderTextAnchorCodec
+import com.mozhi.reader.core.library.ReaderTextAnchors
+import com.mozhi.reader.core.library.ResolvedTextAnchor
 import com.mozhi.reader.core.text.ChineseTextConverter
 import com.mozhi.reader.feature.importer.TxtChapterSplitter
 import com.mozhi.reader.feature.importer.TxtTocRuleLoader
@@ -89,6 +93,7 @@ data class ReaderUiState(
     val isPreparingText: Boolean = false,
     /** 当前章已排完版、首页可画；进场揭示以它为准，不再掐固定表。 */
     val isContentReady: Boolean = false,
+    val contentRevision: Int = 0,
     val errorMessage: String? = null
 )
 
@@ -173,6 +178,14 @@ class ReaderViewModel @Inject constructor(
     private var progressSaveJob: Job? = null
     private var readingResumedAt: Long? = null
     private var previousPosition: ReaderPositionSnapshot? = null
+
+    private data class PendingAnchorJump(
+        val chapterIndex: Int,
+        val anchor: ReaderTextAnchor,
+        val fallbackOffset: Int
+    )
+
+    private var pendingAnchorJump: PendingAnchorJump? = null
 
     /** Guards against overwriting stored progress from a session that never opened a position. */
     private var hasOpenedPosition = false
@@ -286,6 +299,13 @@ class ReaderViewModel @Inject constructor(
                     isLoading = false
                 )
             }
+            ReaderTextAnchorCodec.decode(resolved.lastReadLocator)?.let { anchor ->
+                pendingAnchorJump = PendingAnchorJump(
+                    resolved.lastReadChapterIndex,
+                    anchor,
+                    resolved.lastReadCharOffset
+                )
+            }
             hasOpenedPosition = true
             contentController.openPosition(
                 chapterIndex = resolved.lastReadChapterIndex,
@@ -379,13 +399,44 @@ class ReaderViewModel @Inject constructor(
         }
     }
 
+    private fun currentAnchor(
+        chapterIndex: Int,
+        start: Int,
+        end: Int = start
+    ): ReaderTextAnchor? = contentController.chapterBody(chapterIndex)?.let { body ->
+        ReaderTextAnchors.create(body, start, end, conversionMode)
+    }
+
     // ---- ReaderContentController.Listener ----
 
     override fun onContentChanged(relativePosition: Int) {
         contentHook?.invoke(relativePosition)
-        // relativePosition == 0 且窗口已排版 = 当前章首页可画，正文可以露脸了。
-        if (relativePosition == 0 && contentController.isReady && !mutableState.value.isContentReady) {
-            mutableState.update { it.copy(isContentReady = true) }
+        if (relativePosition != 0) {
+            mutableState.update { it.copy(contentRevision = it.contentRevision + 1) }
+            return
+        }
+        if (contentController.isReady) {
+            val pending = pendingAnchorJump
+            if (pending != null && pending.chapterIndex == contentController.chapterIndex) {
+                pendingAnchorJump = null
+                val body = contentController.chapterBody(pending.chapterIndex).orEmpty()
+                val offset = ReaderTextAnchors.resolve(
+                    body,
+                    pending.anchor,
+                    conversionMode,
+                    chineseTextConverter
+                )?.start ?: pending.fallbackOffset.coerceIn(0, body.length)
+                if (offset != contentController.charOffset) {
+                    contentController.jumpToChapter(pending.chapterIndex, offset)
+                    return
+                }
+            }
+            mutableState.update {
+                it.copy(
+                    isContentReady = true,
+                    contentRevision = it.contentRevision + 1
+                )
+            }
         }
     }
 
@@ -468,10 +519,13 @@ class ReaderViewModel @Inject constructor(
     private suspend fun persistPosition(chapterIndex: Int, charOffset: Int) {
         // Never write from a session that failed to open (e.g. text still materializing) —
         // clearing locatorJson would permanently break the pending legacy migration.
-        if (!hasOpenedPosition) return
+        if (!hasOpenedPosition || !contentController.isReady) return
+        val locatorJson = currentAnchor(chapterIndex, charOffset)
+            ?.let(ReaderTextAnchorCodec::encode)
+            .orEmpty()
         libraryRepository.saveProgress(
             bookId = bookId,
-            locatorJson = "",
+            locatorJson = locatorJson,
             chapterIndex = chapterIndex,
             charOffset = charOffset
         )
@@ -506,8 +560,13 @@ class ReaderViewModel @Inject constructor(
             )
         }
         val target = resolveEpubTarget(link.sourceChapterIndex, link.href) ?: return null
-        val targetChapter = chapterEntities.getOrNull(target.chapterIndex)
-        val body = targetChapter?.let { libraryRepository.readChapterText(bookId, it) }.orEmpty()
+        val presented = contentController.chapterBody(target.chapterIndex)?.let { body ->
+            ReaderChapterContent(
+                body = body,
+                epubLayout = contentController.chapterLayout(target.chapterIndex)
+            )
+        } ?: loadPresentedChapter(target.chapterIndex)
+        val body = presented?.body.orEmpty()
         val start = target.offset.coerceIn(0, body.length)
         val end = target.endOffset.coerceIn(start, body.length)
         val previewEnd = if (end > start) end.coerceAtMost(start + LINK_PREVIEW_MAX_CHARS)
@@ -522,10 +581,8 @@ class ReaderViewModel @Inject constructor(
             label = link.label,
             targetChapterIndex = target.chapterIndex,
             targetCharOffset = start,
-            targetTitle = chineseTextConverter.convert(
-                chapterEntities.getOrNull(target.chapterIndex)?.title.orEmpty(),
-                conversionMode
-            ),
+            targetTitle = mutableState.value.chapters
+                .getOrNull(target.chapterIndex)?.title.orEmpty(),
             content = content
         )
     }
@@ -562,7 +619,13 @@ class ReaderViewModel @Inject constructor(
             }
         }
         if (fragment == null) return EpubTarget(targetChapterIndex, 0, 0)
-        val bundle = layoutStore.readChapter(bookId, targetChapterIndex)
+        val presented = contentController.chapterBody(targetChapterIndex)?.let { body ->
+            ReaderChapterContent(
+                body = body,
+                epubLayout = contentController.chapterLayout(targetChapterIndex)
+            )
+        } ?: loadPresentedChapter(targetChapterIndex)
+        val bundle = presented?.epubLayout
             ?: return EpubTarget(targetChapterIndex, 0, 0)
         val matches = bundle.document.blocks.filter { block ->
             block.element.id == fragment || block.ancestors.any { it.id == fragment } ||
@@ -603,6 +666,13 @@ class ReaderViewModel @Inject constructor(
     }
 
     fun goToBookmark(bookmark: BookmarkEntity) {
+        ReaderTextAnchorCodec.decode(bookmark.locatorJson)?.let { anchor ->
+            pendingAnchorJump = PendingAnchorJump(
+                bookmark.chapterIndex,
+                anchor,
+                bookmark.charOffset
+            )
+        }
         contentController.jumpToChapter(bookmark.chapterIndex, bookmark.charOffset)
     }
 
@@ -627,7 +697,7 @@ class ReaderViewModel @Inject constructor(
         val chapterIndex = contentController.chapterIndex
         val charOffset = contentController.charOffset
         val existing = mutableState.value.bookmarks.firstOrNull {
-            it.chapterIndex == chapterIndex && it.charOffset == charOffset
+            it.chapterIndex == chapterIndex && bookmarkDisplayOffset(it) == charOffset
         }
         viewModelScope.launch {
             if (existing != null) {
@@ -635,7 +705,7 @@ class ReaderViewModel @Inject constructor(
                 eventChannel.send(ReaderEvent.ShowMessage("已取消书签"))
                 return@launch
             }
-            val label = chapterEntities.getOrNull(chapterIndex)?.title ?: "阅读书签"
+            val label = mutableState.value.chapters.getOrNull(chapterIndex)?.title ?: "阅读书签"
             val excerpt = (contentController.curPage() as? RenderPage.Laid)
                 ?.page?.lines
                 ?.firstOrNull { it.charLength > 0 && !it.isTitle }
@@ -645,11 +715,27 @@ class ReaderViewModel @Inject constructor(
                 bookId = bookId,
                 chapterIndex = chapterIndex,
                 charOffset = charOffset,
+                locatorJson = currentAnchor(chapterIndex, charOffset)
+                    ?.let(ReaderTextAnchorCodec::encode)
+                    .orEmpty(),
                 excerpt = excerpt,
                 label = label
             )
             eventChannel.send(ReaderEvent.ShowMessage("已添加书签"))
         }
+    }
+
+    private fun bookmarkDisplayOffset(bookmark: BookmarkEntity): Int {
+        val body = contentController.chapterBody(bookmark.chapterIndex)
+            ?: return bookmark.charOffset
+        val anchor = ReaderTextAnchorCodec.decode(bookmark.locatorJson)
+            ?: return bookmark.charOffset.coerceIn(0, body.length)
+        return ReaderTextAnchors.resolve(
+            body,
+            anchor,
+            conversionMode,
+            chineseTextConverter
+        )?.start ?: bookmark.charOffset.coerceIn(0, body.length)
     }
 
     fun deleteBookmark(bookmarkId: Long) {
@@ -667,6 +753,9 @@ class ReaderViewModel @Inject constructor(
     ): Long? {
         if (range.isEmpty() || selectedText.isBlank()) return null
         val state = mutableState.value
+        val anchorJson = currentAnchor(chapterIndex, range.first, range.last + 1)
+            ?.let(ReaderTextAnchorCodec::encode)
+            .orEmpty()
         return annotationRepository.add(
             bookId = bookId,
             personaId = null,
@@ -676,9 +765,50 @@ class ReaderViewModel @Inject constructor(
             selectedText = selectedText,
             note = "",
             colorTag = state.lastAnnotationColor,
-            style = state.lastAnnotationStyle
+            style = state.lastAnnotationStyle,
+            textAnchorJson = anchorJson
         )
     }
+
+    fun resolveAnnotationRange(annotation: AnnotationEntity): ResolvedTextAnchor? {
+        val body = contentController.chapterBody(annotation.chapterIndex) ?: return null
+        val anchor = ReaderTextAnchorCodec.decode(annotation.textAnchorJson)
+            ?: ReaderTextAnchors.create(
+                body = annotation.selectedText,
+                start = 0,
+                end = annotation.selectedText.length,
+                mode = ChineseConversionMode.OFF
+            ).copy(
+                prefix = "",
+                suffix = "",
+                ratio = annotation.startCharOffset.toFloat() /
+                    chapterEntities[annotation.chapterIndex].charCount.coerceAtLeast(1)
+            )
+        return ReaderTextAnchors.resolve(body, anchor, conversionMode, chineseTextConverter)
+    }
+
+    fun resolveIllustrationRange(illustration: IllustrationEntity): ResolvedTextAnchor? {
+        val chapter = illustration.chapterIndex ?: return null
+        val body = contentController.chapterBody(chapter) ?: return null
+        val anchor = ReaderTextAnchorCodec.decode(illustration.textAnchorJson)
+            ?: ReaderTextAnchors.create(
+                body = illustration.sourceText,
+                start = 0,
+                end = illustration.sourceText.length,
+                mode = ChineseConversionMode.OFF
+            ).copy(
+                prefix = "",
+                suffix = "",
+                ratio = (illustration.charOffset ?: 0).toFloat() /
+                    chapterEntities[chapter].charCount.coerceAtLeast(1)
+            )
+        return ReaderTextAnchors.resolve(body, anchor, conversionMode, chineseTextConverter)
+    }
+
+    fun textAnchorJsonFor(chapterIndex: Int, range: IntRange): String =
+        currentAnchor(chapterIndex, range.first, range.last + 1)
+            ?.let(ReaderTextAnchorCodec::encode)
+            .orEmpty()
 
     /** 浮条/讨论串里改样式；同时记为下次一击的默认。 */
     fun updateAnnotationStyle(annotationId: Long, style: AnnotationStyle, colorTag: String) {
@@ -849,6 +979,42 @@ class ReaderViewModel @Inject constructor(
     }
 
     // ---- settings ----
+
+    fun setChineseConversionMode(mode: ChineseConversionMode) {
+        if (mode == conversionMode) return
+        val chapter = contentController.chapterIndex
+        val fallback = contentController.charOffset
+        val anchor = currentAnchor(chapter, fallback)
+        conversionMode = mode
+        val shownChapters = displayChapters(mode)
+        val shownTocEntries = displayTocEntries(mode)
+        anchor?.let { pendingAnchorJump = PendingAnchorJump(chapter, it, fallback) }
+        mutableState.update { state ->
+            state.copy(
+                settings = state.settings.copy(
+                    bookChineseConversions = state.settings.bookChineseConversions.toMutableMap().apply {
+                        if (mode == ChineseConversionMode.OFF) remove(bookId) else put(bookId, mode)
+                    }
+                ),
+                chapters = shownChapters,
+                tocEntries = shownTocEntries,
+                isContentReady = false
+            )
+        }
+        contentController.setChapters(
+            shownChapters.map { chapterEntity ->
+                ChapterMeta(
+                    chapterEntity.chapterIndex,
+                    chapterEntity.title,
+                    chapterEntity.charCount
+                )
+            }
+        )
+        contentController.reloadFromSource(chapter, if (anchor == null) fallback else 0)
+        viewModelScope.launch {
+            settingsRepository.setBookChineseConversionMode(bookId, mode)
+        }
+    }
 
     fun setFontScale(value: Float) {
         viewModelScope.launch { settingsRepository.setFontScale(value) }

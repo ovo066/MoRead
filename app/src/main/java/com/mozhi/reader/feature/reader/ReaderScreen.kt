@@ -91,6 +91,7 @@ import com.mozhi.reader.core.datastore.ReaderSettings
 import com.mozhi.reader.core.datastore.ReaderTextReplacementRule
 import com.mozhi.reader.core.datastore.ReaderTheme
 import com.mozhi.reader.core.datastore.activeThemeSlot
+import com.mozhi.reader.core.datastore.chineseConversionModeFor
 import com.mozhi.reader.core.datastore.resolveForBook
 import com.mozhi.reader.core.datastore.withBookThemeSelection
 import com.mozhi.reader.feature.reader.engine.ReaderAnnotationMark
@@ -106,11 +107,7 @@ private data class AnnotationInkFloater(
     val topPx: Int
 )
 
-private data class AnnotationThreadKey(
-    val chapterIndex: Int,
-    val startCharOffset: Int,
-    val endCharOffset: Int
-)
+private data class AnnotationThreadKey(val annotationIds: Set<Long>)
 
 private data class ReaderReturnPosition(
     val chapterIndex: Int,
@@ -304,13 +301,20 @@ fun ReaderScreen(
             state.annotations.filter { it.personaId == null }
         }
     }
-    val annotationMarks = remember(visibleAnnotations, state.repliedAnnotationIds) {
-        visibleAnnotations.map { annotation ->
+    val markKey = state.settings.chineseConversionModeFor(bookId)
+    val annotationMarks = remember(
+        visibleAnnotations,
+        state.repliedAnnotationIds,
+        state.contentRevision,
+        markKey
+    ) {
+        visibleAnnotations.mapNotNull { annotation ->
+            val range = viewModel.resolveAnnotationRange(annotation) ?: return@mapNotNull null
             ReaderAnnotationMark(
                 id = annotation.id,
                 chapterIndex = annotation.chapterIndex,
-                startCharOffset = annotation.startCharOffset,
-                endCharOffset = annotation.endCharOffset,
+                startCharOffset = range.start,
+                endCharOffset = range.end,
                 hasComment = annotation.note.isNotBlank() ||
                     annotation.id in state.repliedAnnotationIds,
                 style = annotation.style,
@@ -320,15 +324,15 @@ fun ReaderScreen(
             )
         }
     }
-    val illustrationMarks = remember(state.illustrations) {
+    val illustrationMarks = remember(state.illustrations, state.contentRevision, markKey) {
         state.illustrations.mapNotNull { illustration ->
             val chapter = illustration.chapterIndex ?: return@mapNotNull null
-            val start = illustration.charOffset ?: return@mapNotNull null
+            val range = viewModel.resolveIllustrationRange(illustration) ?: return@mapNotNull null
             ReaderIllustrationMark(
                 id = illustration.id,
                 chapterIndex = chapter,
-                startCharOffset = start,
-                endCharOffset = start + illustration.sourceText.length.coerceAtLeast(1)
+                startCharOffset = range.start,
+                endCharOffset = range.end
             )
         }
     }
@@ -344,11 +348,7 @@ fun ReaderScreen(
         viewModel.contentController.setInlineMarkers(reservations)
     }
     val threadAnnotations = annotationThread?.let { key ->
-        state.annotations.filter {
-            it.chapterIndex == key.chapterIndex &&
-                it.startCharOffset == key.startCharOffset &&
-                it.endCharOffset == key.endCharOffset
-        }
+        state.annotations.filter { it.id in key.annotationIds }
     }.orEmpty()
 
     LaunchedEffect(bookId) { companionViewModel.bind(bookId) }
@@ -561,13 +561,7 @@ fun ReaderScreen(
                         }
                     }
                 val paneAnnotationClick: (List<Long>) -> Unit = { ids ->
-                    state.annotations.firstOrNull { it.id in ids }?.let { annotation ->
-                        annotationThread = AnnotationThreadKey(
-                            annotation.chapterIndex,
-                            annotation.startCharOffset,
-                            annotation.endCharOffset
-                        )
-                    }
+                    annotationThread = AnnotationThreadKey(ids.toSet())
                 }
                 val paneIllustrationClick: (List<Long>) -> Unit = { ids ->
                     state.illustrations.firstOrNull { it.id in ids }?.let { illustration ->
@@ -600,6 +594,10 @@ fun ReaderScreen(
                             chapterTitle = chapterTitle,
                             chapterIndex = state.currentChapterIndex,
                             charOffset = range.first,
+                            textAnchorJson = viewModel.textAnchorJsonFor(
+                                state.currentChapterIndex,
+                                range
+                            ),
                             selection = selectionText,
                             contextText = contextText
                         )

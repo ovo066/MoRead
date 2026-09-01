@@ -406,17 +406,18 @@ class LibraryRepository @Inject constructor(
             )
         )
 
-    /** New-track bookmark: (chapterIndex, charOffset) is the position, locatorJson stays empty. */
+    /** New-track bookmark: locatorJson is the stable anchor; integer position is the fallback. */
     suspend fun addBookmark(
         bookId: Long,
         chapterIndex: Int,
         charOffset: Int,
+        locatorJson: String,
         excerpt: String,
         label: String
     ): Long = bookDao.insertBookmark(
         BookmarkEntity(
             bookId = bookId,
-            locatorJson = "",
+            locatorJson = locatorJson,
             chapterIndex = chapterIndex,
             charOffset = charOffset,
             excerpt = excerpt,

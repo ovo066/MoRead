@@ -5,7 +5,6 @@ import com.mozhi.reader.core.library.ReaderTextAnchorCodec
 import com.mozhi.reader.core.library.ReaderTextAnchors
 import com.mozhi.reader.core.text.ChineseTextConverter
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Test
 
 class ListenProgressAnchorTest {
@@ -34,7 +33,7 @@ class ListenProgressAnchorTest {
     }
 
     @Test
-    fun savedStartUsesLocatorAndOnlyEmptyLocatorFallsBack() {
+    fun savedStartUsesAnchorAndLegacyLocatorFallsBack() {
         val source = "程式碼" + "甲".repeat(40) + "长目标" + "乙".repeat(40)
         val converter = ChineseTextConverter()
         val shown = converter.convert(source, ChineseConversionMode.TW2SP)
@@ -53,6 +52,8 @@ class ListenProgressAnchorTest {
             resolveListenProgressOffset(source, locator, displayedOffset, converter)
         )
         assertEquals(7, resolveListenProgressOffset(source, null, 7, converter))
-        assertNull(resolveListenProgressOffset(source, "not-json", 7, converter))
+        val legacyLocator =
+            """{"href":"text/c1.xhtml","type":"application/xhtml+xml","locations":{"progression":0.25}}"""
+        assertEquals(7, resolveListenProgressOffset(source, legacyLocator, 7, converter))
     }
 }

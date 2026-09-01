@@ -61,6 +61,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 
 enum class ListenPlaybackMode { STANDARD, PRODUCED }
 
@@ -79,16 +80,17 @@ internal fun resolveListenProgressOffset(
     locatorJson: String?,
     fallbackOffset: Int,
     converter: ChineseTextConverter
-): Int? {
-    if (locatorJson.isNullOrBlank()) return fallbackOffset.coerceAtLeast(0)
-    val anchor = ReaderTextAnchorCodec.decode(locatorJson) ?: return null
+): Int {
+    val fallback = fallbackOffset.coerceAtLeast(0)
+    if (locatorJson.isNullOrBlank()) return fallback
+    val anchor = ReaderTextAnchorCodec.decode(locatorJson) ?: return fallback
     if (anchor.mode == ChineseConversionMode.OFF) {
         return ReaderTextAnchors.resolve(
             sourceBody,
             anchor,
             ChineseConversionMode.OFF,
             converter
-        )?.start
+        )?.start ?: fallback
     }
     val displayedBody = converter.convert(sourceBody, anchor.mode)
     return ReaderTextAnchors.resolveSourcePoint(
@@ -96,7 +98,7 @@ internal fun resolveListenProgressOffset(
         displayedBody = displayedBody,
         displayedAnchor = anchor,
         converter = converter
-    )?.start
+    )?.start ?: fallback
 }
 
 /** 听书会话对外快照；null = 没有进行中的听书。 */
@@ -254,12 +256,14 @@ class ListenEngine @Inject constructor(
         } else {
             val chapter = libraryRepository.getChapter(bookId, chapterIndex) ?: return false
             val sourceBody = libraryRepository.readChapterText(bookId, chapter)
-            resolveListenProgressOffset(
-                sourceBody,
-                locatorJson,
-                fallbackOffset,
-                chineseTextConverter
-            ) ?: return false
+            withContext(Dispatchers.Default) {
+                resolveListenProgressOffset(
+                    sourceBody,
+                    locatorJson,
+                    fallbackOffset,
+                    chineseTextConverter
+                )
+            }
         }
         start(bookId, chapterIndex, offset, playbackMode)
         return true

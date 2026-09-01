@@ -37,6 +37,7 @@ import com.mozhi.reader.core.speech.TtsEngineMode
 import com.mozhi.reader.core.speech.TtsSettings
 import com.mozhi.reader.core.speech.TtsSettingsStore
 import com.mozhi.reader.core.speech.TtsSynthesisGranularity
+import com.mozhi.reader.core.text.ChineseTextConverter
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import javax.inject.Inject
@@ -72,6 +73,31 @@ internal fun listenProgressLocator(sourceBody: String, charOffset: Int): String 
             ChineseConversionMode.OFF
         )
     )
+
+internal fun resolveListenProgressOffset(
+    sourceBody: String,
+    locatorJson: String?,
+    fallbackOffset: Int,
+    converter: ChineseTextConverter
+): Int? {
+    if (locatorJson.isNullOrBlank()) return fallbackOffset.coerceAtLeast(0)
+    val anchor = ReaderTextAnchorCodec.decode(locatorJson) ?: return null
+    if (anchor.mode == ChineseConversionMode.OFF) {
+        return ReaderTextAnchors.resolve(
+            sourceBody,
+            anchor,
+            ChineseConversionMode.OFF,
+            converter
+        )?.start
+    }
+    val displayedBody = converter.convert(sourceBody, anchor.mode)
+    return ReaderTextAnchors.resolveSourcePoint(
+        sourceBody = sourceBody,
+        displayedBody = displayedBody,
+        displayedAnchor = anchor,
+        converter = converter
+    )?.start
+}
 
 /** 听书会话对外快照；null = 没有进行中的听书。 */
 data class ListenState(
@@ -112,7 +138,8 @@ class ListenEngine @Inject constructor(
     private val ttsSettingsStore: TtsSettingsStore,
     private val systemTtsSpeaker: SystemTtsSpeaker,
     private val mediaService: AiMediaGenerationService,
-    private val audiobookRepository: AudiobookRepository
+    private val audiobookRepository: AudiobookRepository,
+    private val chineseTextConverter: ChineseTextConverter
 ) {
     private data class Utterance(
         val start: Int,
@@ -213,6 +240,29 @@ class ListenEngine @Inject constructor(
         }
         sessionJob = job
         job.start()
+    }
+
+    suspend fun startFromSavedProgress(
+        bookId: Long,
+        chapterIndex: Int,
+        fallbackOffset: Int,
+        locatorJson: String?,
+        playbackMode: ListenPlaybackMode
+    ): Boolean {
+        val offset = if (locatorJson.isNullOrBlank()) {
+            fallbackOffset.coerceAtLeast(0)
+        } else {
+            val chapter = libraryRepository.getChapter(bookId, chapterIndex) ?: return false
+            val sourceBody = libraryRepository.readChapterText(bookId, chapter)
+            resolveListenProgressOffset(
+                sourceBody,
+                locatorJson,
+                fallbackOffset,
+                chineseTextConverter
+            ) ?: return false
+        }
+        start(bookId, chapterIndex, offset, playbackMode)
+        return true
     }
 
     fun pause() {

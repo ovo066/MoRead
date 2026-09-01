@@ -56,6 +56,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.mozhi.reader.core.datastore.ChineseConversionMode
 import com.mozhi.reader.core.datastore.CustomReaderTheme
 import com.mozhi.reader.core.datastore.PageMode
 import com.mozhi.reader.core.datastore.PageTurnAnimation
@@ -65,6 +66,7 @@ import com.mozhi.reader.core.datastore.ReaderTheme
 import com.mozhi.reader.core.datastore.ReaderThemeSlot
 import com.mozhi.reader.core.datastore.backgroundImageIdFor
 import com.mozhi.reader.core.datastore.backgroundOpacityFor
+import com.mozhi.reader.core.datastore.chineseConversionModeFor
 import com.mozhi.reader.core.datastore.customThemeIdFor
 import com.mozhi.reader.core.datastore.themeFor
 import com.mozhi.reader.feature.reader.render.ReaderPageStyle
@@ -866,6 +868,7 @@ internal fun PageTurnPage(
 @Composable
 internal fun MoreSettingsPage(
     settings: ReaderSettings,
+    bookId: Long,
     palette: ReaderPalette,
     actions: ReaderTypographyActions,
     onOpenPage: (TypographySecondaryPage) -> Unit
@@ -896,6 +899,15 @@ internal fun MoreSettingsPage(
     HorizontalDivider(color = palette.glassBorder)
     Text("其他", style = MaterialTheme.typography.labelMedium, color = palette.muted)
     TypographyNavRow(
+        title = "繁简转换",
+        summary = when (settings.chineseConversionModeFor(bookId)) {
+            ChineseConversionMode.OFF -> "已关闭"
+            ChineseConversionMode.TW2SP -> "简体 · 大陆用语"
+            ChineseConversionMode.S2TWP -> "繁体 · 台湾用语"
+        },
+        palette = palette
+    ) { onOpenPage(TypographySecondaryPage.CHINESE_CONVERSION) }
+    TypographyNavRow(
         title = "语法高亮",
         summary = if (settings.syntaxHighlightEnabled) {
             "已开启 · ${settings.syntaxHighlightRules.count { it.enabled }} 条规则生效"
@@ -913,6 +925,33 @@ internal fun MoreSettingsPage(
         ).joinToString(" · ").ifBlank { "全部关闭" },
         palette = palette
     ) { onOpenPage(TypographySecondaryPage.BEHAVIOR) }
+}
+
+@Composable
+internal fun ChineseConversionPage(
+    mode: ChineseConversionMode,
+    palette: ReaderPalette,
+    onChange: (ChineseConversionMode) -> Unit
+) {
+    listOf(
+        Triple(ChineseConversionMode.OFF, "关闭", "显示书籍原文"),
+        Triple(ChineseConversionMode.TW2SP, "简体（大陆用语）", "繁体转简体并改写地区词"),
+        Triple(ChineseConversionMode.S2TWP, "繁体（台湾用语）", "简体转台湾正体并改写地区词")
+    ).forEach { (value, title, summary) ->
+        TypographyChoiceRow(
+            title = title,
+            summary = summary,
+            selected = value == mode,
+            palette = palette,
+            onClick = { onChange(value) }
+        )
+    }
+    Text(
+        "仅改变阅读显示并记住本书选择，不生成新文件。开启后请关闭转换再编辑原文。",
+        style = MaterialTheme.typography.bodySmall,
+        color = palette.muted,
+        modifier = Modifier.padding(top = 12.dp)
+    )
 }
 
 /** 二级页里的单选行：左侧选中点 + 标题与说明，比一排等宽 chip 更容易读懂互斥关系。 */

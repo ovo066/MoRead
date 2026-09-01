@@ -85,6 +85,7 @@ import com.mozhi.reader.core.database.entity.AnnotationEntity
 import com.mozhi.reader.core.database.entity.AnnotationStyle
 import com.mozhi.reader.core.database.entity.BookmarkEntity
 import com.mozhi.reader.core.database.entity.ChapterEntity
+import com.mozhi.reader.core.datastore.ChineseConversionMode
 import com.mozhi.reader.core.datastore.ReaderFont
 import com.mozhi.reader.core.datastore.PendingReaderFont
 import com.mozhi.reader.core.datastore.ReaderSettings
@@ -509,6 +510,7 @@ fun ReaderScreen(
         onKeepScreenOnChange = viewModel::setKeepScreenOn,
         onImmersiveReadingChange = viewModel::setImmersiveReading,
         onVolumeKeysPageTurnChange = viewModel::setVolumeKeysPageTurn,
+        onChineseConversionModeChange = viewModel::setChineseConversionMode,
         onScreenBrightnessChange = viewModel::setScreenBrightness
     )
 
@@ -579,13 +581,18 @@ fun ReaderScreen(
                     }
                 }
                 val paneTtsAction: (String) -> Unit = { selection -> ttsDraft = selection }
-                val paneEditText: (String, IntRange) -> Unit = { selection, range ->
-                    textEditDraft = TextEditDraft(
-                        chapterIndex = state.currentChapterIndex,
-                        range = range,
-                        originalText = selection
-                    )
-                }
+                val paneEditText: ((String, IntRange) -> Unit)? =
+                    if (state.settings.chineseConversionModeFor(bookId) == ChineseConversionMode.OFF) {
+                        { selection, range ->
+                            textEditDraft = TextEditDraft(
+                                chapterIndex = state.currentChapterIndex,
+                                range = range,
+                                originalText = selection
+                            )
+                        }
+                    } else {
+                        null
+                    }
                 val paneImageAction: (String, String, IntRange) -> Unit =
                     { selectionText, contextText, range ->
                         selectionMediaViewModel.generateImage(

@@ -111,7 +111,7 @@ fun ReaderScrollPane(
     onLinkClick: (ReaderPageLink) -> Unit = {},
     onTtsAction: (selection: String) -> Unit,
     onImageAction: (selection: String, context: String, range: IntRange) -> Unit,
-    onEditText: (selection: String, range: IntRange) -> Unit,
+    onEditText: ((selection: String, range: IntRange) -> Unit)?,
     pageTurnRequest: ReaderPageTurnRequest? = null,
     modifier: Modifier = Modifier
 ) {
@@ -512,11 +512,13 @@ fun ReaderScrollPane(
                     }
                     selection.clear()
                 },
-                onEdit = {
-                    val text = selection.selectedText()
-                    val range = selection.bodyRange()
-                    if (text.isNotBlank() && range != null) onEditText(text, range)
-                    selection.clear()
+                onEdit = onEditText?.let { editText ->
+                    {
+                        val text = selection.selectedText()
+                        val range = selection.bodyRange()
+                        if (text.isNotBlank() && range != null) editText(text, range)
+                        selection.clear()
+                    }
                 },
                 onCopy = {
                     val text = selection.selectedText()

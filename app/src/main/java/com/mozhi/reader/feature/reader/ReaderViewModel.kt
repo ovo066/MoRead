@@ -894,6 +894,7 @@ class ReaderViewModel @Inject constructor(
 
     /** Saves an edited selection back into the local book text and reloads the visible window. */
     fun editSelectedText(chapterIndex: Int, range: IntRange, replacement: String) {
+        if (!sourceEditAllowed()) return
         viewModelScope.launch {
             runCatching {
                 val cursor = libraryRepository.replaceChapterText(
@@ -915,6 +916,7 @@ class ReaderViewModel @Inject constructor(
 
     /** Applies all currently enabled text-cleanup rules to this book only. */
     fun applyTextReplacementRules() {
+        if (!sourceEditAllowed()) return
         viewModelScope.launch {
             runCatching {
                 val rules = settingsRepository.settings.first().textReplacementRules
@@ -972,6 +974,7 @@ class ReaderViewModel @Inject constructor(
 
     /** Rebuilds a TXT book's chapter table from the current local text. */
     fun reidentifyChapters(customRegex: String) {
+        if (!sourceEditAllowed()) return
         viewModelScope.launch {
             runCatching {
                 val book = requireNotNull(libraryRepository.getBook(bookId)) { "书籍不存在" }
@@ -1016,6 +1019,14 @@ class ReaderViewModel @Inject constructor(
                 )
             }
         }
+    }
+
+    private fun sourceEditAllowed(): Boolean {
+        if (conversionMode == ChineseConversionMode.OFF) return true
+        viewModelScope.launch {
+            eventChannel.send(ReaderEvent.ShowMessage("请先在排版中关闭繁简转换"))
+        }
+        return false
     }
 
     private suspend fun refreshTextWindow(chapterIndex: Int, charOffset: Int) {

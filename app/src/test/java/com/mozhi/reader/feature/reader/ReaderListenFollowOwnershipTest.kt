@@ -16,6 +16,7 @@ class ReaderListenFollowOwnershipTest {
         val unrelated = readerListenPositionOwnership(followA, 1, 160)
         assertEquals(followA, unrelated.pending)
         assertFalse(unrelated.isManualSeek)
+        assertEquals(null, acknowledgeReaderListenFollow(followA, targetIsShowing = true))
 
         val delayedA = readerListenPositionOwnership(unrelated.pending, 1, 120)
         assertEquals(null, delayedA.pending)

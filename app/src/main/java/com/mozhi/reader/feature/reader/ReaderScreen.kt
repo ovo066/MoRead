@@ -145,6 +145,11 @@ internal fun readerListenPositionOwnership(
     else -> ReaderListenPositionOwnership(pending, isManualSeek = false)
 }
 
+internal fun acknowledgeReaderListenFollow(
+    pending: PendingReaderListenFollow,
+    targetIsShowing: Boolean
+): PendingReaderListenFollow? = pending.takeUnless { targetIsShowing }
+
 internal data class TextEditDraft(
     val chapterIndex: Int,
     val range: IntRange,
@@ -292,7 +297,13 @@ fun ReaderScreen(
             pendingListenFollow = null
             return@LaunchedEffect
         }
-        if (pendingListenFollow != null) return@LaunchedEffect
+        pendingListenFollow?.let { pending ->
+            pendingListenFollow = acknowledgeReaderListenFollow(
+                pending,
+                viewModel.isShowingPosition(pending.chapterIndex, pending.displayOffset)
+            )
+            return@LaunchedEffect
+        }
         currentListenRange?.let { presented ->
             if (!viewModel.isShowingPosition(presented.chapterIndex, presented.range.start)) {
                 pendingListenFollow = PendingReaderListenFollow(

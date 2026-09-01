@@ -13,6 +13,7 @@ import com.mozhi.reader.core.library.EpubLayoutSpan
 import com.mozhi.reader.core.library.EpubResolvedFontFace
 import com.mozhi.reader.core.library.EpubStylesheetText
 import com.mozhi.reader.core.library.EpubTextAlign
+import com.mozhi.reader.core.library.ReaderTextAnchors
 import com.mozhi.reader.core.text.ChineseTextConverter
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -25,7 +26,7 @@ class ChineseChapterPresenterTest {
         val body = "滑鼠裡的程式碼\uFFFC"
         val span = EpubLayoutSpan(
             textStart = 4,
-            textEnd = 7,
+            textEnd = 6,
             elements = listOf(EpubElementRef(tag = "a", id = "code")),
             linkHref = "#note",
             rubyText = "程式碼"
@@ -92,7 +93,7 @@ class ChineseChapterPresenterTest {
             ChineseConversionMode.TW2SP
         )
 
-        assertEquals("鼠标里的代码\uFFFC", shown.body)
+        assertEquals("鼠标里的程序码\uFFFC", shown.body)
         val shownLayout = shown.epubLayout!!
         val shownBlock = shownLayout.document.blocks.single()
         val shownSpan = shownBlock.spans.single()
@@ -102,15 +103,15 @@ class ChineseChapterPresenterTest {
         val shownNested = shownChild.children.single()
         assertEquals(shown.body.length, shownLayout.document.textLength)
         assertEquals(0, shownBlock.textStart)
-        assertEquals(7, shownBlock.textEnd)
+        assertEquals(8, shownBlock.textEnd)
         assertEquals(4, shownSpan.textStart)
         assertEquals(6, shownSpan.textEnd)
         assertEquals(0, shownRoot.textStart)
-        assertEquals(7, shownRoot.textEnd)
+        assertEquals(8, shownRoot.textEnd)
         assertEquals(2, shownChild.textStart)
-        assertEquals(6, shownChild.textEnd)
+        assertEquals(7, shownChild.textEnd)
         assertEquals(4, shownNested.textStart)
-        assertEquals(6, shownNested.textEnd)
+        assertEquals(7, shownNested.textEnd)
         assertEquals(shown.body.length, shownDom.textLength)
         assertEquals("#note", shownSpan.linkHref)
         assertEquals("代码", shownSpan.rubyText)
@@ -122,5 +123,29 @@ class ChineseChapterPresenterTest {
         assertEquals(layout.fontFaces, shownLayout.fontFaces)
         assertEquals(layout.stylesheets, shownLayout.stylesheets)
         assertEquals(image.copy(charOffset = shown.body.lastIndex), shown.inlineImages.single())
+
+        val leafOffset = shown.body.indexOf('序')
+        val leafAnchor = ReaderTextAnchors.create(
+            shown.body,
+            leafOffset,
+            leafOffset,
+            ChineseConversionMode.TW2SP
+        )
+        assertEquals(
+            5,
+            presenter.resolveSourcePoint(body, layout, listOf(image), leafAnchor)
+        )
+
+        val boundaryOffset = shown.body.indexOf('码')
+        val boundaryAnchor = ReaderTextAnchors.create(
+            shown.body,
+            boundaryOffset,
+            boundaryOffset,
+            ChineseConversionMode.TW2SP
+        )
+        assertEquals(
+            6,
+            presenter.resolveSourcePoint(body, layout, listOf(image), boundaryAnchor)
+        )
     }
 }

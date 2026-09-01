@@ -3,6 +3,8 @@ package com.mozhi.reader.feature.reader.engine
 import com.mozhi.reader.core.datastore.ChineseConversionMode
 import com.mozhi.reader.core.epub.dom.EpubDomNode
 import com.mozhi.reader.core.library.EpubLayoutChapterBundle
+import com.mozhi.reader.core.library.ReaderTextAnchor
+import com.mozhi.reader.core.library.ReaderTextAnchors
 import com.mozhi.reader.core.text.ChineseTextConverter
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -20,6 +22,68 @@ class ChineseChapterPresenter @Inject constructor(
         if (mode == ChineseConversionMode.OFF) {
             return ReaderChapterContent(body, layout, images)
         }
+        val boundaries = presentationBoundaries(body, layout, images)
+        val rewritten = rewrite(body, boundaries, mode)
+        return ReaderChapterContent(
+            body = rewritten.body,
+            epubLayout = layout?.rebase(rewritten.positions, rewritten.body.length, mode),
+            inlineImages = images.map { image ->
+                image.copy(charOffset = rewritten.positions.getValue(image.charOffset))
+            }
+        )
+    }
+
+    fun resolveSourcePoint(
+        body: String,
+        layout: EpubLayoutChapterBundle?,
+        images: List<InlineImageSource>,
+        displayedAnchor: ReaderTextAnchor
+    ): Int? {
+        if (displayedAnchor.mode == ChineseConversionMode.OFF) {
+            return ReaderTextAnchors.resolve(
+                body,
+                displayedAnchor,
+                ChineseConversionMode.OFF,
+                converter
+            )?.start
+        }
+        val boundaries = presentationBoundaries(body, layout, images)
+        val rewritten = rewrite(body, boundaries, displayedAnchor.mode)
+        val displayedPoint = ReaderTextAnchors.resolve(
+            rewritten.body,
+            displayedAnchor,
+            displayedAnchor.mode,
+            converter
+        )?.start ?: return null
+        boundaries.firstOrNull { rewritten.positions.getValue(it) == displayedPoint }
+            ?.let { return it }
+        val (sourceStart, sourceEnd) = boundaries.zipWithNext().firstOrNull { (start, end) ->
+            displayedPoint > rewritten.positions.getValue(start) &&
+                displayedPoint < rewritten.positions.getValue(end)
+        } ?: return null
+        val displayStart = rewritten.positions.getValue(sourceStart)
+        val displayEnd = rewritten.positions.getValue(sourceEnd)
+        val localPoint = displayedPoint - displayStart
+        val displayedLeaf = rewritten.body.substring(displayStart, displayEnd)
+        val localAnchor = ReaderTextAnchors.create(
+            displayedLeaf,
+            localPoint,
+            localPoint,
+            displayedAnchor.mode
+        )
+        return ReaderTextAnchors.resolveSourcePoint(
+            sourceBody = body.substring(sourceStart, sourceEnd),
+            displayedBody = displayedLeaf,
+            displayedAnchor = localAnchor,
+            converter = converter
+        )?.start?.plus(sourceStart)
+    }
+
+    private fun presentationBoundaries(
+        body: String,
+        layout: EpubLayoutChapterBundle?,
+        images: List<InlineImageSource>
+    ): List<Int> {
         val boundaries = sortedSetOf(0, body.length)
         layout?.document?.blocks.orEmpty().forEach { block ->
             boundaries.addValid(block.textStart, body.length)
@@ -34,14 +98,7 @@ class ChineseChapterPresenter @Inject constructor(
             boundaries.addValid(image.charOffset, body.length)
             boundaries.addValid(image.charOffset + 1, body.length)
         }
-        val rewritten = rewrite(body, boundaries.toList(), mode)
-        return ReaderChapterContent(
-            body = rewritten.body,
-            epubLayout = layout?.rebase(rewritten.positions, rewritten.body.length, mode),
-            inlineImages = images.map { image ->
-                image.copy(charOffset = rewritten.positions.getValue(image.charOffset))
-            }
-        )
+        return boundaries.toList()
     }
 
     private data class RewrittenText(

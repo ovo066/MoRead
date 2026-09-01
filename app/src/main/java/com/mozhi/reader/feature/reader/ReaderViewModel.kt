@@ -458,16 +458,18 @@ class ReaderViewModel @Inject constructor(
         val point = displayOffset.coerceIn(0, displayed.length)
         val displayedAnchor = ReaderTextAnchors.create(displayed, point, point, mode)
         if (mode == ChineseConversionMode.OFF) return point
+        val images = rawInlineImages[chapterIndex].orEmpty()
         val chapter = chapterEntities.firstOrNull { it.chapterIndex == chapterIndex }
             ?: return null
         val source = libraryRepository.readChapterText(bookId, chapter)
+        val layout = layoutStore.readChapter(bookId, chapterIndex)
         return withContext(Dispatchers.Default) {
-            ReaderTextAnchors.resolveSourcePoint(
-                sourceBody = source,
-                displayedBody = displayed,
-                displayedAnchor = displayedAnchor,
-                converter = chineseTextConverter
-            )?.start
+            chapterPresenter.resolveSourcePoint(
+                body = source,
+                layout = layout,
+                images = images,
+                displayedAnchor = displayedAnchor
+            )
         }
     }
 

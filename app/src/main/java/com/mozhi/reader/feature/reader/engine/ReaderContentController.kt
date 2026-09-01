@@ -87,6 +87,12 @@ class ReaderContentController(
         var chapter: TextChapter?
     )
 
+    private data class PendingProgressJump(
+        val chapterIndex: Int,
+        val rawFraction: Double,
+        val sourceVersion: Int
+    )
+
     private var chapters: List<ChapterMeta> = emptyList()
     private var inlineMarkersByChapter: Map<Int, List<InlineMarkerReservation>> = emptyMap()
     private var cumulativeChars: LongArray = LongArray(0)
@@ -104,6 +110,7 @@ class ReaderContentController(
     private var prevSlot: Slot? = null
     private var curSlot: Slot? = null
     private var nextSlot: Slot? = null
+    private var pendingProgressJump: PendingProgressJump? = null
     private val loadingIndices = LinkedHashSet<Int>()
     private var relayoutJob: Job? = null
     private val layoutMutex = Mutex()
@@ -178,6 +185,7 @@ class ReaderContentController(
     }
 
     fun openPosition(chapterIndex: Int, charOffset: Int) {
+        pendingProgressJump = null
         this.chapterIndex = chapterIndex.coerceIn(0, (chapters.size - 1).coerceAtLeast(0))
         this.charOffset = charOffset.coerceAtLeast(0)
         rebindWindow()
@@ -185,6 +193,11 @@ class ReaderContentController(
 
     fun jumpToChapter(index: Int, offset: Int = 0) {
         if (chapters.isEmpty()) return
+        pendingProgressJump = null
+        jumpToChapterInternal(index, offset)
+    }
+
+    private fun jumpToChapterInternal(index: Int, offset: Int) {
         chapterIndex = index.coerceIn(0, chapters.size - 1)
         charOffset = offset.coerceAtLeast(0)
         rebindWindow()
@@ -195,6 +208,7 @@ class ReaderContentController(
         chapterIndex: Int = this.chapterIndex,
         charOffset: Int = this.charOffset
     ) {
+        pendingProgressJump = null
         sourceVersion++
         relayoutJob?.cancel()
         environmentVersion++
@@ -215,10 +229,17 @@ class ReaderContentController(
             .coerceIn(0, chapters.size - 1)
         val rawLength = chapters[index].charCount.coerceAtLeast(1)
         val rawWithin = (target - cumulativeChars[index]).coerceIn(0, rawLength.toLong())
-        val shownLength = displayedCharCount(index)
-        val shownWithin = (rawWithin.toDouble() / rawLength * shownLength).toInt()
-            .coerceIn(0, (shownLength - 1).coerceAtLeast(0))
-        jumpToChapter(index, shownWithin)
+        val rawFraction = rawWithin.toDouble() / rawLength
+        val shownLength = slotFor(index)?.content?.body?.length
+        pendingProgressJump = if (shownLength == null) {
+            PendingProgressJump(index, rawFraction, sourceVersion)
+        } else {
+            null
+        }
+        jumpToChapterInternal(
+            index,
+            shownLength?.let { displayedOffset(rawFraction, it) } ?: rawWithin.toInt()
+        )
     }
 
     /** Fraction of the current chapter that lies before the reading position. */
@@ -337,6 +358,7 @@ class ReaderContentController(
     // ---- window management ----
 
     private fun shiftWindowForward() {
+        pendingProgressJump = null
         chapterIndex++
         charOffset = 0
         pageIndex = 0
@@ -350,6 +372,7 @@ class ReaderContentController(
     }
 
     private fun shiftWindowBackward() {
+        pendingProgressJump = null
         val landing = prevChapter
         chapterIndex--
         charOffset = landing?.lastPage?.chapterPosition ?: 0
@@ -402,6 +425,7 @@ class ReaderContentController(
                     chapterIndex -> curSlot = slot
                     chapterIndex + 1 -> nextSlot = slot
                 }
+                if (index == chapterIndex) applyPendingProgress(slot)
                 notifySlotChanged(index)
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -501,6 +525,7 @@ class ReaderContentController(
      */
     fun scrollTo(chapter: Int, offset: Int) {
         if (chapters.isEmpty()) return
+        pendingProgressJump = null
         val target = chapter.coerceIn(0, chapters.size - 1)
         val clamped = offset.coerceAtLeast(0)
         when (target) {
@@ -585,6 +610,16 @@ class ReaderContentController(
 
     private fun displayedCharCount(index: Int): Int =
         slotFor(index)?.content?.body?.length ?: chapters.getOrNull(index)?.charCount ?: 0
+
+    private fun applyPendingProgress(slot: Slot) {
+        val pending = pendingProgressJump ?: return
+        if (pending.chapterIndex != slot.index || pending.sourceVersion != sourceVersion) return
+        charOffset = displayedOffset(pending.rawFraction, slot.content.body.length)
+        pendingProgressJump = null
+    }
+
+    private fun displayedOffset(fraction: Double, length: Int): Int =
+        (fraction * length).toInt().coerceIn(0, (length - 1).coerceAtLeast(0))
 
     private fun laidPage(page: TextPage, chapter: TextChapter): RenderPage.Laid = RenderPage.Laid(
         chapterIndex = chapter.chapterIndex,

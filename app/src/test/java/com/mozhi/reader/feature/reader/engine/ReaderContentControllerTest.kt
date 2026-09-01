@@ -13,6 +13,7 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -313,15 +314,22 @@ class ReaderContentControllerTest {
     @Test
     fun `reload ignores content returned by the previous source version`() = runTest {
         var source = "old"
+        var loads = 0
         val oldStarted = CompletableDeferred<Unit>()
         val releaseOld = CompletableDeferred<Unit>()
+        val newStarted = CompletableDeferred<Unit>()
+        val releaseNew = CompletableDeferred<Unit>()
         val controller = ReaderContentController(
             scope = this,
             chapterLoader = {
+                loads++
                 val captured = source
                 if (captured == "old") {
                     oldStarted.complete(Unit)
                     releaseOld.await()
+                } else {
+                    newStarted.complete(Unit)
+                    releaseNew.await()
                 }
                 ReaderChapterContent(captured)
             },
@@ -334,10 +342,42 @@ class ReaderContentControllerTest {
 
         source = "new"
         controller.reloadFromSource()
+        newStarted.await()
         releaseOld.complete(Unit)
+        advanceUntilIdle()
+        controller.openPosition(0, 0)
+        advanceUntilIdle()
+
+        assertEquals(2, loads)
+
+        releaseNew.complete(Unit)
         advanceUntilIdle()
         coroutineContext.job.children.forEach { it.join() }
 
         assertEquals("new", controller.chapterBody(0))
+    }
+
+    @Test
+    fun `far progress jump applies displayed length after target loads`() = runTest {
+        val bodies = List(4) { index -> "文".repeat(if (index == 3) 50 else 100) }
+        val controller = ReaderContentController(
+            scope = this,
+            chapterLoader = { ReaderChapterContent(bodies[it]) },
+            listener = RecordingListener()
+        )
+        controller.setChapters(List(4) { ChapterMeta(it, "", 100) })
+        controller.updateEnvironment(spec(), FakeMeasure())
+        controller.openPosition(0, 0)
+        advanceUntilIdle()
+        coroutineContext.job.children.forEach { it.join() }
+        assertNull(controller.chapterBody(3))
+
+        controller.jumpToProgress(0.875f)
+        advanceUntilIdle()
+        coroutineContext.job.children.forEach { it.join() }
+
+        assertEquals(3, controller.chapterIndex)
+        assertEquals(25, controller.charOffset)
+        assertEquals(0.875f, controller.bookProgress(), 0.001f)
     }
 }

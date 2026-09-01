@@ -1032,6 +1032,33 @@ class MigrationTest {
         }
     }
 
+    @Test
+    fun migrate22To23AddsCollectionsAndTextAnchors() {
+        helper.createDatabase(DB_NAME, 22).close()
+
+        val db = helper.runMigrationsAndValidate(
+            DB_NAME,
+            23,
+            true,
+            DatabaseMigrations.Migration22To23
+        )
+
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'book_collections'"
+        ).use { cursor -> assertTrue(cursor.moveToFirst()) }
+
+        fun columns(table: String): Set<String> = db.query("PRAGMA table_info($table)").use { cursor ->
+            buildSet {
+                while (cursor.moveToNext()) add(cursor.getString(1))
+            }
+        }
+
+        assertTrue("collectionId" in columns("books"))
+        assertTrue("collectionOrder" in columns("books"))
+        assertTrue("textAnchorJson" in columns("annotations"))
+        assertTrue("textAnchorJson" in columns("illustrations"))
+    }
+
     private companion object {
         const val DB_NAME = "migration-test.db"
     }

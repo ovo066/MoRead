@@ -15,10 +15,9 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -169,6 +168,7 @@ fun BookshelfScreen(
     var deleteSelected by remember { mutableStateOf(false) }
     var rootSize by remember { mutableStateOf(IntSize.Zero) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
+    val collectionDragState = remember { ShelfCollectionDragState() }
     val context = LocalContext.current
     LaunchedEffect(state.isSelectionMode) {
         onSelectionModeChanged(state.isSelectionMode)
@@ -269,6 +269,13 @@ fun BookshelfScreen(
         if (state.isSelectionMode) viewModel.toggleSelection(entry.bookIds)
         else openCollection = entry
     }
+    val onCollectionDrop: (BookEntity, ShelfDropTarget) -> Unit = { source, target ->
+        when {
+            target.collectionId != null ->
+                viewModel.addBooksToCollection(target.collectionId, setOf(source.id))
+            target.bookId != null -> collectionNameRequest = setOf(source.id, target.bookId)
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -310,6 +317,8 @@ fun BookshelfScreen(
                             onBookEntryClick = onBookEntryClick,
                             onCollectionEntryClick = onCollectionEntryClick,
                             onLongPress = onLongPress,
+                            collectionDragState = collectionDragState,
+                            onCollectionDrop = onCollectionDrop,
                             onSetLayout = viewModel::setLayout,
                             onSetReadStateFilter = viewModel::setReadStateFilter,
                             onSelectGroup = viewModel::selectGroup,
@@ -331,6 +340,8 @@ fun BookshelfScreen(
                             onBookEntryClick = onBookEntryClick,
                             onCollectionEntryClick = onCollectionEntryClick,
                             onLongPress = onLongPress,
+                            collectionDragState = collectionDragState,
+                            onCollectionDrop = onCollectionDrop,
                             onSetLayout = viewModel::setLayout,
                             onSetReadStateFilter = viewModel::setReadStateFilter,
                             onSelectGroup = viewModel::selectGroup,
@@ -360,6 +371,8 @@ fun BookshelfScreen(
                 ImportProgressOverlay()
             }
         }
+
+        CollectionDragOverlay(collectionDragState)
 
         longPressTarget?.let { target ->
             BackHandler { longPressTarget = null }
@@ -653,6 +666,8 @@ private fun BookGrid(
     onBookEntryClick: (ShelfEntry.Book) -> Unit,
     onCollectionEntryClick: (ShelfEntry.Collection) -> Unit,
     onLongPress: (BookEntity, Rect) -> Unit,
+    collectionDragState: ShelfCollectionDragState,
+    onCollectionDrop: (BookEntity, ShelfDropTarget) -> Unit,
     onSetLayout: (ShelfLayout) -> Unit,
     onSetReadStateFilter: (BookReadState?) -> Unit,
     onSelectGroup: (Long?, Boolean) -> Unit,
@@ -705,17 +720,20 @@ private fun BookGrid(
         gridItems(entries, key = ShelfEntry::key) { entry ->
             when (entry) {
                 is ShelfEntry.Book -> GridBookItem(
-                    book = entry.book,
+                    entry = entry,
                     selected = entry.book.id in state.selectedBookIds,
                     selectionMode = state.isSelectionMode,
                     onOpen = { onBookEntryClick(entry) },
-                    onLongPress = { bounds -> onLongPress(entry.book, bounds) }
+                    onLongPress = { bounds -> onLongPress(entry.book, bounds) },
+                    collectionDragState = collectionDragState,
+                    onCollectionDrop = onCollectionDrop
                 )
                 is ShelfEntry.Collection -> GridCollectionItem(
                     entry = entry,
                     selected = entry.bookIds.all(state.selectedBookIds::contains),
                     selectionMode = state.isSelectionMode,
-                    onOpen = { onCollectionEntryClick(entry) }
+                    onOpen = { onCollectionEntryClick(entry) },
+                    collectionDragState = collectionDragState
                 )
             }
         }
@@ -733,6 +751,8 @@ private fun BookList(
     onBookEntryClick: (ShelfEntry.Book) -> Unit,
     onCollectionEntryClick: (ShelfEntry.Collection) -> Unit,
     onLongPress: (BookEntity, Rect) -> Unit,
+    collectionDragState: ShelfCollectionDragState,
+    onCollectionDrop: (BookEntity, ShelfDropTarget) -> Unit,
     onSetLayout: (ShelfLayout) -> Unit,
     onSetReadStateFilter: (BookReadState?) -> Unit,
     onSelectGroup: (Long?, Boolean) -> Unit,
@@ -782,17 +802,20 @@ private fun BookList(
         listItems(entries, key = ShelfEntry::key) { entry ->
             when (entry) {
                 is ShelfEntry.Book -> ListBookItem(
-                    book = entry.book,
+                    entry = entry,
                     selected = entry.book.id in state.selectedBookIds,
                     selectionMode = state.isSelectionMode,
                     onOpen = { onBookEntryClick(entry) },
-                    onLongPress = { bounds -> onLongPress(entry.book, bounds) }
+                    onLongPress = { bounds -> onLongPress(entry.book, bounds) },
+                    collectionDragState = collectionDragState,
+                    onCollectionDrop = onCollectionDrop
                 )
                 is ShelfEntry.Collection -> ListCollectionItem(
                     entry = entry,
                     selected = entry.bookIds.all(state.selectedBookIds::contains),
                     selectionMode = state.isSelectionMode,
-                    onOpen = { onCollectionEntryClick(entry) }
+                    onOpen = { onCollectionEntryClick(entry) },
+                    collectionDragState = collectionDragState
                 )
             }
         }
@@ -1333,28 +1356,50 @@ private val SHELF_MENU_WIDTH = 244.dp
 private val SHELF_MENU_MIN_HEIGHT = 120.dp
 private val SHELF_MENU_MAX_HEIGHT = 390.dp
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun GridBookItem(
-    book: BookEntity,
+    entry: ShelfEntry.Book,
     selected: Boolean,
     selectionMode: Boolean,
     onOpen: () -> Unit,
-    onLongPress: (Rect) -> Unit
+    onLongPress: (Rect) -> Unit,
+    collectionDragState: ShelfCollectionDragState,
+    onCollectionDrop: (BookEntity, ShelfDropTarget) -> Unit
 ) {
+    val book = entry.book
     var bounds by remember { mutableStateOf(Rect.Zero) }
-    Column(modifier = Modifier.graphicsLayer { alpha = if (selectionMode && !selected) 0.55f else 1f }) {
+    val target = remember(entry.key) { entry.dropTarget() }
+    DisposableEffect(entry.key) {
+        onDispose { collectionDragState.unregister(entry.key) }
+    }
+    Column(
+        modifier = Modifier
+            .graphicsLayer { alpha = if (selectionMode && !selected) 0.55f else 1f }
+            .onGloballyPositioned {
+                bounds = it.boundsInRoot()
+                collectionDragState.register(target, bounds)
+            }
+            .border(
+                if (collectionDragState.activeTarget == target) 2.dp else 0.dp,
+                MaterialTheme.colorScheme.primary,
+                RoundedCornerShape(12.dp)
+            )
+            .clickable(onClick = onOpen)
+            .collectionDragSource(
+                book = book,
+                bounds = { bounds },
+                enabled = !selectionMode,
+                state = collectionDragState,
+                onDrop = onCollectionDrop,
+                onLongPressOnly = onLongPress
+            )
+    ) {
         Box {
             BookCover(
                 book = book,
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(0.69f)
-                    .onGloballyPositioned { bounds = it.boundsInRoot() }
-                    .combinedClickable(
-                        onClick = onOpen,
-                        onLongClick = { onLongPress(bounds) }
-                    )
             )
             if (selectionMode) {
                 Icon(
@@ -1384,24 +1429,43 @@ private fun GridBookItem(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ListBookItem(
-    book: BookEntity,
+    entry: ShelfEntry.Book,
     selected: Boolean,
     selectionMode: Boolean,
     onOpen: () -> Unit,
-    onLongPress: (Rect) -> Unit
+    onLongPress: (Rect) -> Unit,
+    collectionDragState: ShelfCollectionDragState,
+    onCollectionDrop: (BookEntity, ShelfDropTarget) -> Unit
 ) {
+    val book = entry.book
     var bounds by remember { mutableStateOf(Rect.Zero) }
     val progress = readProgress(book)
+    val target = remember(entry.key) { entry.dropTarget() }
+    DisposableEffect(entry.key) {
+        onDispose { collectionDragState.unregister(entry.key) }
+    }
     FrostedSurface(
         modifier = Modifier
             .fillMaxWidth()
-            .onGloballyPositioned { bounds = it.boundsInRoot() }
-            .combinedClickable(
-                onClick = onOpen,
-                onLongClick = { onLongPress(bounds) }
+            .onGloballyPositioned {
+                bounds = it.boundsInRoot()
+                collectionDragState.register(target, bounds)
+            }
+            .border(
+                if (collectionDragState.activeTarget == target) 2.dp else 0.dp,
+                MaterialTheme.colorScheme.primary,
+                RoundedCornerShape(24.dp)
+            )
+            .clickable(onClick = onOpen)
+            .collectionDragSource(
+                book = book,
+                bounds = { bounds },
+                enabled = !selectionMode,
+                state = collectionDragState,
+                onDrop = onCollectionDrop,
+                onLongPressOnly = onLongPress
             ),
         shape = RoundedCornerShape(24.dp),
         shadowElevation = 4.dp

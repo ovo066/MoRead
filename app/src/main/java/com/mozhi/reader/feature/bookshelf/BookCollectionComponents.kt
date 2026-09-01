@@ -1,6 +1,7 @@
 package com.mozhi.reader.feature.bookshelf
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -31,6 +33,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,14 +43,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.mozhi.reader.core.database.entity.BookCollectionEntity
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.ui.components.FrostedSurface
 import java.io.File
+import kotlin.math.roundToInt
 
 @Composable
 internal fun CollectionArtwork(
@@ -92,11 +99,24 @@ internal fun GridCollectionItem(
     selected: Boolean,
     selectionMode: Boolean,
     onOpen: () -> Unit,
+    collectionDragState: ShelfCollectionDragState,
     modifier: Modifier = Modifier
 ) {
+    val target = remember(entry.key) { entry.dropTarget() }
+    DisposableEffect(entry.key) {
+        onDispose { collectionDragState.unregister(entry.key) }
+    }
     Column(
         modifier = modifier
             .graphicsLayer { alpha = if (selectionMode && !selected) 0.55f else 1f }
+            .onGloballyPositioned {
+                collectionDragState.register(target, it.boundsInRoot())
+            }
+            .border(
+                if (collectionDragState.activeTarget == target) 2.dp else 0.dp,
+                MaterialTheme.colorScheme.primary,
+                RoundedCornerShape(12.dp)
+            )
             .clip(RoundedCornerShape(12.dp))
             .clickable(onClick = onOpen)
     ) {
@@ -137,12 +157,25 @@ internal fun ListCollectionItem(
     selected: Boolean,
     selectionMode: Boolean,
     onOpen: () -> Unit,
+    collectionDragState: ShelfCollectionDragState,
     modifier: Modifier = Modifier
 ) {
+    val target = remember(entry.key) { entry.dropTarget() }
+    DisposableEffect(entry.key) {
+        onDispose { collectionDragState.unregister(entry.key) }
+    }
     FrostedSurface(
         modifier = modifier
             .fillMaxWidth()
             .graphicsLayer { alpha = if (selectionMode && !selected) 0.55f else 1f }
+            .onGloballyPositioned {
+                collectionDragState.register(target, it.boundsInRoot())
+            }
+            .border(
+                if (collectionDragState.activeTarget == target) 2.dp else 0.dp,
+                MaterialTheme.colorScheme.primary,
+                RoundedCornerShape(24.dp)
+            )
             .clickable(onClick = onOpen),
         shape = RoundedCornerShape(24.dp),
         shadowElevation = 4.dp
@@ -180,6 +213,27 @@ internal fun ListCollectionItem(
             }
         }
     }
+}
+
+@Composable
+internal fun CollectionDragOverlay(state: ShelfCollectionDragState) {
+    val book = state.sourceBook ?: return
+    CompactBookArtwork(
+        book = book,
+        modifier = Modifier
+            .offset {
+                IntOffset(
+                    state.pointer.x.roundToInt() - 42.dp.roundToPx(),
+                    state.pointer.y.roundToInt() - 58.dp.roundToPx()
+                )
+            }
+            .size(width = 84.dp, height = 116.dp)
+            .graphicsLayer {
+                alpha = 0.88f
+                scaleX = 1.04f
+                scaleY = 1.04f
+            }
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

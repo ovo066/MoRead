@@ -165,7 +165,8 @@ data class ReaderSettings(
     /** 夜间槽的背景图不透明度。 */
     val nightBackgroundImageOpacity: Float = 0.28f,
     /** 用户主动启用的逐书主题；键为 books.id。 */
-    val bookThemes: Map<Long, BookReaderTheme> = emptyMap()
+    val bookThemes: Map<Long, BookReaderTheme> = emptyMap(),
+    val bookChineseConversions: Map<Long, ChineseConversionMode> = emptyMap()
 )
 
 /** 当前生效的自定义主题；id 悬空（预设已删）按未启用处理。 */
@@ -273,7 +274,10 @@ class ReaderSettingsRepository @Inject constructor(
                 ?.takeIf { id -> imageLibrary.any { it.id == id } },
             nightBackgroundImageOpacity = (preferences[Keys.NightBackgroundImageOpacity] ?: 0.28f)
                 .coerceIn(0.05f, 1f),
-            bookThemes = BookReaderThemeCodec.decode(preferences[Keys.BookThemes])
+            bookThemes = BookReaderThemeCodec.decode(preferences[Keys.BookThemes]),
+            bookChineseConversions = BookChineseConversionCodec.decode(
+                preferences[Keys.BookChineseConversions]
+            )
         )
     }
 
@@ -538,6 +542,16 @@ class ReaderSettingsRepository @Inject constructor(
 
     suspend fun setBookTheme(bookId: Long, theme: ReaderTheme, slot: ReaderThemeSlot) {
         updateBookTheme(bookId) { it.withTheme(slot, theme) }
+    }
+
+    suspend fun setBookChineseConversionMode(bookId: Long, mode: ChineseConversionMode) {
+        dataStore.edit { preferences ->
+            val values = BookChineseConversionCodec
+                .decode(preferences[Keys.BookChineseConversions])
+                .toMutableMap()
+            if (mode == ChineseConversionMode.OFF) values.remove(bookId) else values[bookId] = mode
+            preferences[Keys.BookChineseConversions] = BookChineseConversionCodec.encode(values)
+        }
     }
 
     suspend fun selectBookCustomTheme(bookId: Long, id: Long, slot: ReaderThemeSlot) {
@@ -1132,5 +1146,6 @@ class ReaderSettingsRepository @Inject constructor(
         val NightBackgroundImageOpacity =
             floatPreferencesKey("reader_background_image_night_opacity")
         val BookThemes = stringPreferencesKey("reader_book_themes")
+        val BookChineseConversions = stringPreferencesKey("reader_book_chinese_conversions")
     }
 }

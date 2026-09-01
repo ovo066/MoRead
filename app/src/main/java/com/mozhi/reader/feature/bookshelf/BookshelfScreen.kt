@@ -116,6 +116,7 @@ import androidx.core.content.ContextCompat
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import com.mozhi.reader.core.database.entity.BookCollectionEntity
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.BookReadState
 import com.mozhi.reader.core.database.entity.label
@@ -160,6 +161,11 @@ fun BookshelfScreen(
     var longPressTarget by remember { mutableStateOf<BookLongPressTarget?>(null) }
     var showTagPicker by remember { mutableStateOf(false) }
     var showGroupPicker by remember { mutableStateOf(false) }
+    var openCollection by remember { mutableStateOf<ShelfEntry.Collection?>(null) }
+    var showCollectionPicker by remember { mutableStateOf(false) }
+    var collectionNameRequest by remember { mutableStateOf<Set<Long>?>(null) }
+    var renameCollection by remember { mutableStateOf<BookCollectionEntity?>(null) }
+    var dissolveCollection by remember { mutableStateOf<BookCollectionEntity?>(null) }
     var deleteSelected by remember { mutableStateOf(false) }
     var rootSize by remember { mutableStateOf(IntSize.Zero) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
@@ -226,13 +232,23 @@ fun BookshelfScreen(
     }
 
     // 搜索是叠在筛选之上的第二层过滤，留在 UI 层：输入是本地状态，没必要绕一圈 VM。
-    val filteredBooks = remember(state.books, state.tagRefs, state.tags, searchQuery) {
+    val filteredBooks = remember(
+        state.books,
+        state.collections,
+        state.tagRefs,
+        state.tags,
+        searchQuery
+    ) {
         val query = searchQuery.trim()
+        val matchingCollections = state.collections
+            .filter { it.name.contains(query, ignoreCase = true) }
+            .mapTo(mutableSetOf(), BookCollectionEntity::id)
         if (query.isEmpty()) {
             state.books
         } else {
             state.books.filter { book ->
-                book.title.contains(query, ignoreCase = true) ||
+                book.collectionId in matchingCollections ||
+                    book.title.contains(query, ignoreCase = true) ||
                     book.author.contains(query, ignoreCase = true) ||
                     state.tags.any { tag ->
                         tag.name.contains(query, ignoreCase = true) &&
@@ -240,6 +256,18 @@ fun BookshelfScreen(
                     }
             }
         }
+    }
+    val shelfEntries = remember(filteredBooks, state.allBooks, state.collections) {
+        buildShelfEntries(filteredBooks, state.allBooks, state.collections)
+    }
+    val visibleBookIds = shelfEntries.flatMapTo(linkedSetOf()) { it.bookIds }
+    val onBookEntryClick: (ShelfEntry.Book) -> Unit = { entry ->
+        if (state.isSelectionMode) viewModel.toggleSelection(entry.book.id)
+        else onOpenBookDetail(entry.book.id, null)
+    }
+    val onCollectionEntryClick: (ShelfEntry.Collection) -> Unit = { entry ->
+        if (state.isSelectionMode) viewModel.toggleSelection(entry.bookIds)
+        else openCollection = entry
     }
 
     Box(
@@ -273,12 +301,14 @@ fun BookshelfScreen(
                 ) { layout ->
                     when (layout) {
                         ShelfLayout.GRID -> BookGrid(
-                            books = filteredBooks,
+                            entries = shelfEntries,
+                            bookCount = filteredBooks.size,
                             state = state,
                             searchQuery = searchQuery,
                             onSearchChange = { searchQuery = it },
                             onOpenBook = onOpenBook,
-                            onOpenBookDetail = { onOpenBookDetail(it, null) },
+                            onBookEntryClick = onBookEntryClick,
+                            onCollectionEntryClick = onCollectionEntryClick,
                             onLongPress = onLongPress,
                             onSetLayout = viewModel::setLayout,
                             onSetReadStateFilter = viewModel::setReadStateFilter,
@@ -292,12 +322,14 @@ fun BookshelfScreen(
                             onImport = requestImport
                         )
                         ShelfLayout.LIST -> BookList(
-                            books = filteredBooks,
+                            entries = shelfEntries,
+                            bookCount = filteredBooks.size,
                             state = state,
                             searchQuery = searchQuery,
                             onSearchChange = { searchQuery = it },
                             onOpenBook = onOpenBook,
-                            onOpenBookDetail = { onOpenBookDetail(it, null) },
+                            onBookEntryClick = onBookEntryClick,
+                            onCollectionEntryClick = onCollectionEntryClick,
                             onLongPress = onLongPress,
                             onSetLayout = viewModel::setLayout,
                             onSetReadStateFilter = viewModel::setReadStateFilter,
@@ -351,13 +383,14 @@ fun BookshelfScreen(
             BackHandler { viewModel.exitSelection() }
             ShelfSelectionBar(
                 selectedCount = state.selectedCount,
-                allVisibleSelected = filteredBooks.isNotEmpty() &&
-                    state.selectedBookIds.containsAll(filteredBooks.map(BookEntity::id)),
+                allVisibleSelected = visibleBookIds.isNotEmpty() &&
+                    state.selectedBookIds.containsAll(visibleBookIds),
                 onClose = viewModel::exitSelection,
-                onSelectAll = viewModel::selectAllVisible,
+                onSelectAll = { viewModel.selectAllVisible(visibleBookIds) },
                 onGroup = { showGroupPicker = true },
                 onTags = { showTagPicker = true },
                 onDelete = { deleteSelected = true },
+                onCollection = { showCollectionPicker = true },
                 onSetReadState = viewModel::setSelectedReadState,
                 onSetPinned = viewModel::setSelectedPinned,
                 modifier = Modifier.align(Alignment.BottomCenter)
@@ -419,6 +452,83 @@ fun BookshelfScreen(
             groups = state.groups,
             onDismiss = { showGroupPicker = false },
             onSelect = viewModel::moveSelectedToGroup
+        )
+    }
+
+    if (showCollectionPicker) {
+        CollectionPickerSheet(
+            selectedCount = state.selectedCount,
+            collections = state.collections,
+            allBooks = state.allBooks,
+            onCreate = {
+                showCollectionPicker = false
+                collectionNameRequest = state.selectedBookIds
+            },
+            onSelect = { collectionId ->
+                showCollectionPicker = false
+                viewModel.addBooksToCollection(collectionId, state.selectedBookIds)
+            },
+            onDismiss = { showCollectionPicker = false }
+        )
+    }
+
+    openCollection?.let { opened ->
+        shelfEntries.filterIsInstance<ShelfEntry.Collection>()
+            .firstOrNull { it.collection.id == opened.collection.id }
+            ?.let { entry ->
+                CollectionContentsSheet(
+                    entry = entry,
+                    onOpenBook = { bookId ->
+                        openCollection = null
+                        onOpenBookDetail(bookId, null)
+                    },
+                    onRemoveBook = { viewModel.removeBooksFromCollection(setOf(it)) },
+                    onRename = { renameCollection = entry.collection },
+                    onDissolve = { dissolveCollection = entry.collection },
+                    onDismiss = { openCollection = null }
+                )
+            }
+    }
+
+    collectionNameRequest?.let { bookIds ->
+        CollectionNameDialog(
+            title = "新建合集",
+            initialName = "",
+            onConfirm = { name ->
+                collectionNameRequest = null
+                viewModel.createCollection(name, bookIds)
+            },
+            onDismiss = { collectionNameRequest = null }
+        )
+    }
+
+    renameCollection?.let { collection ->
+        CollectionNameDialog(
+            title = "重命名合集",
+            initialName = collection.name,
+            onConfirm = { name ->
+                renameCollection = null
+                viewModel.renameCollection(collection.id, name)
+            },
+            onDismiss = { renameCollection = null }
+        )
+    }
+
+    dissolveCollection?.let { collection ->
+        AlertDialog(
+            onDismissRequest = { dissolveCollection = null },
+            title = { Text("解散 ${collection.name}？") },
+            text = { Text("解散后书籍回到书架，不会删除书籍或阅读数据。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    dissolveCollection = null
+                    openCollection = null
+                    viewModel.dissolveCollection(collection.id)
+                }) { Text("解散") }
+            },
+            dismissButton = {
+                TextButton(onClick = { dissolveCollection = null }) { Text("取消") }
+            }
         )
     }
 
@@ -534,12 +644,14 @@ private fun EmptyBookshelfFeed(onImport: () -> Unit) {
 
 @Composable
 private fun BookGrid(
-    books: List<BookEntity>,
+    entries: List<ShelfEntry>,
+    bookCount: Int,
     state: BookshelfUiState,
     searchQuery: String,
     onSearchChange: (String) -> Unit,
     onOpenBook: (Long) -> Unit,
-    onOpenBookDetail: (Long) -> Unit,
+    onBookEntryClick: (ShelfEntry.Book) -> Unit,
+    onCollectionEntryClick: (ShelfEntry.Collection) -> Unit,
     onLongPress: (BookEntity, Rect) -> Unit,
     onSetLayout: (ShelfLayout) -> Unit,
     onSetReadStateFilter: (BookReadState?) -> Unit,
@@ -570,7 +682,7 @@ private fun BookGrid(
         }
         item(span = { GridItemSpan(maxLineSpan) }) {
             LibraryToolbar(
-                bookCount = books.size,
+                bookCount = bookCount,
                 searching = searchQuery.isNotBlank(),
                 state = state,
                 onSetLayout = onSetLayout,
@@ -585,34 +697,41 @@ private fun BookGrid(
                 onImport = onImport
             )
         }
-        if (books.isEmpty()) {
+        if (entries.isEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }) {
                 NoShelfResults(query = searchQuery, filter = state.filter)
             }
         }
-        gridItems(books, key = BookEntity::id) { book ->
-            GridBookItem(
-                book = book,
-                selected = book.id in state.selectedBookIds,
-                selectionMode = state.isSelectionMode,
-                onOpen = {
-                    if (state.isSelectionMode) onLongPress(book, Rect.Zero)
-                    else onOpenBookDetail(book.id)
-                },
-                onLongPress = { bounds -> onLongPress(book, bounds) }
-            )
+        gridItems(entries, key = ShelfEntry::key) { entry ->
+            when (entry) {
+                is ShelfEntry.Book -> GridBookItem(
+                    book = entry.book,
+                    selected = entry.book.id in state.selectedBookIds,
+                    selectionMode = state.isSelectionMode,
+                    onOpen = { onBookEntryClick(entry) },
+                    onLongPress = { bounds -> onLongPress(entry.book, bounds) }
+                )
+                is ShelfEntry.Collection -> GridCollectionItem(
+                    entry = entry,
+                    selected = entry.bookIds.all(state.selectedBookIds::contains),
+                    selectionMode = state.isSelectionMode,
+                    onOpen = { onCollectionEntryClick(entry) }
+                )
+            }
         }
     }
 }
 
 @Composable
 private fun BookList(
-    books: List<BookEntity>,
+    entries: List<ShelfEntry>,
+    bookCount: Int,
     state: BookshelfUiState,
     searchQuery: String,
     onSearchChange: (String) -> Unit,
     onOpenBook: (Long) -> Unit,
-    onOpenBookDetail: (Long) -> Unit,
+    onBookEntryClick: (ShelfEntry.Book) -> Unit,
+    onCollectionEntryClick: (ShelfEntry.Collection) -> Unit,
     onLongPress: (BookEntity, Rect) -> Unit,
     onSetLayout: (ShelfLayout) -> Unit,
     onSetReadStateFilter: (BookReadState?) -> Unit,
@@ -642,7 +761,7 @@ private fun BookList(
         item {
             Spacer(Modifier.height(8.dp))
             LibraryToolbar(
-                bookCount = books.size,
+                bookCount = bookCount,
                 searching = searchQuery.isNotBlank(),
                 state = state,
                 onSetLayout = onSetLayout,
@@ -657,20 +776,25 @@ private fun BookList(
                 onImport = onImport
             )
         }
-        if (books.isEmpty()) {
+        if (entries.isEmpty()) {
             item { NoShelfResults(query = searchQuery, filter = state.filter) }
         }
-        listItems(books, key = BookEntity::id) { book ->
-            ListBookItem(
-                book = book,
-                selected = book.id in state.selectedBookIds,
-                selectionMode = state.isSelectionMode,
-                onOpen = {
-                    if (state.isSelectionMode) onLongPress(book, Rect.Zero)
-                    else onOpenBookDetail(book.id)
-                },
-                onLongPress = { bounds -> onLongPress(book, bounds) }
-            )
+        listItems(entries, key = ShelfEntry::key) { entry ->
+            when (entry) {
+                is ShelfEntry.Book -> ListBookItem(
+                    book = entry.book,
+                    selected = entry.book.id in state.selectedBookIds,
+                    selectionMode = state.isSelectionMode,
+                    onOpen = { onBookEntryClick(entry) },
+                    onLongPress = { bounds -> onLongPress(entry.book, bounds) }
+                )
+                is ShelfEntry.Collection -> ListCollectionItem(
+                    entry = entry,
+                    selected = entry.bookIds.all(state.selectedBookIds::contains),
+                    selectionMode = state.isSelectionMode,
+                    onOpen = { onCollectionEntryClick(entry) }
+                )
+            }
         }
     }
 }

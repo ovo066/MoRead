@@ -24,6 +24,7 @@ import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.CheckBox
 import androidx.compose.material.icons.outlined.CheckBoxOutlineBlank
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.CollectionsBookmark
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.IndeterminateCheckBox
@@ -175,6 +176,7 @@ internal fun ShelfSelectionBar(
     onGroup: () -> Unit,
     onTags: () -> Unit,
     onDelete: () -> Unit,
+    onCollection: () -> Unit,
     onSetReadState: (BookReadState?) -> Unit,
     onSetPinned: (Boolean) -> Unit,
     modifier: Modifier = Modifier
@@ -219,6 +221,15 @@ internal fun ShelfSelectionBar(
                         onDismissRequest = { moreExpanded = false },
                         width = 200.dp
                     ) {
+                        MoReadMenuItem(
+                            text = "合集",
+                            icon = Icons.Outlined.CollectionsBookmark,
+                            onClick = {
+                                moreExpanded = false
+                                onCollection()
+                            }
+                        )
+                        MoReadMenuDivider()
                         MoReadMenuItem(
                             text = "置顶",
                             icon = Icons.Outlined.PushPin,

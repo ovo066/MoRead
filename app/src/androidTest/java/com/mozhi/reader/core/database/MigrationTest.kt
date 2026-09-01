@@ -206,7 +206,7 @@ class MigrationTest {
             assertEquals("阅读助手", cursor.getString(0))
             assertEquals(0, cursor.getInt(1))
             assertEquals(1, cursor.getInt(2))
-            assertTrue(cursor.getString(3).contains("search_book"))
+            assertTrue(cursor.getString(3).contains("add_annotation"))
             assertTrue(cursor.moveToNext())
             // 第二条是扮演型示例角色。
             assertEquals(1, cursor.getInt(1))

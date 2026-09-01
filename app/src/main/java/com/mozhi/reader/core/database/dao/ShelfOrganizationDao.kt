@@ -77,6 +77,13 @@ interface ShelfOrganizationDao {
         deleteCollectionRow(id)
     }
 
+    @Transaction
+    suspend fun reorderCollectionBooks(collectionId: Long, bookIds: List<Long>) {
+        bookIds.forEachIndexed { order, bookId ->
+            setBookCollection(bookId, collectionId, order)
+        }
+    }
+
     @Query("SELECT * FROM shelf_groups ORDER BY sortOrder, createdAt, id")
     fun observeGroups(): Flow<List<ShelfGroupEntity>>
 

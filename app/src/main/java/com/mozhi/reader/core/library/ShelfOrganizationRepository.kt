@@ -60,6 +60,9 @@ class ShelfOrganizationRepository @Inject constructor(
 
     suspend fun dissolveCollection(id: Long) = dao.dissolveCollection(id)
 
+    suspend fun reorderCollectionBooks(collectionId: Long, bookIds: List<Long>) =
+        dao.reorderCollectionBooks(collectionId, bookIds)
+
     suspend fun deleteEmptyCollections() = dao.deleteEmptyCollections()
 
     suspend fun saveGroup(group: ShelfGroupEntity): Long = dao.upsertGroup(

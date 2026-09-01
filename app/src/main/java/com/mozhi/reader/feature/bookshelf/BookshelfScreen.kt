@@ -260,6 +260,12 @@ fun BookshelfScreen(
     val shelfEntries = remember(filteredBooks, state.allBooks, state.collections) {
         buildShelfEntries(filteredBooks, state.allBooks, state.collections)
     }
+    LaunchedEffect(openCollection?.collection?.id, shelfEntries) {
+        val openedId = openCollection?.collection?.id ?: return@LaunchedEffect
+        if (shelfEntries.none { it is ShelfEntry.Collection && it.collection.id == openedId }) {
+            openCollection = null
+        }
+    }
     val visibleBookIds = shelfEntries.flatMapTo(linkedSetOf()) { it.bookIds }
     val onBookEntryClick: (ShelfEntry.Book) -> Unit = { entry ->
         if (state.isSelectionMode) viewModel.toggleSelection(entry.book.id)
@@ -1369,15 +1375,16 @@ private fun GridBookItem(
     val book = entry.book
     var bounds by remember { mutableStateOf(Rect.Zero) }
     val target = remember(entry.key) { entry.dropTarget() }
+    val registrationOwner = remember { Any() }
     DisposableEffect(entry.key) {
-        onDispose { collectionDragState.unregister(entry.key) }
+        onDispose { collectionDragState.unregister(entry.key, registrationOwner) }
     }
     Column(
         modifier = Modifier
             .graphicsLayer { alpha = if (selectionMode && !selected) 0.55f else 1f }
             .onGloballyPositioned {
                 bounds = it.boundsInRoot()
-                collectionDragState.register(target, bounds)
+                collectionDragState.register(target, bounds, registrationOwner)
             }
             .then(
                 if (collectionDragState.activeTarget == target) Modifier.border(
@@ -1445,15 +1452,16 @@ private fun ListBookItem(
     var bounds by remember { mutableStateOf(Rect.Zero) }
     val progress = readProgress(book)
     val target = remember(entry.key) { entry.dropTarget() }
+    val registrationOwner = remember { Any() }
     DisposableEffect(entry.key) {
-        onDispose { collectionDragState.unregister(entry.key) }
+        onDispose { collectionDragState.unregister(entry.key, registrationOwner) }
     }
     FrostedSurface(
         modifier = Modifier
             .fillMaxWidth()
             .onGloballyPositioned {
                 bounds = it.boundsInRoot()
-                collectionDragState.register(target, bounds)
+                collectionDragState.register(target, bounds, registrationOwner)
             }
             .then(
                 if (collectionDragState.activeTarget == target) Modifier.border(

@@ -38,6 +38,8 @@ fun findShelfDropTarget(
 
 @Stable
 internal class ShelfCollectionDragState {
+    private data class Registration(val owner: Any, val region: ShelfDropRegion)
+
     var sourceBook by mutableStateOf<BookEntity?>(null)
         private set
     var pointer by mutableStateOf(Offset.Zero)
@@ -45,14 +47,15 @@ internal class ShelfCollectionDragState {
     var activeTarget by mutableStateOf<ShelfDropTarget?>(null)
         private set
 
-    private val regions = mutableStateMapOf<String, ShelfDropRegion>()
+    private val regions = mutableStateMapOf<String, Registration>()
     private var distance = 0f
 
-    fun register(target: ShelfDropTarget, bounds: Rect) {
-        regions[target.entryKey] = ShelfDropRegion(target, bounds)
+    fun register(target: ShelfDropTarget, bounds: Rect, owner: Any) {
+        regions[target.entryKey] = Registration(owner, ShelfDropRegion(target, bounds))
     }
 
-    fun unregister(entryKey: String) {
+    fun unregister(entryKey: String, owner: Any) {
+        if (regions[entryKey]?.owner !== owner) return
         regions.remove(entryKey)
         if (activeTarget?.entryKey == entryKey) activeTarget = null
     }
@@ -67,7 +70,7 @@ internal class ShelfCollectionDragState {
         pointer += delta
         distance += delta.getDistance()
         activeTarget = sourceBook?.let { book ->
-            findShelfDropTarget(pointer, book.id, regions.values.toList())
+            findShelfDropTarget(pointer, book.id, regions.values.map(Registration::region))
         }
     }
 

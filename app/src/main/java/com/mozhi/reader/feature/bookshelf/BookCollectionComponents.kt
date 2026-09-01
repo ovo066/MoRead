@@ -110,14 +110,15 @@ internal fun GridCollectionItem(
     modifier: Modifier = Modifier
 ) {
     val target = remember(entry.key) { entry.dropTarget() }
+    val registrationOwner = remember { Any() }
     DisposableEffect(entry.key) {
-        onDispose { collectionDragState.unregister(entry.key) }
+        onDispose { collectionDragState.unregister(entry.key, registrationOwner) }
     }
     Column(
         modifier = modifier
             .graphicsLayer { alpha = if (selectionMode && !selected) 0.55f else 1f }
             .onGloballyPositioned {
-                collectionDragState.register(target, it.boundsInRoot())
+                collectionDragState.register(target, it.boundsInRoot(), registrationOwner)
             }
             .then(
                 if (collectionDragState.activeTarget == target) Modifier.border(
@@ -170,15 +171,16 @@ internal fun ListCollectionItem(
     modifier: Modifier = Modifier
 ) {
     val target = remember(entry.key) { entry.dropTarget() }
+    val registrationOwner = remember { Any() }
     DisposableEffect(entry.key) {
-        onDispose { collectionDragState.unregister(entry.key) }
+        onDispose { collectionDragState.unregister(entry.key, registrationOwner) }
     }
     FrostedSurface(
         modifier = modifier
             .fillMaxWidth()
             .graphicsLayer { alpha = if (selectionMode && !selected) 0.55f else 1f }
             .onGloballyPositioned {
-                collectionDragState.register(target, it.boundsInRoot())
+                collectionDragState.register(target, it.boundsInRoot(), registrationOwner)
             }
             .then(
                 if (collectionDragState.activeTarget == target) Modifier.border(
@@ -338,6 +340,7 @@ internal fun CollectionContentsSheet(
     onDismiss: () -> Unit
 ) {
     var moreExpanded by remember(entry.collection.id) { mutableStateOf(false) }
+    var memberMenuBookId by remember(entry.collection.id) { mutableStateOf<Long?>(null) }
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         modifier = Modifier.fillMaxHeight(),
@@ -392,14 +395,39 @@ internal fun CollectionContentsSheet(
             ) {
                 items(entry.books, key = BookEntity::id) { book ->
                     Column {
-                        CompactBookArtwork(
-                            book = book,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .aspectRatio(0.69f)
-                                .clip(RoundedCornerShape(12.dp))
-                                .clickable { onOpenBook(book.id) }
-                        )
+                        Box {
+                            CompactBookArtwork(
+                                book = book,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .aspectRatio(0.69f)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .clickable { onOpenBook(book.id) }
+                            )
+                            Box(Modifier.align(Alignment.TopEnd)) {
+                                IconButton(onClick = { memberMenuBookId = book.id }) {
+                                    Icon(
+                                        Icons.Outlined.MoreVert,
+                                        contentDescription = "${book.title} 操作"
+                                    )
+                                }
+                                MoReadStableDropdownMenu(
+                                    expanded = memberMenuBookId == book.id,
+                                    onDismissRequest = { memberMenuBookId = null },
+                                    width = 180.dp
+                                ) {
+                                    MoReadMenuItem(
+                                        text = "移出合集",
+                                        icon = Icons.Outlined.Delete,
+                                        destructive = true,
+                                        onClick = {
+                                            memberMenuBookId = null
+                                            onRemoveBook(book.id)
+                                        }
+                                    )
+                                }
+                            }
+                        }
                         Text(
                             book.title,
                             style = MaterialTheme.typography.labelMedium,
@@ -407,10 +435,6 @@ internal fun CollectionContentsSheet(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.padding(top = 8.dp)
                         )
-                        TextButton(
-                            onClick = { onRemoveBook(book.id) },
-                            modifier = Modifier.align(Alignment.End)
-                        ) { Text("移出") }
                     }
                 }
             }

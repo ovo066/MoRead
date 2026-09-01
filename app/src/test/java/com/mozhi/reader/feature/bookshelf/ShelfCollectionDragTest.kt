@@ -39,7 +39,8 @@ class ShelfCollectionDragTest {
             totalChapters = 1
         )
         val target = ShelfDropTarget("book:2", bookId = 2, collectionId = null)
-        state.register(target, Rect(100f, 0f, 200f, 100f))
+        val owner = Any()
+        state.register(target, Rect(100f, 0f, 200f, 100f), owner)
 
         state.begin(book, Offset(20f, 20f))
         assertNull(state.finish(minDistancePx = 8f))
@@ -52,5 +53,12 @@ class ShelfCollectionDragTest {
         state.begin(book, Offset(20f, 20f))
         state.dragBy(Offset(85f, 0f))
         assertEquals(book to target, state.finish(minDistancePx = 8f))
+
+        val replacementOwner = Any()
+        state.register(target, Rect(200f, 0f, 300f, 100f), replacementOwner)
+        state.unregister(target.entryKey, owner)
+        state.begin(book, Offset(220f, 20f))
+        state.dragBy(Offset.Zero)
+        assertEquals(target, state.activeTarget)
     }
 }

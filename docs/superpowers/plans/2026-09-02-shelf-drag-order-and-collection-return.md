@@ -876,7 +876,7 @@ Run exactly once after Tasks 1-2 and their task reviews are complete:
 
 ```bash
 ./gradlew \
-  :app:testPerformanceUnitTest \
+  :app:testDebugUnitTest \
   --tests 'com.mozhi.reader.feature.bookshelf.BookCollectionModelsTest' \
   --tests 'com.mozhi.reader.feature.bookshelf.ShelfCollectionDragTest' \
   :app:assemblePerformance \

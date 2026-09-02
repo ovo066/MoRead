@@ -18,6 +18,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.mozhi.reader.core.database.entity.BookEntity
+import kotlin.math.abs
 
 data class ShelfDropTarget(
     val entryKey: String,
@@ -42,6 +43,12 @@ data class ShelfDrop(
     val placement: ShelfDropPlacement
 )
 
+internal data class ShelfDragResult(
+    val source: BookEntity,
+    val drop: ShelfDrop?,
+    val showLongPressMenu: Boolean
+)
+
 fun findShelfDrop(
     pointer: Offset,
     sourceBookId: Long,
@@ -49,8 +56,25 @@ fun findShelfDrop(
     horizontal: Boolean,
     allowMerge: Boolean
 ): ShelfDrop? {
-    val region = regions.firstOrNull {
-        it.bounds.contains(pointer) && it.target.bookId != sourceBookId
+    if (regions.any { it.target.bookId == sourceBookId && it.bounds.contains(pointer) }) {
+        return null
+    }
+    val candidates = regions.filter { it.target.bookId != sourceBookId }
+    val direct = candidates.firstOrNull { it.bounds.contains(pointer) }
+    val region = direct ?: if (horizontal) {
+        val row = candidates.filter {
+            pointer.y >= it.bounds.top && pointer.y < it.bounds.bottom
+        }
+        if (row.isNotEmpty() &&
+            pointer.x >= row.minOf { it.bounds.left } &&
+            pointer.x <= row.maxOf { it.bounds.right }
+        ) {
+            row.minByOrNull { abs(pointer.x - it.bounds.center.x) }
+        } else {
+            null
+        }
+    } else {
+        null
     } ?: return null
     val fraction = if (horizontal) {
         (pointer.x - region.bounds.left) / region.bounds.width
@@ -58,6 +82,11 @@ fun findShelfDrop(
         (pointer.y - region.bounds.top) / region.bounds.height
     }
     val placement = when {
+        direct == null -> if (pointer.x < region.bounds.center.x) {
+            ShelfDropPlacement.BEFORE
+        } else {
+            ShelfDropPlacement.AFTER
+        }
         !allowMerge && fraction < 0.5f -> ShelfDropPlacement.BEFORE
         !allowMerge -> ShelfDropPlacement.AFTER
         fraction < 0.25f -> ShelfDropPlacement.BEFORE
@@ -68,11 +97,11 @@ fun findShelfDrop(
 }
 
 fun shelfEdgeScrollDirection(
-    dragBounds: Rect,
+    dragPointerY: Float,
     viewport: Rect
 ): Int = when {
-    dragBounds.top <= viewport.top + viewport.height * 0.10f -> -1
-    dragBounds.bottom >= viewport.top + viewport.height * 0.90f -> 1
+    dragPointerY <= viewport.top + viewport.height * 0.10f -> -1
+    dragPointerY >= viewport.top + viewport.height * 0.90f -> 1
     else -> 0
 }
 
@@ -91,7 +120,8 @@ internal class ShelfCollectionDragState {
 
     private val regions = mutableStateMapOf<String, Registration>()
     private var pointer = Offset.Zero
-    private var distance = 0f
+    private var dragActivated = false
+    private var movedOneCoverDistance = false
     private var sourceBounds = Rect.Zero
     private var dragOffset = Offset.Zero
     private var horizontal = true
@@ -141,31 +171,35 @@ internal class ShelfCollectionDragState {
         dragOffset = Offset.Zero
         this.horizontal = horizontal
         this.allowMerge = allowMerge
-        distance = 0f
+        dragActivated = false
+        movedOneCoverDistance = false
         updateTargets()
     }
 
-    fun dragBy(delta: Offset) {
+    fun dragBy(delta: Offset, minDistancePx: Float) {
         pointer += delta
         dragOffset += delta
+        dragActivated = dragActivated || dragOffset.getDistance() >= minDistancePx
+        movedOneCoverDistance = movedOneCoverDistance ||
+            kotlin.math.abs(dragOffset.x) >= sourceBounds.width ||
+            kotlin.math.abs(dragOffset.y) >= sourceBounds.height
         dragBounds = Rect(
             sourceBounds.left + dragOffset.x,
             sourceBounds.top + dragOffset.y,
             sourceBounds.right + dragOffset.x,
             sourceBounds.bottom + dragOffset.y
         )
-        distance += delta.getDistance()
         updateTargets()
     }
 
-    fun finish(minDistancePx: Float): Pair<BookEntity, ShelfDrop>? {
-        val source = sourceBook
-        val drop = activeDrop
-        val result = if (source != null && drop != null && distance >= minDistancePx) {
-            source to drop
-        } else {
-            null
-        }
+    fun finish(): ShelfDragResult? {
+        val source = sourceBook ?: return null
+        val drop = activeDrop.takeIf { dragActivated }
+        val result = ShelfDragResult(
+            source = source,
+            drop = drop,
+            showLongPressMenu = drop == null && !movedOneCoverDistance
+        )
         cancel()
         return result
     }
@@ -175,7 +209,8 @@ internal class ShelfCollectionDragState {
         activeDrop = null
         autoScrollDirection = 0
         pendingTargetBounds = null
-        distance = 0f
+        dragActivated = false
+        movedOneCoverDistance = false
         dragOffset = Offset.Zero
     }
 
@@ -203,7 +238,11 @@ internal class ShelfCollectionDragState {
                 activeDrop = null
             }
         }
-        autoScrollDirection = shelfEdgeScrollDirection(dragBounds, viewport)
+        autoScrollDirection = if (dragActivated) {
+            shelfEdgeScrollDirection(pointer.y, viewport)
+        } else {
+            0
+        }
     }
 }
 
@@ -231,11 +270,15 @@ internal fun Modifier.collectionDragSource(
         },
         onDrag = { change, amount ->
             change.consume()
-            state.dragBy(amount)
+            state.dragBy(amount, viewConfiguration.touchSlop)
         },
         onDragEnd = {
-            val result = state.finish(viewConfiguration.touchSlop)
-            if (result == null) onLongPressOnly(bounds()) else onDrop(result.first, result.second)
+            val result = state.finish()
+            when {
+                result == null -> Unit
+                result.drop != null -> onDrop(result.source, result.drop)
+                result.showLongPressMenu -> onLongPressOnly(bounds())
+            }
         },
         onDragCancel = state::cancel
     )

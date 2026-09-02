@@ -5,10 +5,23 @@ import androidx.compose.ui.geometry.Rect
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.BookSourceType
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ShelfCollectionDragTest {
+    private fun testBook() = BookEntity(
+        id = 1,
+        title = "书",
+        author = "",
+        coverPath = null,
+        epubPath = "/book.epub",
+        sourceType = BookSourceType.EPUB,
+        importedAt = 1,
+        totalChapters = 1
+    )
+
     @Test
     fun findsTargetUnderPointerAndSkipsTheSourceBook() {
         val source = ShelfDropTarget("book:1", bookId = 1, collectionId = null)
@@ -111,18 +124,28 @@ class ShelfCollectionDragTest {
     }
 
     @Test
+    fun gridGapUsesTheNearestCoverEdge() {
+        val second = ShelfDropTarget("book:2", bookId = 2, collectionId = null)
+        val third = ShelfDropTarget("book:3", bookId = 3, collectionId = null)
+        val regions = listOf(
+            ShelfDropRegion(second, Rect(110f, 0f, 210f, 100f)),
+            ShelfDropRegion(third, Rect(220f, 0f, 320f, 100f))
+        )
+
+        assertEquals(
+            ShelfDrop(second, ShelfDropPlacement.AFTER),
+            findShelfDrop(Offset(213f, 50f), 1, regions, horizontal = true, allowMerge = true)
+        )
+        assertEquals(
+            ShelfDrop(third, ShelfDropPlacement.BEFORE),
+            findShelfDrop(Offset(217f, 50f), 1, regions, horizontal = true, allowMerge = true)
+        )
+    }
+
+    @Test
     fun noMoveFallsBackAndOnlyThresholdedDragDrops() {
         val state = ShelfCollectionDragState()
-        val book = BookEntity(
-            id = 1,
-            title = "书",
-            author = "",
-            coverPath = null,
-            epubPath = "/book.epub",
-            sourceType = BookSourceType.EPUB,
-            importedAt = 1,
-            totalChapters = 1
-        )
+        val book = testBook()
         val target = ShelfDropTarget("book:2", bookId = 2, collectionId = null)
         val owner = Any()
         state.register(target, Rect(100f, 0f, 200f, 100f), owner)
@@ -134,12 +157,12 @@ class ShelfCollectionDragTest {
             horizontal = true,
             allowMerge = true
         )
-        assertNull(state.finish(minDistancePx = 8f))
+        assertEquals(ShelfDragResult(book, drop = null, showLongPressMenu = true), state.finish())
         assertNull(state.sourceBook)
 
         state.begin(book, Offset(20f, 20f), Rect.Zero, horizontal = true, allowMerge = true)
-        state.dragBy(Offset(85f, 0f))
-        assertNull(state.finish(minDistancePx = 100f))
+        state.dragBy(Offset(85f, 0f), minDistancePx = 100f)
+        assertEquals(ShelfDragResult(book, drop = null, showLongPressMenu = false), state.finish())
 
         state.begin(
             book = book,
@@ -148,11 +171,15 @@ class ShelfCollectionDragTest {
             horizontal = true,
             allowMerge = true
         )
-        state.dragBy(Offset(85f, 0f))
+        state.dragBy(Offset(85f, 0f), minDistancePx = 8f)
         assertEquals(Rect(95f, 10f, 195f, 160f), state.dragBounds)
         assertEquals(
-            book to ShelfDrop(target, ShelfDropPlacement.BEFORE),
-            state.finish(minDistancePx = 8f)
+            ShelfDragResult(
+                book,
+                ShelfDrop(target, ShelfDropPlacement.BEFORE),
+                showLongPressMenu = false
+            ),
+            state.finish()
         )
 
         val replacementOwner = Any()
@@ -165,23 +192,14 @@ class ShelfCollectionDragTest {
             horizontal = true,
             allowMerge = true
         )
-        state.dragBy(Offset.Zero)
+        state.dragBy(Offset.Zero, minDistancePx = 8f)
         assertEquals(ShelfDrop(target, ShelfDropPlacement.BEFORE), state.activeDrop)
     }
 
     @Test
     fun previewRelayoutKeepsDropWhilePointerCoversTheSourcePlaceholder() {
         val state = ShelfCollectionDragState()
-        val book = BookEntity(
-            id = 1,
-            title = "书",
-            author = "",
-            coverPath = null,
-            epubPath = "/book.epub",
-            sourceType = BookSourceType.EPUB,
-            importedAt = 1,
-            totalChapters = 1
-        )
+        val book = testBook()
         val source = ShelfDropTarget("book:1", bookId = 1, collectionId = null)
         val target = ShelfDropTarget("book:2", bookId = 2, collectionId = null)
         val sourceOwner = Any()
@@ -196,7 +214,7 @@ class ShelfCollectionDragTest {
             horizontal = true,
             allowMerge = true
         )
-        state.dragBy(Offset(170f, 0f))
+        state.dragBy(Offset(170f, 0f), minDistancePx = 8f)
         val expected = ShelfDrop(target, ShelfDropPlacement.AFTER)
         assertEquals(expected, state.activeDrop)
 
@@ -213,16 +231,7 @@ class ShelfCollectionDragTest {
     @Test
     fun dragBoundsFollowTheExactCoverTranslation() {
         val state = ShelfCollectionDragState()
-        val book = BookEntity(
-            id = 1,
-            title = "书",
-            author = "",
-            coverPath = null,
-            epubPath = "/book.epub",
-            sourceType = BookSourceType.EPUB,
-            importedAt = 1,
-            totalChapters = 1
-        )
+        val book = testBook()
 
         state.begin(
             book = book,
@@ -231,18 +240,54 @@ class ShelfCollectionDragTest {
             horizontal = true,
             allowMerge = true
         )
-        state.dragBy(Offset(30f, 40f))
+        state.dragBy(Offset(30f, 40f), minDistancePx = 8f)
 
         assertEquals(Rect(40f, 50f, 140f, 200f), state.dragBounds)
     }
 
     @Test
-    fun edgeScrollUsesTheWholeViewportTenPercentThresholds() {
+    fun edgeScrollUsesThePointerAndWholeViewportTenPercentThresholds() {
         val viewport = Rect(0f, 0f, 500f, 1000f)
 
-        assertEquals(-1, shelfEdgeScrollDirection(Rect(0f, 99f, 50f, 199f), viewport))
-        assertEquals(0, shelfEdgeScrollDirection(Rect(0f, 101f, 50f, 201f), viewport))
-        assertEquals(0, shelfEdgeScrollDirection(Rect(0f, 799f, 50f, 899f), viewport))
-        assertEquals(1, shelfEdgeScrollDirection(Rect(0f, 801f, 50f, 901f), viewport))
+        assertEquals(-1, shelfEdgeScrollDirection(99f, viewport))
+        assertEquals(0, shelfEdgeScrollDirection(101f, viewport))
+        assertEquals(0, shelfEdgeScrollDirection(899f, viewport))
+        assertEquals(1, shelfEdgeScrollDirection(901f, viewport))
+    }
+
+    @Test
+    fun edgeScrollWaitsForRealDragInsteadOfUsingTheCoverEdge() {
+        val state = ShelfCollectionDragState()
+        state.setViewport(Rect(0f, 0f, 500f, 1000f))
+        state.begin(
+            book = testBook(),
+            start = Offset(50f, 850f),
+            coverBounds = Rect(0f, 800f, 100f, 950f),
+            horizontal = true,
+            allowMerge = true
+        )
+
+        assertEquals(0, state.autoScrollDirection)
+        state.dragBy(Offset(7f, 40f), minDistancePx = 50f)
+        assertEquals(0, state.autoScrollDirection)
+        state.dragBy(Offset(2f, 11f), minDistancePx = 50f)
+        assertEquals(1, state.autoScrollDirection)
+    }
+
+    @Test
+    fun oneCoverDistanceSuppressesTheMenuEvenAfterReturningToStart() {
+        val state = ShelfCollectionDragState()
+        val cover = Rect(0f, 0f, 100f, 150f)
+
+        state.begin(testBook(), Offset(20f, 20f), cover, horizontal = true, allowMerge = true)
+        state.dragBy(Offset(12f, 0f), minDistancePx = 8f)
+        assertTrue(requireNotNull(state.finish()).showLongPressMenu)
+
+        state.begin(testBook(), Offset(20f, 20f), cover, horizontal = true, allowMerge = true)
+        state.dragBy(Offset(100f, 0f), minDistancePx = 8f)
+        state.dragBy(Offset(-100f, 0f), minDistancePx = 8f)
+        val result = requireNotNull(state.finish())
+        assertNull(result.drop)
+        assertFalse(result.showLongPressMenu)
     }
 }

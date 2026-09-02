@@ -99,6 +99,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.LocalPinnableContainer
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -727,7 +728,12 @@ private fun BookGrid(
     onImport: () -> Unit
 ) {
     val gridState = rememberLazyGridState()
-    ShelfAutoScrollEffect(collectionDragState, gridState)
+    ShelfAutoScrollEffect(collectionDragState, gridState) {
+        gridState.requestScrollToItem(
+            gridState.firstVisibleItemIndex,
+            gridState.firstVisibleItemScrollOffset
+        )
+    }
     LazyVerticalGrid(
         columns = GridCells.Fixed(3),
         state = gridState,
@@ -819,7 +825,12 @@ private fun BookList(
     onImport: () -> Unit
 ) {
     val listState = rememberLazyListState()
-    ShelfAutoScrollEffect(collectionDragState, listState)
+    ShelfAutoScrollEffect(collectionDragState, listState) {
+        listState.requestScrollToItem(
+            listState.firstVisibleItemIndex,
+            listState.firstVisibleItemScrollOffset
+        )
+    }
     LazyColumn(
         state = listState,
         modifier = Modifier
@@ -1444,6 +1455,7 @@ private fun GridBookItem(
     onShelfDrop: (BookEntity, ShelfDrop) -> Unit
 ) {
     val book = entry.book
+    val pinnableContainer = LocalPinnableContainer.current
     var bounds by remember { mutableStateOf(Rect.Zero) }
     var coverBounds by remember { mutableStateOf(Rect.Zero) }
     val target = remember(entry.key) { entry.dropTarget() }
@@ -1478,6 +1490,7 @@ private fun GridBookItem(
                 horizontal = true,
                 allowMerge = true,
                 enabled = !selectionMode,
+                pinnableContainer = pinnableContainer,
                 state = collectionDragState,
                 onDrop = onShelfDrop,
                 onLongPressOnly = onLongPress
@@ -1533,6 +1546,7 @@ private fun ListBookItem(
     onShelfDrop: (BookEntity, ShelfDrop) -> Unit
 ) {
     val book = entry.book
+    val pinnableContainer = LocalPinnableContainer.current
     var bounds by remember { mutableStateOf(Rect.Zero) }
     var coverBounds by remember { mutableStateOf(Rect.Zero) }
     val progress = readProgress(book)
@@ -1569,6 +1583,7 @@ private fun ListBookItem(
                 horizontal = false,
                 allowMerge = true,
                 enabled = !selectionMode,
+                pinnableContainer = pinnableContainer,
                 state = collectionDragState,
                 onDrop = onShelfDrop,
                 onLongPressOnly = onLongPress

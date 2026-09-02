@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.PinnableContainer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.mozhi.reader.core.database.entity.BookEntity
@@ -43,6 +44,30 @@ data class ShelfDrop(
     val placement: ShelfDropPlacement
 )
 
+private fun findShelfDropRegion(
+    pointer: Offset,
+    sourceBookId: Long,
+    regions: List<ShelfDropRegion>,
+    horizontal: Boolean
+): ShelfDropRegion? {
+    regions.firstOrNull {
+        it.target.bookId == sourceBookId && it.bounds.contains(pointer)
+    }?.let { return it }
+    regions.firstOrNull {
+        it.target.bookId != sourceBookId && it.bounds.contains(pointer)
+    }?.let { return it }
+    if (!horizontal) return null
+    val row = regions.filter { pointer.y >= it.bounds.top && pointer.y < it.bounds.bottom }
+    if (row.isEmpty() ||
+        pointer.x < row.minOf { it.bounds.left } ||
+        pointer.x > row.maxOf { it.bounds.right }
+    ) return null
+    return row.minWithOrNull(
+        compareBy<ShelfDropRegion> { abs(pointer.x - it.bounds.center.x) }
+            .thenBy { if (it.target.bookId == sourceBookId) 0 else 1 }
+    )
+}
+
 internal data class ShelfDragResult(
     val source: BookEntity,
     val drop: ShelfDrop?,
@@ -56,33 +81,16 @@ fun findShelfDrop(
     horizontal: Boolean,
     allowMerge: Boolean
 ): ShelfDrop? {
-    if (regions.any { it.target.bookId == sourceBookId && it.bounds.contains(pointer) }) {
-        return null
-    }
-    val candidates = regions.filter { it.target.bookId != sourceBookId }
-    val direct = candidates.firstOrNull { it.bounds.contains(pointer) }
-    val region = direct ?: if (horizontal) {
-        val row = candidates.filter {
-            pointer.y >= it.bounds.top && pointer.y < it.bounds.bottom
-        }
-        if (row.isNotEmpty() &&
-            pointer.x >= row.minOf { it.bounds.left } &&
-            pointer.x <= row.maxOf { it.bounds.right }
-        ) {
-            row.minByOrNull { abs(pointer.x - it.bounds.center.x) }
-        } else {
-            null
-        }
-    } else {
-        null
-    } ?: return null
+    val region = findShelfDropRegion(pointer, sourceBookId, regions, horizontal) ?: return null
+    if (region.target.bookId == sourceBookId) return null
+    val direct = region.bounds.contains(pointer)
     val fraction = if (horizontal) {
         (pointer.x - region.bounds.left) / region.bounds.width
     } else {
         (pointer.y - region.bounds.top) / region.bounds.height
     }
     val placement = when {
-        direct == null -> if (pointer.x < region.bounds.center.x) {
+        !direct -> if (pointer.x < region.bounds.center.x) {
             ShelfDropPlacement.BEFORE
         } else {
             ShelfDropPlacement.AFTER
@@ -127,19 +135,21 @@ internal class ShelfCollectionDragState {
     private var horizontal = true
     private var allowMerge = true
     private var viewport = Rect.Zero
-    private var pendingTargetBounds: Rect? = null
+    private var pendingDrop: ShelfDrop? = null
 
     fun register(target: ShelfDropTarget, bounds: Rect, owner: Any) {
         val book = sourceBook
-        val previousBounds = regions[target.entryKey]?.region?.bounds
-        val pointerOnSource = book != null && regions.values.any {
-            it.region.target.bookId == book.id && it.region.bounds.contains(pointer)
-        }
-        when {
-            book != null && target.bookId == book.id -> pendingTargetBounds = null
+        if (book != null &&
             target.entryKey == activeDrop?.target?.entryKey &&
-                previousBounds?.contains(pointer) == true &&
-                !pointerOnSource -> pendingTargetBounds = previousBounds
+            findShelfDrop(
+                pointer,
+                book.id,
+                regions.values.map(Registration::region),
+                horizontal,
+                allowMerge
+            ) == activeDrop
+        ) {
+            pendingDrop = activeDrop
         }
         regions[target.entryKey] = Registration(owner, ShelfDropRegion(target, bounds))
         if (book != null) updateTargets()
@@ -163,7 +173,7 @@ internal class ShelfCollectionDragState {
         horizontal: Boolean,
         allowMerge: Boolean
     ) {
-        pendingTargetBounds = null
+        pendingDrop = null
         sourceBook = book
         pointer = start
         sourceBounds = coverBounds
@@ -177,6 +187,7 @@ internal class ShelfCollectionDragState {
     }
 
     fun dragBy(delta: Offset, minDistancePx: Float) {
+        pendingDrop = null
         pointer += delta
         dragOffset += delta
         dragActivated = dragActivated || dragOffset.getDistance() >= minDistancePx
@@ -208,7 +219,7 @@ internal class ShelfCollectionDragState {
         sourceBook = null
         activeDrop = null
         autoScrollDirection = 0
-        pendingTargetBounds = null
+        pendingDrop = null
         dragActivated = false
         movedOneCoverDistance = false
         dragOffset = Offset.Zero
@@ -217,6 +228,7 @@ internal class ShelfCollectionDragState {
     private fun updateTargets() {
         val book = sourceBook ?: return
         val registeredRegions = regions.values.map(Registration::region)
+        val pointerRegion = findShelfDropRegion(pointer, book.id, registeredRegions, horizontal)
         val drop = findShelfDrop(
             pointer,
             book.id,
@@ -224,17 +236,14 @@ internal class ShelfCollectionDragState {
             horizontal,
             allowMerge
         )
-        val pointerOnSource = registeredRegions.any {
-            it.target.bookId == book.id && it.bounds.contains(pointer)
-        }
         when {
             drop != null -> {
-                pendingTargetBounds = null
+                pendingDrop = null
                 activeDrop = drop
             }
-            pointerOnSource || pendingTargetBounds?.contains(pointer) == true -> Unit
+            pointerRegion?.target?.bookId == book.id -> pendingDrop = null
+            pendingDrop != null -> activeDrop = pendingDrop
             else -> {
-                pendingTargetBounds = null
                 activeDrop = null
             }
         }
@@ -253,13 +262,16 @@ internal fun Modifier.collectionDragSource(
     horizontal: Boolean,
     allowMerge: Boolean,
     enabled: Boolean,
+    pinnableContainer: PinnableContainer?,
     state: ShelfCollectionDragState,
     onDrop: (BookEntity, ShelfDrop) -> Unit,
     onLongPressOnly: (Rect) -> Unit
-): Modifier = pointerInput(book, enabled, horizontal, allowMerge) {
+): Modifier = pointerInput(book, enabled, horizontal, allowMerge, pinnableContainer) {
     if (!enabled) return@pointerInput
+    var pinnedHandle: PinnableContainer.PinnedHandle? = null
     detectDragGesturesAfterLongPress(
         onDragStart = { local ->
+            pinnedHandle = pinnableContainer?.pin()
             state.begin(
                 book = book,
                 start = bounds().topLeft + local,
@@ -274,22 +286,32 @@ internal fun Modifier.collectionDragSource(
         },
         onDragEnd = {
             val result = state.finish()
+            pinnedHandle?.release()
+            pinnedHandle = null
             when {
                 result == null -> Unit
                 result.drop != null -> onDrop(result.source, result.drop)
                 result.showLongPressMenu -> onLongPressOnly(bounds())
             }
         },
-        onDragCancel = state::cancel
+        onDragCancel = {
+            state.cancel()
+            pinnedHandle?.release()
+            pinnedHandle = null
+        }
     )
 }
 
 @Composable
 internal fun ShelfAutoScrollEffect(
     dragState: ShelfCollectionDragState,
-    scrollState: ScrollableState
+    scrollState: ScrollableState,
+    preserveScrollPosition: () -> Unit
 ) {
     val step = with(LocalDensity.current) { 12.dp.toPx() }
+    LaunchedEffect(dragState.activeDrop) {
+        if (dragState.sourceBook != null) preserveScrollPosition()
+    }
     LaunchedEffect(dragState.autoScrollDirection) {
         val direction = dragState.autoScrollDirection
         if (direction == 0) return@LaunchedEffect

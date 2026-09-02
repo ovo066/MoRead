@@ -53,6 +53,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.LocalPinnableContainer
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
@@ -382,7 +383,12 @@ internal fun CollectionContentsSheet(
             )
         }
     }
-    ShelfAutoScrollEffect(memberDragState, memberGridState)
+    ShelfAutoScrollEffect(memberDragState, memberGridState) {
+        memberGridState.requestScrollToItem(
+            memberGridState.firstVisibleItemIndex,
+            memberGridState.firstVisibleItemScrollOffset
+        )
+    }
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         dragHandle = {
@@ -456,6 +462,7 @@ internal fun CollectionContentsSheet(
                     verticalArrangement = Arrangement.spacedBy(20.dp)
                 ) {
                     items(previewBooks, key = BookEntity::id) { book ->
+                        val pinnableContainer = LocalPinnableContainer.current
                         val target = remember(book.id) {
                             ShelfDropTarget(
                                 "member:${book.id}",
@@ -501,6 +508,7 @@ internal fun CollectionContentsSheet(
                                             horizontal = true,
                                             allowMerge = false,
                                             enabled = true,
+                                            pinnableContainer = pinnableContainer,
                                             state = memberDragState,
                                             onDrop = { source, drop ->
                                                 val targetId = requireNotNull(drop.target.bookId)

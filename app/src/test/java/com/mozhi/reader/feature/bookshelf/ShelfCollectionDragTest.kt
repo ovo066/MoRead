@@ -11,8 +11,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ShelfCollectionDragTest {
-    private fun testBook() = BookEntity(
-        id = 1,
+    private fun testBook(id: Long = 1) = BookEntity(
+        id = id,
         title = "书",
         author = "",
         coverPath = null,
@@ -197,7 +197,7 @@ class ShelfCollectionDragTest {
     }
 
     @Test
-    fun previewRelayoutKeepsDropWhilePointerCoversTheSourcePlaceholder() {
+    fun previewRelayoutKeepsDropWhilePointerIsNearestTheSourcePlaceholder() {
         val state = ShelfCollectionDragState()
         val book = testBook()
         val source = ShelfDropTarget("book:1", bookId = 1, collectionId = null)
@@ -225,7 +225,64 @@ class ShelfCollectionDragTest {
         assertEquals(expected, state.activeDrop)
 
         state.register(source, Rect(200f, 0f, 300f, 100f), sourceOwner)
-        assertNull(state.activeDrop)
+        assertEquals(expected, state.activeDrop)
+    }
+
+    @Test
+    fun gridPreviewKeepsBeforeDropWhileLaterBookMovesIntoTheTargetSlot() {
+        val state = ShelfCollectionDragState()
+        val books = (1L..6L).map(::testBook)
+        val targets = books.associate { book ->
+            book.id to ShelfDropTarget("book:${book.id}", bookId = book.id, collectionId = null)
+        }
+        val owners = books.associate { it.id to Any() }
+        val initialBounds = listOf(
+            Rect(0f, 0f, 100f, 100f),
+            Rect(110f, 0f, 210f, 100f),
+            Rect(220f, 0f, 320f, 100f),
+            Rect(0f, 120f, 100f, 220f),
+            Rect(110f, 120f, 210f, 220f),
+            Rect(220f, 120f, 320f, 220f)
+        )
+        books.forEachIndexed { index, book ->
+            state.register(targets.getValue(book.id), initialBounds[index], owners.getValue(book.id))
+        }
+
+        state.begin(
+            book = books.last(),
+            start = Offset(270f, 170f),
+            coverBounds = initialBounds.last(),
+            horizontal = true,
+            allowMerge = false
+        )
+        state.dragBy(Offset(-53f, -120f), minDistancePx = 8f)
+        val expectedDrop = ShelfDrop(targets.getValue(3), ShelfDropPlacement.BEFORE)
+        assertEquals(expectedDrop, state.activeDrop)
+
+        listOf(
+            3L to Rect(0f, 120f, 100f, 220f),
+            4L to Rect(110f, 120f, 210f, 220f),
+            5L to Rect(220f, 120f, 320f, 220f),
+            6L to Rect(220f, 0f, 320f, 100f)
+        ).forEach { (bookId, bounds) ->
+            state.register(targets.getValue(bookId), bounds, owners.getValue(bookId))
+            assertEquals(expectedDrop, state.activeDrop)
+        }
+
+        state.dragBy(Offset(1f, 0f), minDistancePx = 8f)
+        assertEquals(expectedDrop, state.activeDrop)
+        val result = requireNotNull(state.finish())
+        val drop = requireNotNull(result.drop)
+        assertEquals(expectedDrop, drop)
+        assertEquals(
+            listOf(1L, 2L, 6L, 3L, 4L, 5L),
+            reorderCollectionMembers(
+                books,
+                sourceBookId = result.source.id,
+                targetBookId = requireNotNull(drop.target.bookId),
+                after = drop.placement == ShelfDropPlacement.AFTER
+            ).map(BookEntity::id)
+        )
     }
 
     @Test

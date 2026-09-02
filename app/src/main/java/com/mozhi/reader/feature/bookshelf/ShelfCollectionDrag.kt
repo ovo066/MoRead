@@ -82,8 +82,6 @@ internal class ShelfCollectionDragState {
 
     var sourceBook by mutableStateOf<BookEntity?>(null)
         private set
-    var pointer by mutableStateOf(Offset.Zero)
-        private set
     var dragBounds by mutableStateOf(Rect.Zero)
         private set
     var activeDrop by mutableStateOf<ShelfDrop?>(null)
@@ -92,6 +90,7 @@ internal class ShelfCollectionDragState {
         private set
 
     private val regions = mutableStateMapOf<String, Registration>()
+    private var pointer = Offset.Zero
     private var distance = 0f
     private var sourceBounds = Rect.Zero
     private var dragOffset = Offset.Zero
@@ -169,13 +168,17 @@ internal class ShelfCollectionDragState {
     private fun updateTargets() {
         val book = sourceBook ?: return
         val registeredRegions = regions.values.map(Registration::region)
-        activeDrop = findShelfDrop(
+        val drop = findShelfDrop(
             pointer,
             book.id,
             registeredRegions,
             horizontal,
             allowMerge
         )
+        val pointerOnSource = registeredRegions.any {
+            it.target.bookId == book.id && it.bounds.contains(pointer)
+        }
+        if (drop != null || !pointerOnSource) activeDrop = drop
         autoScrollDirection = shelfEdgeScrollDirection(dragBounds, viewport)
     }
 }

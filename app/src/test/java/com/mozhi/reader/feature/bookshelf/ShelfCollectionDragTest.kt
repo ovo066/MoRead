@@ -200,8 +200,10 @@ class ShelfCollectionDragTest {
         val expected = ShelfDrop(target, ShelfDropPlacement.AFTER)
         assertEquals(expected, state.activeDrop)
 
-        state.register(source, Rect(100f, 0f, 200f, 100f), sourceOwner)
         state.register(target, Rect(0f, 0f, 100f, 100f), targetOwner)
+        assertEquals(expected, state.activeDrop)
+
+        state.register(source, Rect(100f, 0f, 200f, 100f), sourceOwner)
         assertEquals(expected, state.activeDrop)
 
         state.register(source, Rect(200f, 0f, 300f, 100f), sourceOwner)

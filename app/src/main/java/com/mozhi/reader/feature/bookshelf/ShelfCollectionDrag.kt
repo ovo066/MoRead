@@ -97,10 +97,22 @@ internal class ShelfCollectionDragState {
     private var horizontal = true
     private var allowMerge = true
     private var viewport = Rect.Zero
+    private var pendingTargetBounds: Rect? = null
 
     fun register(target: ShelfDropTarget, bounds: Rect, owner: Any) {
+        val book = sourceBook
+        val previousBounds = regions[target.entryKey]?.region?.bounds
+        val pointerOnSource = book != null && regions.values.any {
+            it.region.target.bookId == book.id && it.region.bounds.contains(pointer)
+        }
+        when {
+            book != null && target.bookId == book.id -> pendingTargetBounds = null
+            target.entryKey == activeDrop?.target?.entryKey &&
+                previousBounds?.contains(pointer) == true &&
+                !pointerOnSource -> pendingTargetBounds = previousBounds
+        }
         regions[target.entryKey] = Registration(owner, ShelfDropRegion(target, bounds))
-        if (sourceBook != null) updateTargets()
+        if (book != null) updateTargets()
     }
 
     fun unregister(entryKey: String, owner: Any) {
@@ -121,6 +133,7 @@ internal class ShelfCollectionDragState {
         horizontal: Boolean,
         allowMerge: Boolean
     ) {
+        pendingTargetBounds = null
         sourceBook = book
         pointer = start
         sourceBounds = coverBounds
@@ -161,6 +174,7 @@ internal class ShelfCollectionDragState {
         sourceBook = null
         activeDrop = null
         autoScrollDirection = 0
+        pendingTargetBounds = null
         distance = 0f
         dragOffset = Offset.Zero
     }
@@ -178,7 +192,17 @@ internal class ShelfCollectionDragState {
         val pointerOnSource = registeredRegions.any {
             it.target.bookId == book.id && it.bounds.contains(pointer)
         }
-        if (drop != null || !pointerOnSource) activeDrop = drop
+        when {
+            drop != null -> {
+                pendingTargetBounds = null
+                activeDrop = drop
+            }
+            pointerOnSource || pendingTargetBounds?.contains(pointer) == true -> Unit
+            else -> {
+                pendingTargetBounds = null
+                activeDrop = null
+            }
+        }
         autoScrollDirection = shelfEdgeScrollDirection(dragBounds, viewport)
     }
 }

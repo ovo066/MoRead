@@ -1,5 +1,6 @@
 package com.mozhi.reader.feature.bookshelf
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -19,9 +20,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
@@ -46,10 +49,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
@@ -117,11 +123,8 @@ internal fun GridCollectionItem(
     Column(
         modifier = modifier
             .graphicsLayer { alpha = if (selectionMode && !selected) 0.55f else 1f }
-            .onGloballyPositioned {
-                collectionDragState.register(target, it.boundsInRoot(), registrationOwner)
-            }
             .then(
-                if (collectionDragState.activeTarget == target) Modifier.border(
+                if (collectionDragState.activeDrop?.target == target) Modifier.border(
                     2.dp,
                     MaterialTheme.colorScheme.primary,
                     RoundedCornerShape(12.dp)
@@ -133,7 +136,16 @@ internal fun GridCollectionItem(
         Box {
             CollectionArtwork(
                 books = entry.books,
-                modifier = Modifier.fillMaxWidth().aspectRatio(0.69f)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(0.69f)
+                    .onGloballyPositioned {
+                        collectionDragState.register(
+                            target,
+                            it.boundsInRoot(),
+                            registrationOwner
+                        )
+                    }
             )
             if (selectionMode) {
                 Icon(
@@ -179,11 +191,8 @@ internal fun ListCollectionItem(
         modifier = modifier
             .fillMaxWidth()
             .graphicsLayer { alpha = if (selectionMode && !selected) 0.55f else 1f }
-            .onGloballyPositioned {
-                collectionDragState.register(target, it.boundsInRoot(), registrationOwner)
-            }
             .then(
-                if (collectionDragState.activeTarget == target) Modifier.border(
+                if (collectionDragState.activeDrop?.target == target) Modifier.border(
                     2.dp,
                     MaterialTheme.colorScheme.primary,
                     RoundedCornerShape(24.dp)
@@ -199,7 +208,15 @@ internal fun ListCollectionItem(
         ) {
             CollectionArtwork(
                 books = entry.books,
-                modifier = Modifier.size(width = 68.dp, height = 96.dp)
+                modifier = Modifier
+                    .size(width = 68.dp, height = 96.dp)
+                    .onGloballyPositioned {
+                        collectionDragState.register(
+                            target,
+                            it.boundsInRoot(),
+                            registrationOwner
+                        )
+                    }
             )
             if (selectionMode) {
                 Icon(
@@ -229,23 +246,25 @@ internal fun ListCollectionItem(
 }
 
 @Composable
-internal fun CollectionDragOverlay(state: ShelfCollectionDragState) {
+internal fun CollectionDragOverlay(
+    state: ShelfCollectionDragState,
+    origin: Offset = Offset.Zero
+) {
     val book = state.sourceBook ?: return
+    val density = LocalDensity.current
+    val width = with(density) { state.dragBounds.width.toDp() }
+    val height = with(density) { state.dragBounds.height.toDp() }
     CompactBookArtwork(
         book = book,
         modifier = Modifier
             .offset {
                 IntOffset(
-                    state.pointer.x.roundToInt() - 42.dp.roundToPx(),
-                    state.pointer.y.roundToInt() - 58.dp.roundToPx()
+                    (state.dragBounds.left - origin.x).roundToInt(),
+                    (state.dragBounds.top - origin.y).roundToInt()
                 )
             }
-            .size(width = 84.dp, height = 116.dp)
-            .graphicsLayer {
-                alpha = 0.88f
-                scaleX = 1.04f
-                scaleY = 1.04f
-            }
+            .size(width = width, height = height)
+            .graphicsLayer { alpha = 0.92f }
     )
 }
 
@@ -334,6 +353,7 @@ internal fun CollectionPickerSheet(
 internal fun CollectionContentsSheet(
     entry: ShelfEntry.Collection,
     onOpenBook: (Long) -> Unit,
+    onReorderBooks: (List<Long>) -> Unit,
     onRemoveBook: (Long) -> Unit,
     onRename: () -> Unit,
     onDissolve: () -> Unit,
@@ -341,103 +361,193 @@ internal fun CollectionContentsSheet(
 ) {
     var moreExpanded by remember(entry.collection.id) { mutableStateOf(false) }
     var memberMenuBookId by remember(entry.collection.id) { mutableStateOf<Long?>(null) }
+    val memberDragState = remember(entry.collection.id) { ShelfCollectionDragState() }
+    val memberGridState = rememberLazyGridState()
+    var contentOrigin by remember(entry.collection.id) { mutableStateOf(Offset.Zero) }
+    val previewBooks = remember(
+        entry.books,
+        memberDragState.sourceBook?.id,
+        memberDragState.activeDrop
+    ) {
+        val sourceId = memberDragState.sourceBook?.id
+        val drop = memberDragState.activeDrop
+        if (sourceId == null || drop?.target?.bookId == null) {
+            entry.books
+        } else {
+            reorderCollectionMembers(
+                entry.books,
+                sourceBookId = sourceId,
+                targetBookId = drop.target.bookId,
+                after = drop.placement == ShelfDropPlacement.AFTER
+            )
+        }
+    }
+    ShelfAutoScrollEffect(memberDragState, memberGridState)
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         modifier = Modifier.fillMaxHeight(),
         sheetGesturesEnabled = false,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ) {
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 20.dp)
-                .navigationBarsPadding()
+                .onGloballyPositioned { contentOrigin = it.boundsInRoot().topLeft }
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(entry.collection.name, style = MaterialTheme.typography.titleLarge)
-                    Text(
-                        "${entry.books.size} 本书",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 2.dp)
-                    )
-                }
-                Box {
-                    IconButton(onClick = { moreExpanded = true }) {
-                        Icon(Icons.Outlined.MoreVert, contentDescription = "合集操作")
-                    }
-                    MoReadStableDropdownMenu(
-                        expanded = moreExpanded,
-                        onDismissRequest = { moreExpanded = false },
-                        width = 200.dp
-                    ) {
-                        MoReadMenuItem(
-                            text = "重命名",
-                            icon = Icons.Outlined.Edit,
-                            onClick = { moreExpanded = false; onRename() }
-                        )
-                        MoReadMenuItem(
-                            text = "解散合集",
-                            icon = Icons.Outlined.Delete,
-                            destructive = true,
-                            onClick = { moreExpanded = false; onDissolve() }
-                        )
-                    }
-                }
-            }
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(3),
-                modifier = Modifier.fillMaxWidth().weight(1f),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-                verticalArrangement = Arrangement.spacedBy(20.dp)
+            BackHandler(onBack = onDismiss)
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 20.dp)
+                    .navigationBarsPadding()
             ) {
-                items(entry.books, key = BookEntity::id) { book ->
-                    Column {
-                        Box {
-                            CompactBookArtwork(
-                                book = book,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .aspectRatio(0.69f)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .clickable { onOpenBook(book.id) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(entry.collection.name, style = MaterialTheme.typography.titleLarge)
+                        Text(
+                            "${entry.books.size} 本书",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                    }
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Outlined.Close, contentDescription = "关闭合集")
+                    }
+                    Box {
+                        IconButton(onClick = { moreExpanded = true }) {
+                            Icon(Icons.Outlined.MoreVert, contentDescription = "合集操作")
+                        }
+                        MoReadStableDropdownMenu(
+                            expanded = moreExpanded,
+                            onDismissRequest = { moreExpanded = false },
+                            width = 200.dp
+                        ) {
+                            MoReadMenuItem(
+                                text = "重命名",
+                                icon = Icons.Outlined.Edit,
+                                onClick = { moreExpanded = false; onRename() }
                             )
-                            Box(Modifier.align(Alignment.TopEnd)) {
-                                IconButton(onClick = { memberMenuBookId = book.id }) {
-                                    Icon(
-                                        Icons.Outlined.MoreVert,
-                                        contentDescription = "${book.title} 操作"
-                                    )
-                                }
-                                MoReadStableDropdownMenu(
-                                    expanded = memberMenuBookId == book.id,
-                                    onDismissRequest = { memberMenuBookId = null },
-                                    width = 180.dp
-                                ) {
-                                    MoReadMenuItem(
-                                        text = "移出合集",
-                                        icon = Icons.Outlined.Delete,
-                                        destructive = true,
-                                        onClick = {
-                                            memberMenuBookId = null
-                                            onRemoveBook(book.id)
-                                        }
-                                    )
-                                }
+                            MoReadMenuItem(
+                                text = "解散合集",
+                                icon = Icons.Outlined.Delete,
+                                destructive = true,
+                                onClick = { moreExpanded = false; onDissolve() }
+                            )
+                        }
+                    }
+                }
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(3),
+                    state = memberGridState,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .onGloballyPositioned { memberDragState.setViewport(it.boundsInRoot()) },
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        vertical = 16.dp
+                    ),
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(20.dp)
+                ) {
+                    items(previewBooks, key = BookEntity::id) { book ->
+                        val target = remember(book.id) {
+                            ShelfDropTarget(
+                                "member:${book.id}",
+                                bookId = book.id,
+                                collectionId = null
+                            )
+                        }
+                        val registrationOwner = remember { Any() }
+                        var coverBounds by remember(book.id) { mutableStateOf(Rect.Zero) }
+                        DisposableEffect(book.id) {
+                            onDispose {
+                                memberDragState.unregister(target.entryKey, registrationOwner)
                             }
                         }
-                        Text(
-                            book.title,
-                            style = MaterialTheme.typography.labelMedium,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(top = 8.dp)
-                        )
+                        Column {
+                            Box {
+                                CompactBookArtwork(
+                                    book = book,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .aspectRatio(0.69f)
+                                        .graphicsLayer {
+                                            alpha = if (memberDragState.sourceBook?.id == book.id) {
+                                                0f
+                                            } else {
+                                                1f
+                                            }
+                                        }
+                                        .onGloballyPositioned {
+                                            coverBounds = it.boundsInRoot()
+                                            memberDragState.register(
+                                                target,
+                                                coverBounds,
+                                                registrationOwner
+                                            )
+                                        }
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .clickable { onOpenBook(book.id) }
+                                        .collectionDragSource(
+                                            book = book,
+                                            bounds = { coverBounds },
+                                            coverBounds = { coverBounds },
+                                            horizontal = true,
+                                            allowMerge = false,
+                                            enabled = true,
+                                            state = memberDragState,
+                                            onDrop = { source, drop ->
+                                                val targetId = requireNotNull(drop.target.bookId)
+                                                onReorderBooks(
+                                                    reorderCollectionMembers(
+                                                        entry.books,
+                                                        sourceBookId = source.id,
+                                                        targetBookId = targetId,
+                                                        after = drop.placement ==
+                                                            ShelfDropPlacement.AFTER
+                                                    ).map(BookEntity::id)
+                                                )
+                                            },
+                                            onLongPressOnly = { _ -> }
+                                        )
+                                )
+                                Box(Modifier.align(Alignment.TopEnd)) {
+                                    IconButton(onClick = { memberMenuBookId = book.id }) {
+                                        Icon(
+                                            Icons.Outlined.MoreVert,
+                                            contentDescription = "${book.title} 操作"
+                                        )
+                                    }
+                                    MoReadStableDropdownMenu(
+                                        expanded = memberMenuBookId == book.id,
+                                        onDismissRequest = { memberMenuBookId = null },
+                                        width = 180.dp
+                                    ) {
+                                        MoReadMenuItem(
+                                            text = "移出合集",
+                                            icon = Icons.Outlined.Delete,
+                                            destructive = true,
+                                            onClick = {
+                                                memberMenuBookId = null
+                                                onRemoveBook(book.id)
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                            Text(
+                                book.title,
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(top = 8.dp)
+                            )
+                        }
                     }
                 }
             }
+            CollectionDragOverlay(memberDragState, origin = contentOrigin)
         }
     }
 }

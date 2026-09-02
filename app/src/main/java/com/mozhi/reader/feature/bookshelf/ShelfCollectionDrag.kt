@@ -309,14 +309,13 @@ internal fun ShelfAutoScrollEffect(
     preserveScrollPosition: () -> Unit
 ) {
     val step = with(LocalDensity.current) { 12.dp.toPx() }
-    LaunchedEffect(dragState.activeDrop) {
+    LaunchedEffect(dragState.activeDrop, dragState.autoScrollDirection) {
+        while (scrollState.isScrollInProgress) withFrameNanos { }
         if (dragState.sourceBook != null) preserveScrollPosition()
-    }
-    LaunchedEffect(dragState.autoScrollDirection) {
         val direction = dragState.autoScrollDirection
         if (direction == 0) return@LaunchedEffect
         while (dragState.autoScrollDirection == direction) {
-            if (scrollState.scrollBy(direction * step) == 0f) break
+            scrollState.scrollBy(direction * step)
             withFrameNanos { }
         }
     }

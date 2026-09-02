@@ -151,7 +151,7 @@ class ShelfCollectionDragTest {
         state.dragBy(Offset(85f, 0f))
         assertEquals(Rect(95f, 10f, 195f, 160f), state.dragBounds)
         assertEquals(
-            book to ShelfDrop(target, ShelfDropPlacement.MERGE),
+            book to ShelfDrop(target, ShelfDropPlacement.BEFORE),
             state.finish(minDistancePx = 8f)
         )
 
@@ -167,6 +167,45 @@ class ShelfCollectionDragTest {
         )
         state.dragBy(Offset.Zero)
         assertEquals(ShelfDrop(target, ShelfDropPlacement.BEFORE), state.activeDrop)
+    }
+
+    @Test
+    fun previewRelayoutKeepsDropWhilePointerCoversTheSourcePlaceholder() {
+        val state = ShelfCollectionDragState()
+        val book = BookEntity(
+            id = 1,
+            title = "书",
+            author = "",
+            coverPath = null,
+            epubPath = "/book.epub",
+            sourceType = BookSourceType.EPUB,
+            importedAt = 1,
+            totalChapters = 1
+        )
+        val source = ShelfDropTarget("book:1", bookId = 1, collectionId = null)
+        val target = ShelfDropTarget("book:2", bookId = 2, collectionId = null)
+        val sourceOwner = Any()
+        val targetOwner = Any()
+        state.register(source, Rect(0f, 0f, 100f, 100f), sourceOwner)
+        state.register(target, Rect(100f, 0f, 200f, 100f), targetOwner)
+
+        state.begin(
+            book = book,
+            start = Offset(20f, 50f),
+            coverBounds = Rect(0f, 0f, 100f, 100f),
+            horizontal = true,
+            allowMerge = true
+        )
+        state.dragBy(Offset(170f, 0f))
+        val expected = ShelfDrop(target, ShelfDropPlacement.AFTER)
+        assertEquals(expected, state.activeDrop)
+
+        state.register(source, Rect(100f, 0f, 200f, 100f), sourceOwner)
+        state.register(target, Rect(0f, 0f, 100f, 100f), targetOwner)
+        assertEquals(expected, state.activeDrop)
+
+        state.register(source, Rect(200f, 0f, 300f, 100f), sourceOwner)
+        assertNull(state.activeDrop)
     }
 
     @Test

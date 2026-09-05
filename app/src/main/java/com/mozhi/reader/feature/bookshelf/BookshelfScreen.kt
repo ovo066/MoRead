@@ -15,10 +15,9 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,10 +36,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items as listItems
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -98,6 +99,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.LocalPinnableContainer
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -116,6 +118,7 @@ import androidx.core.content.ContextCompat
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import com.mozhi.reader.core.database.entity.BookCollectionEntity
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.BookReadState
 import com.mozhi.reader.core.database.entity.label
@@ -139,6 +142,11 @@ import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
+private data class CollectionCreateRequest(
+    val bookIds: Set<Long>,
+    val shelfOrder: List<Long>? = null
+)
+
 @Composable
 fun BookshelfScreen(
     contentPadding: PaddingValues,
@@ -160,9 +168,15 @@ fun BookshelfScreen(
     var longPressTarget by remember { mutableStateOf<BookLongPressTarget?>(null) }
     var showTagPicker by remember { mutableStateOf(false) }
     var showGroupPicker by remember { mutableStateOf(false) }
+    var openCollectionId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var showCollectionPicker by remember { mutableStateOf(false) }
+    var collectionNameRequest by remember { mutableStateOf<CollectionCreateRequest?>(null) }
+    var renameCollection by remember { mutableStateOf<BookCollectionEntity?>(null) }
+    var dissolveCollection by remember { mutableStateOf<BookCollectionEntity?>(null) }
     var deleteSelected by remember { mutableStateOf(false) }
     var rootSize by remember { mutableStateOf(IntSize.Zero) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
+    val collectionDragState = remember { ShelfCollectionDragState() }
     val context = LocalContext.current
     LaunchedEffect(state.isSelectionMode) {
         onSelectionModeChanged(state.isSelectionMode)
@@ -226,18 +240,81 @@ fun BookshelfScreen(
     }
 
     // 搜索是叠在筛选之上的第二层过滤，留在 UI 层：输入是本地状态，没必要绕一圈 VM。
-    val filteredBooks = remember(state.books, state.tagRefs, state.tags, searchQuery) {
+    val filteredBooks = remember(
+        state.books,
+        state.collections,
+        state.tagRefs,
+        state.tags,
+        searchQuery
+    ) {
         val query = searchQuery.trim()
+        val matchingCollections = state.collections
+            .filter { it.name.contains(query, ignoreCase = true) }
+            .mapTo(mutableSetOf(), BookCollectionEntity::id)
         if (query.isEmpty()) {
             state.books
         } else {
             state.books.filter { book ->
-                book.title.contains(query, ignoreCase = true) ||
+                book.collectionId in matchingCollections ||
+                    book.title.contains(query, ignoreCase = true) ||
                     book.author.contains(query, ignoreCase = true) ||
                     state.tags.any { tag ->
                         tag.name.contains(query, ignoreCase = true) &&
                             tag.id in state.tagIdsFor(book.id)
                     }
+            }
+        }
+    }
+    val shelfEntries = remember(filteredBooks, state.allBooks, state.collections) {
+        buildShelfEntries(filteredBooks, state.allBooks, state.collections)
+    }
+    val previewEntries = remember(
+        shelfEntries,
+        collectionDragState.sourceBook?.id,
+        collectionDragState.activeDrop
+    ) {
+        val sourceId = collectionDragState.sourceBook?.id
+        val drop = collectionDragState.activeDrop
+        if (sourceId == null || drop == null || drop.placement == ShelfDropPlacement.MERGE) {
+            shelfEntries
+        } else {
+            reorderShelfEntries(
+                shelfEntries,
+                sourceBookId = sourceId,
+                targetKey = drop.target.entryKey,
+                after = drop.placement == ShelfDropPlacement.AFTER
+            )
+        }
+    }
+    val visibleBookIds = shelfEntries.flatMapTo(linkedSetOf()) { it.bookIds }
+    val onBookEntryClick: (ShelfEntry.Book) -> Unit = { entry ->
+        if (state.isSelectionMode) viewModel.toggleSelection(entry.book.id)
+        else onOpenBookDetail(entry.book.id, null)
+    }
+    val onCollectionEntryClick: (ShelfEntry.Collection) -> Unit = { entry ->
+        if (state.isSelectionMode) viewModel.toggleSelection(entry.bookIds)
+        else openCollectionId = entry.collection.id
+    }
+    val onShelfDrop: (BookEntity, ShelfDrop) -> Unit = { source, drop ->
+        val reordered = reorderShelfEntries(
+            shelfEntries,
+            sourceBookId = source.id,
+            targetKey = drop.target.entryKey,
+            after = drop.placement != ShelfDropPlacement.BEFORE
+        )
+        val bookOrder = reordered.flatMap(ShelfEntry::bookIds)
+        when (drop.placement) {
+            ShelfDropPlacement.BEFORE, ShelfDropPlacement.AFTER ->
+                viewModel.saveShelfOrder(bookOrder)
+            ShelfDropPlacement.MERGE -> when {
+                drop.target.collectionId != null -> {
+                    viewModel.saveShelfOrder(bookOrder)
+                    viewModel.addBooksToCollection(drop.target.collectionId, setOf(source.id))
+                }
+                drop.target.bookId != null -> collectionNameRequest = CollectionCreateRequest(
+                    bookIds = setOf(source.id, drop.target.bookId),
+                    shelfOrder = bookOrder
+                )
             }
         }
     }
@@ -273,18 +350,24 @@ fun BookshelfScreen(
                 ) { layout ->
                     when (layout) {
                         ShelfLayout.GRID -> BookGrid(
-                            books = filteredBooks,
+                            entries = previewEntries,
+                            bookCount = filteredBooks.size,
                             state = state,
                             searchQuery = searchQuery,
                             onSearchChange = { searchQuery = it },
                             onOpenBook = onOpenBook,
-                            onOpenBookDetail = { onOpenBookDetail(it, null) },
+                            onBookEntryClick = onBookEntryClick,
+                            onCollectionEntryClick = onCollectionEntryClick,
                             onLongPress = onLongPress,
+                            collectionDragState = collectionDragState,
+                            onShelfDrop = onShelfDrop,
                             onSetLayout = viewModel::setLayout,
                             onSetReadStateFilter = viewModel::setReadStateFilter,
                             onSelectGroup = viewModel::selectGroup,
                             onToggleTagFilter = viewModel::toggleTagFilter,
                             onSetTagMatchMode = viewModel::setTagMatchMode,
+                            onSetReadingOrderAffectsShelf =
+                                viewModel::setReadingOrderAffectsShelf,
                             onClearFilter = viewModel::clearFilter,
                             onStartSelection = { viewModel.enterSelection() },
                             onOpenShelfGroups = onOpenShelfGroups,
@@ -292,18 +375,24 @@ fun BookshelfScreen(
                             onImport = requestImport
                         )
                         ShelfLayout.LIST -> BookList(
-                            books = filteredBooks,
+                            entries = previewEntries,
+                            bookCount = filteredBooks.size,
                             state = state,
                             searchQuery = searchQuery,
                             onSearchChange = { searchQuery = it },
                             onOpenBook = onOpenBook,
-                            onOpenBookDetail = { onOpenBookDetail(it, null) },
+                            onBookEntryClick = onBookEntryClick,
+                            onCollectionEntryClick = onCollectionEntryClick,
                             onLongPress = onLongPress,
+                            collectionDragState = collectionDragState,
+                            onShelfDrop = onShelfDrop,
                             onSetLayout = viewModel::setLayout,
                             onSetReadStateFilter = viewModel::setReadStateFilter,
                             onSelectGroup = viewModel::selectGroup,
                             onToggleTagFilter = viewModel::toggleTagFilter,
                             onSetTagMatchMode = viewModel::setTagMatchMode,
+                            onSetReadingOrderAffectsShelf =
+                                viewModel::setReadingOrderAffectsShelf,
                             onClearFilter = viewModel::clearFilter,
                             onStartSelection = { viewModel.enterSelection() },
                             onOpenShelfGroups = onOpenShelfGroups,
@@ -329,6 +418,8 @@ fun BookshelfScreen(
             }
         }
 
+        CollectionDragOverlay(collectionDragState)
+
         longPressTarget?.let { target ->
             BackHandler { longPressTarget = null }
             BookLongPressOverlay(
@@ -351,13 +442,14 @@ fun BookshelfScreen(
             BackHandler { viewModel.exitSelection() }
             ShelfSelectionBar(
                 selectedCount = state.selectedCount,
-                allVisibleSelected = filteredBooks.isNotEmpty() &&
-                    state.selectedBookIds.containsAll(filteredBooks.map(BookEntity::id)),
+                allVisibleSelected = visibleBookIds.isNotEmpty() &&
+                    state.selectedBookIds.containsAll(visibleBookIds),
                 onClose = viewModel::exitSelection,
-                onSelectAll = viewModel::selectAllVisible,
+                onSelectAll = { viewModel.selectAllVisible(visibleBookIds) },
                 onGroup = { showGroupPicker = true },
                 onTags = { showTagPicker = true },
                 onDelete = { deleteSelected = true },
+                onCollection = { showCollectionPicker = true },
                 onSetReadState = viewModel::setSelectedReadState,
                 onSetPinned = viewModel::setSelectedPinned,
                 modifier = Modifier.align(Alignment.BottomCenter)
@@ -419,6 +511,84 @@ fun BookshelfScreen(
             groups = state.groups,
             onDismiss = { showGroupPicker = false },
             onSelect = viewModel::moveSelectedToGroup
+        )
+    }
+
+    if (showCollectionPicker) {
+        CollectionPickerSheet(
+            selectedCount = state.selectedCount,
+            collections = state.collections,
+            allBooks = state.allBooks,
+            onCreate = {
+                showCollectionPicker = false
+                collectionNameRequest = CollectionCreateRequest(state.selectedBookIds)
+            },
+            onSelect = { collectionId ->
+                showCollectionPicker = false
+                viewModel.addBooksToCollection(collectionId, state.selectedBookIds)
+            },
+            onDismiss = { showCollectionPicker = false }
+        )
+    }
+
+    openCollectionId?.let { openedId ->
+        shelfEntries.filterIsInstance<ShelfEntry.Collection>()
+            .firstOrNull { it.collection.id == openedId }
+            ?.let { entry ->
+                CollectionContentsSheet(
+                    entry = entry,
+                    onOpenBook = { bookId -> onOpenBookDetail(bookId, null) },
+                    onReorderBooks = { bookIds ->
+                        viewModel.reorderCollectionBooks(entry.collection.id, bookIds)
+                    },
+                    onRemoveBook = { viewModel.removeBooksFromCollection(setOf(it)) },
+                    onRename = { renameCollection = entry.collection },
+                    onDissolve = { dissolveCollection = entry.collection },
+                    onDismiss = { openCollectionId = null }
+                )
+            }
+    }
+
+    collectionNameRequest?.let { request ->
+        CollectionNameDialog(
+            title = "新建合集",
+            initialName = "",
+            onConfirm = { name ->
+                collectionNameRequest = null
+                request.shelfOrder?.let(viewModel::saveShelfOrder)
+                viewModel.createCollection(name, request.bookIds)
+            },
+            onDismiss = { collectionNameRequest = null }
+        )
+    }
+
+    renameCollection?.let { collection ->
+        CollectionNameDialog(
+            title = "重命名合集",
+            initialName = collection.name,
+            onConfirm = { name ->
+                renameCollection = null
+                viewModel.renameCollection(collection.id, name)
+            },
+            onDismiss = { renameCollection = null }
+        )
+    }
+
+    dissolveCollection?.let { collection ->
+        AlertDialog(
+            onDismissRequest = { dissolveCollection = null },
+            title = { Text("解散 ${collection.name}？") },
+            text = { Text("解散后书籍回到书架，不会删除书籍或阅读数据。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    dissolveCollection = null
+                    openCollectionId = null
+                    viewModel.dissolveCollection(collection.id)
+                }) { Text("解散") }
+            },
+            dismissButton = {
+                TextButton(onClick = { dissolveCollection = null }) { Text("取消") }
+            }
         )
     }
 
@@ -534,27 +704,42 @@ private fun EmptyBookshelfFeed(onImport: () -> Unit) {
 
 @Composable
 private fun BookGrid(
-    books: List<BookEntity>,
+    entries: List<ShelfEntry>,
+    bookCount: Int,
     state: BookshelfUiState,
     searchQuery: String,
     onSearchChange: (String) -> Unit,
     onOpenBook: (Long) -> Unit,
-    onOpenBookDetail: (Long) -> Unit,
+    onBookEntryClick: (ShelfEntry.Book) -> Unit,
+    onCollectionEntryClick: (ShelfEntry.Collection) -> Unit,
     onLongPress: (BookEntity, Rect) -> Unit,
+    collectionDragState: ShelfCollectionDragState,
+    onShelfDrop: (BookEntity, ShelfDrop) -> Unit,
     onSetLayout: (ShelfLayout) -> Unit,
     onSetReadStateFilter: (BookReadState?) -> Unit,
     onSelectGroup: (Long?, Boolean) -> Unit,
     onToggleTagFilter: (Long) -> Unit,
     onSetTagMatchMode: (TagMatchMode) -> Unit,
+    onSetReadingOrderAffectsShelf: (Boolean) -> Unit,
     onClearFilter: () -> Unit,
     onStartSelection: () -> Unit,
     onOpenShelfGroups: () -> Unit,
     onOpenShelfTags: () -> Unit,
     onImport: () -> Unit
 ) {
+    val gridState = rememberLazyGridState()
+    ShelfAutoScrollEffect(collectionDragState, gridState) {
+        gridState.requestScrollToItem(
+            gridState.firstVisibleItemIndex,
+            gridState.firstVisibleItemScrollOffset
+        )
+    }
     LazyVerticalGrid(
         columns = GridCells.Fixed(3),
-        modifier = Modifier.fillMaxSize(),
+        state = gridState,
+        modifier = Modifier
+            .fillMaxSize()
+            .onGloballyPositioned { collectionDragState.setViewport(it.boundsInRoot()) },
         contentPadding = PaddingValues(start = 20.dp, top = 18.dp, end = 20.dp, bottom = 124.dp),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp)
@@ -570,7 +755,7 @@ private fun BookGrid(
         }
         item(span = { GridItemSpan(maxLineSpan) }) {
             LibraryToolbar(
-                bookCount = books.size,
+                bookCount = bookCount,
                 searching = searchQuery.isNotBlank(),
                 state = state,
                 onSetLayout = onSetLayout,
@@ -578,6 +763,7 @@ private fun BookGrid(
                 onSelectGroup = onSelectGroup,
                 onToggleTagFilter = onToggleTagFilter,
                 onSetTagMatchMode = onSetTagMatchMode,
+                onSetReadingOrderAffectsShelf = onSetReadingOrderAffectsShelf,
                 onClearFilter = onClearFilter,
                 onStartSelection = onStartSelection,
                 onOpenShelfGroups = onOpenShelfGroups,
@@ -585,48 +771,71 @@ private fun BookGrid(
                 onImport = onImport
             )
         }
-        if (books.isEmpty()) {
+        if (entries.isEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }) {
                 NoShelfResults(query = searchQuery, filter = state.filter)
             }
         }
-        gridItems(books, key = BookEntity::id) { book ->
-            GridBookItem(
-                book = book,
-                selected = book.id in state.selectedBookIds,
-                selectionMode = state.isSelectionMode,
-                onOpen = {
-                    if (state.isSelectionMode) onLongPress(book, Rect.Zero)
-                    else onOpenBookDetail(book.id)
-                },
-                onLongPress = { bounds -> onLongPress(book, bounds) }
-            )
+        gridItems(entries, key = ShelfEntry::key) { entry ->
+            when (entry) {
+                is ShelfEntry.Book -> GridBookItem(
+                    entry = entry,
+                    selected = entry.book.id in state.selectedBookIds,
+                    selectionMode = state.isSelectionMode,
+                    onOpen = { onBookEntryClick(entry) },
+                    onLongPress = { bounds -> onLongPress(entry.book, bounds) },
+                    collectionDragState = collectionDragState,
+                    onShelfDrop = onShelfDrop
+                )
+                is ShelfEntry.Collection -> GridCollectionItem(
+                    entry = entry,
+                    selected = entry.bookIds.all(state.selectedBookIds::contains),
+                    selectionMode = state.isSelectionMode,
+                    onOpen = { onCollectionEntryClick(entry) },
+                    collectionDragState = collectionDragState
+                )
+            }
         }
     }
 }
 
 @Composable
 private fun BookList(
-    books: List<BookEntity>,
+    entries: List<ShelfEntry>,
+    bookCount: Int,
     state: BookshelfUiState,
     searchQuery: String,
     onSearchChange: (String) -> Unit,
     onOpenBook: (Long) -> Unit,
-    onOpenBookDetail: (Long) -> Unit,
+    onBookEntryClick: (ShelfEntry.Book) -> Unit,
+    onCollectionEntryClick: (ShelfEntry.Collection) -> Unit,
     onLongPress: (BookEntity, Rect) -> Unit,
+    collectionDragState: ShelfCollectionDragState,
+    onShelfDrop: (BookEntity, ShelfDrop) -> Unit,
     onSetLayout: (ShelfLayout) -> Unit,
     onSetReadStateFilter: (BookReadState?) -> Unit,
     onSelectGroup: (Long?, Boolean) -> Unit,
     onToggleTagFilter: (Long) -> Unit,
     onSetTagMatchMode: (TagMatchMode) -> Unit,
+    onSetReadingOrderAffectsShelf: (Boolean) -> Unit,
     onClearFilter: () -> Unit,
     onStartSelection: () -> Unit,
     onOpenShelfGroups: () -> Unit,
     onOpenShelfTags: () -> Unit,
     onImport: () -> Unit
 ) {
+    val listState = rememberLazyListState()
+    ShelfAutoScrollEffect(collectionDragState, listState) {
+        listState.requestScrollToItem(
+            listState.firstVisibleItemIndex,
+            listState.firstVisibleItemScrollOffset
+        )
+    }
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        state = listState,
+        modifier = Modifier
+            .fillMaxSize()
+            .onGloballyPositioned { collectionDragState.setViewport(it.boundsInRoot()) },
         contentPadding = PaddingValues(start = 20.dp, top = 18.dp, end = 20.dp, bottom = 124.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
@@ -642,7 +851,7 @@ private fun BookList(
         item {
             Spacer(Modifier.height(8.dp))
             LibraryToolbar(
-                bookCount = books.size,
+                bookCount = bookCount,
                 searching = searchQuery.isNotBlank(),
                 state = state,
                 onSetLayout = onSetLayout,
@@ -650,6 +859,7 @@ private fun BookList(
                 onSelectGroup = onSelectGroup,
                 onToggleTagFilter = onToggleTagFilter,
                 onSetTagMatchMode = onSetTagMatchMode,
+                onSetReadingOrderAffectsShelf = onSetReadingOrderAffectsShelf,
                 onClearFilter = onClearFilter,
                 onStartSelection = onStartSelection,
                 onOpenShelfGroups = onOpenShelfGroups,
@@ -657,20 +867,28 @@ private fun BookList(
                 onImport = onImport
             )
         }
-        if (books.isEmpty()) {
+        if (entries.isEmpty()) {
             item { NoShelfResults(query = searchQuery, filter = state.filter) }
         }
-        listItems(books, key = BookEntity::id) { book ->
-            ListBookItem(
-                book = book,
-                selected = book.id in state.selectedBookIds,
-                selectionMode = state.isSelectionMode,
-                onOpen = {
-                    if (state.isSelectionMode) onLongPress(book, Rect.Zero)
-                    else onOpenBookDetail(book.id)
-                },
-                onLongPress = { bounds -> onLongPress(book, bounds) }
-            )
+        listItems(entries, key = ShelfEntry::key) { entry ->
+            when (entry) {
+                is ShelfEntry.Book -> ListBookItem(
+                    entry = entry,
+                    selected = entry.book.id in state.selectedBookIds,
+                    selectionMode = state.isSelectionMode,
+                    onOpen = { onBookEntryClick(entry) },
+                    onLongPress = { bounds -> onLongPress(entry.book, bounds) },
+                    collectionDragState = collectionDragState,
+                    onShelfDrop = onShelfDrop
+                )
+                is ShelfEntry.Collection -> ListCollectionItem(
+                    entry = entry,
+                    selected = entry.bookIds.all(state.selectedBookIds::contains),
+                    selectionMode = state.isSelectionMode,
+                    onOpen = { onCollectionEntryClick(entry) },
+                    collectionDragState = collectionDragState
+                )
+            }
         }
     }
 }
@@ -954,6 +1172,7 @@ private fun LibraryToolbar(
     onSelectGroup: (Long?, Boolean) -> Unit,
     onToggleTagFilter: (Long) -> Unit,
     onSetTagMatchMode: (TagMatchMode) -> Unit,
+    onSetReadingOrderAffectsShelf: (Boolean) -> Unit,
     onClearFilter: () -> Unit,
     onStartSelection: () -> Unit,
     onOpenShelfGroups: () -> Unit,
@@ -982,7 +1201,12 @@ private fun LibraryToolbar(
                         text = buildString {
                             if (searching) append("找到 $bookCount 本") else append("$bookCount 本")
                             filter.readState?.let { append(" · ").append(it.label()) }
-                            if (!searching && !filter.isActive) append(" · 按最近阅读")
+                            if (!searching && !filter.isActive) {
+                                append(
+                                    if (state.readingOrderAffectsShelf) " · 阅读后前移"
+                                    else " · 手动排序"
+                                )
+                            }
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1048,6 +1272,7 @@ private fun LibraryToolbar(
                     onSetLayout = onSetLayout,
                     onSetReadStateFilter = onSetReadStateFilter,
                     onSetTagMatchMode = onSetTagMatchMode,
+                    onSetReadingOrderAffectsShelf = onSetReadingOrderAffectsShelf,
                     onClearFilter = onClearFilter,
                     onStartSelection = onStartSelection,
                     onOpenShelfTags = onOpenShelfTags
@@ -1093,6 +1318,7 @@ private fun ShelfViewMenu(
     onSetLayout: (ShelfLayout) -> Unit,
     onSetReadStateFilter: (BookReadState?) -> Unit,
     onSetTagMatchMode: (TagMatchMode) -> Unit,
+    onSetReadingOrderAffectsShelf: (Boolean) -> Unit,
     onClearFilter: () -> Unit,
     onStartSelection: () -> Unit,
     onOpenShelfTags: () -> Unit
@@ -1153,6 +1379,15 @@ private fun ShelfViewMenu(
             }
         }
 
+        MoReadMenuItem(
+            text = "阅读后自动前移",
+            icon = Icons.Outlined.AutoStories,
+            selected = state.readingOrderAffectsShelf,
+            onClick = {
+                onSetReadingOrderAffectsShelf(!state.readingOrderAffectsShelf)
+            }
+        )
+
         if (state.filter.tagIds.isNotEmpty()) {
             MoReadMenuExpandableItem(
                 text = "标签匹配",
@@ -1209,28 +1444,68 @@ private val SHELF_MENU_WIDTH = 244.dp
 private val SHELF_MENU_MIN_HEIGHT = 120.dp
 private val SHELF_MENU_MAX_HEIGHT = 390.dp
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun GridBookItem(
-    book: BookEntity,
+    entry: ShelfEntry.Book,
     selected: Boolean,
     selectionMode: Boolean,
     onOpen: () -> Unit,
-    onLongPress: (Rect) -> Unit
+    onLongPress: (Rect) -> Unit,
+    collectionDragState: ShelfCollectionDragState,
+    onShelfDrop: (BookEntity, ShelfDrop) -> Unit
 ) {
+    val book = entry.book
+    val pinnableContainer = LocalPinnableContainer.current
     var bounds by remember { mutableStateOf(Rect.Zero) }
-    Column(modifier = Modifier.graphicsLayer { alpha = if (selectionMode && !selected) 0.55f else 1f }) {
+    var coverBounds by remember { mutableStateOf(Rect.Zero) }
+    val target = remember(entry.key) { entry.dropTarget() }
+    val registrationOwner = remember { Any() }
+    DisposableEffect(entry.key) {
+        onDispose { collectionDragState.unregister(entry.key, registrationOwner) }
+    }
+    Column(
+        modifier = Modifier
+            .graphicsLayer {
+                alpha = if (collectionDragState.sourceBook?.id == book.id) {
+                    0f
+                } else if (selectionMode && !selected) {
+                    0.55f
+                } else {
+                    1f
+                }
+            }
+            .onGloballyPositioned { bounds = it.boundsInRoot() }
+            .then(
+                if (collectionDragState.activeDrop?.target == target) Modifier.border(
+                    2.dp,
+                    MaterialTheme.colorScheme.primary,
+                    RoundedCornerShape(12.dp)
+                ) else Modifier
+            )
+            .clickable(onClick = onOpen)
+            .collectionDragSource(
+                book = book,
+                bounds = { bounds },
+                coverBounds = { coverBounds },
+                horizontal = true,
+                allowMerge = true,
+                enabled = !selectionMode,
+                pinnableContainer = pinnableContainer,
+                state = collectionDragState,
+                onDrop = onShelfDrop,
+                onLongPressOnly = onLongPress
+            )
+    ) {
         Box {
             BookCover(
                 book = book,
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(0.69f)
-                    .onGloballyPositioned { bounds = it.boundsInRoot() }
-                    .combinedClickable(
-                        onClick = onOpen,
-                        onLongClick = { onLongPress(bounds) }
-                    )
+                    .onGloballyPositioned {
+                        coverBounds = it.boundsInRoot()
+                        collectionDragState.register(target, coverBounds, registrationOwner)
+                    }
             )
             if (selectionMode) {
                 Icon(
@@ -1260,24 +1535,58 @@ private fun GridBookItem(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ListBookItem(
-    book: BookEntity,
+    entry: ShelfEntry.Book,
     selected: Boolean,
     selectionMode: Boolean,
     onOpen: () -> Unit,
-    onLongPress: (Rect) -> Unit
+    onLongPress: (Rect) -> Unit,
+    collectionDragState: ShelfCollectionDragState,
+    onShelfDrop: (BookEntity, ShelfDrop) -> Unit
 ) {
+    val book = entry.book
+    val pinnableContainer = LocalPinnableContainer.current
     var bounds by remember { mutableStateOf(Rect.Zero) }
+    var coverBounds by remember { mutableStateOf(Rect.Zero) }
     val progress = readProgress(book)
+    val target = remember(entry.key) { entry.dropTarget() }
+    val registrationOwner = remember { Any() }
+    DisposableEffect(entry.key) {
+        onDispose { collectionDragState.unregister(entry.key, registrationOwner) }
+    }
     FrostedSurface(
         modifier = Modifier
             .fillMaxWidth()
+            .graphicsLayer {
+                alpha = if (collectionDragState.sourceBook?.id == book.id) {
+                    0f
+                } else if (selectionMode && !selected) {
+                    0.55f
+                } else {
+                    1f
+                }
+            }
             .onGloballyPositioned { bounds = it.boundsInRoot() }
-            .combinedClickable(
-                onClick = onOpen,
-                onLongClick = { onLongPress(bounds) }
+            .then(
+                if (collectionDragState.activeDrop?.target == target) Modifier.border(
+                    2.dp,
+                    MaterialTheme.colorScheme.primary,
+                    RoundedCornerShape(24.dp)
+                ) else Modifier
+            )
+            .clickable(onClick = onOpen)
+            .collectionDragSource(
+                book = book,
+                bounds = { bounds },
+                coverBounds = { coverBounds },
+                horizontal = false,
+                allowMerge = true,
+                enabled = !selectionMode,
+                pinnableContainer = pinnableContainer,
+                state = collectionDragState,
+                onDrop = onShelfDrop,
+                onLongPressOnly = onLongPress
             ),
         shape = RoundedCornerShape(24.dp),
         shadowElevation = 4.dp
@@ -1288,7 +1597,12 @@ private fun ListBookItem(
         ) {
             CompactBookArtwork(
                 book = book,
-                modifier = Modifier.size(width = 68.dp, height = 96.dp)
+                modifier = Modifier
+                    .size(width = 68.dp, height = 96.dp)
+                    .onGloballyPositioned {
+                        coverBounds = it.boundsInRoot()
+                        collectionDragState.register(target, coverBounds, registrationOwner)
+                    }
             )
             if (selectionMode) {
                 Icon(

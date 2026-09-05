@@ -206,7 +206,7 @@ class MigrationTest {
             assertEquals("阅读助手", cursor.getString(0))
             assertEquals(0, cursor.getInt(1))
             assertEquals(1, cursor.getInt(2))
-            assertTrue(cursor.getString(3).contains("search_book"))
+            assertTrue(cursor.getString(3).contains("add_annotation"))
             assertTrue(cursor.moveToNext())
             // 第二条是扮演型示例角色。
             assertEquals(1, cursor.getInt(1))
@@ -1030,6 +1030,33 @@ class MigrationTest {
             assertTrue(cursor.isNull(0))
             assertTrue(cursor.isNull(1))
         }
+    }
+
+    @Test
+    fun migrate22To23AddsCollectionsAndTextAnchors() {
+        helper.createDatabase(DB_NAME, 22).close()
+
+        val db = helper.runMigrationsAndValidate(
+            DB_NAME,
+            23,
+            true,
+            DatabaseMigrations.Migration22To23
+        )
+
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'book_collections'"
+        ).use { cursor -> assertTrue(cursor.moveToFirst()) }
+
+        fun columns(table: String): Set<String> = db.query("PRAGMA table_info($table)").use { cursor ->
+            buildSet {
+                while (cursor.moveToNext()) add(cursor.getString(1))
+            }
+        }
+
+        assertTrue("collectionId" in columns("books"))
+        assertTrue("collectionOrder" in columns("books"))
+        assertTrue("textAnchorJson" in columns("annotations"))
+        assertTrue("textAnchorJson" in columns("illustrations"))
     }
 
     private companion object {

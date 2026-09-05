@@ -16,6 +16,7 @@ import com.mozhi.reader.ai.media.AiMediaGenerationService
 import com.mozhi.reader.core.database.entity.AudiobookRoleEntity
 import com.mozhi.reader.core.database.entity.AudiobookSegmentEntity
 import com.mozhi.reader.core.database.entity.ChapterEntity
+import com.mozhi.reader.core.datastore.ChineseConversionMode
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
 import com.mozhi.reader.core.datastore.ReaderTextReplacementRule
 import com.mozhi.reader.core.datastore.audiobookRevision
@@ -24,6 +25,8 @@ import com.mozhi.reader.core.library.AudiobookChapterState
 import com.mozhi.reader.core.library.AudiobookEngine
 import com.mozhi.reader.core.library.AudiobookRepository
 import com.mozhi.reader.core.library.LibraryRepository
+import com.mozhi.reader.core.library.ReaderTextAnchorCodec
+import com.mozhi.reader.core.library.ReaderTextAnchors
 import com.mozhi.reader.core.speech.SentenceSegmenter
 import com.mozhi.reader.core.speech.SentenceSpan
 import com.mozhi.reader.core.speech.SleepTimerPlan
@@ -59,6 +62,16 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.suspendCancellableCoroutine
 
 enum class ListenPlaybackMode { STANDARD, PRODUCED }
+
+internal fun listenProgressLocator(sourceBody: String, charOffset: Int): String =
+    ReaderTextAnchorCodec.encode(
+        ReaderTextAnchors.create(
+            sourceBody,
+            charOffset,
+            charOffset,
+            ChineseConversionMode.OFF
+        )
+    )
 
 /** 听书会话对外快照；null = 没有进行中的听书。 */
 data class ListenState(
@@ -438,7 +451,7 @@ class ListenEngine @Inject constructor(
                                     playing = true,
                                     status = playbackPlan.status
                                 )
-                                persistPosition(bookId, chapter.chapterIndex, utterance.start)
+                                persistPosition(bookId, chapter.chapterIndex, utterance.start, body)
                             }
                         }
                         when {
@@ -461,7 +474,7 @@ class ListenEngine @Inject constructor(
                             playing = true,
                             status = playbackPlan.status
                         )
-                        persistPosition(bookId, chapter.chapterIndex, utterance.start)
+                        persistPosition(bookId, chapter.chapterIndex, utterance.start, body)
                         prefetch(bookId, queue.drop(1), settings)
                         val result = speakGuarded {
                             val readyPath = utterance.audioPath?.takeIf { it.isNotBlank() && File(it).isFile }
@@ -662,9 +675,17 @@ class ListenEngine @Inject constructor(
         )
     }
 
-    private fun persistPosition(bookId: Long, chapterIndex: Int, charOffset: Int) {
+    private fun persistPosition(
+        bookId: Long,
+        chapterIndex: Int,
+        charOffset: Int,
+        sourceBody: String
+    ) {
+        val locatorJson = listenProgressLocator(sourceBody, charOffset)
         scope.launch {
-            runCatching { libraryRepository.updateReadPosition(bookId, chapterIndex, charOffset) }
+            runCatching {
+                libraryRepository.saveProgress(bookId, locatorJson, chapterIndex, charOffset)
+            }
         }
     }
 

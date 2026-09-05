@@ -177,6 +177,7 @@ dependencies {
     implementation(libs.coil.network.okhttp)
     implementation(libs.juniversalchardet)
     implementation(libs.jsoup)
+    implementation(libs.opencc.java)
     implementation(libs.android.svg)
     implementation(libs.zxing.core)
 

@@ -53,7 +53,11 @@ class ReaderContentControllerScrollTest {
     @Test
     fun `scrolling into the next chapter slides the window and preloads ahead`() = runTest {
         val listener = RecordingListener()
-        val controller = ReaderContentController(this, { chapterBody() }, listener)
+        val controller = ReaderContentController(
+            this,
+            { ReaderChapterContent(chapterBody()) },
+            listener
+        )
         controller.setChapters(metas(4))
         controller.updateEnvironment(spec(), FakeMeasure())
         controller.openPosition(0, 0)
@@ -79,7 +83,11 @@ class ReaderContentControllerScrollTest {
     @Test
     fun `scrolling backwards reuses the previous chapter's layout`() = runTest {
         val listener = RecordingListener()
-        val controller = ReaderContentController(this, { chapterBody() }, listener)
+        val controller = ReaderContentController(
+            this,
+            { ReaderChapterContent(chapterBody()) },
+            listener
+        )
         controller.setChapters(metas(4))
         controller.updateEnvironment(spec(), FakeMeasure())
         controller.openPosition(1, 0)
@@ -98,7 +106,11 @@ class ReaderContentControllerScrollTest {
     @Test
     fun `scrolling within the chapter publishes position without content churn`() = runTest {
         val listener = RecordingListener()
-        val controller = ReaderContentController(this, { chapterBody() }, listener)
+        val controller = ReaderContentController(
+            this,
+            { ReaderChapterContent(chapterBody()) },
+            listener
+        )
         controller.setChapters(metas(2))
         controller.updateEnvironment(spec(), FakeMeasure())
         controller.openPosition(0, 0)
@@ -115,7 +127,11 @@ class ReaderContentControllerScrollTest {
     @Test
     fun `a far scroll rebinds the whole window`() = runTest {
         val listener = RecordingListener()
-        val controller = ReaderContentController(this, { chapterBody() }, listener)
+        val controller = ReaderContentController(
+            this,
+            { ReaderChapterContent(chapterBody()) },
+            listener
+        )
         controller.setChapters(metas(6))
         controller.updateEnvironment(spec(), FakeMeasure())
         controller.openPosition(0, 0)

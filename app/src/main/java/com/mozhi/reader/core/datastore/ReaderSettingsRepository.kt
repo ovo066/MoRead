@@ -126,6 +126,9 @@ data class ReaderSettings(
     val pageMode: PageMode = PageMode.PAGINATED,
     val pageTurnAnimation: PageTurnAnimation = PageTurnAnimation.SIMULATION,
     val shelfLayout: ShelfLayout = ShelfLayout.GRID,
+    val shelfBookOrder: List<Long> = emptyList(),
+    val shelfBookOrderReadAnchor: Long = 0L,
+    val readingOrderAffectsShelf: Boolean = true,
     val keepScreenOn: Boolean = false,
     /** 阅读页默认隐藏系统状态栏；离开阅读页时恢复。 */
     val immersiveReading: Boolean = true,
@@ -165,7 +168,8 @@ data class ReaderSettings(
     /** 夜间槽的背景图不透明度。 */
     val nightBackgroundImageOpacity: Float = 0.28f,
     /** 用户主动启用的逐书主题；键为 books.id。 */
-    val bookThemes: Map<Long, BookReaderTheme> = emptyMap()
+    val bookThemes: Map<Long, BookReaderTheme> = emptyMap(),
+    val bookChineseConversions: Map<Long, ChineseConversionMode> = emptyMap()
 )
 
 /** 当前生效的自定义主题；id 悬空（预设已删）按未启用处理。 */
@@ -248,6 +252,12 @@ class ReaderSettingsRepository @Inject constructor(
             shelfLayout = preferences[Keys.ShelfLayout]
                 ?.let { runCatching { ShelfLayout.valueOf(it) }.getOrNull() }
                 ?: ShelfLayout.GRID,
+            shelfBookOrder = preferences[Keys.ShelfBookOrder]
+                ?.split(',')
+                ?.mapNotNull(String::toLongOrNull)
+                .orEmpty(),
+            shelfBookOrderReadAnchor = preferences[Keys.ShelfBookOrderReadAnchor] ?: 0L,
+            readingOrderAffectsShelf = preferences[Keys.ReadingOrderAffectsShelf] ?: true,
             keepScreenOn = preferences[Keys.KeepScreenOn] ?: false,
             immersiveReading = preferences[Keys.ImmersiveReading] ?: true,
             volumeKeysPageTurn = preferences[Keys.VolumeKeysPageTurn] ?: false,
@@ -273,7 +283,10 @@ class ReaderSettingsRepository @Inject constructor(
                 ?.takeIf { id -> imageLibrary.any { it.id == id } },
             nightBackgroundImageOpacity = (preferences[Keys.NightBackgroundImageOpacity] ?: 0.28f)
                 .coerceIn(0.05f, 1f),
-            bookThemes = BookReaderThemeCodec.decode(preferences[Keys.BookThemes])
+            bookThemes = BookReaderThemeCodec.decode(preferences[Keys.BookThemes]),
+            bookChineseConversions = BookChineseConversionCodec.decode(
+                preferences[Keys.BookChineseConversions]
+            )
         )
     }
 
@@ -540,6 +553,16 @@ class ReaderSettingsRepository @Inject constructor(
         updateBookTheme(bookId) { it.withTheme(slot, theme) }
     }
 
+    suspend fun setBookChineseConversionMode(bookId: Long, mode: ChineseConversionMode) {
+        dataStore.edit { preferences ->
+            val values = BookChineseConversionCodec
+                .decode(preferences[Keys.BookChineseConversions])
+                .toMutableMap()
+            if (mode == ChineseConversionMode.OFF) values.remove(bookId) else values[bookId] = mode
+            preferences[Keys.BookChineseConversions] = BookChineseConversionCodec.encode(values)
+        }
+    }
+
     suspend fun selectBookCustomTheme(bookId: Long, id: Long, slot: ReaderThemeSlot) {
         dataStore.edit { preferences ->
             if (CustomReaderThemeCodec.decode(preferences[Keys.CustomThemes]).none { it.id == id }) {
@@ -743,6 +766,17 @@ class ReaderSettingsRepository @Inject constructor(
 
     suspend fun setShelfLayout(value: ShelfLayout) {
         dataStore.edit { it[Keys.ShelfLayout] = value.name }
+    }
+
+    suspend fun setShelfBookOrder(value: List<Long>, readAnchor: Long) {
+        dataStore.edit {
+            it[Keys.ShelfBookOrder] = value.distinct().joinToString(",")
+            it[Keys.ShelfBookOrderReadAnchor] = readAnchor
+        }
+    }
+
+    suspend fun setReadingOrderAffectsShelf(value: Boolean) {
+        dataStore.edit { it[Keys.ReadingOrderAffectsShelf] = value }
     }
 
     suspend fun setKeepScreenOn(value: Boolean) {
@@ -1090,6 +1124,9 @@ class ReaderSettingsRepository @Inject constructor(
         val PageMode = stringPreferencesKey("reader_page_mode")
         val PageTurnAnimation = stringPreferencesKey("reader_page_turn_animation")
         val ShelfLayout = stringPreferencesKey("shelf_layout")
+        val ShelfBookOrder = stringPreferencesKey("shelf_book_order")
+        val ShelfBookOrderReadAnchor = longPreferencesKey("shelf_book_order_read_anchor")
+        val ReadingOrderAffectsShelf = booleanPreferencesKey("reading_order_affects_shelf")
         val KeepScreenOn = booleanPreferencesKey("keep_screen_on")
         val ImmersiveReading = booleanPreferencesKey("reader_immersive_reading")
         val VolumeKeysPageTurn = booleanPreferencesKey("reader_volume_keys_page_turn")
@@ -1132,5 +1169,6 @@ class ReaderSettingsRepository @Inject constructor(
         val NightBackgroundImageOpacity =
             floatPreferencesKey("reader_background_image_night_opacity")
         val BookThemes = stringPreferencesKey("reader_book_themes")
+        val BookChineseConversions = stringPreferencesKey("reader_book_chinese_conversions")
     }
 }

@@ -1,7 +1,10 @@
 package com.mozhi.reader.feature.reader
 
+import com.mozhi.reader.core.datastore.ChineseConversionMode
 import com.mozhi.reader.core.library.BookQuoteLocator
 import com.mozhi.reader.core.library.QuoteChapter
+import com.mozhi.reader.core.library.ReaderTextAnchorCodec
+import com.mozhi.reader.core.library.ReaderTextAnchors
 
 /**
  * 一条可跳回正文的引用。
@@ -19,7 +22,8 @@ data class LocatedCompanionCitation(
     val citation: CompanionCitation,
     val chapterIndex: Int,
     val startCharOffset: Int,
-    val endCharOffset: Int
+    val endCharOffset: Int,
+    val sourceAnchorJson: String = ""
 )
 
 /** 一条消息拆出的展示文本与引用列表。 */
@@ -96,11 +100,20 @@ object CompanionCitationVerifier {
             }
         }
         location?.let {
+            val body = chapters.first { chapter -> chapter.chapterIndex == it.chapterIndex }.body
             LocatedCompanionCitation(
                 citation = citation.copy(chapterNumber = it.chapterIndex + 1),
                 chapterIndex = it.chapterIndex,
                 startCharOffset = it.startCharOffset,
-                endCharOffset = it.endCharOffset
+                endCharOffset = it.endCharOffset,
+                sourceAnchorJson = ReaderTextAnchorCodec.encode(
+                    ReaderTextAnchors.create(
+                        body,
+                        it.startCharOffset,
+                        it.endCharOffset,
+                        ChineseConversionMode.OFF
+                    )
+                )
             )
         }
     }

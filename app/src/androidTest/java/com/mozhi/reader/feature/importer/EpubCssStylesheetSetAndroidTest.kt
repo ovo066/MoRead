@@ -9,7 +9,7 @@ import org.junit.runner.RunWith
 class EpubCssStylesheetSetAndroidTest {
     @Test
     fun fontFaceAndRulePatternsCompileOnAndroid() {
-        val styles = EpubCssStylesheetSet.parse(
+        val styles = EpubLegacyStyleBridge.parse(
             listOf(
                 EpubStylesheetSource(
                     href = "OEBPS/Styles/style.css",

@@ -2,6 +2,7 @@ reference/
 .downloads/
 .tools/
 .isolated-build/
+.worktrees/
 .gradle/
 .kotlin/
 local.properties

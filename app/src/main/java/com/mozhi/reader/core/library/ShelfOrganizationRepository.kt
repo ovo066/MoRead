@@ -5,6 +5,7 @@ import com.mozhi.reader.core.database.TagNameNormalizer
 import com.mozhi.reader.core.database.dao.ShelfOrganizationDao
 import com.mozhi.reader.core.database.entity.BookTagEntity
 import com.mozhi.reader.core.database.entity.BookTagRefEntity
+import com.mozhi.reader.core.database.entity.BookCollectionEntity
 import com.mozhi.reader.core.database.entity.ShelfGroupEntity
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -17,7 +18,8 @@ data class ShelfOrganizationSnapshot(
     val groupCounts: Map<Long?, Int> = emptyMap(),
     val tags: List<BookTagEntity> = emptyList(),
     val tagCounts: Map<Long, Int> = emptyMap(),
-    val tagRefs: List<BookTagRefEntity> = emptyList()
+    val tagRefs: List<BookTagRefEntity> = emptyList(),
+    val collections: List<BookCollectionEntity> = emptyList()
 ) {
     fun tagIdsFor(bookId: Long): Set<Long> = tagRefs
         .asSequence()
@@ -30,7 +32,7 @@ data class ShelfOrganizationSnapshot(
 class ShelfOrganizationRepository @Inject constructor(
     private val dao: ShelfOrganizationDao
 ) {
-    val snapshot: Flow<ShelfOrganizationSnapshot> = combine(
+    private val organization = combine(
         dao.observeGroups(),
         dao.observeGroupCounts().map { rows -> rows.associate { it.groupId to it.bookCount } },
         dao.observeTags(),
@@ -39,6 +41,29 @@ class ShelfOrganizationRepository @Inject constructor(
     ) { groups, groupCounts, tags, tagCounts, refs ->
         ShelfOrganizationSnapshot(groups, groupCounts, tags, tagCounts, refs)
     }
+
+    val snapshot: Flow<ShelfOrganizationSnapshot> =
+        combine(organization, dao.observeCollections()) { current, collections ->
+            current.copy(collections = collections)
+        }
+
+    suspend fun createCollection(name: String, bookIds: Collection<Long>): Long =
+        dao.createCollection(name.trim(), bookIds.toList())
+
+    suspend fun addBooksToCollection(id: Long, bookIds: Collection<Long>) =
+        dao.addBooksToCollection(id, bookIds.toList())
+
+    suspend fun removeBooksFromCollection(bookIds: Collection<Long>) =
+        dao.removeBooksFromCollection(bookIds.toList())
+
+    suspend fun renameCollection(id: Long, name: String) = dao.renameCollection(id, name.trim())
+
+    suspend fun dissolveCollection(id: Long) = dao.dissolveCollection(id)
+
+    suspend fun reorderCollectionBooks(collectionId: Long, bookIds: List<Long>) =
+        dao.reorderCollectionBooks(collectionId, bookIds)
+
+    suspend fun deleteEmptyCollections() = dao.deleteEmptyCollections()
 
     suspend fun saveGroup(group: ShelfGroupEntity): Long = dao.upsertGroup(
         group.copy(name = group.name.trim())

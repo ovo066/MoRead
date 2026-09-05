@@ -7,6 +7,7 @@ import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Update
 import com.mozhi.reader.core.database.entity.BookTagCount
+import com.mozhi.reader.core.database.entity.BookCollectionEntity
 import com.mozhi.reader.core.database.entity.BookTagEntity
 import com.mozhi.reader.core.database.entity.BookTagRefEntity
 import com.mozhi.reader.core.database.entity.ShelfGroupCount
@@ -15,6 +16,74 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ShelfOrganizationDao {
+    @Query("SELECT * FROM book_collections ORDER BY createdAt DESC, id DESC")
+    fun observeCollections(): Flow<List<BookCollectionEntity>>
+
+    @Insert
+    suspend fun insertCollection(collection: BookCollectionEntity): Long
+
+    @Query("UPDATE book_collections SET name = :name WHERE id = :id")
+    suspend fun renameCollection(id: Long, name: String)
+
+    @Query("SELECT COALESCE(MAX(collectionOrder), -1) FROM books WHERE collectionId = :collectionId")
+    suspend fun maxCollectionOrder(collectionId: Long): Int
+
+    @Query("UPDATE books SET collectionId = :collectionId, collectionOrder = :order WHERE id = :bookId")
+    suspend fun setBookCollection(bookId: Long, collectionId: Long?, order: Int)
+
+    @Query("UPDATE books SET collectionId = NULL, collectionOrder = 0 WHERE id IN (:bookIds)")
+    suspend fun clearBookCollections(bookIds: List<Long>)
+
+    @Query("UPDATE books SET collectionId = NULL, collectionOrder = 0 WHERE collectionId = :collectionId")
+    suspend fun clearCollection(collectionId: Long)
+
+    @Query("DELETE FROM book_collections WHERE id = :id")
+    suspend fun deleteCollectionRow(id: Long)
+
+    @Query(
+        "DELETE FROM book_collections WHERE id NOT IN " +
+            "(SELECT DISTINCT collectionId FROM books WHERE collectionId IS NOT NULL)"
+    )
+    suspend fun deleteEmptyCollections()
+
+    @Transaction
+    suspend fun addBooksToCollection(collectionId: Long, bookIds: List<Long>) {
+        var order = maxCollectionOrder(collectionId) + 1
+        bookIds.distinct().forEach { bookId ->
+            setBookCollection(bookId, collectionId, order++)
+        }
+        deleteEmptyCollections()
+    }
+
+    @Transaction
+    suspend fun createCollection(name: String, bookIds: List<Long>): Long {
+        val id = insertCollection(BookCollectionEntity(name = name, createdAt = System.currentTimeMillis()))
+        bookIds.distinct().forEachIndexed { order, bookId ->
+            setBookCollection(bookId, id, order)
+        }
+        deleteEmptyCollections()
+        return id
+    }
+
+    @Transaction
+    suspend fun removeBooksFromCollection(bookIds: List<Long>) {
+        clearBookCollections(bookIds)
+        deleteEmptyCollections()
+    }
+
+    @Transaction
+    suspend fun dissolveCollection(id: Long) {
+        clearCollection(id)
+        deleteCollectionRow(id)
+    }
+
+    @Transaction
+    suspend fun reorderCollectionBooks(collectionId: Long, bookIds: List<Long>) {
+        bookIds.forEachIndexed { order, bookId ->
+            setBookCollection(bookId, collectionId, order)
+        }
+    }
+
     @Query("SELECT * FROM shelf_groups ORDER BY sortOrder, createdAt, id")
     fun observeGroups(): Flow<List<ShelfGroupEntity>>
 

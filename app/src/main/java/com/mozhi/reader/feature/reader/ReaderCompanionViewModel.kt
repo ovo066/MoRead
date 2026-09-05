@@ -94,7 +94,8 @@ sealed interface CompanionChatEvent {
     data class LocateInBook(
         val chapterIndex: Int,
         val startCharOffset: Int,
-        val endCharOffset: Int
+        val endCharOffset: Int,
+        val sourceAnchorJson: String
     ) : CompanionChatEvent
 
     data class Message(val text: String) : CompanionChatEvent
@@ -1024,7 +1025,8 @@ class ReaderCompanionViewModel @Inject constructor(
                 CompanionChatEvent.LocateInBook(
                     chapterIndex = citation.chapterIndex,
                     startCharOffset = citation.startCharOffset,
-                    endCharOffset = citation.endCharOffset
+                    endCharOffset = citation.endCharOffset,
+                    sourceAnchorJson = citation.sourceAnchorJson
                 )
             )
         }

@@ -85,18 +85,21 @@ import com.mozhi.reader.core.database.entity.AnnotationEntity
 import com.mozhi.reader.core.database.entity.AnnotationStyle
 import com.mozhi.reader.core.database.entity.BookmarkEntity
 import com.mozhi.reader.core.database.entity.ChapterEntity
+import com.mozhi.reader.core.datastore.ChineseConversionMode
 import com.mozhi.reader.core.datastore.ReaderFont
 import com.mozhi.reader.core.datastore.PendingReaderFont
 import com.mozhi.reader.core.datastore.ReaderSettings
 import com.mozhi.reader.core.datastore.ReaderTextReplacementRule
 import com.mozhi.reader.core.datastore.ReaderTheme
 import com.mozhi.reader.core.datastore.activeThemeSlot
+import com.mozhi.reader.core.datastore.chineseConversionModeFor
 import com.mozhi.reader.core.datastore.resolveForBook
 import com.mozhi.reader.core.datastore.withBookThemeSelection
 import com.mozhi.reader.feature.reader.engine.ReaderAnnotationMark
 import com.mozhi.reader.feature.reader.engine.ReaderIllustrationMark
 import com.mozhi.reader.feature.reader.engine.InlineMarkerKind
 import com.mozhi.reader.feature.reader.engine.InlineMarkerReservation
+import com.mozhi.reader.core.library.ResolvedTextAnchor
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 
@@ -106,16 +109,46 @@ private data class AnnotationInkFloater(
     val topPx: Int
 )
 
-private data class AnnotationThreadKey(
-    val chapterIndex: Int,
-    val startCharOffset: Int,
-    val endCharOffset: Int
-)
+private data class AnnotationThreadKey(val annotationIds: Set<Long>)
 
 private data class ReaderReturnPosition(
     val chapterIndex: Int,
     val charOffset: Int
 )
+
+private data class PresentedListenRange(
+    val chapterIndex: Int,
+    val sourceStart: Int,
+    val sourceEnd: Int,
+    val contentRevision: Int,
+    val range: ResolvedTextAnchor
+)
+
+internal data class PendingReaderListenFollow(
+    val chapterIndex: Int,
+    val displayOffset: Int
+)
+
+internal data class ReaderListenPositionOwnership(
+    val pending: PendingReaderListenFollow?,
+    val isManualSeek: Boolean
+)
+
+internal fun readerListenPositionOwnership(
+    pending: PendingReaderListenFollow?,
+    chapterIndex: Int,
+    displayOffset: Int
+): ReaderListenPositionOwnership = when {
+    pending == null -> ReaderListenPositionOwnership(null, isManualSeek = true)
+    pending.chapterIndex == chapterIndex && pending.displayOffset == displayOffset ->
+        ReaderListenPositionOwnership(null, isManualSeek = false)
+    else -> ReaderListenPositionOwnership(pending, isManualSeek = false)
+}
+
+internal fun acknowledgeReaderListenFollow(
+    pending: PendingReaderListenFollow,
+    targetIsShowing: Boolean
+): PendingReaderListenFollow? = pending.takeUnless { targetIsShowing }
 
 internal data class TextEditDraft(
     val chapterIndex: Int,
@@ -192,6 +225,46 @@ fun ReaderScreen(
     val readerSettings = state.settings.resolveForBook(bookId, themeSlot)
     val palette = readerPalette(readerSettings, systemDark)
     val listeningThisBook = listenState?.bookId == bookId
+    val conversionMode = state.settings.chineseConversionModeFor(bookId)
+    var presentedListenRange by remember { mutableStateOf<PresentedListenRange?>(null) }
+    var pendingListenFollow by remember(bookId, conversionMode) {
+        mutableStateOf<PendingReaderListenFollow?>(null)
+    }
+    LaunchedEffect(
+        listenState?.bookId,
+        listenState?.chapterIndex,
+        listenState?.sentenceStart,
+        listenState?.sentenceEnd,
+        conversionMode,
+        state.isContentReady,
+        state.contentRevision
+    ) {
+        val listen = listenState
+        presentedListenRange = null
+        if (!state.isContentReady || listen == null || listen.bookId != bookId) {
+            return@LaunchedEffect
+        }
+        val range = viewModel.resolveSourceRange(
+            listen.chapterIndex,
+            listen.sentenceStart,
+            listen.sentenceEnd
+        ) ?: return@LaunchedEffect
+        presentedListenRange = PresentedListenRange(
+            listen.chapterIndex,
+            listen.sentenceStart,
+            listen.sentenceEnd,
+            state.contentRevision,
+            range
+        )
+    }
+    val currentListenRange = presentedListenRange?.takeIf { presented ->
+        val listen = listenState
+        listen != null && listen.bookId == bookId &&
+            state.isContentReady && presented.contentRevision == state.contentRevision &&
+            presented.chapterIndex == listen.chapterIndex &&
+            presented.sourceStart == listen.sentenceStart &&
+            presented.sourceEnd == listen.sentenceEnd
+    }
     // 滚动模式：听书「按页跳」与「翻页回写朗读位置」都不适用，跟读交给滚动面自己做。
     val scrollMode = state.settings.pageMode == com.mozhi.reader.core.datastore.PageMode.SCROLL
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
@@ -209,31 +282,89 @@ fun ReaderScreen(
     ) { uri -> uri?.let(viewModel::importCustomFont) }
 
     // 听书自动翻页：朗读句越过当前页边界时，直接跳到句首所在页（无翻页动画）。
-    LaunchedEffect(listeningThisBook, scrollMode) {
-        if (!listeningThisBook || scrollMode) return@LaunchedEffect
-        listenViewModel.state.collect { listen ->
-            if (listen == null || listen.bookId != bookId) return@collect
-            if (listen.isPlaying &&
-                !viewModel.isShowingPosition(listen.chapterIndex, listen.sentenceStart)
-            ) {
-                viewModel.goToPosition(listen.chapterIndex, listen.sentenceStart)
+    LaunchedEffect(
+        listeningThisBook,
+        scrollMode,
+        currentListenRange,
+        listenState?.isPlaying,
+        pendingListenFollow
+    ) {
+        if (!listeningThisBook) {
+            pendingListenFollow = null
+            return@LaunchedEffect
+        }
+        if (scrollMode || listenState?.isPlaying != true) {
+            pendingListenFollow = null
+            return@LaunchedEffect
+        }
+        pendingListenFollow?.let { pending ->
+            pendingListenFollow = acknowledgeReaderListenFollow(
+                pending,
+                viewModel.isShowingPosition(pending.chapterIndex, pending.displayOffset)
+            )
+            return@LaunchedEffect
+        }
+        currentListenRange?.let { presented ->
+            if (!viewModel.isShowingPosition(presented.chapterIndex, presented.range.start)) {
+                pendingListenFollow = PendingReaderListenFollow(
+                    chapterIndex = presented.chapterIndex,
+                    displayOffset = presented.range.start
+                )
+                viewModel.goToPosition(presented.chapterIndex, presented.range.start)
             }
         }
     }
     // 听书时手动翻页/跳章：把朗读位置同步到新页首（Legado 语义）。
     // 自动翻页落点恰是当前句起点，会命中 withinSentence 而不回环触发 seek。
-    LaunchedEffect(listeningThisBook, scrollMode) {
+    LaunchedEffect(listeningThisBook, scrollMode, conversionMode) {
         if (!listeningThisBook || scrollMode) return@LaunchedEffect
         snapshotFlow { state.currentChapterIndex to state.currentCharOffset }
             // 页面从沉浸播放页返回时会先发一次旧阅读位置；这不是用户 seek。
             .drop(1)
             .collect { (chapterIndex, charOffset) ->
+                val ownership = readerListenPositionOwnership(
+                    pendingListenFollow,
+                    chapterIndex,
+                    charOffset
+                )
+                pendingListenFollow = ownership.pending
+                if (!ownership.isManualSeek) return@collect
                 val listen = listenViewModel.state.value ?: return@collect
                 if (listen.bookId != bookId) return@collect
-                val withinSentence = chapterIndex == listen.chapterIndex &&
-                    charOffset >= listen.sentenceStart &&
-                    charOffset < maxOf(listen.sentenceEnd, listen.sentenceStart + 1)
-                if (!withinSentence) listenViewModel.seekTo(chapterIndex, charOffset)
+                val sourceChapter = listen.chapterIndex
+                val sourceStart = listen.sentenceStart
+                val sourceEnd = listen.sentenceEnd
+                val sentence = viewModel.resolveSourceRange(
+                    sourceChapter,
+                    sourceStart,
+                    sourceEnd
+                )
+                val currentListen = listenViewModel.state.value ?: return@collect
+                if (currentListen.bookId != bookId ||
+                    currentListen.chapterIndex != sourceChapter ||
+                    currentListen.sentenceStart != sourceStart ||
+                    currentListen.sentenceEnd != sourceEnd
+                ) {
+                    return@collect
+                }
+                val withinSentence = chapterIndex == sourceChapter &&
+                    sentence != null && charOffset >= sentence.start &&
+                    charOffset < maxOf(sentence.end, sentence.start + 1)
+                if (!withinSentence) {
+                    val sourceOffset = viewModel.sourceOffsetForDisplayed(
+                        chapterIndex,
+                        charOffset
+                    ) ?: return@collect
+                    val latestListen = listenViewModel.state.value ?: return@collect
+                    if (pendingListenFollow == null &&
+                        latestListen.bookId == bookId &&
+                        latestListen.chapterIndex == sourceChapter &&
+                        latestListen.sentenceStart == sourceStart &&
+                        latestListen.sentenceEnd == sourceEnd
+                    ) {
+                        listenViewModel.seekTo(chapterIndex, sourceOffset)
+                    }
+                }
             }
     }
     val chapterTitle = state.chapters
@@ -243,14 +374,26 @@ fun ReaderScreen(
     val contextQuote = chapterTitle.ifBlank { state.book?.title.orEmpty() }
     val readerReady = !state.isLoading && state.errorMessage == null
 
-    LaunchedEffect(pendingLocate, readerReady) {
+    LaunchedEffect(
+        pendingLocate,
+        readerReady,
+        state.isContentReady,
+        state.contentRevision,
+        conversionMode
+    ) {
         val request = pendingLocate ?: return@LaunchedEffect
-        if (!readerReady) return@LaunchedEffect
-        viewModel.goToPosition(request.chapterIndex, request.startCharOffset)
+        if (!readerReady || !state.isContentReady) return@LaunchedEffect
+        val range = viewModel.resolveSourceRange(
+            request.chapterIndex,
+            request.startCharOffset,
+            request.endCharOffset,
+            request.sourceAnchorJson
+        ) ?: return@LaunchedEffect
+        viewModel.goToPosition(request.chapterIndex, range.start)
         locateHighlight = com.mozhi.reader.feature.reader.engine.TransientHighlightSpan(
             chapterIndex = request.chapterIndex,
-            startCharOffset = request.startCharOffset,
-            endCharOffset = request.endCharOffset
+            startCharOffset = range.start,
+            endCharOffset = range.end
         )
         onPendingLocateConsumed()
     }
@@ -304,13 +447,20 @@ fun ReaderScreen(
             state.annotations.filter { it.personaId == null }
         }
     }
-    val annotationMarks = remember(visibleAnnotations, state.repliedAnnotationIds) {
-        visibleAnnotations.map { annotation ->
+    val markKey = conversionMode
+    val annotationMarks = remember(
+        visibleAnnotations,
+        state.repliedAnnotationIds,
+        state.contentRevision,
+        markKey
+    ) {
+        visibleAnnotations.mapNotNull { annotation ->
+            val range = viewModel.resolveAnnotationRange(annotation) ?: return@mapNotNull null
             ReaderAnnotationMark(
                 id = annotation.id,
                 chapterIndex = annotation.chapterIndex,
-                startCharOffset = annotation.startCharOffset,
-                endCharOffset = annotation.endCharOffset,
+                startCharOffset = range.start,
+                endCharOffset = range.end,
                 hasComment = annotation.note.isNotBlank() ||
                     annotation.id in state.repliedAnnotationIds,
                 style = annotation.style,
@@ -320,15 +470,15 @@ fun ReaderScreen(
             )
         }
     }
-    val illustrationMarks = remember(state.illustrations) {
+    val illustrationMarks = remember(state.illustrations, state.contentRevision, markKey) {
         state.illustrations.mapNotNull { illustration ->
             val chapter = illustration.chapterIndex ?: return@mapNotNull null
-            val start = illustration.charOffset ?: return@mapNotNull null
+            val range = viewModel.resolveIllustrationRange(illustration) ?: return@mapNotNull null
             ReaderIllustrationMark(
                 id = illustration.id,
                 chapterIndex = chapter,
-                startCharOffset = start,
-                endCharOffset = start + illustration.sourceText.length.coerceAtLeast(1)
+                startCharOffset = range.start,
+                endCharOffset = range.end
             )
         }
     }
@@ -344,11 +494,7 @@ fun ReaderScreen(
         viewModel.contentController.setInlineMarkers(reservations)
     }
     val threadAnnotations = annotationThread?.let { key ->
-        state.annotations.filter {
-            it.chapterIndex == key.chapterIndex &&
-                it.startCharOffset == key.startCharOffset &&
-                it.endCharOffset == key.endCharOffset
-        }
+        state.annotations.filter { it.id in key.annotationIds }
     }.orEmpty()
 
     LaunchedEffect(bookId) { companionViewModel.bind(bookId) }
@@ -509,6 +655,7 @@ fun ReaderScreen(
         onKeepScreenOnChange = viewModel::setKeepScreenOn,
         onImmersiveReadingChange = viewModel::setImmersiveReading,
         onVolumeKeysPageTurnChange = viewModel::setVolumeKeysPageTurn,
+        onChineseConversionModeChange = viewModel::setChineseConversionMode,
         onScreenBrightnessChange = viewModel::setScreenBrightness
     )
 
@@ -528,11 +675,11 @@ fun ReaderScreen(
                     aiRequest == null && inkFloater == null && annotationThread == null &&
                     linkPreview == null && ttsDraft == null && textEditDraft == null && !typographyCardVisible
                 // 听书当前句优先：正在朗读时它才是「此刻读到哪」，引文高亮已完成使命。
-                val paneListenHighlight = listenState?.takeIf { it.bookId == bookId }?.let { listen ->
+                val paneListenHighlight = currentListenRange?.let { listen ->
                     com.mozhi.reader.feature.reader.engine.TransientHighlightSpan(
                         chapterIndex = listen.chapterIndex,
-                        startCharOffset = listen.sentenceStart,
-                        endCharOffset = listen.sentenceEnd
+                        startCharOffset = listen.range.start,
+                        endCharOffset = listen.range.end
                     )
                 } ?: locateHighlight
                 val paneNotice: (String) -> Unit = { message ->
@@ -561,13 +708,7 @@ fun ReaderScreen(
                         }
                     }
                 val paneAnnotationClick: (List<Long>) -> Unit = { ids ->
-                    state.annotations.firstOrNull { it.id in ids }?.let { annotation ->
-                        annotationThread = AnnotationThreadKey(
-                            annotation.chapterIndex,
-                            annotation.startCharOffset,
-                            annotation.endCharOffset
-                        )
-                    }
+                    annotationThread = AnnotationThreadKey(ids.toSet())
                 }
                 val paneIllustrationClick: (List<Long>) -> Unit = { ids ->
                     state.illustrations.firstOrNull { it.id in ids }?.let { illustration ->
@@ -585,13 +726,18 @@ fun ReaderScreen(
                     }
                 }
                 val paneTtsAction: (String) -> Unit = { selection -> ttsDraft = selection }
-                val paneEditText: (String, IntRange) -> Unit = { selection, range ->
-                    textEditDraft = TextEditDraft(
-                        chapterIndex = state.currentChapterIndex,
-                        range = range,
-                        originalText = selection
-                    )
-                }
+                val paneEditText: ((String, IntRange) -> Unit)? =
+                    if (state.settings.chineseConversionModeFor(bookId) == ChineseConversionMode.OFF) {
+                        { selection, range ->
+                            textEditDraft = TextEditDraft(
+                                chapterIndex = state.currentChapterIndex,
+                                range = range,
+                                originalText = selection
+                            )
+                        }
+                    } else {
+                        null
+                    }
                 val paneImageAction: (String, String, IntRange) -> Unit =
                     { selectionText, contextText, range ->
                         selectionMediaViewModel.generateImage(
@@ -600,6 +746,10 @@ fun ReaderScreen(
                             chapterTitle = chapterTitle,
                             chapterIndex = state.currentChapterIndex,
                             charOffset = range.first,
+                            textAnchorJson = viewModel.textAnchorJsonFor(
+                                state.currentChapterIndex,
+                                range
+                            ),
                             selection = selectionText,
                             contextText = contextText
                         )
@@ -611,6 +761,7 @@ fun ReaderScreen(
                         palette = palette,
                         enabled = paneEnabled,
                         registerContentHook = viewModel::setContentHook,
+                        onScrollSupersedesNavigation = viewModel::supersedePendingNavigation,
                         onCenterTap = { chromeVisible = !chromeVisible },
                         onBoundary = viewModel::onBoundaryHit,
                         onNotice = paneNotice,
@@ -689,10 +840,7 @@ fun ReaderScreen(
                     chromeVisible = false
                     detailsVisible = true
                 },
-                isCurrentPositionBookmarked = state.bookmarks.any {
-                    it.chapterIndex == state.currentChapterIndex &&
-                        it.charOffset == state.currentCharOffset
-                },
+                isCurrentPositionBookmarked = viewModel.isCurrentPositionBookmarked(),
                 onToggleBookmark = viewModel::toggleBookmark,
                 onPrevChapter = viewModel::goToPrevChapter,
                 onNextChapter = viewModel::goToNextChapter,
@@ -709,11 +857,18 @@ fun ReaderScreen(
                                 android.Manifest.permission.POST_NOTIFICATIONS
                             )
                         }
-                        listenViewModel.start(
-                            bookId,
-                            state.currentChapterIndex,
-                            state.currentCharOffset
-                        )
+                        coroutineScope.launch {
+                            viewModel.sourceOffsetForDisplayed(
+                                state.currentChapterIndex,
+                                state.currentCharOffset
+                            )?.let { sourceOffset ->
+                                listenViewModel.start(
+                                    bookId,
+                                    state.currentChapterIndex,
+                                    sourceOffset
+                                )
+                            }
+                        }
                     }
                 },
                 onCompanion = { onOpenCompanionChat(bookId) },
@@ -863,7 +1018,7 @@ fun ReaderScreen(
                                     state.currentChapterIndex,
                                     state.currentCharOffset
                                 )
-                                viewModel.goToPosition(targetChapter, preview.targetCharOffset)
+                                viewModel.goToEpubLink(preview)
                             }
                         }) { Text("跳转") }
                     }
@@ -1009,7 +1164,9 @@ fun ReaderScreen(
         ReaderSheet.SEARCH -> {
             val searchViewModel: ReaderSearchViewModel = hiltViewModel()
             val searchState by searchViewModel.uiState.collectAsStateWithLifecycle()
-            LaunchedEffect(bookId) { searchViewModel.bind(bookId) }
+            LaunchedEffect(bookId, conversionMode) {
+                searchViewModel.bind(bookId, conversionMode)
+            }
             ModalBottomSheet(
                 onDismissRequest = {
                     activeSheet = null
@@ -1181,7 +1338,8 @@ private tailrec fun Context.findComponentActivity(): ComponentActivity? = when (
 data class ReaderLocateRequest(
     val chapterIndex: Int,
     val startCharOffset: Int,
-    val endCharOffset: Int
+    val endCharOffset: Int,
+    val sourceAnchorJson: String = ""
 )
 
 /** 引文高亮只是「我把你带到这儿了」的提示，亮一下即可，不该长期占据视觉。 */

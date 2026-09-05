@@ -33,6 +33,7 @@ data class SelectionImageGeneration(
     val bookId: Long,
     val chapterIndex: Int,
     val charOffset: Int?,
+    val textAnchorJson: String,
     val sourceText: String,
     val basePrompt: String
 )
@@ -164,6 +165,7 @@ class ReaderSelectionMediaViewModel @Inject constructor(
         chapterTitle: String,
         chapterIndex: Int,
         charOffset: Int?,
+        textAnchorJson: String,
         selection: String,
         contextText: String
     ) {
@@ -182,6 +184,7 @@ class ReaderSelectionMediaViewModel @Inject constructor(
                 bookId = bookId,
                 chapterIndex = chapterIndex,
                 charOffset = charOffset,
+                textAnchorJson = textAnchorJson,
                 sourceText = selected,
                 basePrompt = fallbackPrompt
             ),
@@ -225,7 +228,8 @@ class ReaderSelectionMediaViewModel @Inject constructor(
                     charOffset = generation.charOffset,
                     sourceText = generation.sourceText,
                     prompt = prompt,
-                    personaId = null
+                    personaId = null,
+                    textAnchorJson = generation.textAnchorJson
                 )
                 mutableState.value = mutableState.value.copy(
                     status = null,

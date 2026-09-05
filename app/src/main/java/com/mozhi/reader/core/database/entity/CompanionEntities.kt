@@ -157,6 +157,8 @@ data class AnnotationEntity(
     /** Visibility boundary used by the AI that created this annotation; null for user/legacy rows. */
     val sourceScopeChapterIndex: Int? = null,
     val sourceScopeCharOffset: Int? = null,
+    @ColumnInfo(defaultValue = "''")
+    val textAnchorJson: String = "",
     val createdAt: Long
 )
 
@@ -345,5 +347,7 @@ data class IllustrationEntity(
     val pixelHeight: Int = 0,
     /** 无 FK：角色删除后插图仍是用户资产。 */
     val createdByPersonaId: Long? = null,
+    @ColumnInfo(defaultValue = "''")
+    val textAnchorJson: String = "",
     val createdAt: Long
 )

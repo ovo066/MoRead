@@ -124,6 +124,8 @@ android {
 
     // MigrationTestHelper 从测试 APK 的 assets 读取各历史版本 schema。
     sourceSets.getByName("androidTest").assets.directories.add("$projectDir/schemas")
+    // Package notices independently of the META-INF exclusions above.
+    sourceSets.getByName("main").assets.directories.add("$rootDir/licenses")
 }
 
 kotlin {
@@ -177,6 +179,7 @@ dependencies {
     implementation(libs.coil.network.okhttp)
     implementation(libs.juniversalchardet)
     implementation(libs.jsoup)
+    implementation(libs.opencc.java)
     implementation(libs.android.svg)
     implementation(libs.zxing.core)
 
@@ -194,6 +197,7 @@ dependencies {
     annotationProcessor(libs.objectbox.processor)
 
     testImplementation(libs.junit)
+    testImplementation("io.mockk:mockk:1.14.6")
     testImplementation(libs.kotlinx.coroutines.test)
     // 桌面原生库：让向量检索可以在本机 JVM 单测里真跑（Windows 开发机 / Linux CI）。
     testImplementation(libs.objectbox.windows)
@@ -202,5 +206,7 @@ dependencies {
     androidTestImplementation(libs.androidx.room.testing)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation(libs.androidx.compose.ui.tooling)
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }

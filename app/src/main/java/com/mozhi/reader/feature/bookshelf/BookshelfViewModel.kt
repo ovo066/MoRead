@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mozhi.reader.core.database.entity.BookEntity
+import com.mozhi.reader.core.database.entity.BookCollectionEntity
 import com.mozhi.reader.core.database.entity.BookReadState
 import com.mozhi.reader.core.database.entity.BookTagEntity
 import com.mozhi.reader.core.database.entity.BookTagRefEntity
@@ -32,13 +33,16 @@ import kotlinx.coroutines.launch
 
 data class BookshelfUiState(
     val books: List<BookEntity> = emptyList(),
+    val allBooks: List<BookEntity> = emptyList(),
     val layout: ShelfLayout = ShelfLayout.GRID,
+    val readingOrderAffectsShelf: Boolean = true,
     val filter: ShelfFilter = ShelfFilter(),
     val tags: List<BookTagEntity> = emptyList(),
     val groups: List<ShelfGroupEntity> = emptyList(),
     val groupCounts: Map<Long?, Int> = emptyMap(),
     val tagCounts: Map<Long, Int> = emptyMap(),
     val tagRefs: List<BookTagRefEntity> = emptyList(),
+    val collections: List<BookCollectionEntity> = emptyList(),
     /** 未经筛选的书籍总数，用于工具栏「N 本中的 M 本」这类文案。 */
     val totalBooks: Int = 0,
     /** 「正在阅读」卡的书；取全量最近阅读，不受筛选影响——筛选是给下面的书格用的。 */
@@ -119,6 +123,9 @@ class BookshelfViewModel @Inject constructor(
         BookshelfBaseState(
             books = books,
             layout = settings.shelfLayout,
+            shelfBookOrder = settings.shelfBookOrder,
+            shelfBookOrderReadAnchor = settings.shelfBookOrderReadAnchor,
+            readingOrderAffectsShelf = settings.readingOrderAffectsShelf,
             filter = filter,
             recentBook = books.filter { it.lastReadAt > 0L }.maxByOrNull(BookEntity::lastReadAt),
             recentChapterTitle = chapterTitle,
@@ -136,15 +143,23 @@ class BookshelfViewModel @Inject constructor(
         val effectiveFilter = base.filter.withExistingGroups(
             organization.groups.map(ShelfGroupEntity::id).toSet()
         )
+        val orderedBooks = base.books.orderedForShelf(
+            savedOrder = base.shelfBookOrder,
+            readingOrderAffectsShelf = base.readingOrderAffectsShelf,
+            readAnchor = base.shelfBookOrderReadAnchor
+        )
         BookshelfUiState(
-            books = filterShelfBooks(base.books, organization.tagRefs, effectiveFilter).sortedForShelf(),
+            books = filterShelfBooks(orderedBooks, organization.tagRefs, effectiveFilter),
+            allBooks = orderedBooks,
             layout = base.layout,
+            readingOrderAffectsShelf = base.readingOrderAffectsShelf,
             filter = effectiveFilter,
             tags = organization.tags,
             groups = organization.groups,
             groupCounts = organization.groupCounts,
             tagCounts = organization.tagCounts,
             tagRefs = organization.tagRefs,
+            collections = organization.collections,
             totalBooks = base.books.size,
             recentBook = base.recentBook,
             recentChapterTitle = base.recentChapterTitle,
@@ -203,7 +218,9 @@ class BookshelfViewModel @Inject constructor(
 
     fun deleteBook(book: BookEntity) {
         viewModelScope.launch {
-            runCatching { libraryRepository.deleteBook(book) }
+            runCatching {
+                libraryRepository.deleteBook(book)
+            }
                 .onFailure {
                     eventChannel.send(BookshelfEvent.ShowMessage("删除失败，请稍后重试"))
                 }
@@ -223,6 +240,18 @@ class BookshelfViewModel @Inject constructor(
 
     fun setLayout(layout: ShelfLayout) {
         viewModelScope.launch { settingsRepository.setShelfLayout(layout) }
+    }
+
+    fun saveShelfOrder(visibleBookIds: List<Long>) {
+        val allBooks = uiState.value.allBooks
+        val allBookIds = allBooks.map(BookEntity::id)
+        val order = mergeVisibleShelfOrder(allBookIds, visibleBookIds)
+        val readAnchor = allBooks.maxOfOrNull(BookEntity::lastReadAt) ?: 0L
+        viewModelScope.launch { settingsRepository.setShelfBookOrder(order, readAnchor) }
+    }
+
+    fun setReadingOrderAffectsShelf(value: Boolean) {
+        viewModelScope.launch { settingsRepository.setReadingOrderAffectsShelf(value) }
     }
 
     fun setReadStateFilter(state: BookReadState?) {
@@ -270,6 +299,7 @@ class BookshelfViewModel @Inject constructor(
             val pinned = !book.isPinned
             runCatching { libraryRepository.setPinned(book.id, pinned) }
                 .onSuccess {
+                    if (pinned) moveShelfBooksToFront(setOf(book.id))
                     eventChannel.send(
                         BookshelfEvent.ShowMessage(if (pinned) "已置顶" else "已取消置顶")
                     )
@@ -284,8 +314,12 @@ class BookshelfViewModel @Inject constructor(
     }
 
     fun toggleSelection(bookId: Long) {
+        toggleSelection(setOf(bookId))
+    }
+
+    fun toggleSelection(bookIds: Set<Long>) {
         selectedBookIds.value = selectedBookIds.value.toMutableSet().apply {
-            if (!add(bookId)) remove(bookId)
+            if (bookIds.all(::contains)) removeAll(bookIds) else addAll(bookIds)
         }
     }
 
@@ -294,9 +328,9 @@ class BookshelfViewModel @Inject constructor(
         selectedBookIds.value = emptySet()
     }
 
-    fun selectAllVisible() {
-        val visible = uiState.value.books.map(BookEntity::id).toSet()
-        selectedBookIds.value = if (selectedBookIds.value.containsAll(visible)) emptySet() else visible
+    fun selectAllVisible(bookIds: Set<Long>) {
+        selectedBookIds.value =
+            if (selectedBookIds.value.containsAll(bookIds)) emptySet() else bookIds
     }
 
     fun moveSelectedToGroup(groupId: Long?) {
@@ -358,6 +392,7 @@ class BookshelfViewModel @Inject constructor(
         if (ids.isEmpty()) return
         viewModelScope.launch {
             ids.forEach { libraryRepository.setPinned(it, pinned) }
+            if (pinned) moveShelfBooksToFront(ids)
             eventChannel.send(
                 BookshelfEvent.ShowMessage(
                     if (pinned) "已置顶 ${ids.size} 本书" else "已取消置顶 ${ids.size} 本书"
@@ -366,11 +401,55 @@ class BookshelfViewModel @Inject constructor(
             exitSelection()
         }
     }
+
+    fun createCollection(name: String, bookIds: Set<Long>) {
+        viewModelScope.launch {
+            shelfRepository.createCollection(name, bookIds)
+            eventChannel.send(BookshelfEvent.ShowMessage("已创建合集"))
+            exitSelection()
+        }
+    }
+
+    fun addBooksToCollection(collectionId: Long, bookIds: Set<Long>) {
+        viewModelScope.launch {
+            shelfRepository.addBooksToCollection(collectionId, bookIds)
+            eventChannel.send(BookshelfEvent.ShowMessage("已加入合集"))
+            exitSelection()
+        }
+    }
+
+    fun removeBooksFromCollection(bookIds: Set<Long>) {
+        viewModelScope.launch { shelfRepository.removeBooksFromCollection(bookIds) }
+    }
+
+    fun renameCollection(id: Long, name: String) {
+        viewModelScope.launch { shelfRepository.renameCollection(id, name) }
+    }
+
+    fun dissolveCollection(id: Long) {
+        viewModelScope.launch { shelfRepository.dissolveCollection(id) }
+    }
+
+    fun reorderCollectionBooks(collectionId: Long, bookIds: List<Long>) {
+        viewModelScope.launch { shelfRepository.reorderCollectionBooks(collectionId, bookIds) }
+    }
+
+    private suspend fun moveShelfBooksToFront(bookIds: Set<Long>) {
+        val books = uiState.value.allBooks
+        val current = books.map(BookEntity::id)
+        settingsRepository.setShelfBookOrder(
+            value = current.filter(bookIds::contains) + current.filterNot(bookIds::contains),
+            readAnchor = books.maxOfOrNull(BookEntity::lastReadAt) ?: 0L
+        )
+    }
 }
 
 private data class BookshelfBaseState(
     val books: List<BookEntity>,
     val layout: ShelfLayout,
+    val shelfBookOrder: List<Long>,
+    val shelfBookOrderReadAnchor: Long,
+    val readingOrderAffectsShelf: Boolean,
     val filter: ShelfFilter,
     val recentBook: BookEntity?,
     val recentChapterTitle: String,
@@ -383,10 +462,3 @@ private fun BookReadState.actionLabel(): String = when (this) {
     BookReadState.FINISHED -> "标为已读完"
     BookReadState.SHELVED -> "标为搁置"
 }
-
-/** 置顶优先（按置顶时间倒序），其余按最近阅读，从未读过的按导入时间倒序垫底。 */
-private fun List<BookEntity>.sortedForShelf(): List<BookEntity> = sortedWith(
-    compareByDescending<BookEntity> { it.pinnedAt }
-        .thenByDescending { it.lastReadAt }
-        .thenByDescending { it.importedAt }
-)

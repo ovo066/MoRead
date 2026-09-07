@@ -107,6 +107,7 @@ internal enum class TypographySecondaryPage(val title: String) {
     THEME("主题与背景"),
     PAGE_TURN("翻页方式"),
     MORE("更多设置"),
+    CHINESE_CONVERSION("繁简转换"),
     SYNTAX("语法高亮"),
     BEHAVIOR("阅读交互")
 }

@@ -70,6 +70,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.mozhi.reader.core.datastore.ChineseConversionMode
 import com.mozhi.reader.core.datastore.CustomReaderTheme
 import com.mozhi.reader.core.datastore.PageMode
 import com.mozhi.reader.core.datastore.PageTurnAnimation
@@ -84,6 +85,7 @@ import com.mozhi.reader.core.datastore.ReaderTheme
 import com.mozhi.reader.core.datastore.ReaderThemeSlot
 import com.mozhi.reader.core.datastore.backgroundImageIdFor
 import com.mozhi.reader.core.datastore.backgroundOpacityFor
+import com.mozhi.reader.core.datastore.chineseConversionModeFor
 import com.mozhi.reader.core.datastore.customThemeIdFor
 import com.mozhi.reader.core.datastore.resolveThemeSlot
 import com.mozhi.reader.core.datastore.themeFor
@@ -146,6 +148,7 @@ data class ReaderTypographyActions(
     val onKeepScreenOnChange: (Boolean) -> Unit,
     val onImmersiveReadingChange: (Boolean) -> Unit,
     val onVolumeKeysPageTurnChange: (Boolean) -> Unit,
+    val onChineseConversionModeChange: (ChineseConversionMode) -> Unit,
     /** [com.mozhi.reader.core.datastore.FOLLOW_SYSTEM_BRIGHTNESS] 或 0..1。 */
     val onScreenBrightnessChange: (Float) -> Unit
 )
@@ -222,8 +225,9 @@ fun ReaderTypographySheet(
             )
         } else {
             TypographySecondaryHeader(page.title) {
-                // 语法高亮与阅读交互是从「更多设置」进来的，返回该回到那一页而不是一路弹回一级页。
+                // 更多设置里的深层页返回 More，而不是一路弹回一级页。
                 secondaryPage = when (page) {
+                    TypographySecondaryPage.CHINESE_CONVERSION,
                     TypographySecondaryPage.SYNTAX,
                     TypographySecondaryPage.BEHAVIOR -> TypographySecondaryPage.MORE
                     else -> null
@@ -234,6 +238,7 @@ fun ReaderTypographySheet(
                 TypographySecondaryPage.PAGE_TURN -> PageTurnPage(settings, palette, actions)
                 TypographySecondaryPage.MORE -> MoreSettingsPage(
                     settings = settings,
+                    bookId = bookId,
                     palette = palette,
                     actions = actions,
                     onOpenPage = { secondaryPage = it }
@@ -248,6 +253,11 @@ fun ReaderTypographySheet(
                         editorDraft = CustomThemeDraft(theme, target)
                     },
                     onCreateCustomTheme = { target -> editorDraft = createDraft(target) }
+                )
+                TypographySecondaryPage.CHINESE_CONVERSION -> ChineseConversionPage(
+                    mode = settings.chineseConversionModeFor(bookId),
+                    palette = palette,
+                    onChange = actions.onChineseConversionModeChange
                 )
                 TypographySecondaryPage.SYNTAX -> SyntaxHighlightEditor(
                     settings = settings,

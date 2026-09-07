@@ -98,7 +98,8 @@ class AiMediaGenerationService @Inject constructor(
         charOffset: Int?,
         sourceText: String,
         prompt: String,
-        personaId: Long?
+        personaId: Long?,
+        textAnchorJson: String = ""
     ): IllustrationEntity {
         val cleanPrompt = prompt.trim().take(MAX_PROMPT_CHARS)
         require(cleanPrompt.isNotEmpty()) { "生图提示词不能为空" }
@@ -122,7 +123,8 @@ class AiMediaGenerationService @Inject constructor(
                         bookId = bookId,
                         chapterIndex = chapterIndex,
                         charOffset = charOffset,
-                        sourceText = sourceText.trim().take(MAX_SOURCE_CHARS),
+                        textAnchorJson = textAnchorJson,
+                        sourceText = sourceText,
                         prompt = generatedPrompt,
                         imagePath = output.absolutePath,
                         mediaType = generated.mediaType,
@@ -288,7 +290,6 @@ class AiMediaGenerationService @Inject constructor(
 
     private companion object {
         const val MAX_PROMPT_CHARS = 8_000
-        const val MAX_SOURCE_CHARS = 8_000
         const val MAX_SPEECH_CHARS = 8_000
         const val MAX_MEDIA_BYTES = 30 * 1024 * 1024
     }

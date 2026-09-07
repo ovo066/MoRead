@@ -450,17 +450,18 @@ class LibraryRepository @Inject constructor(
             )
         )
 
-    /** New-track bookmark: (chapterIndex, charOffset) is the position, locatorJson stays empty. */
+    /** New-track bookmark: locatorJson is the stable anchor; integer position is the fallback. */
     suspend fun addBookmark(
         bookId: Long,
         chapterIndex: Int,
         charOffset: Int,
+        locatorJson: String,
         excerpt: String,
         label: String
     ): Long = bookDao.insertBookmark(
         BookmarkEntity(
             bookId = bookId,
-            locatorJson = "",
+            locatorJson = locatorJson,
             chapterIndex = chapterIndex,
             charOffset = charOffset,
             excerpt = excerpt,
@@ -525,6 +526,7 @@ class LibraryRepository @Inject constructor(
     suspend fun deleteBook(book: BookEntity) {
         database.withTransaction {
             bookDao.deleteBook(book.id)
+            database.shelfOrganizationDao().deleteEmptyCollections()
         }
         // 向量清理失败不阻塞删书（孤儿切片按 bookId 隔离，检索不到）。
         runCatching { VectorQueries.removeChunksForBook(vectorStore.get(), book.id) }

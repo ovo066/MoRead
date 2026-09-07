@@ -17,6 +17,13 @@ data class ShelfGroupEntity(
     val createdAt: Long
 )
 
+@Entity(tableName = "book_collections")
+data class BookCollectionEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val createdAt: Long
+)
+
 @Entity(tableName = "book_tags", indices = [Index(value = ["name"], unique = true)])
 data class BookTagEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,

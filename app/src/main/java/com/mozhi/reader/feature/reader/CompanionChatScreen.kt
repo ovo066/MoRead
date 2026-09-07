@@ -111,7 +111,12 @@ import kotlinx.coroutines.launch
 fun CompanionChatScreen(
     bookId: Long,
     onBack: () -> Unit,
-    onLocateInBook: (chapterIndex: Int, startCharOffset: Int, endCharOffset: Int) -> Unit = { _, _, _ -> },
+    onLocateInBook: (
+        chapterIndex: Int,
+        startCharOffset: Int,
+        endCharOffset: Int,
+        sourceAnchorJson: String
+    ) -> Unit = { _, _, _, _ -> },
     companionViewModel: ReaderCompanionViewModel = hiltViewModel(),
     mediaViewModel: ReaderSelectionMediaViewModel = hiltViewModel()
 ) {
@@ -143,7 +148,8 @@ fun CompanionChatScreen(
                 is CompanionChatEvent.LocateInBook -> onLocateInBook(
                     event.chapterIndex,
                     event.startCharOffset,
-                    event.endCharOffset
+                    event.endCharOffset,
+                    event.sourceAnchorJson
                 )
                 // 定位失败要说出来：静默无反应会让人以为是点击没生效，反复戳。
                 is CompanionChatEvent.Message ->

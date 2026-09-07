@@ -129,7 +129,7 @@ fun ReaderPane(
     onLinkClick: (ReaderPageLink) -> Unit = {},
     onTtsAction: (selection: String) -> Unit,
     onImageAction: (selection: String, context: String, range: IntRange) -> Unit,
-    onEditText: (selection: String, range: IntRange) -> Unit,
+    onEditText: ((selection: String, range: IntRange) -> Unit)?,
     pageTurnRequest: ReaderPageTurnRequest? = null,
     modifier: Modifier = Modifier
 ) {
@@ -499,11 +499,13 @@ fun ReaderPane(
                     }
                     selection.clear()
                 },
-                onEdit = {
-                    val text = selection.selectedText()
-                    val range = selection.bodyRange()
-                    if (text.isNotBlank() && range != null) onEditText(text, range)
-                    selection.clear()
+                onEdit = onEditText?.let { editText ->
+                    {
+                        val text = selection.selectedText()
+                        val range = selection.bodyRange()
+                        if (text.isNotBlank() && range != null) editText(text, range)
+                        selection.clear()
+                    }
                 },
                 onCopy = {
                     val text = selection.selectedText()
@@ -527,7 +529,7 @@ internal fun BoxScope.SelectionToolbar(
     onAnnotation: () -> Unit,
     onTts: () -> Unit,
     onImage: () -> Unit,
-    onEdit: () -> Unit,
+    onEdit: (() -> Unit)?,
     onCopy: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -558,7 +560,9 @@ internal fun BoxScope.SelectionToolbar(
             SelectionToolItem(Icons.Outlined.BorderColor, "划线", palette.accent, palette, onAnnotation)
             SelectionToolItem(Icons.Outlined.Headphones, "朗读", palette.accent, palette, onTts)
             SelectionToolItem(Icons.Outlined.Image, "生图", palette.accent, palette, onImage)
-            SelectionToolItem(Icons.Outlined.Edit, "编辑", palette.accent, palette, onEdit)
+            onEdit?.let { edit ->
+                SelectionToolItem(Icons.Outlined.Edit, "编辑", palette.accent, palette, edit)
+            }
             SelectionToolItem(Icons.Outlined.ContentCopy, "复制", palette.onBackground, palette, onCopy)
             SelectionToolItem(Icons.Outlined.Close, "取消", palette.muted, palette, onDismiss)
         }

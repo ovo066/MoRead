@@ -118,6 +118,7 @@ import dev.chrisbanes.haze.rememberHazeState
 private const val LOCATE_CHAPTER_KEY = "locate-chapter"
 private const val LOCATE_START_KEY = "locate-start"
 private const val LOCATE_END_KEY = "locate-end"
+private const val LOCATE_ANCHOR_KEY = "locate-anchor"
 
 private const val ROOT_FADE_OUT_MS = 90
 private const val ROOT_FADE_IN_MS = 210
@@ -474,6 +475,9 @@ fun MoReadApp(
                     val locateEnd = entry.savedStateHandle
                         .getStateFlow<Int?>(LOCATE_END_KEY, null)
                         .collectAsStateWithLifecycle()
+                    val locateAnchor = entry.savedStateHandle
+                        .getStateFlow<String?>(LOCATE_ANCHOR_KEY, null)
+                        .collectAsStateWithLifecycle()
                     ReaderScreen(
                         bookId = entry.arguments?.getString("bookId")?.toLongOrNull()
                             ?: return@pushComposable,
@@ -486,13 +490,15 @@ fun MoReadApp(
                             ReaderLocateRequest(
                                 chapterIndex = chapter,
                                 startCharOffset = locateStart.value ?: 0,
-                                endCharOffset = locateEnd.value ?: 0
+                                endCharOffset = locateEnd.value ?: 0,
+                                sourceAnchorJson = locateAnchor.value.orEmpty()
                             )
                         },
                         onPendingLocateConsumed = {
                             entry.savedStateHandle[LOCATE_CHAPTER_KEY] = null
                             entry.savedStateHandle[LOCATE_START_KEY] = null
                             entry.savedStateHandle[LOCATE_END_KEY] = null
+                            entry.savedStateHandle[LOCATE_ANCHOR_KEY] = null
                         }
                     )
                 }
@@ -571,11 +577,12 @@ fun MoReadApp(
                         bookId = entry.arguments?.getString("bookId")?.toLongOrNull()
                             ?: return@pushComposable,
                         onBack = navController::popBackStack,
-                        onLocateInBook = { chapterIndex, start, end ->
+                        onLocateInBook = { chapterIndex, start, end, sourceAnchorJson ->
                             navController.previousBackStackEntry?.savedStateHandle?.let { handle ->
-                                handle[LOCATE_CHAPTER_KEY] = chapterIndex
                                 handle[LOCATE_START_KEY] = start
                                 handle[LOCATE_END_KEY] = end
+                                handle[LOCATE_ANCHOR_KEY] = sourceAnchorJson
+                                handle[LOCATE_CHAPTER_KEY] = chapterIndex
                             }
                             navController.popBackStack()
                         }

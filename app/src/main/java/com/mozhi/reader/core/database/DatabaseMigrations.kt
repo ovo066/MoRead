@@ -733,4 +733,25 @@ object DatabaseMigrations {
         }
     }
 
+    val Migration22To23 = object : Migration(22, 23) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `book_collections` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `name` TEXT NOT NULL,
+                    `createdAt` INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL("ALTER TABLE `books` ADD COLUMN `collectionId` INTEGER DEFAULT NULL")
+            db.execSQL("ALTER TABLE `books` ADD COLUMN `collectionOrder` INTEGER NOT NULL DEFAULT 0")
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_books_collectionId` ON `books` (`collectionId`)"
+            )
+            db.execSQL("ALTER TABLE `annotations` ADD COLUMN `textAnchorJson` TEXT NOT NULL DEFAULT ''")
+            db.execSQL("ALTER TABLE `illustrations` ADD COLUMN `textAnchorJson` TEXT NOT NULL DEFAULT ''")
+        }
+    }
+
 }

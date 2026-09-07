@@ -30,6 +30,7 @@ espresso = "3.7.0"
 objectbox = "4.3.0"
 androidSvg = "1.4"
 zxing = "3.5.3"
+openccJava = "1.4.2"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
@@ -68,6 +69,7 @@ readium-streamer = { module = "org.readium.kotlin-toolkit:readium-streamer", ver
 readium-navigator = { module = "org.readium.kotlin-toolkit:readium-navigator", version.ref = "readium" }
 juniversalchardet = { module = "com.github.albfernandez:juniversalchardet", version.ref = "juniversalchardet" }
 jsoup = { module = "org.jsoup:jsoup", version.ref = "jsoup" }
+opencc-java = { module = "io.github.laisuk:openccjava", version.ref = "openccJava" }
 desugar-jdk-libs = { module = "com.android.tools:desugar_jdk_libs", version.ref = "desugarJdkLibs" }
 haze = { module = "dev.chrisbanes.haze:haze", version.ref = "haze" }
 haze-materials = { module = "dev.chrisbanes.haze:haze-materials", version.ref = "haze" }

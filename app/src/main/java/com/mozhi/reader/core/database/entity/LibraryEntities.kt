@@ -50,7 +50,7 @@ enum class ModelRole {
     IMAGE
 }
 
-@Entity(tableName = "books")
+@Entity(tableName = "books", indices = [Index("collectionId")])
 data class BookEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val title: String,
@@ -87,7 +87,11 @@ data class BookEntity(
     val pinnedAt: Long = 0,
     /** 所属书架分组；null = 未分组。 */
     @ColumnInfo(defaultValue = "NULL")
-    val groupId: Long? = null
+    val groupId: Long? = null,
+    @ColumnInfo(defaultValue = "NULL")
+    val collectionId: Long? = null,
+    @ColumnInfo(defaultValue = "0")
+    val collectionOrder: Int = 0
 )
 
 /** 书架阅读状态。搁置只能手动设，自动推导永远不会得到它。 */

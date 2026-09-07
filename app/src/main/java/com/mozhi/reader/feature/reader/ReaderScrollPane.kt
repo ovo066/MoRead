@@ -254,6 +254,9 @@ fun ReaderScrollPane(
                 backgroundTick++
             }
             if (relayout) {
+                // 字号、边距或视口改变后必须按当前位置重新落点；不能把这次真正的
+                // 排版跳转误认成滚动过程中异步章节完成，从而保留旧像素锚点。
+                holder.requirePositionReanchor()
                 controller.updateEnvironment(style.spec, style.measure)
             }
             invalidate()
@@ -721,14 +724,25 @@ private class ScrollPaneHolder(private val controller: ReaderContentController) 
 
     /**
      * contentHook(0)：当前章重排/加载完成，或外部跳转（目录/书签/搜索/换排版）。
-     * 空闲时按 charOffset 重锚；滚动进行中只钳制锚点，别打断手感。
+     *
+     * 连续滚动会先把视口顶部字符同步给 controller，随后相邻章节异步排版也会发同一个
+     * 回调。此时 charOffset 只能定位到文字行，丢失行内像素偏移；若再次重锚，页面就会
+     * 向上弹。仅当 controller 的位置不是本面最近一次同步的位置时，才视为外部跳转。
      */
     fun onContentRefreshed() {
-        if (dragging || flinging) {
+        val positionWasSyncedHere = controller.chapterIndex == lastSyncedChapter &&
+            controller.charOffset == lastSyncedOffset
+        if (dragging || flinging || positionWasSyncedHere) {
             clampAnchor()
         } else {
             reanchorToPosition()
         }
+    }
+
+    /** 排版环境变化会改变字符到像素的映射，下一次刷新必须重新按阅读位置落点。 */
+    fun requirePositionReanchor() {
+        lastSyncedChapter = -1
+        lastSyncedOffset = -1
     }
 
     private fun reanchorToPosition() {

@@ -260,10 +260,13 @@ class EmbeddingProgressTracker @Inject constructor(
         runtime.update { it - bookId }
     }
 
-    /** 用户点「重试」时立即进入排队态，而不是等 Worker 真正启动后才有反馈。 */
+    /**
+     * 用户点「重试」时立即进入排队态，而不是等 Worker 真正启动后才有反馈。
+     * 用 REPLACE 顶掉可能正在指数退避里睡着的旧任务；重跑是纯增量续跑，已建章节不受影响。
+     */
     fun retry(bookId: Long) {
         markQueued(bookId, message = "已加入索引队列")
-        scheduler.enqueueForBook(bookId)
+        scheduler.enqueueForBook(bookId, replaceExisting = true)
     }
 
     suspend fun enable(bookId: Long) {
@@ -280,8 +283,11 @@ class EmbeddingProgressTracker @Inject constructor(
 
     suspend fun rebuild(bookId: Long) {
         settingsStore.setEnabled(bookId, true)
+        // 清空只在这里做一次，不能交给 Worker：Worker 失败会重试，写在里面的清理会被
+        // 重放成「建到一半就清零」的死循环。
+        runCatching { VectorQueries.removeChunksForBook(vectorStore.get(), bookId) }
         markQueued(bookId, message = "已加入重建队列")
-        scheduler.enqueueForBook(bookId, resetBookIndex = true)
+        scheduler.enqueueForBook(bookId, replaceExisting = true)
     }
 
     suspend fun retryAll() {
@@ -303,18 +309,26 @@ class EmbeddingProgressTracker @Inject constructor(
     suspend fun rebuildAll() {
         val enabledBookIds = selectedBookIds()
         enabledBookIds.forEach { bookId ->
+            runCatching { VectorQueries.removeChunksForBook(vectorStore.get(), bookId) }
             markQueued(bookId, message = "已加入重建队列")
-            scheduler.enqueueForBook(bookId, resetBookIndex = true)
+            scheduler.enqueueForBook(bookId, replaceExisting = true)
         }
     }
 
+    /**
+     * 参与批量操作的书：显式启用的，加上「有索引但没记录在开关里」的旧版本遗留书。
+     * 后者会顺手补写进开关集合——Worker 只认这个集合，口径不一致时批量重试会变成空转。
+     */
     private suspend fun selectedBookIds(): Set<Long> {
         val explicit = settingsStore.enabledBookIds.first()
         return libraryRepository.getBooks().mapNotNullTo(linkedSetOf()) { book ->
+            if (book.id in explicit) return@mapNotNullTo book.id
             val hasLegacyIndex = runCatching {
                 VectorQueries.chaptersWithChunks(vectorStore.get(), book.id).isNotEmpty()
             }.getOrDefault(false)
-            book.id.takeIf { it in explicit || hasLegacyIndex }
+            if (!hasLegacyIndex) return@mapNotNullTo null
+            settingsStore.setEnabled(book.id, true)
+            book.id
         }
     }
 

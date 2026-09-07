@@ -374,8 +374,26 @@ internal class EpubLayoutContext(
             }
             if (family.lowercase() in GENERIC_FAMILIES) return ResolvedFontRef(null, family)
         }
+        // 出版 CSS 常写一串多看/掌阅私有字体名再跟中文通用名（"DK-SONGTI", "st", 宋体）。
+        // 没有内嵌字体时，把整条回退链里第一个能识别的中文/西文通用名映射到系统族，
+        // 而不是把无法解析的首个私有名交给渲染层（那等于丢掉出版者的衬线/黑体意图）。
+        families.firstNotNullOfOrNull(::genericFamilyAlias)?.let { return ResolvedFontRef(null, it) }
         val first = families.firstOrNull()
         return ResolvedFontRef(null, first)
+    }
+
+    private fun genericFamilyAlias(family: String): String? {
+        val key = family.trim().trim('\"', '\'').lowercase()
+        if (key.isEmpty()) return null
+        return when {
+            key in GENERIC_FAMILIES -> key
+            key in SANS_CODES -> "sans-serif"
+            key in SERIF_CODES -> "serif"
+            MONO_ALIASES.any(key::contains) -> "monospace"
+            SANS_ALIASES.any(key::contains) -> "sans-serif"
+            SERIF_ALIASES.any(key::contains) -> "serif"
+            else -> null
+        }
     }
 
     fun themeBlockDecoration(
@@ -460,6 +478,17 @@ internal class EpubLayoutContext(
         const val DEFAULT_PUBLISHER_PARAGRAPH_EM = 0.55f
         const val MAX_PARAGRAPH_GAP_FACTOR = 4f
         val GENERIC_FAMILIES = setOf("serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui")
+        private val SANS_ALIASES = listOf(
+            "黑体", "黑", "heiti", "hei", "xht", "xiheiti", "yahei", "sans", "gothic", "helvetica", "arial", "roboto"
+        )
+        private val SERIF_ALIASES = listOf(
+            "宋体", "宋", "明朝", "明体", "仿宋", "楷体", "楷", "隶书", "隶变", "songti", "song", "fangsong", "kaiti", "kai",
+            "lishu", "lubian", "mincho", "serif", "times", "georgia", "garamond", "baskerville", "palatino"
+        )
+        // 多看/掌阅缩写族名只做整词匹配，避免 "st" 误命中别的名字。
+        private val SANS_CODES = setOf("ht", "xht", "dk-heiti", "dk-xiheiti")
+        private val SERIF_CODES = setOf("st", "fs", "kt", "lb", "gy", "ls", "extb", "dk-songti", "dk-fangsong", "dk-kaiti")
+        private val MONO_ALIASES = listOf("mono", "courier", "consolas", "menlo")
     }
 }
 

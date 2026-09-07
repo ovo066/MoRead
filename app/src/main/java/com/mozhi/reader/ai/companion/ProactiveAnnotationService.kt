@@ -37,13 +37,13 @@ private data class ProactiveAnnotationEnvelope(
 )
 
 internal object ProactiveAnnotationParser {
-    fun parse(raw: String): List<ProactiveAnnotationDraft> {
+    fun parse(raw: String, limit: Int): List<ProactiveAnnotationDraft> {
         val clean = raw.trim()
             .removePrefix("```json")
             .removePrefix("```")
             .removeSuffix("```")
             .trim()
-        return runCatching {
+        val drafts = runCatching {
             when (val root = AiJson.parseToJsonElement(clean)) {
                 is kotlinx.serialization.json.JsonArray -> root.mapNotNull { element ->
                     runCatching {
@@ -54,7 +54,8 @@ internal object ProactiveAnnotationParser {
             }
         }.getOrDefault(emptyList())
             .filter { it.quote.isNotBlank() && it.note.isNotBlank() }
-            .take(2)
+        // limit 可以是 Int.MAX_VALUE（用户选了「不限制」），此时原样放行。
+        return if (limit >= drafts.size) drafts else drafts.take(limit.coerceAtLeast(0))
     }
 }
 
@@ -76,6 +77,7 @@ class ProactiveAnnotationService @Inject constructor(
         val allowance = quota.reserve(
             bookId = bookId,
             chapterIndex = chapterIndex,
+            limits = autonomy.annotationLimitsFor(bookId),
             requestVoice = autonomy.annotationVoiceActive && persona.voiceId.isNotBlank(),
             requestImages = autonomy.annotationImageActive
         )
@@ -87,13 +89,20 @@ class ProactiveAnnotationService @Inject constructor(
         if (body.isBlank()) return
         val book = libraryRepository.getBook(bookId) ?: return
         val resolved = clientFactory.forRole(ModelRole.CHEAP)
+        val countInstruction = if (allowance.annotationsUnlimited) {
+            "至少 ${allowance.minAnnotations.coerceAtLeast(1)} 段，条数不限，但只挑真正值得回应的地方，不要为凑数硬写"
+        } else if (allowance.minAnnotations in 1 until allowance.maxAnnotations) {
+            "${allowance.minAnnotations} 到 ${allowance.maxAnnotations} 段"
+        } else {
+            "最多 ${allowance.maxAnnotations} 段"
+        }
         val raw = resolved.client.chat(
             messages = listOf(
                 ChatMessage(
                     ChatRole.SYSTEM,
                     """
                     你是阅读应用的随读段评编辑。只根据用户刚读完的这一章写批注，绝不引用或暗示后续剧情。
-                    选择最多 ${allowance.maxAnnotations} 段值得回应的原文，quote 必须逐字复制自输入正文，note 用角色口吻写简短中文段评。
+                    选择 $countInstruction 值得回应的原文，quote 必须逐字复制自输入正文，note 用角色口吻写简短中文段评。
                     style 只能是 HIGHLIGHT、UNDERLINE、WAVY。voice 仅在适合像私语一样说出时为 true；image_prompt 仅在值得配图时给中文提示词。
                     只输出 JSON：{"annotations":[{"quote":"原文","note":"段评","style":"HIGHLIGHT","voice":false,"image_prompt":null}]}
                     """.trimIndent()
@@ -109,7 +118,7 @@ class ProactiveAnnotationService @Inject constructor(
         var created = 0
         var voices = 0
         var images = 0
-        ProactiveAnnotationParser.parse(raw).forEach { draft ->
+        ProactiveAnnotationParser.parse(raw, allowance.maxAnnotations).forEach { draft ->
             val location = BookQuoteLocator.locateAll(
                 listOf(QuoteChapter(chapterIndex, body)),
                 draft.quote.trim()

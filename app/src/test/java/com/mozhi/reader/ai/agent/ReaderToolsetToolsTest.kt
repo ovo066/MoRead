@@ -133,7 +133,7 @@ class ReaderToolsetToolsTest {
             embedQuery = { vector(1f, 0f) },
             store = { store },
             readingScope = ReadingScope.upto(3, 10),
-            loadChapter = { ChapterDocument(3, "当前章", currentBody) }
+            loadChapter = { index -> if (index == 3) ChapterDocument(3, "当前章", currentBody) else fixtureChapter(index) }
         )
 
         val result = tool.execute(buildJsonObject { put("query", "凶手") })
@@ -154,7 +154,29 @@ class ReaderToolsetToolsTest {
             readingScope = ReadingScope.upto(3, Int.MAX_VALUE)
         )
         val result = tool.execute(buildJsonObject { put("query", "任意") })
-        assertTrue(result.startsWith("向量检索不可用"))
+        assertTrue(result.startsWith("查询向量生成失败"))
+    }
+
+    @Test
+    fun searchBookFallsBackToBm25WithoutRebuildingWhenLocalVectorQueryIsBroken() = runTest {
+        store.boxFor(BookChunk::class.java).put(chunk(chapterIndex = 0, text = "西市狼卫线索"))
+        val tool = SearchBookTool(
+            bookId = 1,
+            getBook = { book(lastReadChapterIndex = 3) },
+            chapterTitle = { null },
+            embedQuery = { vector(1f, 0f) },
+            store = { store },
+            readingScope = ReadingScope.upto(3, Int.MAX_VALUE),
+            loadChapter = { fixtureChapter(it) },
+            searchChunks = { _, _, _ -> error("HNSW 索引损坏") }
+        )
+
+        val result = tool.execute(buildJsonObject { put("query", "西市狼卫") })
+
+        // 切片本身是好的：查询失败不该触发重建（那只会白花用户的 embedding 额度）。
+        assertTrue(result, result.contains("本地向量索引查询失败"))
+        assertFalse(result, result.contains("重建"))
+        assertTrue(result, result.contains("西市狼卫线索"))
     }
 
     @Test
@@ -204,6 +226,73 @@ class ReaderToolsetToolsTest {
         assertEquals(0, requested)
         assertTrue(result, result.contains("本书未启用 AI 索引"))
         assertTrue(result, result.contains("西市追查狼卫"))
+    }
+
+    @Test
+    fun lexicalCoverageIsIndependentOfEmbeddingCompletionOrFailure() = runTest {
+        val documents = listOf(
+            ChapterDocument(0, "开端", "城里下了一场雨。"),
+            ChapterDocument(1, "线索", "他终于找到青铜钥匙。")
+        )
+        for (state in listOf("disabled", "empty", "partial", "complete", "failed")) {
+            store.boxFor(BookChunk::class.java).removeAll()
+            if (state in listOf("partial", "complete", "failed")) {
+                store.boxFor(BookChunk::class.java).put(chunk(0, documents[0].body))
+            }
+            if (state == "complete") store.boxFor(BookChunk::class.java).put(chunk(1, documents[1].body))
+            val tool = SearchBookTool(
+                bookId = 1,
+                getBook = { book(1).copy(totalChapters = 2) },
+                chapterTitle = { documents[it].title },
+                embedQuery = { if (state == "failed") error("模拟 embedding 中途失败") else vector(1f, 0f) },
+                store = { store },
+                readingScope = ReadingScope.upto(1, documents[1].body.length),
+                indexingEnabled = { state != "disabled" },
+                loadChapter = { documents.getOrNull(it) },
+                loadChaptersThrough = { last -> documents.filter { it.chapterIndex <= last } }
+            )
+            val result = tool.execute(buildJsonObject { put("query", "青铜钥匙") })
+            assertTrue("$state: $result", result.contains("他终于找到青铜钥匙。"))
+        }
+    }
+
+    @Test
+    fun lexicalSearchFindsReadPrefixWithoutLettingUnreadTextOccupyRecallSlots() = runTest {
+        val prefix = "他终于找到青铜钥匙。"
+        val unread = "青铜钥匙打开禁门，凶手现身。".repeat(300)
+        val document = ChapterDocument(0, "首章", prefix + unread)
+        val tool = SearchBookTool(
+            bookId = 1,
+            getBook = { book(0, prefix.length).copy(totalChapters = 1) },
+            chapterTitle = { "首章" },
+            embedQuery = { error("不应调用") },
+            store = { store },
+            indexingEnabled = { false },
+            readingScope = ReadingScope.upto(0, prefix.length),
+            loadChapter = { document },
+            loadChaptersThrough = { listOf(document) }
+        )
+        val result = tool.execute(buildJsonObject { put("query", "青铜钥匙") })
+        assertTrue(result, result.contains(prefix))
+        assertFalse(result, result.contains("凶手现身"))
+        assertFalse(result, result.contains("打开禁门"))
+    }
+
+    @Test
+    fun missingCanonicalTextIsNotReportedAsACompleteNoMatch() = runTest {
+        val tool = SearchBookTool(
+            bookId = 1,
+            getBook = { book(1).copy(totalChapters = 2) },
+            chapterTitle = { null },
+            embedQuery = { error("不应调用") },
+            store = { store },
+            indexingEnabled = { false },
+            readingScope = ReadingScope.upto(1, 20),
+            loadChaptersThrough = { error("正文读取失败") }
+        )
+        val result = tool.execute(buildJsonObject { put("query", "不存在的字面串") })
+        assertTrue(result, result.contains("正文覆盖不完整"))
+        assertFalse(result, result.contains("书里没有写到"))
     }
 
     @Test
@@ -298,8 +387,14 @@ class ReaderToolsetToolsTest {
         chapterTitle = { index -> "章题$index" },
         embedQuery = { vector(1f, 0f) },
         store = { store },
-        readingScope = ReadingScope.upto(lastReadChapterIndex, Int.MAX_VALUE)
+        readingScope = ReadingScope.upto(lastReadChapterIndex, Int.MAX_VALUE),
+        loadChapter = { fixtureChapter(it) }
     )
+
+    // The old tests seeded only vector chunks. Supply a separate canonical read fixture too;
+    // dedicated coverage tests below use independent documents and vary embedding completion.
+    private fun fixtureChapter(index: Int) = ChapterDocument(index, "章题$index",
+        store.boxFor(BookChunk::class.java).all.firstOrNull { it.chapterIndex == index }?.text.orEmpty())
 
     private fun book(
         lastReadChapterIndex: Int,

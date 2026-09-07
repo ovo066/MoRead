@@ -26,8 +26,8 @@ object BookQuoteLocator {
     const val MIN_QUOTE_CHARS = 6
 
     /** 逐字全匹配，返回全部命中位置（按章节、偏移升序）。 */
-    fun locateAll(chapters: List<QuoteChapter>, quote: String): List<QuoteLocation> {
-        if (quote.isEmpty()) return emptyList()
+    fun locateAll(chapters: List<QuoteChapter>, quote: String, maxMatches: Int = Int.MAX_VALUE): List<QuoteLocation> {
+        if (quote.isEmpty() || maxMatches <= 0) return emptyList()
         return buildList {
             chapters.forEach { chapter ->
                 var from = 0
@@ -35,6 +35,7 @@ object BookQuoteLocator {
                     val index = chapter.body.indexOf(quote, from)
                     if (index < 0) break
                     add(QuoteLocation(chapter.chapterIndex, index, index + quote.length))
+                    if (size >= maxMatches) return@buildList
                     from = index + quote.length.coerceAtLeast(1)
                 }
             }

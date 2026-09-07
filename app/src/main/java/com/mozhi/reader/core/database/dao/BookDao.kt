@@ -13,6 +13,16 @@ import com.mozhi.reader.core.database.entity.ChapterEntity
 import com.mozhi.reader.core.database.entity.ReadingDailyEntity
 import kotlinx.coroutines.flow.Flow
 
+/**
+ * 「按字符」算进度用的两个累计值。书架一次取全部，详情页只取一本。
+ * `chapters` 上有 (bookId, chapterIndex) 复合索引，聚合走索引扫描。
+ */
+data class BookReadSpanRow(
+    val bookId: Long,
+    val charsBeforeChapter: Long,
+    val totalChars: Long
+)
+
 @Dao
 interface BookDao {
     @Query(
@@ -22,6 +32,31 @@ interface BookDao {
         """
     )
     fun observeBooks(): Flow<List<BookEntity>>
+
+    @Query(
+        """
+        SELECT b.id AS bookId,
+               COALESCE(SUM(CASE WHEN c.chapterIndex < b.lastReadChapterIndex
+                                 THEN c.charCount ELSE 0 END), 0) AS charsBeforeChapter,
+               COALESCE(SUM(c.charCount), 0) AS totalChars
+        FROM books b LEFT JOIN chapters c ON c.bookId = b.id
+        GROUP BY b.id
+        """
+    )
+    fun observeBookReadSpans(): Flow<List<BookReadSpanRow>>
+
+    @Query(
+        """
+        SELECT b.id AS bookId,
+               COALESCE(SUM(CASE WHEN c.chapterIndex < b.lastReadChapterIndex
+                                 THEN c.charCount ELSE 0 END), 0) AS charsBeforeChapter,
+               COALESCE(SUM(c.charCount), 0) AS totalChars
+        FROM books b LEFT JOIN chapters c ON c.bookId = b.id
+        WHERE b.id = :bookId
+        GROUP BY b.id
+        """
+    )
+    fun observeBookReadSpan(bookId: Long): Flow<BookReadSpanRow?>
 
     @Query("SELECT * FROM books ORDER BY importedAt ASC")
     suspend fun getBooks(): List<BookEntity>
@@ -211,6 +246,12 @@ interface BookDao {
 
     @Query("DELETE FROM chapters WHERE bookId = :bookId")
     suspend fun deleteChaptersForBook(bookId: Long)
+
+    @Query("UPDATE chapters SET title = :title WHERE bookId = :bookId AND chapterIndex = :chapterIndex")
+    suspend fun updateChapterTitle(bookId: Long, chapterIndex: Int, title: String)
+
+    @Query("SELECT * FROM books WHERE sourceType = :sourceType")
+    suspend fun getBooksBySource(sourceType: BookSourceType): List<BookEntity>
 
     @Query("SELECT * FROM chapters WHERE bookId = :bookId ORDER BY chapterIndex")
     fun observeChapters(bookId: Long): Flow<List<ChapterEntity>>

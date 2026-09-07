@@ -136,8 +136,16 @@ internal fun currentReaderTocListIndex(
 
 
 private const val MIN_EXPLICIT_CHAPTERS = 2
+private const val CHAPTER_NUMERALS = """[0-9０-９〇零一二三四五六七八九十百千万两廿卅卌]"""
+
+/**
+ * 逻辑章节的标题形态。出版方偶尔漏掉「第」（金瓶梅第 41 回目就是「四十一回 两孩儿……」），
+ * 漏掉时要求量词后紧跟空白或标点，免得把「两回事」这类正常标题也当成章节编号。
+ */
 private val EXPLICIT_CHAPTER_TITLE = Regex(
-    pattern = """^\s*(?:第\s*[0-9０-９〇零一二三四五六七八九十百千万两廿卅卌]+\s*[章节回篇卷部]|(?:chapter|chapitre|kapitel|cap[ií]tulo)\s+[0-9ivxlcdm]+\b)""",
+    pattern = """^\s*(?:第\s*$CHAPTER_NUMERALS+\s*[章节回篇卷部]""" +
+        """|$CHAPTER_NUMERALS+\s*[章节回篇卷部](?=[\s、,，.。:：·—－]|$)""" +
+        """|(?:chapter|chapitre|kapitel|cap[ií]tulo)\s+[0-9ivxlcdm]+\b)""",
     option = RegexOption.IGNORE_CASE
 )
 

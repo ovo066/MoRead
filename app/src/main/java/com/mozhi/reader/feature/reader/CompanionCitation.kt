@@ -2,6 +2,7 @@ package com.mozhi.reader.feature.reader
 
 import com.mozhi.reader.core.library.BookQuoteLocator
 import com.mozhi.reader.core.library.QuoteChapter
+import com.mozhi.reader.core.retrieval.ReadingScope
 
 /**
  * 一条可跳回正文的引用。
@@ -66,7 +67,7 @@ object CompanionCitationParser {
         return ParsedCompanionMessage(
             displayText = display,
             citations = citations
-                .distinctBy { it.quote }
+                .distinctBy { it.chapterNumber to it.quote }
                 .take(MAX_CITATIONS)
         )
     }
@@ -85,23 +86,28 @@ object CompanionCitationParser {
 object CompanionCitationVerifier {
     fun locate(
         citations: List<CompanionCitation>,
-        chapters: List<QuoteChapter>
-    ): List<LocatedCompanionCitation> = citations.mapNotNull { citation ->
-        val preferredChapterIndex = citation.chapterNumber?.minus(1)
-        val location = BookQuoteLocator.locateAll(chapters, citation.quote.trim()).let { matches ->
-            if (preferredChapterIndex == null) {
-                matches.firstOrNull()
-            } else {
-                matches.minByOrNull { kotlin.math.abs(it.chapterIndex - preferredChapterIndex) }
+        chapters: List<QuoteChapter>,
+        scope: ReadingScope = ReadingScope.WholeBook
+    ): List<LocatedCompanionCitation> {
+        val readable = chapters.filter { scope.allowsChapter(it.chapterIndex) }
+            .map { it.copy(body = scope.readableText(it.chapterIndex, it.body)) }
+        return citations.mapNotNull { citation ->
+            val preferredChapterIndex = citation.chapterNumber?.minus(1)
+            val location = BookQuoteLocator.locateAll(readable, citation.quote.trim()).let { matches ->
+                if (preferredChapterIndex == null) {
+                    matches.firstOrNull()
+                } else {
+                    matches.minByOrNull { kotlin.math.abs(it.chapterIndex - preferredChapterIndex) }
+                }
             }
-        }
-        location?.let {
-            LocatedCompanionCitation(
-                citation = citation.copy(chapterNumber = it.chapterIndex + 1),
-                chapterIndex = it.chapterIndex,
-                startCharOffset = it.startCharOffset,
-                endCharOffset = it.endCharOffset
-            )
+            location?.let {
+                LocatedCompanionCitation(
+                    citation = citation.copy(chapterNumber = it.chapterIndex + 1),
+                    chapterIndex = it.chapterIndex,
+                    startCharOffset = it.startCharOffset,
+                    endCharOffset = it.endCharOffset
+                )
+            }
         }
     }
 }

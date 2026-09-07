@@ -152,6 +152,7 @@ fun BookDetailScreen(
     onPlayAudiobook: (Long) -> Unit = {},
     onOpenAudiobookRoles: (Long) -> Unit = {},
     onOpenAudiobookProduction: (Long) -> Unit = {},
+    onOpenAnnotationLimits: (Long) -> Unit = {},
     /** 书架长按菜单的深链动作：edit = 直接开信息编辑，cover = 直接开封面选择。 */
     initialAction: String? = null,
     viewModel: BookDetailViewModel = hiltViewModel()
@@ -250,6 +251,7 @@ fun BookDetailScreen(
                 RingRow(
                     book = book,
                     streakDays = state.streakDays,
+                    readSpan = state.readSpan,
                     modifier = Modifier.padding(horizontal = 20.dp)
                 )
             }
@@ -289,6 +291,14 @@ fun BookDetailScreen(
                         modifier = Modifier.padding(horizontal = 20.dp)
                     )
                 }
+            }
+            item {
+                BookAnnotationLimitsCard(
+                    autonomy = state.autonomy,
+                    bookId = bookId,
+                    onOpen = { onOpenAnnotationLimits(bookId) },
+                    modifier = Modifier.padding(horizontal = 20.dp)
+                )
             }
             item {
                 NotesSection(

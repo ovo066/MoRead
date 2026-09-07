@@ -61,6 +61,9 @@ class EpubLayoutDocumentParser @Inject constructor() {
         stylesheets: Map<String, String>
     ): ParsedEpubLayoutChapter {
         val document = Jsoup.parse(bytes.inputStream(), null, href)
+        // DROPPED_SELECTOR 会把 <title> 一起摘掉（正文不许出现它），所以标题必须先取出来。
+        // 导入期靠它给目录未引用的 spine 文档命名，取晚了永远是 null。
+        val documentTitle = document.title().trim().takeIf(String::isNotEmpty)
         val linkedStylesheets = ArrayList<String>()
         val stylesheetSources = ArrayList<EpubStylesheetSource>()
         val stylesheetsByPath = stylesheets.entries.associate { it.key.lowercase() to it.value }
@@ -297,7 +300,7 @@ class EpubLayoutDocumentParser @Inject constructor() {
             document = EpubLayoutChapter(
                 chapterIndex = chapterIndex,
                 href = href,
-                documentTitle = document.title().trim().takeIf(String::isNotEmpty),
+                documentTitle = documentTitle,
                 immersivePage = immersivePage,
                 bodyStyle = bodyStyle,
                 stylesheetHrefs = linkedStylesheets.distinct(),
@@ -308,7 +311,7 @@ class EpubLayoutDocumentParser @Inject constructor() {
             dom = EpubDomChapter(
                 chapterIndex = chapterIndex,
                 href = href,
-                documentTitle = document.title().trim().takeIf(String::isNotEmpty),
+                documentTitle = documentTitle,
                 bodyNode = body.toDomNode(rubyText, nodeAnchors, 0, 0),
                 textLength = extractedText.length,
                 diagnostics = chapterDiagnostics

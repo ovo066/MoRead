@@ -25,7 +25,6 @@ import com.mozhi.reader.ai.embedding.BookEmbeddingPipeline
 import com.mozhi.reader.ai.embedding.EmbedOutcome
 import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.datastore.BookEmbeddingSettingsStore
-import com.mozhi.reader.core.vector.VectorQueries
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
@@ -34,7 +33,6 @@ import dagger.hilt.components.SingletonComponent
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
-import io.objectbox.BoxStore
 
 @EntryPoint
 @InstallIn(SingletonComponent::class)
@@ -42,15 +40,14 @@ interface BookEmbeddingEntryPoint {
     fun libraryRepository(): LibraryRepository
     fun embeddingPipeline(): BookEmbeddingPipeline
     fun embeddingSettingsStore(): BookEmbeddingSettingsStore
-    fun vectorStore(): BoxStore
 }
 
 @Singleton
 class WorkBookEmbeddingScheduler @Inject constructor(
     @ApplicationContext private val context: Context
 ) : BookEmbeddingScheduler {
-    override fun enqueueForBook(bookId: Long, resetBookIndex: Boolean) =
-        BookEmbeddingWorker.enqueueForBook(context, bookId, resetBookIndex)
+    override fun enqueueForBook(bookId: Long, replaceExisting: Boolean) =
+        BookEmbeddingWorker.enqueueForBook(context, bookId, replaceExisting)
 
     override fun cancelForBook(bookId: Long) =
         BookEmbeddingWorker.cancelForBook(context, bookId)
@@ -79,17 +76,12 @@ class BookEmbeddingWorker(
     override suspend fun doWork(): Result {
         val targetBookId = inputData.getLong(INPUT_BOOK_ID, INVALID_BOOK_ID)
         if (targetBookId == INVALID_BOOK_ID) return Result.failure()
-        if (!entryPoint.embeddingSettingsStore().isEnabled(targetBookId)) {
-            VectorQueries.removeChunksForBook(entryPoint.vectorStore(), targetBookId)
-            return Result.success()
-        }
+        // 本任务只负责「建」，任何情况下都不删已落库的切片。清理只有两个出口：
+        // 用户在详情页停用（EmbeddingProgressTracker.disable）与重建前的一次性清空
+        // （rebuild）。理由：doWork 会因网络失败被反复重试，在这里删就等于把已经
+        // 建好的索引周期性清零——重试必须是纯增量续跑。
+        if (!entryPoint.embeddingSettingsStore().isEnabled(targetBookId)) return Result.success()
         val book = entryPoint.libraryRepository().getBook(targetBookId) ?: return Result.success()
-
-        // 不同 embedding 模型的坐标系不可混用。模型分配变化后先清书籍切片，随后本轮
-        // 从第 1 章完整重建；先清后建即使进程中途退出也只会暂时缺索引，不会错误召回。
-        if (inputData.getBoolean(INPUT_RESET_INDEX, false)) {
-            VectorQueries.removeChunksForBook(entryPoint.vectorStore(), book.id)
-        }
 
         val pipeline = entryPoint.embeddingPipeline()
         runCatching { setForeground(createForegroundInfo("《${book.title}》")) }
@@ -151,23 +143,17 @@ class BookEmbeddingWorker(
     }
 
     companion object {
-        private const val INPUT_RESET_INDEX = "reset-index"
         private const val INPUT_BOOK_ID = "book-id"
         private const val INVALID_BOOK_ID = -1L
         private const val NOTIFICATION_CHANNEL_ID = "ai_index"
         private const val NOTIFICATION_ID = 4_200
 
-        fun enqueueForBook(context: Context, bookId: Long, resetBookIndex: Boolean = false) {
+        fun enqueueForBook(context: Context, bookId: Long, replaceExisting: Boolean = false) {
             WorkManager.getInstance(context).enqueueUniqueWork(
                 workName(bookId),
-                if (resetBookIndex) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP,
+                if (replaceExisting) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP,
                 OneTimeWorkRequestBuilder<BookEmbeddingWorker>()
-                    .setInputData(
-                        workDataOf(
-                            INPUT_BOOK_ID to bookId,
-                            INPUT_RESET_INDEX to resetBookIndex
-                        )
-                    )
+                    .setInputData(workDataOf(INPUT_BOOK_ID to bookId))
                     .setConstraints(
                         Constraints.Builder()
                             .setRequiredNetworkType(NetworkType.CONNECTED)

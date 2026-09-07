@@ -1036,7 +1036,13 @@ class ReaderSettingsRepository @Inject constructor(
                 proactiveAnnotationVoiceEnabled =
                     preferences[Keys.CompanionProactiveAnnotationVoice] ?: false,
                 proactiveAnnotationImageEnabled =
-                    preferences[Keys.CompanionProactiveAnnotationImage] ?: false
+                    preferences[Keys.CompanionProactiveAnnotationImage] ?: false,
+                annotationLimits = ProactiveAnnotationLimitsCodec.decodeGlobal(
+                    preferences[Keys.CompanionAnnotationLimits]
+                ),
+                annotationLimitsByBook = ProactiveAnnotationLimitsCodec.decodeBooks(
+                    preferences[Keys.CompanionAnnotationLimitsByBook]
+                )
             )
         }
 
@@ -1060,7 +1066,32 @@ class ReaderSettingsRepository @Inject constructor(
         dataStore.edit { it[Keys.CompanionProactiveAnnotationImage] = value }
     }
 
+    suspend fun setCompanionAnnotationLimits(limits: ProactiveAnnotationLimits) {
+        dataStore.edit {
+            it[Keys.CompanionAnnotationLimits] = ProactiveAnnotationLimitsCodec.encodeGlobal(limits)
+        }
+    }
+
+    /** 传 null 表示这本书交还给全局默认。 */
+    suspend fun setCompanionAnnotationLimitsForBook(
+        bookId: Long,
+        override: BookProactiveAnnotationLimits?
+    ) {
+        if (bookId <= 0L) return
+        dataStore.edit { preferences ->
+            val current = ProactiveAnnotationLimitsCodec
+                .decodeBooks(preferences[Keys.CompanionAnnotationLimitsByBook])
+                .toMutableMap()
+            if (override == null) current -= bookId else current[bookId] = override
+            preferences[Keys.CompanionAnnotationLimitsByBook] =
+                ProactiveAnnotationLimitsCodec.encodeBooks(current)
+        }
+    }
+
     private object Keys {
+        val CompanionAnnotationLimits = stringPreferencesKey("companion_annotation_limits")
+        val CompanionAnnotationLimitsByBook =
+            stringPreferencesKey("companion_annotation_limits_by_book")
         val FontScale = floatPreferencesKey("reader_font_scale")
         val Font = stringPreferencesKey("reader_font")
         val CustomFontPath = stringPreferencesKey("reader_custom_font_path")

@@ -25,6 +25,66 @@ class ChineseChapterPresenterTest {
     private val presenter = ChineseChapterPresenter(ChineseTextConverter())
 
     @Test
+    fun knownSourceRangeIgnoresRepeatedContextAfterContraction() {
+        val body = "網際網路".repeat(100) + "甲".repeat(300)
+        val shown = presenter.present(body, null, emptyList(), ChineseConversionMode.TW2SP)
+
+        assertEquals("互联网".repeat(100) + "甲".repeat(300), shown.body)
+        assertEquals(
+            ResolvedTextAnchor(400, 401),
+            presenter.resolveDisplayedRange(shown.source!!, sourceStart = 500, sourceEnd = 501)
+        )
+    }
+
+    @Test
+    fun knownSourceRangeIgnoresRepeatedContextAfterExpansion() {
+        val body = "互联网".repeat(100) + "甲".repeat(300)
+        val shown = presenter.present(body, null, emptyList(), ChineseConversionMode.S2TWP)
+
+        assertEquals("網際網路".repeat(100) + "甲".repeat(300), shown.body)
+        assertEquals(
+            ResolvedTextAnchor(500, 501),
+            presenter.resolveDisplayedRange(shown.source!!, sourceStart = 400, sourceEnd = 401)
+        )
+    }
+
+    @Test
+    fun repeatedContextInsideEpubLeafKeepsItsSourcePosition() {
+        val heading = "主機板".repeat(10) + "\n"
+        val body = heading + "網際網路".repeat(100) + "甲".repeat(300)
+        val layout = EpubLayoutChapterBundle(
+            document = EpubLayoutChapter(
+                chapterIndex = 0,
+                href = "chapter.xhtml",
+                textLength = body.length,
+                blocks = listOf(
+                    EpubLayoutBlock(
+                        orderIndex = 0,
+                        kind = EpubLayoutBlockKind.PARAGRAPH,
+                        textStart = heading.length,
+                        textEnd = body.length,
+                        element = EpubElementRef(tag = "p")
+                    )
+                )
+            ),
+            resourcePaths = emptyMap(),
+            fontPaths = emptyMap()
+        )
+        val shown = presenter.present(body, layout, emptyList(), ChineseConversionMode.TW2SP)
+        val displayedHeading = "主板".repeat(10) + "\n"
+
+        assertEquals(displayedHeading + "互联网".repeat(100) + "甲".repeat(300), shown.body)
+        assertEquals(
+            ResolvedTextAnchor(displayedHeading.length + 400, displayedHeading.length + 401),
+            presenter.resolveDisplayedRange(
+                shown.source!!,
+                sourceStart = heading.length + 500,
+                sourceEnd = heading.length + 501
+            )
+        )
+    }
+
+    @Test
     fun sourceRangeStaysAtPhraseBoundariesWhenAnchorContextStartsInsideAWord() {
         val body = "網際網路".repeat(12) + "主機板" + "資料庫".repeat(12)
         val shown = presenter.present(body, null, emptyList(), ChineseConversionMode.TW2SP)

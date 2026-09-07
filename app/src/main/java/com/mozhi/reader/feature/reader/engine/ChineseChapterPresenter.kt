@@ -147,19 +147,10 @@ class ChineseChapterPresenter @Inject constructor(
         val displayEnd = source.positions.getValue(sourceEnd)
         val sourceLeaf = source.body.substring(sourceStart, sourceEnd)
         val localPoint = sourcePoint - sourceStart
-        val localAnchor = ReaderTextAnchors.create(
-            sourceLeaf,
-            localPoint,
-            localPoint,
-            ChineseConversionMode.OFF
-        )
         val displayedLeaf = source.displayedBody.substring(displayStart, displayEnd)
-        val localDisplayPoint = ReaderTextAnchors.resolveTextMatch(
-            displayedLeaf,
-            localAnchor,
-            source.mode,
-            converter
-        )?.start ?: ReaderTextAnchors.convertedBoundary(
+        // Source coordinates are already known. Matching repeated text by its raw ratio can
+        // select a different occurrence when conversion changes the length of earlier phrases.
+        val localDisplayPoint = ReaderTextAnchors.convertedBoundary(
             sourceLeaf,
             displayedLeaf,
             localPoint,

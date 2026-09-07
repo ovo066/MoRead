@@ -9,6 +9,7 @@ class CompanionToolRouterTest {
     private val allTools = setOf(
         "get_reading_progress",
         "search_book",
+        "grep_book",
         "read_book_section",
         "list_chapters",
         "list_annotations",
@@ -99,7 +100,7 @@ class CompanionToolRouterTest {
             longTermMemoryEnabled = true
         )
 
-        assertEquals(setOf("search_book", "generate_image"), tools)
+        assertEquals(setOf("search_book", "grep_book", "generate_image"), tools)
         assertFalse("synthesize_speech" in tools)
         assertFalse("web_search" in tools)
     }

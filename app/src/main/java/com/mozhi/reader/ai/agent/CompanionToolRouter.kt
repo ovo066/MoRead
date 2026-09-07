@@ -35,6 +35,7 @@ internal object CompanionToolRouter {
         if (text.isNotEmpty()) {
             if ((!sceneAvailable && !text.containsAny(CASUAL_WORDS)) || text.containsAny(BOOK_SEARCH_WORDS)) {
                 candidates += "search_book"
+                candidates += "grep_book"
             }
             if (text.containsAny(SECTION_READ_WORDS)) candidates += "read_book_section"
             if (text.containsAny(CHAPTER_LIST_WORDS)) candidates += "list_chapters"
@@ -83,6 +84,7 @@ internal object CompanionToolRouter {
     private val READ_ONLY_TOOLS = setOf(
         "get_reading_progress",
         "search_book",
+        "grep_book",
         "read_book_section",
         "list_chapters",
         "list_annotations",

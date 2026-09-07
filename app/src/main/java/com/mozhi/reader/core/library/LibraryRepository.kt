@@ -23,6 +23,7 @@ import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 
 data class ChapterDraft(
     val index: Int,
@@ -62,6 +63,18 @@ class LibraryRepository @Inject constructor(
 ) {
     fun observeBooks(): Flow<List<BookEntity>> = bookDao.observeBooks()
 
+    /** 书架用：一次取全部书的按字符进度累计值，交给 [readFraction] 算百分比。 */
+    fun observeBookReadSpans(): Flow<Map<Long, BookReadSpan>> =
+        bookDao.observeBookReadSpans().map { rows ->
+            rows.associate { row -> row.bookId to BookReadSpan(row.charsBeforeChapter, row.totalChars) }
+        }
+
+    /** 详情页用：只取一本书的按字符进度累计值。 */
+    fun observeBookReadSpan(bookId: Long): Flow<BookReadSpan?> =
+        bookDao.observeBookReadSpan(bookId).map { row ->
+            row?.let { BookReadSpan(it.charsBeforeChapter, it.totalChars) }
+        }
+
     suspend fun getBooks(): List<BookEntity> = bookDao.getBooks()
 
     fun observeBook(bookId: Long): Flow<BookEntity?> = bookDao.observeBook(bookId)
@@ -88,6 +101,12 @@ class LibraryRepository @Inject constructor(
 
     suspend fun getEpubBooksMissingToc(): List<BookEntity> =
         bookDao.getBooksMissingToc(BookSourceType.EPUB)
+
+    suspend fun getEpubBooks(): List<BookEntity> = bookDao.getBooksBySource(BookSourceType.EPUB)
+
+    suspend fun updateChapterTitle(bookId: Long, chapterIndex: Int, title: String) {
+        bookDao.updateChapterTitle(bookId, chapterIndex, title)
+    }
 
     suspend fun updateBookCover(bookId: Long, coverPath: String) {
         bookDao.updateBookCover(bookId, coverPath)
@@ -381,6 +400,31 @@ class LibraryRepository @Inject constructor(
 
     suspend fun readChapterText(bookId: Long, chapter: ChapterEntity): String =
         textStore.readChapter(bookId, chapter.textByteOffset, chapter.textByteLength)
+
+    /** Same text.mz coordinates as the reader, with explicit retrieval failure semantics. */
+    suspend fun readChapterTextStrict(bookId: Long, chapter: ChapterEntity): String {
+        val body = textStore.readChapterStrict(bookId, chapter.textByteOffset, chapter.textByteLength)
+        if (body.length != chapter.charCount) {
+            throw BookTextException("INVALID_TEXT", "章节正文与 UTF-16 坐标元数据不一致")
+        }
+        return body
+    }
+
+    suspend fun bookTextRevision(bookId: Long): String {
+        val book = getBook(bookId) ?: throw BookTextException("SOURCE_MISSING", "书籍已不存在")
+        val chapters = getChapters(bookId).sortedBy { it.chapterIndex }
+        val metadata = buildString {
+            append(book.id).append(':').append(book.importedAt).append(':')
+            append(book.textVersion).append(':').append(book.totalChapters).append(';')
+            chapters.forEach { chapter ->
+                append(chapter.chapterIndex).append(':').append(chapter.charCount).append(':')
+                append(chapter.textByteOffset).append(':').append(chapter.textByteLength).append(';')
+            }
+            append(textStore.contentRevision(bookId))
+        }
+        return java.security.MessageDigest.getInstance("SHA-256")
+            .digest(metadata.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+    }
 
     suspend fun getBookmarks(bookId: Long): List<BookmarkEntity> = bookDao.getBookmarks(bookId)
 

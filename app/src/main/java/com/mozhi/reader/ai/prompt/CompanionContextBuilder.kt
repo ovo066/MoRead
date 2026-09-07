@@ -206,6 +206,9 @@ class CompanionContextBuilder @Inject constructor(
                     append("〔原文 第N章〕「逐字引文」；")
                     append("仅可标记从当前场景或书籍工具结果中逐字复制、确认存在的内容，")
                     append("转述、概括、角色对白示例和普通强调不得使用此标记。")
+                    append("\n查人物、场景、错名或同义改述用 search_book；已知原文、数字串的定位与字面计数用 grep_book。")
+                    append("只有 grep_book 的 complete/exact 才能报告确切次数；partial 只是下界，字面次数不等于事件数量。")
+                    append("检索候选是待核验的证据，不表示问题前提已被证实；无候选或零字面命中也不能证明事件不存在。")
                 }
             }
             var memoryBlock = memoryBlock(memories)

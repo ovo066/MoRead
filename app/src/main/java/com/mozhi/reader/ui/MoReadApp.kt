@@ -87,6 +87,7 @@ import com.mozhi.reader.feature.settings.AppUpdatePrompt
 import com.mozhi.reader.feature.settings.ImageGenSettingsScreen
 import com.mozhi.reader.feature.settings.FontLibraryScreen
 import com.mozhi.reader.feature.settings.ImageLibraryScreen
+import com.mozhi.reader.feature.settings.ProactiveAnnotationSettingsScreen
 import com.mozhi.reader.feature.settings.GlobalPresetSettingsScreen
 import com.mozhi.reader.feature.settings.BackupSettingsScreen
 import com.mozhi.reader.feature.settings.ProviderDetailScreen
@@ -303,6 +304,7 @@ fun MoReadApp(
                     AiAndCompanionSettingsScreen(
                         onBack = navController::popBackStack,
                         onOpenAiServices = { navController.navigate("ai-services") },
+                        onOpenAnnotationLimits = { navController.navigate("annotation-limits") },
                         onOpenWebSearch = { navController.navigate("web-search-settings") },
                         onOpenGlobalPresets = { navController.navigate("global-presets") },
                         onOpenUserMasks = { navController.navigate("user-masks") },
@@ -310,6 +312,19 @@ fun MoReadApp(
                         onOpenVoiceLibrary = { navController.navigate("tts-voices") },
                         onOpenImageGenSettings = { navController.navigate("image-gen-settings") },
                         viewModel = hiltViewModel<SettingsViewModel>(settingsEntry)
+                    )
+                }
+                pushComposable("annotation-limits") {
+                    ProactiveAnnotationSettingsScreen(
+                        bookId = null,
+                        onBack = navController::popBackStack
+                    )
+                }
+                pushComposable("annotation-limits/{bookId}") { entry ->
+                    ProactiveAnnotationSettingsScreen(
+                        bookId = entry.arguments?.getString("bookId")?.toLongOrNull()
+                            ?: return@pushComposable,
+                        onBack = navController::popBackStack
                     )
                 }
                 pushComposable("settings-data") { entry ->
@@ -411,7 +426,10 @@ fun MoReadApp(
                             navController.navigate("listen/$bookId?source=produced")
                         },
                         onOpenAudiobookRoles = { bookId -> navController.navigate("audiobook-roles/$bookId") },
-                        onOpenAudiobookProduction = { bookId -> navController.navigate("audiobook-production/$bookId") }
+                        onOpenAudiobookProduction = { bookId -> navController.navigate("audiobook-production/$bookId") },
+                        onOpenAnnotationLimits = { bookId ->
+                            navController.navigate("annotation-limits/$bookId")
+                        }
                     )
                 }
                 pushComposable(

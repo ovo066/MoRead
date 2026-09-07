@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -1239,6 +1240,9 @@ fun ReaderScreen(
                 annotationThread = null
                 discussionViewModel.close()
             },
+            // IME inset must constrain the sheet itself. Padding only the inner Column leaves a
+            // full-height discussion measured behind the keyboard, so its composer cannot move.
+            modifier = Modifier.imePadding(),
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
             containerColor = palette.glassStrong,
             contentColor = palette.onBackground,

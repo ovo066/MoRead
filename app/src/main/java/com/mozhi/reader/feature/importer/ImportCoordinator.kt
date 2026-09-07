@@ -13,6 +13,7 @@ import com.mozhi.reader.core.database.entity.BookSourceType
 import com.mozhi.reader.core.importer.BookImportGateway
 import com.mozhi.reader.core.importer.PreparedImport
 import com.mozhi.reader.core.library.BookImageInput
+import com.mozhi.reader.core.library.ChapterDraft
 import com.mozhi.reader.core.library.BookLayoutStore
 import com.mozhi.reader.core.library.BookMediaStore
 import com.mozhi.reader.core.library.ChapterTextInput
@@ -89,6 +90,37 @@ class ImportCoordinator @Inject constructor(
                 }
             }
         }
+        repairEpubChapterTitles()
+    }
+
+    /**
+     * 旧版把目录未引用的 spine 文档命名为「第 N 章」；现在按目录延续命名。已导入的书
+     * 不重扫 EPUB，只用库里的目录树把这类假章名改掉，一次性执行。
+     */
+    private suspend fun repairEpubChapterTitles() {
+        val marker = File(booksDirectory(), CHAPTER_TITLE_REPAIR_MARKER)
+        if (marker.isFile) return
+        libraryRepository.getEpubBooks().forEach { book ->
+            runCatching {
+                val chapters = libraryRepository.getChapters(book.id)
+                if (chapters.none { PLACEHOLDER_CHAPTER_TITLE.matches(it.title) }) return@forEach
+                val tocEntries = libraryRepository.getTocEntries(book.id)
+                    .filter { it.chapterIndex != null && it.title.isNotBlank() }
+                if (tocEntries.isEmpty()) return@forEach
+                val placeholderChapters = chapters.filter { PLACEHOLDER_CHAPTER_TITLE.matches(it.title) }
+                val repaired = repairPlaceholderChapterTitles(
+                    chapters = chapters.map { ChapterDraft(it.chapterIndex, it.title, it.href, it.charCount) },
+                    tocTitles = tocEntries.map { requireNotNull(it.chapterIndex) to it.title },
+                    chapterTextHints = placeholderChapters.associate { chapter ->
+                        chapter.chapterIndex to libraryRepository.readChapterText(book.id, chapter).take(256)
+                    }
+                )
+                repaired.forEach { (index, title) ->
+                    libraryRepository.updateChapterTitle(book.id, index, title)
+                }
+            }
+        }
+        runCatching { marker.createNewFile() }
     }
 
     override suspend fun prepare(uri: Uri): PreparedImport = withContext(Dispatchers.IO) {
@@ -273,7 +305,9 @@ class ImportCoordinator @Inject constructor(
             val publication = readium.open(target)
             try {
                 coverFile = savePublicationCover(publication, bookKey)
-                val structure = publication.toImportStructure()
+                val layoutPackage = packageInspector.inspect(target)
+                val spine = extractSpine(publication, layoutPackage, target)
+                val structure = publication.toImportStructure(spine)
                 val chapters = structure.chapters
                 require(chapters.isNotEmpty()) { "EPUB 中没有可阅读内容" }
 
@@ -300,8 +334,6 @@ class ImportCoordinator @Inject constructor(
                     tocEntries = structure.tocEntries
                 )
                 insertedBookId = bookId
-                val layoutPackage = packageInspector.inspect(target)
-                val spine = extractSpine(publication, layoutPackage, target)
                 require(spine.layouts.size == chapters.size) {
                     "EPUB 精排数据不完整：${spine.layouts.size}/${chapters.size} 章"
                 }
@@ -609,9 +641,13 @@ class ImportCoordinator @Inject constructor(
         }
     }
 
-    private fun Publication.toImportStructure(): EpubImportStructure = buildEpubImportStructure(
-        readingOrder = readingOrder.map { link ->
-            EpubReadingOrderItem(title = link.title, href = link.href.toString())
+    private fun Publication.toImportStructure(spine: ExtractedSpine? = null): EpubImportStructure = buildEpubImportStructure(
+        readingOrder = readingOrder.mapIndexed { index, link ->
+            EpubReadingOrderItem(
+                title = link.title ?: spine?.layouts?.getOrNull(index)?.document?.documentTitle,
+                href = link.href.toString(),
+                textSample = spine?.chapters?.getOrNull(index)?.body?.take(256)
+            )
         },
         tableOfContents = tableOfContents.map { it.toNavigationNode() }
     )
@@ -682,6 +718,8 @@ class ImportCoordinator @Inject constructor(
         const val MAX_COVER_HEIGHT = 1_800
         const val COVER_JPEG_QUALITY = 90
         const val COVER_BACKFILL_MARKER = ".epub-cover-backfill-v1"
+        const val CHAPTER_TITLE_REPAIR_MARKER = ".epub-chapter-title-repair-v1"
+        private val PLACEHOLDER_CHAPTER_TITLE = Regex("""^第 \d+ 章$""")
     }
 }
 

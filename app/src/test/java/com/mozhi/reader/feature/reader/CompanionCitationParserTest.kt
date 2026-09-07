@@ -5,6 +5,9 @@ import com.mozhi.reader.core.library.QuoteChapter
 import com.mozhi.reader.core.library.ReaderTextAnchorCodec
 import com.mozhi.reader.core.library.ReaderTextAnchors
 import com.mozhi.reader.core.text.ChineseTextConverter
+import com.mozhi.reader.core.database.entity.BookEntity
+import com.mozhi.reader.core.database.entity.BookSourceType
+import com.mozhi.reader.core.retrieval.ReadingScopeResolver
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -168,5 +171,39 @@ class CompanionCitationParserTest {
                 chapters
             ).isEmpty()
         )
+    }
+
+    @Test
+    fun multipleCitationButtonsSurviveJumpBackAndReopen() {
+        val raw = "〔原文 第1章〕「他说他不会再回来」；〔原文 第3章〕「他最后还是回来了」。"
+        val chapters = listOf(QuoteChapter(0, "他说他不会再回来。"), QuoteChapter(1, "过渡。"),
+            QuoteChapter(2, "他最后还是回来了。后续揭晓身份。"))
+        val book = BookEntity(id = 1, title = "测试", author = "", coverPath = null, epubPath = "test",
+            sourceType = BookSourceType.TXT, importedAt = 0, totalChapters = 3,
+            lastReadChapterIndex = 2, lastReadCharOffset = 10,
+            maxReachedChapterIndex = 2, maxReachedCharOffset = 10)
+        val initial = CompanionCitationVerifier.locate(CompanionCitationParser.parse(raw).citations,
+            chapters, ReadingScopeResolver.resolve(true, book))
+        // Recreate the parse and lookup from the persisted raw message as a reopened screen does.
+        val afterJump = book.copy(lastReadChapterIndex = 0, lastReadCharOffset = 1)
+        val reopened = CompanionCitationVerifier.locate(CompanionCitationParser.parse(raw).citations,
+            chapters, ReadingScopeResolver.resolve(true, afterJump))
+        assertEquals(2, initial.size)
+        assertEquals(initial, reopened)
+        assertEquals(listOf(0, 2), reopened.map { it.chapterIndex })
+        val reset = afterJump.copy(maxReachedChapterIndex = 0, maxReachedCharOffset = 1)
+        assertTrue(CompanionCitationVerifier.locate(CompanionCitationParser.parse(raw).citations,
+            chapters, ReadingScopeResolver.resolve(true, reset)).isEmpty())
+        assertEquals(2, CompanionCitationVerifier.locate(CompanionCitationParser.parse(raw).citations,
+            chapters, ReadingScopeResolver.resolve(false, reset)).size)
+    }
+
+    @Test
+    fun sameQuoteInDifferentChaptersKeepsBothJumpTargets() {
+        val parsed = CompanionCitationParser.parse("〔原文 第1章〕「他说他不会再回来」；〔原文 第3章〕「他说他不会再回来」。")
+        val located = CompanionCitationVerifier.locate(parsed.citations,
+            listOf(QuoteChapter(0, "他说他不会再回来"), QuoteChapter(2, "😀他说他不会再回来")))
+        assertEquals(listOf(0, 2), located.map { it.chapterIndex })
+        assertEquals(listOf(0, 2), located.map { it.startCharOffset })
     }
 }

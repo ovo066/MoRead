@@ -127,6 +127,9 @@ import com.mozhi.reader.core.database.entity.label
 import com.mozhi.reader.core.database.entity.isPinned
 import com.mozhi.reader.core.database.entity.readState
 import com.mozhi.reader.core.datastore.ShelfLayout
+import com.mozhi.reader.core.library.BookReadSpan
+import com.mozhi.reader.core.library.readFraction
+import com.mozhi.reader.core.library.readPercent
 import com.mozhi.reader.ui.components.FrostedSurface
 import com.mozhi.reader.ui.components.MoReadMenuDivider
 import com.mozhi.reader.ui.components.MoReadMenuExpandableItem
@@ -438,6 +441,7 @@ fun BookshelfScreen(
             BackHandler { longPressTarget = null }
             BookLongPressOverlay(
                 target = target,
+                readSpan = state.readSpans[target.book.id],
                 rootSize = rootSize,
                 onDismiss = { longPressTarget = null },
                 onSetReadState = { viewModel.setReadState(target.book, it) },
@@ -762,6 +766,7 @@ private fun BookGrid(
             BookshelfHeader(
                 recentBook = state.recentBook,
                 recentChapterTitle = state.recentChapterTitle,
+                recentReadSpan = state.recentBook?.let { state.readSpans[it.id] },
                 searchQuery = searchQuery,
                 onSearchChange = onSearchChange,
                 onOpenBook = onOpenBook
@@ -794,6 +799,7 @@ private fun BookGrid(
             when (entry) {
                 is ShelfEntry.Book -> GridBookItem(
                     entry = entry,
+                    readSpan = state.readSpans[entry.book.id],
                     selected = entry.book.id in state.selectedBookIds,
                     selectionMode = state.isSelectionMode,
                     onOpen = { onBookEntryClick(entry) },
@@ -858,6 +864,7 @@ private fun BookList(
             BookshelfHeader(
                 recentBook = state.recentBook,
                 recentChapterTitle = state.recentChapterTitle,
+                recentReadSpan = state.recentBook?.let { state.readSpans[it.id] },
                 searchQuery = searchQuery,
                 onSearchChange = onSearchChange,
                 onOpenBook = onOpenBook
@@ -889,6 +896,7 @@ private fun BookList(
             when (entry) {
                 is ShelfEntry.Book -> ListBookItem(
                     entry = entry,
+                    readSpan = state.readSpans[entry.book.id],
                     selected = entry.book.id in state.selectedBookIds,
                     selectionMode = state.isSelectionMode,
                     onOpen = { onBookEntryClick(entry) },
@@ -914,6 +922,7 @@ private fun BookList(
 private fun BookshelfHeader(
     recentBook: BookEntity?,
     recentChapterTitle: String,
+    recentReadSpan: BookReadSpan?,
     searchQuery: String,
     onSearchChange: (String) -> Unit,
     onOpenBook: (Long) -> Unit,
@@ -926,6 +935,7 @@ private fun BookshelfHeader(
             ReadingNowCard(
                 recentBook = recentBook,
                 recentChapterTitle = recentChapterTitle,
+                recentReadSpan = recentReadSpan,
                 onOpenBook = onOpenBook
             )
         }
@@ -1020,6 +1030,7 @@ private fun SearchCapsule(query: String, onQueryChange: (String) -> Unit) {
 private fun ReadingNowCard(
     recentBook: BookEntity?,
     recentChapterTitle: String,
+    recentReadSpan: BookReadSpan?,
     onOpenBook: (Long) -> Unit
 ) {
     val seal = sealColor()
@@ -1078,7 +1089,7 @@ private fun ReadingNowCard(
                     }
                 }
             } else {
-                val progress = readProgress(recentBook)
+                val progress = readFraction(recentBook, recentReadSpan)
                 Row(
                     modifier = Modifier
                         .clickable { onOpenBook(recentBook.id) }
@@ -1140,7 +1151,7 @@ private fun ReadingNowCard(
                                 drawStopIndicator = {}
                             )
                             Text(
-                                text = "${(progress * 100).toInt()}%",
+                                text = "${readPercent(progress)}%",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(start = 10.dp)
@@ -1463,6 +1474,7 @@ private val SHELF_MENU_MAX_HEIGHT = 390.dp
 @Composable
 private fun GridBookItem(
     entry: ShelfEntry.Book,
+    readSpan: BookReadSpan?,
     selected: Boolean,
     selectionMode: Boolean,
     onOpen: () -> Unit,
@@ -1520,6 +1532,7 @@ private fun GridBookItem(
         Box {
             BookCover(
                 book = book,
+                readSpan = readSpan,
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(0.69f)
@@ -1558,6 +1571,7 @@ private fun GridBookItem(
 @Composable
 private fun ListBookItem(
     entry: ShelfEntry.Book,
+    readSpan: BookReadSpan?,
     selected: Boolean,
     selectionMode: Boolean,
     onOpen: () -> Unit,
@@ -1570,7 +1584,7 @@ private fun ListBookItem(
     val pinnableContainer = LocalPinnableContainer.current
     var bounds by remember { mutableStateOf(Rect.Zero) }
     var coverBounds by remember { mutableStateOf(Rect.Zero) }
-    val progress = readProgress(book)
+    val progress = readFraction(book, readSpan)
     val target = remember(entry.key) { entry.dropTarget() }
     val registrationOwner = remember { Any() }
     DisposableEffect(entry.key) {
@@ -1668,7 +1682,7 @@ private fun ListBookItem(
                     modifier = Modifier.padding(top = 4.dp)
                 )
                 Text(
-                    progressText(book),
+                    progressText(book, readSpan),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.padding(top = 9.dp)
@@ -1693,12 +1707,13 @@ private fun ListBookItem(
 @Composable
 private fun BookCover(
     book: BookEntity,
+    readSpan: BookReadSpan?,
     modifier: Modifier
 ) {
     val coverFile = remember(book.coverPath) {
         book.coverPath?.let(::File)?.takeIf(File::isFile)
     }
-    val progress = readProgress(book)
+    val progress = readFraction(book, readSpan)
     val animatedProgress by animateFloatAsState(
         targetValue = progress,
         animationSpec = tween(durationMillis = 420),
@@ -1733,7 +1748,7 @@ private fun BookCover(
             ) {
                 Text(
                     text = when (val state = book.readState()) {
-                        BookReadState.READING -> "${(animatedProgress * 100).toInt()}%"
+                        BookReadState.READING -> "${readPercent(animatedProgress)}%"
                         else -> state.label()
                     },
                     style = MaterialTheme.typography.labelSmall,
@@ -2038,15 +2053,10 @@ private fun ImportProgressOverlay() {
     }
 }
 
-internal fun readProgress(book: BookEntity): Float = when {
-    book.totalChapters <= 0 || book.lastReadAt == 0L -> 0f
-    else -> ((book.lastReadChapterIndex + 1f) / book.totalChapters).coerceIn(0f, 1f)
-}
-
-private fun progressText(book: BookEntity): String = if (book.lastReadAt == 0L) {
+private fun progressText(book: BookEntity, span: BookReadSpan?): String = if (book.lastReadAt == 0L) {
     "未开始 · ${book.totalChapters} 章"
 } else {
-    val percent = (readProgress(book) * 100).toInt()
+    val percent = readPercent(readFraction(book, span))
     "$percent% · 第 ${book.lastReadChapterIndex + 1}/${book.totalChapters} 章"
 }
 

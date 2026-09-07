@@ -54,7 +54,12 @@ class BackupArchiveManager @Inject constructor(
             ?.forEach(File::delete)
         val output = File(outputDir, backupFileName(mode = mode)).apply { delete() }
         val db = database.openHelper.writableDatabase
-        db.query("PRAGMA wal_checkpoint(FULL)").close()
+        db.query("PRAGMA wal_checkpoint(FULL)").use { cursor ->
+            // SQLite cursors are lazy: read the result to flush committed WAL rows into the file.
+            check(cursor.moveToFirst() && cursor.getInt(0) == 0) {
+                "数据库忙碌，请稍后重试备份"
+            }
+        }
         val databaseFile = context.getDatabasePath(DATABASE_NAME)
         val dataStore = File(context.filesDir, "datastore/reader_settings.preferences_pb")
         val directories = directoriesFor(mode)
@@ -219,7 +224,7 @@ class BackupArchiveManager @Inject constructor(
         const val DATASTORE_ENTRY = "datastore/reader_settings.preferences_pb"
         const val MANIFEST_ENTRY = "manifest.json"
         const val CURRENT_FORMAT_VERSION = 1
-        const val CURRENT_DATABASE_VERSION = 21
+        const val CURRENT_DATABASE_VERSION = MoReadDatabase.VERSION
         const val PENDING_RESTORE_NAME = "pending-restore.moread.zip"
         const val PREPARED_RESTORE_DIRECTORY = "prepared"
         val LIGHTWEIGHT_FILE_DIRECTORIES = listOf(

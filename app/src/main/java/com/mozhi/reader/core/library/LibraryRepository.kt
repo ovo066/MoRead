@@ -482,6 +482,7 @@ class LibraryRepository @Inject constructor(
     suspend fun deleteBook(book: BookEntity) {
         database.withTransaction {
             bookDao.deleteBook(book.id)
+            database.shelfOrganizationDao().deleteEmptyCollections()
         }
         // 向量清理失败不阻塞删书（孤儿切片按 bookId 隔离，检索不到）。
         runCatching { VectorQueries.removeChunksForBook(vectorStore.get(), book.id) }

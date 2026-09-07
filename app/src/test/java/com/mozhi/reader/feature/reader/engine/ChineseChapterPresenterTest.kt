@@ -17,10 +17,101 @@ import com.mozhi.reader.core.library.ReaderTextAnchors
 import com.mozhi.reader.core.library.ResolvedTextAnchor
 import com.mozhi.reader.core.text.ChineseTextConverter
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChineseChapterPresenterTest {
     private val presenter = ChineseChapterPresenter(ChineseTextConverter())
+
+    @Test
+    fun sourceRangeStaysAtPhraseBoundariesWhenAnchorContextStartsInsideAWord() {
+        val body = "網際網路".repeat(12) + "主機板" + "資料庫".repeat(12)
+        val shown = presenter.present(body, null, emptyList(), ChineseConversionMode.TW2SP)
+
+        assertEquals(
+            ResolvedTextAnchor(36, 38),
+            presenter.resolveDisplayedRange(shown.source!!, sourceStart = 48, sourceEnd = 51)
+        )
+        assertEquals("主板", shown.body.substring(36, 38))
+    }
+
+    @Test
+    fun shorterBodyClampsStaleLayoutBoundariesBeforeMappingThem() {
+        val body = "主板主板"
+        val layout = EpubLayoutChapterBundle(
+            document = EpubLayoutChapter(
+                chapterIndex = 0,
+                href = "chapter.xhtml",
+                textLength = 1000,
+                blocks = listOf(
+                    EpubLayoutBlock(
+                        orderIndex = 0,
+                        kind = EpubLayoutBlockKind.PARAGRAPH,
+                        textStart = -2,
+                        textEnd = 1000,
+                        element = EpubElementRef(tag = "p"),
+                        spans = listOf(EpubLayoutSpan(textStart = -1, textEnd = 5))
+                    )
+                )
+            ),
+            resourcePaths = emptyMap(),
+            fontPaths = emptyMap(),
+            dom = EpubDomChapter(
+                chapterIndex = 0,
+                href = "chapter.xhtml",
+                textLength = 1000,
+                bodyNode = EpubDomNode(
+                    tag = "body",
+                    textStart = 0,
+                    textEnd = 1000,
+                    children = listOf(
+                        EpubDomNode(tag = "span", textStart = 5, textEnd = 1000),
+                        EpubDomNode(tag = "br", textStart = -1, textEnd = -1)
+                    )
+                )
+            )
+        )
+        val images = listOf(
+            InlineImageSource(-1, "/tmp/before.jpg", 10, 10, ""),
+            InlineImageSource(5, "/tmp/after.jpg", 10, 10, "")
+        )
+
+        val shown = presenter.present(body, layout, images, ChineseConversionMode.S2TWP)
+
+        assertEquals("主機板主機板", shown.body)
+        val block = shown.epubLayout!!.document.blocks.single()
+        assertEquals(0, block.textStart)
+        assertEquals(6, block.textEnd)
+        assertEquals(0, block.spans.single().textStart)
+        assertEquals(6, block.spans.single().textEnd)
+        val dom = shown.epubLayout!!.dom!!.bodyNode
+        assertEquals(6, dom.textEnd)
+        assertEquals(6, dom.children[0].textStart)
+        assertEquals(6, dom.children[0].textEnd)
+        assertEquals(-1, dom.children[1].textStart)
+        assertEquals(-1, dom.children[1].textEnd)
+        assertEquals(listOf(0, 6), shown.inlineImages.map { it.charOffset })
+    }
+
+    @Test
+    fun regionalConversionMapsEveryBoundaryAndEmptyChapters() {
+        for (body in listOf("", "這個程式設計師正在檢查主機板與網際網路設定，並把資料庫裡的程式碼傳送給其他使用者。".repeat(4))) {
+            val mode = ChineseConversionMode.TW2SP
+            val shown = presenter.present(body, null, emptyList(), mode).body
+            for (point in 0..body.length) {
+                val result = presenter.resolveDisplayedPoint(body, null, emptyList(), point, mode)
+                assertNotNull("source boundary $point", result)
+                assertTrue(result!! in 0..shown.length)
+            }
+            for (point in 0..shown.length) {
+                val anchor = ReaderTextAnchors.create(shown, point, point, mode)
+                val result = presenter.resolveSourcePoint(body, null, emptyList(), anchor)
+                assertNotNull("display boundary $point", result)
+                assertTrue(result!! in 0..body.length)
+            }
+        }
+    }
 
     @Test
     fun conversionRebuildsEveryEpubBoundaryAndKeepsResources() {

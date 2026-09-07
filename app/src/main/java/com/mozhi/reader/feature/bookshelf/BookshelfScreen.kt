@@ -86,6 +86,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -108,6 +109,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -141,6 +143,7 @@ import java.time.LocalDate
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlinx.coroutines.launch
 
 private data class CollectionCreateRequest(
     val bookIds: Set<Long>,
@@ -164,6 +167,7 @@ fun BookshelfScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
     var deleteTarget by remember { mutableStateOf<BookEntity?>(null) }
     var longPressTarget by remember { mutableStateOf<BookLongPressTarget?>(null) }
     var showTagPicker by remember { mutableStateOf(false) }
@@ -286,16 +290,26 @@ fun BookshelfScreen(
             )
         }
     }
-    val visibleBookIds = shelfEntries.flatMapTo(linkedSetOf()) { it.bookIds }
+    val visibleBookIds = shelfEntries.flatMapTo(linkedSetOf()) { it.visibleBookIds }
     val onBookEntryClick: (ShelfEntry.Book) -> Unit = { entry ->
         if (state.isSelectionMode) viewModel.toggleSelection(entry.book.id)
         else onOpenBookDetail(entry.book.id, null)
     }
     val onCollectionEntryClick: (ShelfEntry.Collection) -> Unit = { entry ->
-        if (state.isSelectionMode) viewModel.toggleSelection(entry.bookIds)
+        if (state.isSelectionMode) viewModel.toggleSelection(entry.visibleBookIds)
         else openCollectionId = entry.collection.id
     }
-    val onShelfDrop: (BookEntity, ShelfDrop) -> Unit = { source, drop ->
+    val onShelfDrop: (BookEntity, ShelfDrop) -> Unit = dropBook@{ source, drop ->
+        if (drop.placement != ShelfDropPlacement.MERGE && shelfDropCrossesPinnedBoundary(
+                shelfEntries, source.id, drop.target.entryKey,
+                after = drop.placement == ShelfDropPlacement.AFTER
+            )
+        ) {
+            scope.launch {
+                snackbarHostState.showSnackbar("置顶书籍保持在前，请在同一区域内调整顺序")
+            }
+            return@dropBook
+        }
         val reordered = reorderShelfEntries(
             shelfEntries,
             sourceBookId = source.id,
@@ -785,11 +799,12 @@ private fun BookGrid(
                     onOpen = { onBookEntryClick(entry) },
                     onLongPress = { bounds -> onLongPress(entry.book, bounds) },
                     collectionDragState = collectionDragState,
-                    onShelfDrop = onShelfDrop
+                    onShelfDrop = onShelfDrop,
+                    reorderActions = shelfReorderActions(entries, entry.book, onShelfDrop)
                 )
                 is ShelfEntry.Collection -> GridCollectionItem(
                     entry = entry,
-                    selected = entry.bookIds.all(state.selectedBookIds::contains),
+                    selected = entry.visibleBookIds.all(state.selectedBookIds::contains),
                     selectionMode = state.isSelectionMode,
                     onOpen = { onCollectionEntryClick(entry) },
                     collectionDragState = collectionDragState
@@ -879,11 +894,12 @@ private fun BookList(
                     onOpen = { onBookEntryClick(entry) },
                     onLongPress = { bounds -> onLongPress(entry.book, bounds) },
                     collectionDragState = collectionDragState,
-                    onShelfDrop = onShelfDrop
+                    onShelfDrop = onShelfDrop,
+                    reorderActions = shelfReorderActions(entries, entry.book, onShelfDrop)
                 )
                 is ShelfEntry.Collection -> ListCollectionItem(
                     entry = entry,
-                    selected = entry.bookIds.all(state.selectedBookIds::contains),
+                    selected = entry.visibleBookIds.all(state.selectedBookIds::contains),
                     selectionMode = state.isSelectionMode,
                     onOpen = { onCollectionEntryClick(entry) },
                     collectionDragState = collectionDragState
@@ -1452,7 +1468,8 @@ private fun GridBookItem(
     onOpen: () -> Unit,
     onLongPress: (Rect) -> Unit,
     collectionDragState: ShelfCollectionDragState,
-    onShelfDrop: (BookEntity, ShelfDrop) -> Unit
+    onShelfDrop: (BookEntity, ShelfDrop) -> Unit,
+    reorderActions: List<CustomAccessibilityAction>
 ) {
     val book = entry.book
     val pinnableContainer = LocalPinnableContainer.current
@@ -1474,7 +1491,10 @@ private fun GridBookItem(
                     1f
                 }
             }
-            .onGloballyPositioned { bounds = it.boundsInRoot() }
+            .onGloballyPositioned {
+                bounds = it.boundsInRoot()
+                collectionDragState.register(target, bounds, registrationOwner)
+            }
             .then(
                 if (collectionDragState.activeDrop?.target == target) Modifier.border(
                     2.dp,
@@ -1493,7 +1513,8 @@ private fun GridBookItem(
                 pinnableContainer = pinnableContainer,
                 state = collectionDragState,
                 onDrop = onShelfDrop,
-                onLongPressOnly = onLongPress
+                onLongPressOnly = onLongPress,
+                reorderActions = reorderActions
             )
     ) {
         Box {
@@ -1504,7 +1525,6 @@ private fun GridBookItem(
                     .aspectRatio(0.69f)
                     .onGloballyPositioned {
                         coverBounds = it.boundsInRoot()
-                        collectionDragState.register(target, coverBounds, registrationOwner)
                     }
             )
             if (selectionMode) {
@@ -1543,7 +1563,8 @@ private fun ListBookItem(
     onOpen: () -> Unit,
     onLongPress: (Rect) -> Unit,
     collectionDragState: ShelfCollectionDragState,
-    onShelfDrop: (BookEntity, ShelfDrop) -> Unit
+    onShelfDrop: (BookEntity, ShelfDrop) -> Unit,
+    reorderActions: List<CustomAccessibilityAction>
 ) {
     val book = entry.book
     val pinnableContainer = LocalPinnableContainer.current
@@ -1567,7 +1588,10 @@ private fun ListBookItem(
                     1f
                 }
             }
-            .onGloballyPositioned { bounds = it.boundsInRoot() }
+            .onGloballyPositioned {
+                bounds = it.boundsInRoot()
+                collectionDragState.register(target, bounds, registrationOwner)
+            }
             .then(
                 if (collectionDragState.activeDrop?.target == target) Modifier.border(
                     2.dp,
@@ -1586,7 +1610,8 @@ private fun ListBookItem(
                 pinnableContainer = pinnableContainer,
                 state = collectionDragState,
                 onDrop = onShelfDrop,
-                onLongPressOnly = onLongPress
+                onLongPressOnly = onLongPress,
+                reorderActions = reorderActions
             ),
         shape = RoundedCornerShape(24.dp),
         shadowElevation = 4.dp
@@ -1601,7 +1626,6 @@ private fun ListBookItem(
                     .size(width = 68.dp, height = 96.dp)
                     .onGloballyPositioned {
                         coverBounds = it.boundsInRoot()
-                        collectionDragState.register(target, coverBounds, registrationOwner)
                     }
             )
             if (selectionMode) {

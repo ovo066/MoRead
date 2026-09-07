@@ -3,10 +3,61 @@ package com.mozhi.reader.core.library
 import com.mozhi.reader.core.datastore.ChineseConversionMode
 import com.mozhi.reader.core.text.ChineseTextConverter
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ReaderTextAnchorTest {
     private val converter = ChineseTextConverter()
+
+    @Test
+    fun repeatedOverlappingContextKeepsEveryBoundaryInTheSameMode() {
+        val body = "甲".repeat(100)
+        for (point in 0..body.length) {
+            val anchor = ReaderTextAnchors.create(body, point, point, ChineseConversionMode.OFF)
+            assertEquals(
+                "point $point",
+                ResolvedTextAnchor(point, point),
+                ReaderTextAnchors.resolve(body, anchor, ChineseConversionMode.OFF, converter),
+            )
+        }
+    }
+
+    @Test
+    fun everyRegionalPhraseBoundaryHasAnInBoundsPositionInBothDirections() {
+        val source = "這個程式設計師正在檢查主機板與網際網路設定，並把資料庫裡的程式碼傳送給其他使用者。".repeat(4)
+        val shown = converter.convert(source, ChineseConversionMode.TW2SP)
+        for (point in 0..source.length) {
+            val anchor = ReaderTextAnchors.create(source, point, point, ChineseConversionMode.OFF)
+            val resolved = ReaderTextAnchors.resolve(shown, anchor, ChineseConversionMode.TW2SP, converter)
+            assertNotNull("source boundary $point", resolved)
+            assertTrue("source boundary $point", resolved!!.start in 0..shown.length)
+        }
+        for (point in 0..shown.length) {
+            val anchor = ReaderTextAnchors.create(shown, point, point, ChineseConversionMode.TW2SP)
+            val resolved = ReaderTextAnchors.resolveSourcePoint(source, shown, anchor, converter)
+            assertNotNull("display boundary $point", resolved)
+            assertTrue("display boundary $point", resolved!!.start in 0..source.length)
+        }
+    }
+
+    @Test
+    fun missingContextFallsBackToRatioAndEmptyBodyResolvesToZero() {
+        val anchor = ReaderTextAnchors.create("甲乙目標丙丁戊己", 2, 4, ChineseConversionMode.OFF)
+        assertEquals(
+            ResolvedTextAnchor(1, 3),
+            ReaderTextAnchors.resolve("ABCDE", anchor, ChineseConversionMode.TW2SP, converter)
+        )
+        assertEquals(
+            ResolvedTextAnchor(0, 0),
+            ReaderTextAnchors.resolve("", anchor, ChineseConversionMode.TW2SP, converter)
+        )
+        val emptyAnchor = ReaderTextAnchors.create("", 0, 0, ChineseConversionMode.TW2SP)
+        assertEquals(
+            ResolvedTextAnchor(0, 0),
+            ReaderTextAnchors.resolveSourcePoint("", "", emptyAnchor, converter)
+        )
+    }
 
     @Test
     fun pointAnchorReturnsTheSameBoundaryInTheSameMode() {

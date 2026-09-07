@@ -5,6 +5,7 @@ import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.BookSourceType
 import com.mozhi.reader.core.datastore.ReaderSettings
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -39,6 +40,59 @@ class BookCollectionModelsTest {
 
         assertEquals(listOf(3L, 1L), entry.books.map(BookEntity::id))
         assertEquals(setOf(1L, 3L), entry.bookIds)
+        assertEquals(setOf(1L), entry.visibleBookIds)
+    }
+
+    @Test
+    fun filteredSelectAllContainsOnlyMatchingCollectionMembersAndStandaloneBooks() {
+        val visibleMember = book(1, collectionId = 7)
+        val hiddenMember = book(2, collectionId = 7)
+        val standalone = book(3)
+        val entries = buildShelfEntries(
+            listOf(visibleMember, standalone),
+            listOf(visibleMember, hiddenMember, standalone),
+            listOf(collection)
+        )
+
+        assertEquals(setOf(1L, 3L), entries.flatMapTo(linkedSetOf(), ShelfEntry::visibleBookIds))
+        assertEquals(setOf(1L, 2L), entries.first().bookIds)
+    }
+
+    @Test
+    fun pinnedSegmentRejectsCrossingButKeepsWithinSegmentMovesAfterPersistence() {
+        val books = listOf(book(1, pinnedAt = 10), book(2, pinnedAt = 20), book(3), book(4))
+        val entries = books.map(ShelfEntry::Book)
+        assertTrue(shelfDropCrossesPinnedBoundary(entries, 4, "book:1", after = false))
+        assertTrue(shelfDropCrossesPinnedBoundary(entries, 1, "book:4", after = true))
+        assertEquals(entries, reorderShelfEntries(entries, 4, "book:1", after = false))
+        assertEquals(entries, reorderShelfEntries(entries, 1, "book:4", after = true))
+
+        val pinnedOrder = reorderShelfEntries(entries, 2, "book:1", after = false)
+        val finalOrder = reorderShelfEntries(pinnedOrder, 4, "book:2", after = true)
+        assertEquals(pinnedOrder, finalOrder)
+        val boundaryOrder = reorderShelfEntries(pinnedOrder, 4, "book:1", after = true)
+        assertFalse(shelfDropCrossesPinnedBoundary(pinnedOrder, 4, "book:1", after = true))
+        val saved = boundaryOrder.flatMap(ShelfEntry::bookIds)
+        assertEquals(listOf(2L, 1L, 4L, 3L), saved)
+        assertEquals(saved, books.orderedForShelf(saved, false, 0).map(BookEntity::id))
+        assertEquals(saved, books.orderedForShelf(saved, true, 0).map(BookEntity::id))
+    }
+
+    @Test
+    fun collectionWithHiddenPinnedMemberKeepsItsPinnedShelfPosition() {
+        val pinnedMember = book(1, collectionId = 7, pinnedAt = 10)
+        val visibleMember = book(2, collectionId = 7)
+        val standalone = book(3)
+        val entries = buildShelfEntries(
+            listOf(standalone, visibleMember),
+            listOf(pinnedMember, standalone, visibleMember),
+            listOf(collection)
+        )
+
+        assertEquals(listOf("collection:7", "book:3"), entries.map(ShelfEntry::key))
+        assertTrue(entries.first().isPinned)
+        assertEquals(setOf(2L), entries.first().visibleBookIds)
+        assertEquals(entries, reorderShelfEntries(entries, 3, "collection:7", after = false))
     }
 
     @Test
@@ -129,6 +183,22 @@ class BookCollectionModelsTest {
                 visibleBookIds = listOf(5, 3, 1)
             )
         )
+    }
+
+    @Test
+    fun deletedOrRepeatedIdsInDropSnapshotNeverReplaceRemainingBooks() {
+        assertEquals(
+            listOf(5L, 2L, 4L, 1L),
+            mergeVisibleShelfOrder(listOf(1, 2, 4, 5), listOf(5, 3, 5, 1))
+        )
+    }
+
+    @Test
+    fun droppingOntoTheSourceDoesNotChangeEitherOrder() {
+        val books = listOf(book(1), book(2), book(3))
+        val entries = books.map(ShelfEntry::Book)
+        assertEquals(entries, reorderShelfEntries(entries, 2, "book:2", after = true))
+        assertEquals(books, reorderCollectionMembers(books, 2, 2, after = false))
     }
 
     @Test

@@ -67,7 +67,7 @@ import com.mozhi.reader.core.database.entity.TtsVoiceEntity
         AudiobookChapterEntity::class,
         BookTocEntryEntity::class
     ],
-    version = 23,
+    version = MoReadDatabase.VERSION,
     exportSchema = true
 )
 @TypeConverters(DatabaseConverters::class)
@@ -82,4 +82,8 @@ abstract class MoReadDatabase : RoomDatabase() {
     abstract fun shelfOrganizationDao(): ShelfOrganizationDao
     abstract fun ttsVoiceDao(): TtsVoiceDao
     abstract fun audiobookDao(): AudiobookDao
+
+    companion object {
+        const val VERSION = 23
+    }
 }

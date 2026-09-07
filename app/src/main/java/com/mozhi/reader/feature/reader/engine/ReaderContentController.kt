@@ -1,6 +1,7 @@
 package com.mozhi.reader.feature.reader.engine
 
 import com.mozhi.reader.core.library.EpubLayoutChapterBundle
+import com.mozhi.reader.core.datastore.ChineseConversionMode
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -22,7 +23,17 @@ data class ChapterMeta(
 data class ReaderChapterContent(
     val body: String,
     val epubLayout: EpubLayoutChapterBundle? = null,
-    val inlineImages: List<InlineImageSource> = emptyList()
+    val inlineImages: List<InlineImageSource> = emptyList(),
+    /** Original coordinates travel with the displayed chapter through reloads and window changes. */
+    val source: ReaderChapterSource? = null
+)
+
+data class ReaderChapterSource(
+    val body: String,
+    val displayedBody: String = body,
+    val mode: ChineseConversionMode = ChineseConversionMode.OFF,
+    val boundaries: List<Int> = listOf(0, body.length).distinct(),
+    val positions: Map<Int, Int> = mapOf(0 to 0, body.length to body.length)
 )
 
 /**
@@ -587,6 +598,10 @@ class ReaderContentController(
 
     /** Body text for a chapter currently held by the three-chapter window. */
     fun chapterBody(index: Int): String? = slotFor(index)?.content?.body
+
+    fun chapterSource(index: Int): ReaderChapterSource? = slotFor(index)?.content?.let { content ->
+        content.source ?: ReaderChapterSource(content.body)
+    }
 
     fun chapterLayout(index: Int): EpubLayoutChapterBundle? = slotFor(index)?.content?.epubLayout
 

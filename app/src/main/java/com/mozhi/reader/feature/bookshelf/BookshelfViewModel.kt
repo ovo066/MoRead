@@ -211,7 +211,6 @@ class BookshelfViewModel @Inject constructor(
         viewModelScope.launch {
             runCatching {
                 libraryRepository.deleteBook(book)
-                shelfRepository.deleteEmptyCollections()
             }
                 .onFailure {
                     eventChannel.send(BookshelfEvent.ShowMessage("删除失败，请稍后重试"))
@@ -363,7 +362,6 @@ class BookshelfViewModel @Inject constructor(
         viewModelScope.launch {
             ids.mapNotNull { libraryRepository.getBook(it) }
                 .forEach { libraryRepository.deleteBook(it) }
-            shelfRepository.deleteEmptyCollections()
             eventChannel.send(BookshelfEvent.ShowMessage("已移除 ${ids.size} 本书"))
             exitSelection()
         }

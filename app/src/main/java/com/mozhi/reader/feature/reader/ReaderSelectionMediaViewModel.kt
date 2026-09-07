@@ -185,7 +185,7 @@ class ReaderSelectionMediaViewModel @Inject constructor(
                 chapterIndex = chapterIndex,
                 charOffset = charOffset,
                 textAnchorJson = textAnchorJson,
-                sourceText = selected,
+                sourceText = selection,
                 basePrompt = fallbackPrompt
             ),
             prompt = fallbackPrompt,

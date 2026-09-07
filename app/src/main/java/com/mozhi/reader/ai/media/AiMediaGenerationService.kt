@@ -124,7 +124,7 @@ class AiMediaGenerationService @Inject constructor(
                         chapterIndex = chapterIndex,
                         charOffset = charOffset,
                         textAnchorJson = textAnchorJson,
-                        sourceText = sourceText.trim().take(MAX_SOURCE_CHARS),
+                        sourceText = sourceText,
                         prompt = generatedPrompt,
                         imagePath = output.absolutePath,
                         mediaType = generated.mediaType,
@@ -290,7 +290,6 @@ class AiMediaGenerationService @Inject constructor(
 
     private companion object {
         const val MAX_PROMPT_CHARS = 8_000
-        const val MAX_SOURCE_CHARS = 8_000
         const val MAX_SPEECH_CHARS = 8_000
         const val MAX_MEDIA_BYTES = 30 * 1024 * 1024
     }

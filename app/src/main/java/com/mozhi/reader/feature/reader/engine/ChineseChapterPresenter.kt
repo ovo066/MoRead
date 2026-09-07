@@ -26,11 +26,12 @@ class ChineseChapterPresenter @Inject constructor(
         val boundaries = presentationBoundaries(body, layout, images)
         val rewritten = rewrite(body, boundaries, mode)
         return ReaderChapterContent(
-            body = rewritten.body,
-            epubLayout = layout?.rebase(rewritten.positions, rewritten.body.length, mode),
+            body = rewritten.displayedBody,
+            epubLayout = layout?.rebase(rewritten.positions, body.length, rewritten.displayedBody.length, mode),
             inlineImages = images.map { image ->
-                image.copy(charOffset = rewritten.positions.getValue(image.charOffset))
-            }
+                image.copy(charOffset = rewritten.positions.mappedOffset(image.charOffset, body.length))
+            },
+            source = rewritten
         )
     }
 
@@ -40,40 +41,47 @@ class ChineseChapterPresenter @Inject constructor(
         images: List<InlineImageSource>,
         displayedAnchor: ReaderTextAnchor
     ): Int? {
-        if (displayedAnchor.mode == ChineseConversionMode.OFF) {
+        val source = if (displayedAnchor.mode == ChineseConversionMode.OFF) {
+            ReaderChapterSource(body)
+        } else {
+            rewrite(body, presentationBoundaries(body, layout, images), displayedAnchor.mode)
+        }
+        return resolveSourcePoint(source, displayedAnchor)
+    }
+
+    fun resolveSourcePoint(source: ReaderChapterSource, displayedAnchor: ReaderTextAnchor): Int? {
+        if (source.mode == ChineseConversionMode.OFF) {
             return ReaderTextAnchors.resolve(
-                body,
+                source.body,
                 displayedAnchor,
                 ChineseConversionMode.OFF,
                 converter
             )?.start
         }
-        val boundaries = presentationBoundaries(body, layout, images)
-        val rewritten = rewrite(body, boundaries, displayedAnchor.mode)
         val displayedPoint = ReaderTextAnchors.resolve(
-            rewritten.body,
+            source.displayedBody,
             displayedAnchor,
-            displayedAnchor.mode,
+            source.mode,
             converter
         )?.start ?: return null
-        boundaries.firstOrNull { rewritten.positions.getValue(it) == displayedPoint }
+        source.boundaries.firstOrNull { source.positions.getValue(it) == displayedPoint }
             ?.let { return it }
-        val (sourceStart, sourceEnd) = boundaries.zipWithNext().firstOrNull { (start, end) ->
-            displayedPoint > rewritten.positions.getValue(start) &&
-                displayedPoint < rewritten.positions.getValue(end)
+        val (sourceStart, sourceEnd) = source.boundaries.zipWithNext().firstOrNull { (start, end) ->
+            displayedPoint > source.positions.getValue(start) &&
+                displayedPoint < source.positions.getValue(end)
         } ?: return null
-        val displayStart = rewritten.positions.getValue(sourceStart)
-        val displayEnd = rewritten.positions.getValue(sourceEnd)
+        val displayStart = source.positions.getValue(sourceStart)
+        val displayEnd = source.positions.getValue(sourceEnd)
         val localPoint = displayedPoint - displayStart
-        val displayedLeaf = rewritten.body.substring(displayStart, displayEnd)
+        val displayedLeaf = source.displayedBody.substring(displayStart, displayEnd)
         val localAnchor = ReaderTextAnchors.create(
             displayedLeaf,
             localPoint,
             localPoint,
-            displayedAnchor.mode
+            source.mode
         )
         return ReaderTextAnchors.resolveSourcePoint(
-            sourceBody = body.substring(sourceStart, sourceEnd),
+            sourceBody = source.body.substring(sourceStart, sourceEnd),
             displayedBody = displayedLeaf,
             displayedAnchor = localAnchor,
             converter = converter
@@ -103,32 +111,41 @@ class ChineseChapterPresenter @Inject constructor(
         sourceEnd: Int,
         mode: ChineseConversionMode
     ): ResolvedTextAnchor? {
-        val start = sourceStart.coerceIn(0, body.length)
-        val end = sourceEnd.coerceIn(start, body.length)
-        if (mode == ChineseConversionMode.OFF) return ResolvedTextAnchor(start, end)
-        val boundaries = presentationBoundaries(body, layout, images)
-        val rewritten = rewrite(body, boundaries, mode)
-        val displayStart = resolveDisplayedBoundary(body, boundaries, rewritten, start, mode)
+        val source = if (mode == ChineseConversionMode.OFF) {
+            ReaderChapterSource(body)
+        } else {
+            rewrite(body, presentationBoundaries(body, layout, images), mode)
+        }
+        return resolveDisplayedRange(source, sourceStart, sourceEnd)
+    }
+
+    /** Uses the immutable map produced at load time; rendering marks never rewrites the chapter. */
+    fun resolveDisplayedRange(
+        source: ReaderChapterSource,
+        sourceStart: Int,
+        sourceEnd: Int
+    ): ResolvedTextAnchor? {
+        val start = sourceStart.coerceIn(0, source.body.length)
+        val end = sourceEnd.coerceIn(start, source.body.length)
+        if (source.mode == ChineseConversionMode.OFF) return ResolvedTextAnchor(start, end)
+        val displayStart = resolveDisplayedBoundary(source, start)
             ?: return null
-        val displayEnd = resolveDisplayedBoundary(body, boundaries, rewritten, end, mode)
+        val displayEnd = resolveDisplayedBoundary(source, end)
             ?: return null
         return ResolvedTextAnchor(displayStart, displayEnd)
     }
 
     private fun resolveDisplayedBoundary(
-        body: String,
-        boundaries: List<Int>,
-        rewritten: RewrittenText,
-        sourcePoint: Int,
-        mode: ChineseConversionMode
+        source: ReaderChapterSource,
+        sourcePoint: Int
     ): Int? {
-        rewritten.positions[sourcePoint]?.let { return it }
-        val (sourceStart, sourceEnd) = boundaries.zipWithNext().firstOrNull { (start, end) ->
+        source.positions[sourcePoint]?.let { return it }
+        val (sourceStart, sourceEnd) = source.boundaries.zipWithNext().firstOrNull { (start, end) ->
             sourcePoint > start && sourcePoint < end
         } ?: return null
-        val displayStart = rewritten.positions.getValue(sourceStart)
-        val displayEnd = rewritten.positions.getValue(sourceEnd)
-        val sourceLeaf = body.substring(sourceStart, sourceEnd)
+        val displayStart = source.positions.getValue(sourceStart)
+        val displayEnd = source.positions.getValue(sourceEnd)
+        val sourceLeaf = source.body.substring(sourceStart, sourceEnd)
         val localPoint = sourcePoint - sourceStart
         val localAnchor = ReaderTextAnchors.create(
             sourceLeaf,
@@ -136,12 +153,21 @@ class ChineseChapterPresenter @Inject constructor(
             localPoint,
             ChineseConversionMode.OFF
         )
-        return ReaderTextAnchors.resolve(
-            rewritten.body.substring(displayStart, displayEnd),
+        val displayedLeaf = source.displayedBody.substring(displayStart, displayEnd)
+        val localDisplayPoint = ReaderTextAnchors.resolveTextMatch(
+            displayedLeaf,
             localAnchor,
-            mode,
+            source.mode,
             converter
-        )?.start?.plus(displayStart)
+        )?.start ?: ReaderTextAnchors.convertedBoundary(
+            sourceLeaf,
+            displayedLeaf,
+            localPoint,
+            ChineseConversionMode.OFF,
+            source.mode,
+            converter
+        )
+        return localDisplayPoint + displayStart
     }
 
     private fun presentationBoundaries(
@@ -166,16 +192,11 @@ class ChineseChapterPresenter @Inject constructor(
         return boundaries.toList()
     }
 
-    private data class RewrittenText(
-        val body: String,
-        val positions: Map<Int, Int>
-    )
-
     private fun rewrite(
         source: String,
         boundaries: List<Int>,
         mode: ChineseConversionMode
-    ): RewrittenText {
+    ): ReaderChapterSource {
         val output = StringBuilder(source.length)
         val positions = HashMap<Int, Int>(boundaries.size)
         positions[0] = 0
@@ -184,7 +205,7 @@ class ChineseChapterPresenter @Inject constructor(
             output.append(converter.convert(source.substring(start, end), mode))
             positions[end] = output.length
         }
-        return RewrittenText(output.toString(), positions)
+        return ReaderChapterSource(source, output.toString(), mode, boundaries, positions)
     }
 
     private fun MutableSet<Int>.addValid(value: Int, length: Int) {
@@ -197,14 +218,18 @@ class ChineseChapterPresenter @Inject constructor(
         children.forEach { it.collectBoundaries(target, length) }
     }
 
-    private fun EpubDomNode.rebase(positions: Map<Int, Int>): EpubDomNode = copy(
-        textStart = textStart.takeIf { it >= 0 }?.let(positions::getValue) ?: -1,
-        textEnd = textEnd.takeIf { it >= 0 }?.let(positions::getValue) ?: -1,
-        children = children.map { it.rebase(positions) }
+    private fun Map<Int, Int>.mappedOffset(offset: Int, sourceLength: Int): Int =
+        getValue(offset.coerceIn(0, sourceLength))
+
+    private fun EpubDomNode.rebase(positions: Map<Int, Int>, sourceLength: Int): EpubDomNode = copy(
+        textStart = textStart.takeIf { it >= 0 }?.let { positions.mappedOffset(it, sourceLength) } ?: -1,
+        textEnd = textEnd.takeIf { it >= 0 }?.let { positions.mappedOffset(it, sourceLength) } ?: -1,
+        children = children.map { it.rebase(positions, sourceLength) }
     )
 
     private fun EpubLayoutChapterBundle.rebase(
         positions: Map<Int, Int>,
+        sourceLength: Int,
         newLength: Int,
         mode: ChineseConversionMode
     ): EpubLayoutChapterBundle = copy(
@@ -212,12 +237,12 @@ class ChineseChapterPresenter @Inject constructor(
             documentTitle = document.documentTitle?.let { converter.convert(it, mode) },
             blocks = document.blocks.map { block ->
                 block.copy(
-                    textStart = positions.getValue(block.textStart),
-                    textEnd = positions.getValue(block.textEnd),
+                    textStart = positions.mappedOffset(block.textStart, sourceLength),
+                    textEnd = positions.mappedOffset(block.textEnd, sourceLength),
                     spans = block.spans.map { span ->
                         span.copy(
-                            textStart = positions.getValue(span.textStart),
-                            textEnd = positions.getValue(span.textEnd),
+                            textStart = positions.mappedOffset(span.textStart, sourceLength),
+                            textEnd = positions.mappedOffset(span.textEnd, sourceLength),
                             rubyText = span.rubyText?.let { converter.convert(it, mode) }
                         )
                     }
@@ -228,7 +253,7 @@ class ChineseChapterPresenter @Inject constructor(
         dom = dom?.let { source ->
             source.copy(
                 documentTitle = source.documentTitle?.let { converter.convert(it, mode) },
-                bodyNode = source.bodyNode.rebase(positions),
+                bodyNode = source.bodyNode.rebase(positions, sourceLength),
                 textLength = newLength
             )
         }

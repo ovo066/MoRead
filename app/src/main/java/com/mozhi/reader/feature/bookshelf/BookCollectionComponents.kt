@@ -57,6 +57,10 @@ import androidx.compose.ui.layout.LocalPinnableContainer
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
@@ -77,7 +81,9 @@ internal fun CollectionArtwork(
 ) {
     val covers = books.take(4)
     Surface(
-        modifier = modifier,
+        modifier = modifier.semantics {
+            contentDescription = covers.joinToString(prefix = "合集封面：") { it.title }
+        },
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surfaceContainerHighest,
         shadowElevation = 8.dp
@@ -133,6 +139,12 @@ internal fun GridCollectionItem(
             )
             .clip(RoundedCornerShape(12.dp))
             .clickable(onClick = onOpen)
+            .semantics {
+                if (!selectionMode) onLongClick(label = "合集操作") { onOpen(); true }
+            }
+            .onGloballyPositioned {
+                collectionDragState.register(target, it.boundsInRoot(), registrationOwner)
+            }
     ) {
         Box {
             CollectionArtwork(
@@ -140,13 +152,6 @@ internal fun GridCollectionItem(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(0.69f)
-                    .onGloballyPositioned {
-                        collectionDragState.register(
-                            target,
-                            it.boundsInRoot(),
-                            registrationOwner
-                        )
-                    }
             )
             if (selectionMode) {
                 Icon(
@@ -199,7 +204,13 @@ internal fun ListCollectionItem(
                     RoundedCornerShape(24.dp)
                 ) else Modifier
             )
-            .clickable(onClick = onOpen),
+            .clickable(onClick = onOpen)
+            .semantics {
+                if (!selectionMode) onLongClick(label = "合集操作") { onOpen(); true }
+            }
+            .onGloballyPositioned {
+                collectionDragState.register(target, it.boundsInRoot(), registrationOwner)
+            },
         shape = RoundedCornerShape(24.dp),
         shadowElevation = 4.dp
     ) {
@@ -211,13 +222,6 @@ internal fun ListCollectionItem(
                 books = entry.books,
                 modifier = Modifier
                     .size(width = 68.dp, height = 96.dp)
-                    .onGloballyPositioned {
-                        collectionDragState.register(
-                            target,
-                            it.boundsInRoot(),
-                            registrationOwner
-                        )
-                    }
             )
             if (selectionMode) {
                 Icon(
@@ -471,59 +475,78 @@ internal fun CollectionContentsSheet(
                             )
                         }
                         val registrationOwner = remember { Any() }
+                        var bounds by remember(book.id) { mutableStateOf(Rect.Zero) }
                         var coverBounds by remember(book.id) { mutableStateOf(Rect.Zero) }
                         DisposableEffect(book.id) {
                             onDispose {
                                 memberDragState.unregister(target.entryKey, registrationOwner)
                             }
                         }
-                        Column {
+                        val onMemberDrop: (BookEntity, ShelfDrop) -> Unit = { source, drop ->
+                            val targetId = requireNotNull(drop.target.bookId)
+                            onReorderBooks(
+                                reorderCollectionMembers(
+                                    entry.books,
+                                    sourceBookId = source.id,
+                                    targetBookId = targetId,
+                                    after = drop.placement == ShelfDropPlacement.AFTER
+                                ).map(BookEntity::id)
+                            )
+                        }
+                        val index = entry.books.indexOfFirst { it.id == book.id }
+                        val reorderActions = listOfNotNull(
+                            entry.books.getOrNull(index - 1)?.let {
+                                CustomAccessibilityAction("向前移动") {
+                                    onReorderBooks(reorderCollectionMembers(
+                                        entry.books, book.id, it.id, after = false
+                                    ).map(BookEntity::id))
+                                    true
+                                }
+                            },
+                            entry.books.getOrNull(index + 1)?.let {
+                                CustomAccessibilityAction("向后移动") {
+                                    onReorderBooks(reorderCollectionMembers(
+                                        entry.books, book.id, it.id, after = true
+                                    ).map(BookEntity::id))
+                                    true
+                                }
+                            }
+                        )
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .graphicsLayer {
+                                    alpha = if (memberDragState.sourceBook?.id == book.id) 0f else 1f
+                                }
+                                .onGloballyPositioned {
+                                    bounds = it.boundsInRoot()
+                                    memberDragState.register(target, bounds, registrationOwner)
+                                }
+                                .clickable { onOpenBook(book.id) }
+                                .collectionDragSource(
+                                    book = book,
+                                    bounds = { bounds },
+                                    coverBounds = { coverBounds },
+                                    horizontal = true,
+                                    allowMerge = false,
+                                    enabled = true,
+                                    pinnableContainer = pinnableContainer,
+                                    state = memberDragState,
+                                    onDrop = onMemberDrop,
+                                    onLongPressOnly = { memberMenuBookId = book.id },
+                                    reorderActions = reorderActions
+                                )
+                        ) {
                             Box {
                                 CompactBookArtwork(
                                     book = book,
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .aspectRatio(0.69f)
-                                        .graphicsLayer {
-                                            alpha = if (memberDragState.sourceBook?.id == book.id) {
-                                                0f
-                                            } else {
-                                                1f
-                                            }
-                                        }
                                         .onGloballyPositioned {
                                             coverBounds = it.boundsInRoot()
-                                            memberDragState.register(
-                                                target,
-                                                coverBounds,
-                                                registrationOwner
-                                            )
                                         }
                                         .clip(RoundedCornerShape(12.dp))
-                                        .clickable { onOpenBook(book.id) }
-                                        .collectionDragSource(
-                                            book = book,
-                                            bounds = { coverBounds },
-                                            coverBounds = { coverBounds },
-                                            horizontal = true,
-                                            allowMerge = false,
-                                            enabled = true,
-                                            pinnableContainer = pinnableContainer,
-                                            state = memberDragState,
-                                            onDrop = { source, drop ->
-                                                val targetId = requireNotNull(drop.target.bookId)
-                                                onReorderBooks(
-                                                    reorderCollectionMembers(
-                                                        entry.books,
-                                                        sourceBookId = source.id,
-                                                        targetBookId = targetId,
-                                                        after = drop.placement ==
-                                                            ShelfDropPlacement.AFTER
-                                                    ).map(BookEntity::id)
-                                                )
-                                            },
-                                            onLongPressOnly = { _ -> }
-                                        )
                                 )
                                 Box(Modifier.align(Alignment.TopEnd)) {
                                     IconButton(onClick = { memberMenuBookId = book.id }) {

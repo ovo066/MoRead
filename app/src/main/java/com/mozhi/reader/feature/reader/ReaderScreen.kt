@@ -739,20 +739,22 @@ fun ReaderScreen(
                         null
                     }
                 val paneImageAction: (String, String, IntRange) -> Unit =
-                    { selectionText, contextText, range ->
-                        selectionMediaViewModel.generateImage(
-                            bookId = bookId,
-                            bookTitle = state.book?.title.orEmpty(),
-                            chapterTitle = chapterTitle,
-                            chapterIndex = state.currentChapterIndex,
-                            charOffset = range.first,
-                            textAnchorJson = viewModel.textAnchorJsonFor(
-                                state.currentChapterIndex,
-                                range
-                            ),
-                            selection = selectionText,
-                            contextText = contextText
-                        )
+                    { _, contextText, range ->
+                        val chapterIndex = state.currentChapterIndex
+                        coroutineScope.launch {
+                            val source = viewModel.sourceSelectionForDisplayed(chapterIndex, range)
+                                ?: return@launch
+                            selectionMediaViewModel.generateImage(
+                                bookId = bookId,
+                                bookTitle = state.book?.title.orEmpty(),
+                                chapterTitle = chapterTitle,
+                                chapterIndex = chapterIndex,
+                                charOffset = source.start,
+                                textAnchorJson = source.textAnchorJson,
+                                selection = source.text,
+                                contextText = contextText
+                            )
+                        }
                     }
                 if (scrollMode) {
                     ReaderScrollPane(

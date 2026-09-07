@@ -6,18 +6,24 @@ import com.mozhi.reader.core.database.entity.BookEntity
 sealed interface ShelfEntry {
     val key: String
     val bookIds: Set<Long>
+    val visibleBookIds: Set<Long>
+    val isPinned: Boolean
 
     data class Book(val book: BookEntity) : ShelfEntry {
         override val key = "book:${book.id}"
         override val bookIds = setOf(book.id)
+        override val visibleBookIds = bookIds
+        override val isPinned = book.pinnedAt > 0L
     }
 
     data class Collection(
         val collection: BookCollectionEntity,
-        val books: List<BookEntity>
+        val books: List<BookEntity>,
+        override val visibleBookIds: Set<Long> = books.mapTo(linkedSetOf(), BookEntity::id)
     ) : ShelfEntry {
         override val key = "collection:${collection.id}"
         override val bookIds = books.mapTo(linkedSetOf(), BookEntity::id)
+        override val isPinned = books.any { it.pinnedAt > 0L }
     }
 }
 
@@ -32,16 +38,22 @@ fun buildShelfEntries(
         .groupBy { requireNotNull(it.collectionId) }
         .mapValues { (_, books) -> books.sortedWith(compareBy(BookEntity::collectionOrder).thenBy(BookEntity::id)) }
     val emitted = mutableSetOf<Long>()
-    return buildList {
+    val visibleIds = visibleBooks.mapTo(hashSetOf(), BookEntity::id)
+    return buildList<ShelfEntry> {
         visibleBooks.forEach { book ->
             val collectionId = book.collectionId
             val collection = collectionId?.let(collectionsById::get)
             if (collection == null) add(ShelfEntry.Book(book))
             else if (emitted.add(collection.id)) {
-                add(ShelfEntry.Collection(collection, membersByCollection.getValue(collection.id)))
+                val members = membersByCollection.getValue(collection.id)
+                add(ShelfEntry.Collection(
+                    collection,
+                    members,
+                    members.mapTo(linkedSetOf(), BookEntity::id).intersect(visibleIds)
+                ))
             }
         }
-    }
+    }.sortedByDescending(ShelfEntry::isPinned)
 }
 
 internal fun List<BookEntity>.orderedForShelf(
@@ -73,6 +85,26 @@ internal fun reorderShelfEntries(
     targetKey: String,
     after: Boolean
 ): List<ShelfEntry> {
+    val reordered = moveShelfEntry(entries, sourceBookId, targetKey, after)
+    return if (reordered.hasPinnedBoundaryCrossing()) entries else reordered
+}
+
+internal fun shelfDropCrossesPinnedBoundary(
+    entries: List<ShelfEntry>,
+    sourceBookId: Long,
+    targetKey: String,
+    after: Boolean
+): Boolean = moveShelfEntry(entries, sourceBookId, targetKey, after).hasPinnedBoundaryCrossing()
+
+private fun List<ShelfEntry>.hasPinnedBoundaryCrossing(): Boolean =
+    zipWithNext().any { (before, after) -> !before.isPinned && after.isPinned }
+
+private fun moveShelfEntry(
+    entries: List<ShelfEntry>,
+    sourceBookId: Long,
+    targetKey: String,
+    after: Boolean
+): List<ShelfEntry> {
     val sourceIndex = entries.indexOfFirst {
         it is ShelfEntry.Book && it.book.id == sourceBookId
     }
@@ -89,8 +121,10 @@ internal fun mergeVisibleShelfOrder(
     allBookIds: List<Long>,
     visibleBookIds: List<Long>
 ): List<Long> {
-    val visible = visibleBookIds.toHashSet()
-    val reordered = visibleBookIds.iterator()
+    val existing = allBookIds.toHashSet()
+    val currentVisibleIds = visibleBookIds.distinct().filter(existing::contains)
+    val visible = currentVisibleIds.toHashSet()
+    val reordered = currentVisibleIds.iterator()
     return allBookIds.map { id -> if (id in visible) reordered.next() else id }
 }
 

@@ -33,6 +33,7 @@ DEVELOPMENT_PLAN.md
 design/
 docs/CODE_MAP.md
 docs/COMPANION_PHASE3_HANDOFF.md
+docs/superpowers/
 .firecrawl/
 
 # 构建产物与发布材料（APK 一律通过 GitHub Release 分发）

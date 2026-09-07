@@ -29,7 +29,7 @@ interface ShelfOrganizationDao {
     suspend fun maxCollectionOrder(collectionId: Long): Int
 
     @Query("UPDATE books SET collectionId = :collectionId, collectionOrder = :order WHERE id = :bookId")
-    suspend fun setBookCollection(bookId: Long, collectionId: Long?, order: Int)
+    suspend fun setBookCollection(bookId: Long, collectionId: Long?, order: Int): Int
 
     @Query("UPDATE books SET collectionId = NULL, collectionOrder = 0 WHERE id IN (:bookIds)")
     suspend fun clearBookCollections(bookIds: List<Long>)
@@ -57,9 +57,10 @@ interface ShelfOrganizationDao {
 
     @Transaction
     suspend fun createCollection(name: String, bookIds: List<Long>): Long {
+        require(bookIds.isNotEmpty()) { "合集至少需要一本书" }
         val id = insertCollection(BookCollectionEntity(name = name, createdAt = System.currentTimeMillis()))
         bookIds.distinct().forEachIndexed { order, bookId ->
-            setBookCollection(bookId, id, order)
+            require(setBookCollection(bookId, id, order) == 1) { "书籍已移除，请刷新书架" }
         }
         deleteEmptyCollections()
         return id

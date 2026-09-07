@@ -1,6 +1,8 @@
 package com.mozhi.reader.core.database
 
 import androidx.room.Room
+import androidx.room.testing.MigrationTestHelper
+import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.mozhi.reader.core.database.entity.BookEntity
@@ -13,18 +15,39 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class ShelfCollectionDaoTest {
-    private val database = Room.inMemoryDatabaseBuilder(
-        InstrumentationRegistry.getInstrumentation().targetContext,
-        MoReadDatabase::class.java
-    ).allowMainThreadQueries().build()
+    private val context = InstrumentationRegistry.getInstrumentation().targetContext
+    private lateinit var database: MoReadDatabase
+
+    @get:Rule
+    val helper = MigrationTestHelper(
+        InstrumentationRegistry.getInstrumentation(),
+        MoReadDatabase::class.java,
+        emptyList(),
+        FrameworkSQLiteOpenHelperFactory()
+    )
+
+    @Before
+    fun openMigratedDatabase() {
+        helper.createDatabase(DB_NAME, 22).close()
+        database = Room.databaseBuilder(context, MoReadDatabase::class.java, DB_NAME)
+            .addMigrations(DatabaseMigrations.Migration22To23)
+            .allowMainThreadQueries()
+            .build()
+    }
 
     @After
-    fun closeDatabase() = database.close()
+    fun closeDatabase() {
+        database.close()
+        context.deleteDatabase(DB_NAME)
+    }
 
     @Test
     fun collectionMovesPreserveOrderAndIndependentGroupTagData() = runBlocking {
@@ -61,6 +84,33 @@ class ShelfCollectionDaoTest {
         assertEquals(listOf(null, null, null), bookDao.getBooks().map(BookEntity::collectionId))
     }
 
+    @Test
+    fun createCollectionRejectsEmptyMembers() = runBlocking {
+        val shelfDao = database.shelfOrganizationDao()
+
+        val failure = runCatching { shelfDao.createCollection("空合集", emptyList()) }.exceptionOrNull()
+
+        assertTrue(failure is IllegalArgumentException)
+        assertTrue(shelfDao.observeCollections().first().isEmpty())
+    }
+
+    @Test
+    fun createCollectionRejectsMissingBooksWithoutMovingExistingMembers() = runBlocking {
+        val shelfDao = database.shelfOrganizationDao()
+        val bookDao = database.bookDao()
+        val first = bookDao.insertBook(book("一", 1, 1))
+        val original = shelfDao.createCollection("原合集", listOf(first, first))
+
+        for (members in listOf(listOf(999_999L), listOf(first, 999_999L))) {
+            val failure = runCatching { shelfDao.createCollection("新合集", members) }.exceptionOrNull()
+
+            assertTrue(failure is IllegalArgumentException)
+            assertEquals(listOf(original), shelfDao.observeCollections().first().map { it.id })
+            assertEquals(original, bookDao.getBook(first)?.collectionId)
+            assertEquals(0, bookDao.getBook(first)?.collectionOrder)
+        }
+    }
+
     private fun book(title: String, importedAt: Long, groupId: Long) = BookEntity(
         title = title,
         author = "",
@@ -71,4 +121,8 @@ class ShelfCollectionDaoTest {
         totalChapters = 1,
         groupId = groupId
     )
+
+    private companion object {
+        const val DB_NAME = "shelf-collection-migration-test.db"
+    }
 }

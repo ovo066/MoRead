@@ -143,6 +143,95 @@ class ShelfCollectionDragTest {
     }
 
     @Test
+    fun listTitlesAndVerticalGapsAreDropTargets() {
+        val first = ShelfDropTarget("book:2", bookId = 2, collectionId = null)
+        val second = ShelfDropTarget("book:3", bookId = 3, collectionId = null)
+        val regions = listOf(
+            ShelfDropRegion(first, Rect(0f, 0f, 320f, 122f)),
+            ShelfDropRegion(second, Rect(0f, 136f, 320f, 258f))
+        )
+        assertEquals(
+            ShelfDrop(second, ShelfDropPlacement.BEFORE),
+            findShelfDrop(Offset(280f, 145f), 1, regions, horizontal = false, allowMerge = true)
+        )
+        assertEquals(
+            ShelfDrop(first, ShelfDropPlacement.AFTER),
+            findShelfDrop(Offset(280f, 125f), 1, regions, horizontal = false, allowMerge = true)
+        )
+        assertEquals(
+            ShelfDrop(second, ShelfDropPlacement.BEFORE),
+            findShelfDrop(Offset(280f, 133f), 1, regions, horizontal = false, allowMerge = true)
+        )
+    }
+
+    @Test
+    fun gridRowGapKeepsTheNearestInsertionTarget() {
+        val first = ShelfDropTarget("book:2", bookId = 2, collectionId = null)
+        val second = ShelfDropTarget("book:3", bookId = 3, collectionId = null)
+        val regions = listOf(
+            ShelfDropRegion(first, Rect(0f, 0f, 100f, 180f)),
+            ShelfDropRegion(second, Rect(0f, 200f, 100f, 380f))
+        )
+        assertEquals(
+            ShelfDrop(first, ShelfDropPlacement.AFTER),
+            findShelfDrop(Offset(50f, 185f), 1, regions, horizontal = true, allowMerge = true)
+        )
+        assertEquals(
+            ShelfDrop(second, ShelfDropPlacement.BEFORE),
+            findShelfDrop(Offset(50f, 195f), 1, regions, horizontal = true, allowMerge = true)
+        )
+    }
+
+    @Test
+    fun cancellingADragClearsDropAndScrollBeforeTheNextGesture() {
+        val state = ShelfCollectionDragState()
+        val target = ShelfDropTarget("book:2", bookId = 2, collectionId = null)
+        val cover = Rect(0f, 0f, 100f, 150f)
+        state.register(target, Rect(0f, 800f, 320f, 1000f), Any())
+        state.setViewport(Rect(0f, 0f, 320f, 1000f))
+        state.begin(testBook(), Offset(50f, 50f), cover, horizontal = false, allowMerge = true)
+        state.dragBy(Offset(0f, 900f), minDistancePx = 8f)
+        assertEquals(1, state.autoScrollDirection)
+        assertTrue(state.activeDrop != null)
+
+        state.cancel()
+        assertNull(state.sourceBook)
+        assertNull(state.activeDrop)
+        assertNull(state.finish())
+        assertEquals(0, state.autoScrollDirection)
+        state.begin(testBook(), Offset(50f, 50f), cover, horizontal = false, allowMerge = true)
+        val next = requireNotNull(state.finish())
+        assertNull(next.drop)
+        assertTrue(next.showLongPressMenu)
+    }
+
+    @Test
+    fun scrollSpeedMatchesAtSixtyAndOneHundredTwentyFramesPerSecond() {
+        fun distance(frames: Int): Float = (1..frames).sumOf { frame ->
+            val start = (frame - 1) * 1_000_000_000L / frames
+            val end = frame * 1_000_000_000L / frames
+            shelfScrollDistance(end - start, 720f).toDouble()
+        }.toFloat()
+        assertEquals(720f, distance(60), 0.001f)
+        assertEquals(distance(60), distance(120), 0.001f)
+    }
+
+    @Test
+    fun accessibilityReorderActionsStayWithinThePinnedSegment() {
+        val pinned = testBook(1).copy(pinnedAt = 10)
+        val unpinned = testBook(2)
+        val last = testBook(3)
+        val entries = listOf(pinned, unpinned, last).map(ShelfEntry::Book)
+        var result: ShelfDrop? = null
+
+        assertTrue(shelfReorderActions(entries, pinned) { _, drop -> result = drop }.isEmpty())
+        val actions = shelfReorderActions(entries, unpinned) { _, drop -> result = drop }
+        assertEquals(listOf("向后移动"), actions.map { it.label })
+        assertTrue(actions.single().action())
+        assertEquals(ShelfDrop(ShelfEntry.Book(last).dropTarget(), ShelfDropPlacement.AFTER), result)
+    }
+
+    @Test
     fun noMoveFallsBackAndOnlyThresholdedDragDrops() {
         val state = ShelfCollectionDragState()
         val book = testBook()

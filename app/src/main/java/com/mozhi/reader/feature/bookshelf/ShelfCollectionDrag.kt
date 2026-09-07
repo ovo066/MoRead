@@ -9,17 +9,23 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.PinnableContainer
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.mozhi.reader.core.database.entity.BookEntity
-import kotlin.math.abs
 
 data class ShelfDropTarget(
     val entryKey: String,
@@ -56,14 +62,22 @@ private fun findShelfDropRegion(
     regions.firstOrNull {
         it.target.bookId != sourceBookId && it.bounds.contains(pointer)
     }?.let { return it }
-    if (!horizontal) return null
-    val row = regions.filter { pointer.y >= it.bounds.top && pointer.y < it.bounds.bottom }
-    if (row.isEmpty() ||
-        pointer.x < row.minOf { it.bounds.left } ||
-        pointer.x > row.maxOf { it.bounds.right }
+    val row = if (horizontal) regions.filter {
+        pointer.y >= it.bounds.top && pointer.y < it.bounds.bottom
+    } else emptyList()
+    val candidates = row.ifEmpty { regions }
+    if (candidates.isEmpty() ||
+        pointer.x < candidates.minOf { it.bounds.left } ||
+        pointer.x > candidates.maxOf { it.bounds.right } ||
+        pointer.y < regions.minOf { it.bounds.top } ||
+        pointer.y > regions.maxOf { it.bounds.bottom }
     ) return null
-    return row.minWithOrNull(
-        compareBy<ShelfDropRegion> { abs(pointer.x - it.bounds.center.x) }
+    return candidates.minWithOrNull(
+        compareBy<ShelfDropRegion> {
+            val dx = pointer.x - pointer.x.coerceIn(it.bounds.left, it.bounds.right)
+            val dy = pointer.y - pointer.y.coerceIn(it.bounds.top, it.bounds.bottom)
+            dx * dx + dy * dy
+        }
             .thenBy { if (it.target.bookId == sourceBookId) 0 else 1 }
     )
 }
@@ -90,7 +104,11 @@ fun findShelfDrop(
         (pointer.y - region.bounds.top) / region.bounds.height
     }
     val placement = when {
-        !direct -> if (pointer.x < region.bounds.center.x) {
+        !direct -> if (if (horizontal && pointer.y in region.bounds.top..region.bounds.bottom) {
+            pointer.x < region.bounds.center.x
+        } else {
+            pointer.y < region.bounds.center.y
+        }) {
             ShelfDropPlacement.BEFORE
         } else {
             ShelfDropPlacement.AFTER
@@ -255,6 +273,7 @@ internal class ShelfCollectionDragState {
     }
 }
 
+@Composable
 internal fun Modifier.collectionDragSource(
     book: BookEntity,
     bounds: () -> Rect,
@@ -265,42 +284,83 @@ internal fun Modifier.collectionDragSource(
     pinnableContainer: PinnableContainer?,
     state: ShelfCollectionDragState,
     onDrop: (BookEntity, ShelfDrop) -> Unit,
-    onLongPressOnly: (Rect) -> Unit
-): Modifier = pointerInput(book, enabled, horizontal, allowMerge, pinnableContainer) {
-    if (!enabled) return@pointerInput
-    var pinnedHandle: PinnableContainer.PinnedHandle? = null
-    detectDragGesturesAfterLongPress(
-        onDragStart = { local ->
-            pinnedHandle = pinnableContainer?.pin()
-            state.begin(
-                book = book,
-                start = bounds().topLeft + local,
-                coverBounds = coverBounds(),
-                horizontal = horizontal,
-                allowMerge = allowMerge
-            )
-        },
-        onDrag = { change, amount ->
-            change.consume()
-            state.dragBy(amount, viewConfiguration.touchSlop)
-        },
-        onDragEnd = {
-            val result = state.finish()
-            pinnedHandle?.release()
-            pinnedHandle = null
-            when {
-                result == null -> Unit
-                result.drop != null -> onDrop(result.source, result.drop)
-                result.showLongPressMenu -> onLongPressOnly(bounds())
+    onLongPressOnly: (Rect) -> Unit,
+    reorderActions: List<CustomAccessibilityAction> = emptyList()
+): Modifier {
+    val currentBook by rememberUpdatedState(book)
+    val currentBounds by rememberUpdatedState(bounds)
+    val currentCoverBounds by rememberUpdatedState(coverBounds)
+    val currentOnDrop by rememberUpdatedState(onDrop)
+    val currentOnLongPress by rememberUpdatedState(onLongPressOnly)
+    val hapticFeedback by rememberUpdatedState(LocalHapticFeedback.current)
+    return pointerInput(book.id, enabled, horizontal, allowMerge, pinnableContainer, state) {
+        if (!enabled) return@pointerInput
+        var pinnedHandle: PinnableContainer.PinnedHandle? = null
+        detectDragGesturesAfterLongPress(
+            onDragStart = { local ->
+                pinnedHandle = pinnableContainer?.pin()
+                hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                state.begin(
+                    book = currentBook,
+                    start = currentBounds().topLeft + local,
+                    coverBounds = currentCoverBounds(),
+                    horizontal = horizontal,
+                    allowMerge = allowMerge
+                )
+            },
+            onDrag = { change, amount ->
+                change.consume()
+                state.dragBy(amount, viewConfiguration.touchSlop)
+            },
+            onDragEnd = {
+                val result = state.finish()
+                pinnedHandle?.release()
+                pinnedHandle = null
+                when {
+                    result == null -> Unit
+                    result.drop != null -> currentOnDrop(result.source, result.drop)
+                    result.showLongPressMenu -> currentOnLongPress(currentBounds())
+                }
+            },
+            onDragCancel = {
+                state.cancel()
+                pinnedHandle?.release()
+                pinnedHandle = null
             }
-        },
-        onDragCancel = {
-            state.cancel()
-            pinnedHandle?.release()
-            pinnedHandle = null
+        )
+    }.semantics {
+        if (enabled) {
+            onLongClick(label = "书籍操作") {
+                currentOnLongPress(currentBounds())
+                true
+            }
+            customActions = reorderActions
         }
-    )
+    }
 }
+
+internal fun shelfReorderActions(
+    entries: List<ShelfEntry>,
+    book: BookEntity,
+    onDrop: (BookEntity, ShelfDrop) -> Unit
+): List<CustomAccessibilityAction> {
+    val index = entries.indexOfFirst { it is ShelfEntry.Book && it.book.id == book.id }
+    if (index < 0) return emptyList()
+    return listOfNotNull(
+        entries.getOrNull(index - 1)?.let { it to ShelfDropPlacement.BEFORE },
+        entries.getOrNull(index + 1)?.let { it to ShelfDropPlacement.AFTER }
+    ).filterNot { (target, placement) ->
+        shelfDropCrossesPinnedBoundary(entries, book.id, target.key, placement == ShelfDropPlacement.AFTER)
+    }.map { (target, placement) ->
+        CustomAccessibilityAction(if (placement == ShelfDropPlacement.BEFORE) "向前移动" else "向后移动") {
+            onDrop(book, ShelfDrop(target.dropTarget(), placement))
+            true
+        }
+    }
+}
+
+internal fun shelfScrollDistance(elapsedNanos: Long, speedPxPerSecond: Float): Float =
+    elapsedNanos.coerceIn(0L, 50_000_000L) / 1_000_000_000f * speedPxPerSecond
 
 @Composable
 internal fun ShelfAutoScrollEffect(
@@ -308,15 +368,32 @@ internal fun ShelfAutoScrollEffect(
     scrollState: ScrollableState,
     preserveScrollPosition: () -> Unit
 ) {
-    val step = with(LocalDensity.current) { 12.dp.toPx() }
-    LaunchedEffect(dragState.activeDrop, dragState.autoScrollDirection) {
+    val speed = with(LocalDensity.current) { 720.dp.toPx() }
+    val preservePosition by rememberUpdatedState(preserveScrollPosition)
+    val sourceId = dragState.sourceBook?.id
+    val direction = dragState.autoScrollDirection
+    LaunchedEffect(dragState.activeDrop, direction, sourceId) {
+        if (sourceId == null || direction != 0) return@LaunchedEffect
         while (scrollState.isScrollInProgress) withFrameNanos { }
-        if (dragState.sourceBook != null) preserveScrollPosition()
-        val direction = dragState.autoScrollDirection
-        if (direction == 0) return@LaunchedEffect
-        while (dragState.autoScrollDirection == direction) {
-            scrollState.scrollBy(direction * step)
-            withFrameNanos { }
+        preservePosition()
+    }
+    // Target changes during relayout must not cancel the scroll coroutine.
+    LaunchedEffect(dragState, scrollState, sourceId, direction, speed) {
+        if (sourceId == null || direction == 0) return@LaunchedEffect
+        var lastDrop = dragState.activeDrop
+        while (scrollState.isScrollInProgress) withFrameNanos { }
+        preservePosition()
+        var previousFrame = withFrameNanos { it }
+        while (dragState.sourceBook != null && dragState.autoScrollDirection == direction) {
+            if (lastDrop != dragState.activeDrop) {
+                while (scrollState.isScrollInProgress) withFrameNanos { }
+                preservePosition()
+                lastDrop = dragState.activeDrop
+            }
+            val frame = withFrameNanos { it }
+            val distance = direction * shelfScrollDistance(frame - previousFrame, speed)
+            previousFrame = frame
+            if (distance != 0f && scrollState.scrollBy(distance) == 0f) break
         }
     }
 }

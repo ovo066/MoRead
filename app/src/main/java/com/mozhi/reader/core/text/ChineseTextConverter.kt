@@ -8,10 +8,17 @@ import openccjava.OpenccConfig
 
 @Singleton
 class ChineseTextConverter @Inject constructor() {
-    fun convert(text: String, mode: ChineseConversionMode): String = when (mode) {
-        ChineseConversionMode.OFF -> text
-        ChineseConversionMode.TW2SP -> OpenCC.convert(text, OpenccConfig.TW2SP)
-        ChineseConversionMode.S2TWP -> OpenCC.convert(text, OpenccConfig.S2TWP)
+    fun convert(text: String, mode: ChineseConversionMode): String {
+        if (mode == ChineseConversionMode.OFF || text.isEmpty()) return text
+        // Missing dictionaries must leave the original chapter readable, including
+        // subsequent calls after OpenCC's static initializer has failed.
+        return runCatching {
+            when (mode) {
+                ChineseConversionMode.OFF -> text
+                ChineseConversionMode.TW2SP -> OpenCC.convert(text, OpenccConfig.TW2SP)
+                ChineseConversionMode.S2TWP -> OpenCC.convert(text, OpenccConfig.S2TWP)
+            }
+        }.getOrDefault(text)
     }
 
     fun retarget(

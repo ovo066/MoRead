@@ -1034,7 +1034,45 @@ class MigrationTest {
 
     @Test
     fun migrate22To23AddsCollectionsAndTextAnchors() {
-        helper.createDatabase(DB_NAME, 22).close()
+        helper.createDatabase(DB_NAME, 22).use { db ->
+            db.execSQL(
+                """
+                INSERT INTO books (
+                    id, title, author, coverPath, epubPath, sourceType, importedAt,
+                    totalChapters, lastReadLocator, lastReadChapterIndex, lastReadCharOffset,
+                    maxReachedChapterIndex, maxReachedCharOffset, lastReadAt, textVersion,
+                    tags, metadataEdited, manualReadState, pinnedAt, groupId
+                ) VALUES (
+                    1, '迁移前的书', '旧作者', '/data/covers/1.png', '/data/books/old.epub', 'EPUB', 1000,
+                    12, '{"chapterIndex":2,"charOffset":30}', 2, 30, 8, 90, 2000, 4,
+                    '历史标签', 1, 'READING', 3000, 7
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                INSERT INTO annotations (
+                    id, bookId, personaId, chapterIndex, startCharOffset, endCharOffset,
+                    selectedText, note, colorTag, style, mediaJson,
+                    sourceScopeChapterIndex, sourceScopeCharOffset, createdAt
+                ) VALUES (
+                    1, 1, NULL, 2, 30, 35, '旧批注原文', '保留的笔记', 'amber', 'WAVY',
+                    '{"images":["old.png"]}', 8, 90, 4000
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                INSERT INTO illustrations (
+                    id, bookId, chapterIndex, charOffset, sourceText, prompt, imagePath,
+                    mediaType, pixelWidth, pixelHeight, createdByPersonaId, createdAt
+                ) VALUES (
+                    1, 1, 2, 30, '插图原文', '山水图', '/data/illustrations/1.png',
+                    'image/png', 640, 480, 9, 5000
+                )
+                """.trimIndent()
+            )
+        }
 
         val db = helper.runMigrationsAndValidate(
             DB_NAME,
@@ -1046,17 +1084,68 @@ class MigrationTest {
         db.query(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'book_collections'"
         ).use { cursor -> assertTrue(cursor.moveToFirst()) }
-
-        fun columns(table: String): Set<String> = db.query("PRAGMA table_info($table)").use { cursor ->
-            buildSet {
-                while (cursor.moveToNext()) add(cursor.getString(1))
-            }
+        db.query("PRAGMA index_info('index_books_collectionId')").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("collectionId", cursor.getString(2))
         }
-
-        assertTrue("collectionId" in columns("books"))
-        assertTrue("collectionOrder" in columns("books"))
-        assertTrue("textAnchorJson" in columns("annotations"))
-        assertTrue("textAnchorJson" in columns("illustrations"))
+        db.query(
+            """
+            SELECT collectionId, collectionOrder, title, lastReadChapterIndex, lastReadCharOffset,
+                   maxReachedChapterIndex, maxReachedCharOffset, groupId, pinnedAt, lastReadLocator
+            FROM books WHERE id = 1
+            """.trimIndent()
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue(cursor.isNull(0))
+            assertEquals(0, cursor.getInt(1))
+            assertEquals("迁移前的书", cursor.getString(2))
+            assertEquals(2, cursor.getInt(3))
+            assertEquals(30, cursor.getInt(4))
+            assertEquals(8, cursor.getInt(5))
+            assertEquals(90, cursor.getInt(6))
+            assertEquals(7L, cursor.getLong(7))
+            assertEquals(3000L, cursor.getLong(8))
+            assertEquals("{\"chapterIndex\":2,\"charOffset\":30}", cursor.getString(9))
+        }
+        db.query(
+            """
+            SELECT textAnchorJson, bookId, chapterIndex, startCharOffset, endCharOffset,
+                   selectedText, note, style, mediaJson, sourceScopeChapterIndex, sourceScopeCharOffset
+            FROM annotations WHERE id = 1
+            """.trimIndent()
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("", cursor.getString(0))
+            assertEquals(1L, cursor.getLong(1))
+            assertEquals(2, cursor.getInt(2))
+            assertEquals(30, cursor.getInt(3))
+            assertEquals(35, cursor.getInt(4))
+            assertEquals("旧批注原文", cursor.getString(5))
+            assertEquals("保留的笔记", cursor.getString(6))
+            assertEquals("WAVY", cursor.getString(7))
+            assertEquals("{\"images\":[\"old.png\"]}", cursor.getString(8))
+            assertEquals(8, cursor.getInt(9))
+            assertEquals(90, cursor.getInt(10))
+        }
+        db.query(
+            """
+            SELECT textAnchorJson, bookId, chapterIndex, charOffset, sourceText, prompt,
+                   imagePath, pixelWidth, pixelHeight, createdByPersonaId
+            FROM illustrations WHERE id = 1
+            """.trimIndent()
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("", cursor.getString(0))
+            assertEquals(1L, cursor.getLong(1))
+            assertEquals(2, cursor.getInt(2))
+            assertEquals(30, cursor.getInt(3))
+            assertEquals("插图原文", cursor.getString(4))
+            assertEquals("山水图", cursor.getString(5))
+            assertEquals("/data/illustrations/1.png", cursor.getString(6))
+            assertEquals(640, cursor.getInt(7))
+            assertEquals(480, cursor.getInt(8))
+            assertEquals(9L, cursor.getLong(9))
+        }
     }
 
     private companion object {

@@ -24,8 +24,15 @@ data class CompanionAutonomySettings(
     /** 段评附语音；受 [proactiveAnnotationsEnabled] 约束。 */
     val proactiveAnnotationVoiceEnabled: Boolean = false,
     /** 段评附插图；受 [proactiveAnnotationsEnabled] 约束。 */
-    val proactiveAnnotationImageEnabled: Boolean = false
+    val proactiveAnnotationImageEnabled: Boolean = false,
+    /** 段评数量与频控的全局默认值；单本书可在详情页覆盖。 */
+    val annotationLimits: ProactiveAnnotationLimits = ProactiveAnnotationLimits(),
+    /** 按书覆盖表，键为书 id；`enabled` 为假的条目视为跟随全局。 */
+    val annotationLimitsByBook: Map<Long, BookProactiveAnnotationLimits> = emptyMap()
 ) {
+    /** 某本书实际生效的段评额度。 */
+    fun annotationLimitsFor(bookId: Long): ProactiveAnnotationLimits =
+        resolveProactiveAnnotationLimits(annotationLimits, annotationLimitsByBook[bookId])
     /** 总开关关掉时，两个媒体子项一律视为关——避免「子项开着但看不出没生效」。 */
     val annotationVoiceActive: Boolean
         get() = proactiveAnnotationsEnabled && proactiveAnnotationVoiceEnabled

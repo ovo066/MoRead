@@ -117,10 +117,14 @@ import com.mozhi.reader.core.database.entity.label
 import com.mozhi.reader.core.database.entity.readState
 import com.mozhi.reader.core.database.entity.ShelfGroupEntity
 import com.mozhi.reader.core.datastore.ReaderImageAsset
+import com.mozhi.reader.core.datastore.CompanionAutonomySettings
 import com.mozhi.reader.core.datastore.PendingReaderImage
 import com.mozhi.reader.ai.media.BookCoverGenerationProgress
 import com.mozhi.reader.ai.media.OnlineBookCover
 import com.mozhi.reader.ai.embedding.BookEmbeddingProgress
+import com.mozhi.reader.core.library.BookReadSpan
+import com.mozhi.reader.core.library.readFraction
+import com.mozhi.reader.core.library.readPercent
 import com.mozhi.reader.ai.embedding.EmbeddingIndexStage
 import com.mozhi.reader.core.library.NoteRepository
 import com.mozhi.reader.ui.components.FrostedSurface
@@ -455,18 +459,68 @@ internal fun HeroCover(book: BookEntity, modifier: Modifier = Modifier) {
     }
 }
 
+/**
+ * 本书随读段评：与「本书 AI 索引」同一片区，都是按书的 AI 设置。
+ * 总开关没开时这里只做说明，不假装能改——改了也不会触发生成。
+ */
+@Composable
+internal fun BookAnnotationLimitsCard(
+    autonomy: CompanionAutonomySettings,
+    bookId: Long,
+    onOpen: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val perBook = autonomy.annotationLimitsByBook[bookId]?.enabled == true
+    val effective = autonomy.annotationLimitsFor(bookId)
+    FrostedSurface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        shadowElevation = 6.dp
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onOpen)
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "本书随读段评",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = when {
+                        !autonomy.proactiveAnnotationsEnabled ->
+                            "随读段评当前全局关闭；到设置 › AI 与伴读里打开后这里才会生成批注。"
+                        perBook -> "本书单独设置：${effective.summary()}"
+                        else -> "跟随全局：${effective.summary()}"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 3.dp)
+                )
+            }
+            Icon(
+                imageVector = Icons.Outlined.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
 /** 双环卡（§3.3）：全书进度环（moss）+ 连续阅读环（seal）。 */
 @Composable
 internal fun RingRow(
     book: BookEntity,
     streakDays: Int,
+    readSpan: BookReadSpan?,
     modifier: Modifier = Modifier
 ) {
-    val progress = if (book.totalChapters <= 0 || book.lastReadAt == 0L) {
-        0f
-    } else {
-        ((book.lastReadChapterIndex + 1f) / book.totalChapters).coerceIn(0f, 1f)
-    }
+    // 与书架、阅读页页脚同一口径：按字符累计，不把当前章算作已读完。
+    val progress = readFraction(book, readSpan)
     val seal = sealColor()
     Row(modifier = modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         FrostedSurface(
@@ -484,7 +538,7 @@ internal fun RingRow(
                     modifier = Modifier.size(96.dp)
                 ) {
                     Text(
-                        text = "${(progress * 100).toInt()}%",
+                        text = "${readPercent(progress)}%",
                         style = MaterialTheme.typography.titleMedium,
                         fontFamily = FontFamily.Serif,
                         fontWeight = FontWeight.SemiBold

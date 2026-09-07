@@ -16,9 +16,27 @@ class ReadingScope private constructor(
     val isWholeBook: Boolean
         get() = maxChapterIndex == Int.MAX_VALUE && maxCharOffset == Int.MAX_VALUE
 
-    fun allowsChapter(chapterIndex: Int): Boolean = chapterIndex <= maxChapterIndex
+    fun allowsChapter(chapterIndex: Int): Boolean = chapterIndex >= 0 && chapterIndex <= maxChapterIndex
+
+    /** A later UI position must not broaden an in-flight request; a stricter scope always wins. */
+    fun intersect(other: ReadingScope): ReadingScope = if (contains(other)) other else this
+
+    fun contains(other: ReadingScope): Boolean = isWholeBook ||
+        maxChapterIndex > other.maxChapterIndex ||
+        (maxChapterIndex == other.maxChapterIndex && maxCharOffset >= other.maxCharOffset)
+
+    /** Construct local lexical/literal text before scoring, never using an unread embedding. */
+    fun readableEnd(chapterIndex: Int, text: String): Int {
+        if (!allowsChapter(chapterIndex)) return 0
+        var end = if (chapterIndex == maxChapterIndex) minOf(maxCharOffset, text.length) else text.length
+        if (end in 1 until text.length && text[end].isLowSurrogate() && text[end - 1].isHighSurrogate()) end--
+        return end
+    }
+
+    fun readableText(chapterIndex: Int, text: String): String = text.take(readableEnd(chapterIndex, text))
 
     fun allowsPosition(chapterIndex: Int, charOffset: Int): Boolean = when {
+        chapterIndex < 0 -> false
         chapterIndex < maxChapterIndex -> true
         chapterIndex > maxChapterIndex -> false
         else -> charOffset >= 0 && charOffset <= maxCharOffset
@@ -26,6 +44,7 @@ class ReadingScope private constructor(
 
     /** A chunk without trustworthy offsets is allowed only before the boundary chapter. */
     fun allowsChunk(chapterIndex: Int, startCharOffset: Int, endCharOffset: Int): Boolean = when {
+        chapterIndex < 0 -> false
         chapterIndex < maxChapterIndex -> true
         chapterIndex > maxChapterIndex -> false
         isWholeBook -> true

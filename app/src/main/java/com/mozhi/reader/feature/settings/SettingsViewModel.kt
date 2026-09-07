@@ -10,7 +10,9 @@ import com.mozhi.reader.core.database.entity.AiModelEntity
 import com.mozhi.reader.core.database.entity.AiProviderEntity
 import com.mozhi.reader.core.database.entity.ModelRole
 import com.mozhi.reader.core.datastore.CompanionAutonomySettings
+import com.mozhi.reader.core.datastore.BookProactiveAnnotationLimits
 import com.mozhi.reader.core.datastore.CompanionMemorySettings
+import com.mozhi.reader.core.datastore.ProactiveAnnotationLimits
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
 import com.mozhi.reader.core.datastore.ShelfLayout
 import com.mozhi.reader.core.library.LibraryRepository
@@ -235,6 +237,17 @@ class SettingsViewModel @Inject constructor(
     fun setProactiveAnnotationImage(enabled: Boolean) {
         viewModelScope.launch {
             readerSettingsRepository.setCompanionProactiveAnnotationImage(enabled)
+        }
+    }
+
+    fun setAnnotationLimits(limits: ProactiveAnnotationLimits) {
+        viewModelScope.launch { readerSettingsRepository.setCompanionAnnotationLimits(limits) }
+    }
+
+    /** 传 null 让这本书交还给全局默认。 */
+    fun setBookAnnotationLimits(bookId: Long, override: BookProactiveAnnotationLimits?) {
+        viewModelScope.launch {
+            readerSettingsRepository.setCompanionAnnotationLimitsForBook(bookId, override)
         }
     }
 

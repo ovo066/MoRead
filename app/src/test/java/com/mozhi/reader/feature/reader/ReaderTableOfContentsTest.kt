@@ -54,6 +54,28 @@ class ReaderTableOfContentsTest {
 
 
     @Test
+    fun `chapter title missing the 第 prefix still counts as a numbered chapter`() {
+        val items = buildReaderTocItems(
+            chapters = emptyList(),
+            entries = listOf(
+                entry(order = 0, title = "制作说明", depth = 0, parent = null, chapter = 0),
+                entry(order = 1, title = "第三十九回 寄法名官哥穿道服", depth = 0, parent = null, chapter = 80),
+                entry(order = 2, title = "第四十回 抱孩童瓶儿希宠", depth = 0, parent = null, chapter = 82),
+                // 出版方漏掉了「第」，但它依然是第四十一回
+                entry(order = 3, title = "四十一回 两孩儿联姻共笑嬉", depth = 0, parent = null, chapter = 84),
+                entry(order = 4, title = "第四十二回 逞豪华门前放烟火", depth = 0, parent = null, chapter = 86),
+                // 量词后紧跟正文的普通标题不算章节编号
+                entry(order = 5, title = "两回事", depth = 0, parent = null, chapter = 88)
+            )
+        )
+
+        assertEquals(listOf(null, 1, 2, 3, 4, null), items.map { it.displayNumber })
+        assertEquals(4, readerTocDisplayCount(items))
+        assertEquals(2, readerTocSupplementaryCount(items))
+        assertEquals(3, currentReaderTocDisplayNumber(items, currentChapterIndex = 85))
+    }
+
+    @Test
     fun `publisher toc numbers follow logical entries instead of spine indexes`() {
         val items = buildReaderTocItems(
             chapters = emptyList(),

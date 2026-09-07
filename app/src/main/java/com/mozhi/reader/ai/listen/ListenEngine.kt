@@ -149,6 +149,8 @@ class ListenEngine @Inject constructor(
     private var focusRequest: AudioFocusRequest? = null
     private var resumeAfterTransientFocusLoss = false
     private var noisyReceiver: BroadcastReceiver? = null
+    /** 让本进程持续出声，耳机键才会送到我们的 MediaSession；暂停期间也不能停。 */
+    private val silenceTrack = ListenSilenceTrack()
     private var wakeLock: PowerManager.WakeLock? = null
     private var currentBodyLength: Int = 0
 
@@ -346,6 +348,7 @@ class ListenEngine @Inject constructor(
             playbackMode = playbackMode
         )
         registerNoisyReceiver()
+        silenceTrack.start()
         var playedProducedChapter = false
         var producedSkipStatus: String? = null
 
@@ -912,6 +915,7 @@ class ListenEngine @Inject constructor(
             runCatching { context.unregisterReceiver(receiver) }
         }
         noisyReceiver = null
+        silenceTrack.stop()
         abandonAudioFocus()
         currentSpans = emptyList()
         currentBodyLength = 0

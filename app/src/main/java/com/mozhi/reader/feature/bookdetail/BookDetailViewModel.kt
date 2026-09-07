@@ -26,6 +26,8 @@ import com.mozhi.reader.ai.media.BookCoverGenerationProgress
 import com.mozhi.reader.ai.media.OnlineBookCover
 import com.mozhi.reader.core.library.AnnotationRepository
 import com.mozhi.reader.core.library.AudiobookRepository
+import com.mozhi.reader.core.datastore.CompanionAutonomySettings
+import com.mozhi.reader.core.library.BookReadSpan
 import com.mozhi.reader.core.library.IllustrationRepository
 import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.library.NoteExporter
@@ -69,6 +71,10 @@ data class BookDetailUiState(
     val audiobookTotalMillis: Long = 0,
     val audiobookRoleNames: List<String> = emptyList(),
     val embeddingProgress: BookEmbeddingProgress? = null,
+    /** 按字符算全书进度所需的累计值；null 时进度环自动回落按章公式。 */
+    val readSpan: BookReadSpan? = null,
+    /** 段评主动行为开关与本书生效额度，详情页那张「本书随读段评」卡要用。 */
+    val autonomy: CompanionAutonomySettings = CompanionAutonomySettings(),
     val description: String = "",
     val isLoading: Boolean = true,
     val isWorking: Boolean = false
@@ -169,7 +175,9 @@ class BookDetailViewModel @Inject constructor(
         val shelf: com.mozhi.reader.core.library.ShelfOrganizationSnapshot,
         val audiobookChapters: List<com.mozhi.reader.core.database.entity.AudiobookChapterEntity>,
         val audiobookRoles: List<com.mozhi.reader.core.database.entity.AudiobookRoleEntity>,
-        val embeddingProgress: BookEmbeddingProgress
+        val embeddingProgress: BookEmbeddingProgress,
+        val readSpan: BookReadSpan?,
+        val autonomy: CompanionAutonomySettings
     )
 
     private val bookDescription = libraryRepository.observeChapters(bookId).mapLatest { chapters ->
@@ -187,7 +195,16 @@ class BookDetailViewModel @Inject constructor(
         audiobookRepository.observeRoles(bookId),
         embeddingProgressTracker.observeBook(bookId)
     ) { settings, shelf, audiobookChapters, audiobookRoles, embeddingProgress ->
-        DetailExtras(settings, shelf, audiobookChapters, audiobookRoles, embeddingProgress)
+        DetailExtras(
+            settings, shelf, audiobookChapters, audiobookRoles, embeddingProgress,
+            readSpan = null,
+            autonomy = CompanionAutonomySettings()
+        )
+    }.combine(libraryRepository.observeBookReadSpan(bookId)) { extras, readSpan ->
+        // combine 的强类型重载只到五元，后面的流各自再并一次。
+        extras.copy(readSpan = readSpan)
+    }.combine(settingsRepository.companionAutonomySettings) { extras, autonomy ->
+        extras.copy(autonomy = autonomy)
     }
 
     init {
@@ -227,6 +244,8 @@ class BookDetailViewModel @Inject constructor(
                 .sumOf { it.totalMillis },
             audiobookRoleNames = extras.audiobookRoles.map { it.name },
             embeddingProgress = extras.embeddingProgress,
+            readSpan = extras.readSpan,
+            autonomy = extras.autonomy,
             description = description,
             isLoading = false,
             isWorking = isWorking

@@ -14,6 +14,7 @@ import com.mozhi.reader.core.datastore.ShelfLayout
 import com.mozhi.reader.core.importer.BookImportGateway
 import com.mozhi.reader.core.importer.PreparedImport
 import com.mozhi.reader.core.importer.BatchImportScheduler
+import com.mozhi.reader.core.library.BookReadSpan
 import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.library.ShelfOrganizationRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -44,6 +45,8 @@ data class BookshelfUiState(
     val recentBook: BookEntity? = null,
     /** 最近在读那本书当前章的章名，给「正在阅读」播放卡用。 */
     val recentChapterTitle: String = "",
+    /** 按字符算进度所需的累计值，键为书 id；缺失时 [readFraction] 自动回落按章公式。 */
+    val readSpans: Map<Long, BookReadSpan> = emptyMap(),
     val isImporting: Boolean = false,
     val selectionActive: Boolean = false,
     val selectedBookIds: Set<Long> = emptySet()
@@ -123,8 +126,13 @@ class BookshelfViewModel @Inject constructor(
         )
     }
 
-    val uiState = combine(baseState, shelfRepository.snapshot, selectedBookIds, selectionActive) {
-            base, organization, selected, isSelectionActive ->
+    val uiState = combine(
+        baseState,
+        shelfRepository.snapshot,
+        selectedBookIds,
+        selectionActive,
+        libraryRepository.observeBookReadSpans()
+    ) { base, organization, selected, isSelectionActive, readSpans ->
         val effectiveFilter = base.filter.withExistingGroups(
             organization.groups.map(ShelfGroupEntity::id).toSet()
         )
@@ -140,6 +148,7 @@ class BookshelfViewModel @Inject constructor(
             totalBooks = base.books.size,
             recentBook = base.recentBook,
             recentChapterTitle = base.recentChapterTitle,
+            readSpans = readSpans,
             isImporting = base.isImporting,
             selectionActive = isSelectionActive,
             selectedBookIds = selected.intersect(base.books.map(BookEntity::id).toSet())

@@ -175,6 +175,7 @@ fun SettingsScreen(
 fun AiAndCompanionSettingsScreen(
     onBack: () -> Unit,
     onOpenAiServices: () -> Unit,
+    onOpenAnnotationLimits: () -> Unit,
     onOpenWebSearch: () -> Unit,
     onOpenGlobalPresets: () -> Unit,
     onOpenUserMasks: () -> Unit,
@@ -255,15 +256,22 @@ fun AiAndCompanionSettingsScreen(
                 MoReadSwitchRow(
                     icon = Icons.Outlined.BorderColor,
                     title = "随读段评",
-                    subtitle = "读完一章后自动留下不超过 2 条批注（每日上限 10 条）",
+                    subtitle = "读完一章后自动留下批注（${state.autonomy.annotationLimits.summary()}）",
                     checked = state.autonomy.proactiveAnnotationsEnabled,
                     onCheckedChange = viewModel::setProactiveAnnotations
+                )
+                MoReadRowDivider()
+                MoReadRow(
+                    icon = Icons.Outlined.Tune,
+                    title = "段评数量与频率",
+                    subtitle = state.autonomy.annotationLimits.summary() + "；单本书可在书籍详情页单独设",
+                    onClick = onOpenAnnotationLimits
                 )
                 MoReadRowDivider()
                 MoReadSwitchRow(
                     icon = Icons.Outlined.RecordVoiceOver,
                     title = "段评附语音",
-                    subtitle = "批注可带一段语音，每日上限 3 条",
+                    subtitle = "批注可带一段语音，每日上限见「段评数量与频率」",
                     checked = state.autonomy.proactiveAnnotationVoiceEnabled,
                     enabled = state.autonomy.proactiveAnnotationsEnabled,
                     onCheckedChange = viewModel::setProactiveAnnotationVoice
@@ -272,7 +280,7 @@ fun AiAndCompanionSettingsScreen(
                 MoReadSwitchRow(
                     icon = Icons.Outlined.Image,
                     title = "段评附插图",
-                    subtitle = "批注可带一张插图，每日上限 3 张",
+                    subtitle = "批注可带一张插图，每日上限见「段评数量与频率」",
                     checked = state.autonomy.proactiveAnnotationImageEnabled,
                     enabled = state.autonomy.proactiveAnnotationsEnabled,
                     onCheckedChange = viewModel::setProactiveAnnotationImage

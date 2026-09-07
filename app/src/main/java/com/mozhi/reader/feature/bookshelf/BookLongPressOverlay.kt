@@ -54,6 +54,9 @@ import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.BookReadState
 import com.mozhi.reader.core.database.entity.isPinned
 import com.mozhi.reader.core.database.entity.readState
+import com.mozhi.reader.core.library.BookReadSpan
+import com.mozhi.reader.core.library.readFraction
+import com.mozhi.reader.core.library.readPercent
 import com.mozhi.reader.ui.components.FrostedSurface
 import com.mozhi.reader.ui.components.MoReadMenuDivider
 
@@ -71,6 +74,7 @@ internal data class BookLongPressTarget(
 @Composable
 internal fun BookLongPressOverlay(
     target: BookLongPressTarget,
+    readSpan: BookReadSpan?,
     rootSize: IntSize,
     onDismiss: () -> Unit,
     onSetReadState: (BookReadState?) -> Unit,
@@ -135,6 +139,7 @@ internal fun BookLongPressOverlay(
         BookLongPressPreview(
             book = book,
             state = state,
+            readSpan = readSpan,
             modifier = Modifier
                 .width(PREVIEW_WIDTH)
                 .offset { IntOffset(clampLeft(previewWidthPx).toInt(), previewTop.toInt()) }
@@ -248,6 +253,7 @@ internal fun BookLongPressOverlay(
 private fun BookLongPressPreview(
     book: BookEntity,
     state: BookReadState,
+    readSpan: BookReadSpan?,
     modifier: Modifier = Modifier
 ) {
     FrostedSurface(
@@ -275,7 +281,7 @@ private fun BookLongPressPreview(
                 overflow = TextOverflow.Ellipsis
             )
             Text(
-                text = state.caption(book),
+                text = state.caption(book, readSpan),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -317,9 +323,9 @@ private fun BookActionRow(
     }
 }
 
-internal fun BookReadState.caption(book: BookEntity): String = when (this) {
+internal fun BookReadState.caption(book: BookEntity, readSpan: BookReadSpan?): String = when (this) {
     BookReadState.UNREAD -> "未读 · ${book.totalChapters} 章"
-    BookReadState.READING -> "在读 · ${(readProgress(book) * 100).toInt()}%"
+    BookReadState.READING -> "在读 · ${readPercent(readFraction(book, readSpan))}%"
     BookReadState.FINISHED -> "已读完"
     BookReadState.SHELVED -> "已搁置"
 }

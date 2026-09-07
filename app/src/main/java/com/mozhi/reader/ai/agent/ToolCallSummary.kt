@@ -18,6 +18,7 @@ object ToolCallSummary {
     fun summarize(toolName: String, argumentsJson: String?): String {
         val args = parse(argumentsJson) ?: return ""
         return when (toolName) {
+            "grep_book" -> args.text("pattern")
             "search_book" -> withCount(args.text("query"), args.int("top_k"), "段")
             "recall_memory" -> args.text("query")
             "web_search" -> withCount(args.text("query"), args.int("limit"), "条")

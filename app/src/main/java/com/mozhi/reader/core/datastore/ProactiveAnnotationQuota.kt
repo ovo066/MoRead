@@ -22,28 +22,59 @@ data class ProactiveAnnotationQuotaState(
 data class ProactiveAnnotationAllowance(
     val accepted: Boolean,
     val maxAnnotations: Int = 0,
+    /** 写进提示词的下限请求；配额层不做强制。 */
+    val minAnnotations: Int = 0,
     val maxVoice: Int = 0,
     val maxImages: Int = 0
-)
+) {
+    val annotationsUnlimited: Boolean get() = maxAnnotations == Int.MAX_VALUE
+}
 
 internal fun evaluateProactiveAnnotationQuota(
     state: ProactiveAnnotationQuotaState,
     today: Long,
     chapterKey: String,
+    limits: ProactiveAnnotationLimits,
     requestVoice: Boolean,
     requestImages: Boolean
 ): Pair<ProactiveAnnotationQuotaState, ProactiveAnnotationAllowance> {
+    val effective = limits.normalized()
     val current = if (state.epochDay == today) state else ProactiveAnnotationQuotaState(today)
-    if (chapterKey in current.attemptedChapters || current.annotationCount >= 10) {
+    val dailyExhausted = !effective.dailyUnlimited && current.annotationCount >= effective.dailyMax
+    if (chapterKey in current.attemptedChapters || dailyExhausted) {
         return current to ProactiveAnnotationAllowance(accepted = false)
     }
     val allowance = ProactiveAnnotationAllowance(
         accepted = true,
-        maxAnnotations = (10 - current.annotationCount).coerceAtMost(2),
-        maxVoice = if (requestVoice) (3 - current.voiceCount).coerceAtLeast(0) else 0,
-        maxImages = if (requestImages) (3 - current.imageCount).coerceAtLeast(0) else 0
+        maxAnnotations = remaining(
+            unlimited = effective.dailyUnlimited,
+            cap = effective.dailyMax,
+            used = current.annotationCount,
+            perChapter = if (effective.chapterUnlimited) Int.MAX_VALUE else effective.maxPerChapter
+        ),
+        minAnnotations = effective.minPerChapter,
+        maxVoice = if (requestVoice) {
+            remaining(effective.dailyVoiceMax == ProactiveAnnotationLimits.UNLIMITED, effective.dailyVoiceMax, current.voiceCount)
+        } else {
+            0
+        },
+        maxImages = if (requestImages) {
+            remaining(effective.dailyImageMax == ProactiveAnnotationLimits.UNLIMITED, effective.dailyImageMax, current.imageCount)
+        } else {
+            0
+        }
     )
     return current.copy(attemptedChapters = current.attemptedChapters + chapterKey) to allowance
+}
+
+private fun remaining(
+    unlimited: Boolean,
+    cap: Int,
+    used: Int,
+    perChapter: Int = Int.MAX_VALUE
+): Int {
+    val left = if (unlimited) Int.MAX_VALUE else (cap - used).coerceAtLeast(0)
+    return minOf(left, perChapter)
 }
 
 @Singleton
@@ -53,6 +84,7 @@ class ProactiveAnnotationQuota @Inject constructor(
     suspend fun reserve(
         bookId: Long,
         chapterIndex: Int,
+        limits: ProactiveAnnotationLimits,
         requestVoice: Boolean,
         requestImages: Boolean,
         today: Long = LocalDate.now().toEpochDay()
@@ -71,6 +103,7 @@ class ProactiveAnnotationQuota @Inject constructor(
                 state = state,
                 today = today,
                 chapterKey = chapterKey,
+                limits = limits,
                 requestVoice = requestVoice,
                 requestImages = requestImages
             )
@@ -98,9 +131,11 @@ class ProactiveAnnotationQuota @Inject constructor(
                 preferences[VOICES] = 0
                 preferences[IMAGES] = 0
             }
-            preferences[ANNOTATIONS] = ((preferences[ANNOTATIONS] ?: 0) + annotations).coerceAtMost(10)
-            preferences[VOICES] = ((preferences[VOICES] ?: 0) + voices).coerceAtMost(3)
-            preferences[IMAGES] = ((preferences[IMAGES] ?: 0) + images).coerceAtMost(3)
+            // 计数只累加、按天归零。旧版本会 coerceAtMost 到硬编码的 10/3/3——
+            // 限额一旦可配，那种夹值就是错的。
+            preferences[ANNOTATIONS] = (preferences[ANNOTATIONS] ?: 0) + annotations
+            preferences[VOICES] = (preferences[VOICES] ?: 0) + voices
+            preferences[IMAGES] = (preferences[IMAGES] ?: 0) + images
         }
     }
 

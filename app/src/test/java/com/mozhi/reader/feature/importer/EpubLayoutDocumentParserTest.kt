@@ -8,6 +8,23 @@ import org.junit.Test
 
 class EpubLayoutDocumentParserTest {
     @Test
+    fun `head title survives dropped-node cleanup and never leaks into body text`() {
+        val parsed = EpubLayoutDocumentParser().parseWithText(
+            bytes = """
+                <html><head><title>第一回 西门庆热结十弟兄</title></head>
+                <body><p>诗曰：</p></body></html>
+            """.trimIndent().toByteArray(),
+            chapterIndex = 0,
+            href = "OEBPS/Text/part0005.xhtml",
+            stylesheets = emptyMap()
+        )
+
+        assertEquals("第一回 西门庆热结十弟兄", parsed.document.documentTitle)
+        assertEquals("第一回 西门庆热结十弟兄", parsed.dom.documentTitle)
+        assertEquals("诗曰：", parsed.text)
+    }
+
+    @Test
     fun `package-relative readium href still resolves linked css and font`() {
         val href = EpubResourcePath.matchKnown(
             "Text/chapter.xhtml",

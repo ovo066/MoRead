@@ -363,9 +363,10 @@ internal class EpubInlineLayout(private val ctx: EpubLayoutContext) {
         val fullPage = declaredWidth?.let { it >= limit * 0.9f } == true ||
             declaredHeight?.let { it >= ctx.spec.visibleHeight * 0.8f } == true ||
             aspect <= 0.85f && (declaredWidth ?: maxWidth) >= limit * 0.9f
+        // A replaced image never spans pages: even an explicit CSS/HTML height is capped at one
+        // page. Covers declared as 590x750 must shrink into the page instead of overflowing it.
         val maxHeight = contentHeight(style.maxHeight)
-            ?: if (declaredHeight != null) Float.MAX_VALUE
-            else ctx.spec.visibleHeight * if (fullPage) 1f else MAX_IMAGE_HEIGHT_FRACTION
+            ?: ctx.spec.visibleHeight * if (fullPage || declaredHeight != null) 1f else MAX_IMAGE_HEIGHT_FRACTION
         val minWidth = contentWidth(style.minWidth) ?: 1f
         val minHeight = contentHeight(style.minHeight) ?: 1f
 
@@ -391,9 +392,15 @@ internal class EpubInlineLayout(private val ctx: EpubLayoutContext) {
                 height *= scale
             }
         } else {
-            // CSS width+height define the concrete replaced-element rectangle. The default
-            // object-fit is fill, so preserving the intrinsic ratio here would place the image
-            // and following text differently from the publication.
+            // CSS width+height define the concrete replaced-element rectangle (object-fit: fill),
+            // so the declared ratio is kept as-is. But when the rectangle exceeds the page — the
+            // browser would simply overflow, we cannot — both axes shrink by the same factor.
+            // Clamping only the overflowing axis squashed full-page covers into a strip.
+            val shrink = min(maxWidth / width.coerceAtLeast(1f), maxHeight / height.coerceAtLeast(1f))
+            if (shrink < 1f) {
+                width *= shrink
+                height *= shrink
+            }
             width = width.coerceIn(min(minWidth, maxWidth), maxWidth)
             height = height.coerceIn(min(minHeight, maxHeight), maxHeight)
         }

@@ -810,8 +810,11 @@ class ReaderCompanionViewModel @Inject constructor(
 
         val currentBookId = bookId.value ?: return emptyMap()
         val book = libraryRepository.getBook(currentBookId) ?: return emptyMap()
+        val scope = ReadingScopeResolver.resolve(
+            settingsRepository.companionSpoilerProtectionEnabled.first(), book
+        )
         val chapters = libraryRepository.getChapters(currentBookId)
-            .filter { it.chapterIndex <= book.lastReadChapterIndex }
+            .filter { scope.allowsChapter(it.chapterIndex) }
         val requestedChapterIndexes = candidates
             .flatMap { (_, citations) -> citations.mapNotNull { it.chapterNumber?.minus(1) } }
             .toSet()
@@ -825,18 +828,14 @@ class ReaderCompanionViewModel @Inject constructor(
                 val explicitlyRequested = chapter.chapterIndex in requestedChapterIndexes
                 if (!explicitlyRequested && scannedChars >= MAX_LOCATE_CHARS) return@forEach
                 val fullText = libraryRepository.readChapterText(currentBookId, chapter)
-                val readableText = if (chapter.chapterIndex == book.lastReadChapterIndex) {
-                    fullText.take(book.lastReadCharOffset.coerceIn(0, fullText.length))
-                } else {
-                    fullText
-                }
+                val readableText = scope.readableText(chapter.chapterIndex, fullText)
                 scannedChars += readableText.length
                 add(QuoteChapter(chapter.chapterIndex, readableText))
             }
         }
 
         return candidates.mapNotNull { (messageId, citations) ->
-            CompanionCitationVerifier.locate(citations, quoteChapters)
+            CompanionCitationVerifier.locate(citations, quoteChapters, scope)
                 .takeIf { it.isNotEmpty() }
                 ?.let { messageId to it }
         }.toMap()

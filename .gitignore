@@ -31,9 +31,10 @@ CLAUDE.md
 DECISIONS.md
 DEVELOPMENT_PLAN.md
 design/
-docs/CODE_MAP.md
 docs/COMPANION_PHASE3_HANDOFF.md
 docs/superpowers/
+docs/EPUB_NATIVE_LAYOUT_PLAN.md
+docs/releases/v1.0.5.md
 .firecrawl/
 
 # 构建产物与发布材料（APK 一律通过 GitHub Release 分发）

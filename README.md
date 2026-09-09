@@ -67,8 +67,6 @@
 
 前往 [Releases](https://github.com/ovo066/MoRead/releases) 下载最新正式签名 APK。系统要求 Android 8.0（API 26）及以上。
 
-当前版本 **1.0.8**（versionCode **71**）：[相比 1.0.7 的更新说明](docs/releases/v1.0.8.md)。performance 包仅供开发验收，不作为正式 Release 附件；其签名与正式版不同，不能互相覆盖安装。
-
 ## 快速上手
 
 1. 书架页导入书籍，或在文件管理器中对 TXT / EPUB 使用「其他应用打开」→ 墨知

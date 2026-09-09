@@ -94,7 +94,8 @@ class CompanionContextBuilder @Inject constructor(
             }
         }
         val promptAnnotations = if (bookId != null && progress != null) {
-            formatPromptAnnotations(annotationRepository.getForChapter(bookId, progress.currentChapterIndex))
+            formatPromptAnnotations(annotationRepository.getForChapter(bookId, progress.currentChapterIndex)
+                .filter { com.mozhi.reader.core.retrieval.AnnotationVisibility.isVisible(it, readingScope) })
         } else {
             emptyList()
         }
@@ -126,8 +127,13 @@ class CompanionContextBuilder @Inject constructor(
             scene = scene,
             annotations = promptAnnotations,
             memories = memories,
+            // 用户画像是角色级全局数据，没有 bookId 来源。跨书关闭时不得把它注入
+            // 书内会话，否则其中偶然混入的其他书信息会绕过记忆的 bookId 过滤。
             userProfile = persona
-                ?.takeIf { it.memoryEnabled && memorySettings.longTermEnabled }
+                ?.takeIf {
+                    it.memoryEnabled && memorySettings.longTermEnabled &&
+                        (bookId == null || memorySettings.crossBookEnabled)
+                }
                 ?.userProfile
                 .orEmpty(),
             readingScope = readingScope,

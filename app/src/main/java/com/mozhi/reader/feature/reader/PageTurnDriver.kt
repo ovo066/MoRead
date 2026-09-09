@@ -90,6 +90,9 @@ class PageTurnDriver(
     enum class Mode { SIMULATION, FLAT, INSTANT }
 
     var mode: Mode = Mode.SIMULATION
+    /** A spine hinge settles after one leaf width; cover/slide retain full-viewport travel. */
+    var hingeLeafWidth: Float? = null
+    private val settleWidth: Float get() = hingeLeafWidth?.coerceAtLeast(1f) ?: viewWidth
 
     fun setViewport(width: Float, height: Float) {
         viewWidth = width.coerceAtLeast(1f)
@@ -180,6 +183,9 @@ class PageTurnDriver(
         startSettle(FULL_PAGE_SETTLE_MS)
     }
 
+    /** Settle the old request before a caller installs a newer request's completion owner. */
+    fun finishActiveTurn() { abortAnimation() }
+
     fun cancelActiveTurn() {
         settleJob?.cancel()
         settleJob = null
@@ -224,10 +230,12 @@ class PageTurnDriver(
         }
         val targetX = settleTargetX(dir, committing)
         val targetY = if (cornerAtTop) 1f else viewHeight
-        val fromX = touchX
+        val fromX = if (hingeLeafWidth != null && mode == Mode.FLAT) {
+            clampHingeTouchX(dir, touchX, startX, settleWidth)
+        } else touchX
         val fromY = touchY
         val distance = kotlin.math.abs(targetX - fromX)
-        val duration = (speedMillis * distance / viewWidth).roundToInt().coerceAtLeast(1)
+        val duration = (speedMillis * distance / settleWidth).roundToInt().coerceAtLeast(1)
         if (committing) callbacks.onTurnCommitted()
         settleJob = scope.launch {
             settle.snapTo(0f)
@@ -257,12 +265,7 @@ class PageTurnDriver(
                 committing -> viewWidth
                 else -> -viewWidth
             }
-            Mode.FLAT -> when {
-                dir == PageTurnDirection.NEXT && committing -> startX - viewWidth
-                dir == PageTurnDirection.NEXT -> startX
-                committing -> startX + viewWidth
-                else -> startX
-            }
+            Mode.FLAT -> flatPageTurnTargetX(dir, committing, startX, settleWidth)
         }
 
     /** Legado `abortAnim`: a DOWN during the settle snaps to the end state immediately. */
@@ -395,3 +398,23 @@ fun Modifier.readerPageTouch(
 }
 
 private const val LONG_PRESS_TIMEOUT_MS = 600L
+
+/** Hinge callers supply leaf width; slide/cover callers supply full spread width. */
+internal fun flatPageTurnTargetX(
+    direction: PageTurnDirection,
+    committing: Boolean,
+    startX: Float,
+    travelWidth: Float
+): Float = when {
+    !committing -> startX
+    direction == PageTurnDirection.NEXT -> startX - travelWidth
+    else -> startX + travelWidth
+}
+
+internal fun clampHingeTouchX(
+    direction: PageTurnDirection,
+    touchX: Float,
+    startX: Float,
+    leafWidth: Float
+): Float = if (direction == PageTurnDirection.NEXT) touchX.coerceIn(startX - leafWidth, startX)
+    else touchX.coerceIn(startX, startX + leafWidth)

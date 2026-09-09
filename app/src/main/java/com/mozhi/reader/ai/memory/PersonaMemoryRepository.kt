@@ -40,16 +40,19 @@ class PersonaMemoryRepository @Inject constructor(
             }.getOrDefault(emptyList())
         }
 
-    suspend fun delete(id: Long) = withContext(Dispatchers.IO) {
-        runCatching { VectorQueries.removeMemory(vectorStore, id) }
-        Unit
+    /**
+     * 「删除」按真正遗忘处理。用户画像是从多条记忆派生的自由文本，没有可靠的逐条来源，
+     * 因此删除任一条时同时清空画像，避免被删内容继续从系统提示词注入。
+     */
+    suspend fun delete(memory: StoredMemory, personaId: Long) = withContext(Dispatchers.IO) {
+        check(VectorQueries.removeMemory(vectorStore, memory.id)) { "记忆不存在或已被删除" }
+        personaDao.updateUserProfile(personaId, "")
     }
 
     /** 清空该角色的记忆与画像：两者都是「它对用户的了解」，只清一半会留下矛盾状态。 */
     suspend fun clear(personaId: Long) = withContext(Dispatchers.IO) {
-        runCatching { VectorQueries.removeMemoriesForPersona(vectorStore, personaId) }
-        runCatching { personaDao.updateUserProfile(personaId, "") }
-        Unit
+        VectorQueries.removeMemoriesForPersona(vectorStore, personaId)
+        personaDao.updateUserProfile(personaId, "")
     }
 
     suspend fun profile(personaId: Long): String = withContext(Dispatchers.IO) {

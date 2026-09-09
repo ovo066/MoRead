@@ -210,7 +210,7 @@ class ReaderViewModelPersistenceTest {
             val selection = reader.viewModel.sourceSelectionForDisplayed(0, displayStart until displayed.length)!!
             val generated = Channel<IllustrationEntity>(Channel.UNLIMITED)
             val media = mockk<AiMediaGenerationService> {
-                coEvery { generateIllustration(any(), any(), any(), any(), any(), any(), any()) } coAnswers {
+                coEvery { generateIllustration(any(), any(), any(), any(), any(), any(), any(), any(), any()) } coAnswers {
                     IllustrationEntity(
                         bookId = firstArg(), chapterIndex = secondArg(), charOffset = thirdArg(),
                         sourceText = arg(3), prompt = arg(4), textAnchorJson = arg(6),
@@ -247,6 +247,26 @@ class ReaderViewModelPersistenceTest {
         }
     }
 
+    @Test
+    fun coldOpenSchedulesOnFirstReadyLayoutAndResumeCanRetry() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val reader = ReaderFixture(source)
+        try {
+            reader.viewModel.setReaderVisible(true)
+            verify(exactly = 0) { reader.annotationScheduler.onChapterEntered(any(), any()) }
+            reader.viewModel.uiState.first { it.isContentReady }
+            verify(exactly = 1) { reader.annotationScheduler.onChapterEntered(1L, 0) }
+            reader.viewModel.onContentChanged(0)
+            verify(exactly = 1) { reader.annotationScheduler.onChapterEntered(1L, 0) }
+            reader.viewModel.setReaderVisible(false)
+            reader.viewModel.setReaderVisible(true)
+            verify(exactly = 2) { reader.annotationScheduler.onChapterEntered(1L, 0) }
+        } finally {
+            reader.viewModel.viewModelScope.cancel()
+            Dispatchers.resetMain()
+        }
+    }
+
     private fun withReader(body: String, test: suspend (ReaderFixture) -> Unit) = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val reader = ReaderFixture(body)
@@ -270,6 +290,9 @@ class ReaderViewModelPersistenceTest {
         private val storedBookmarks = MutableStateFlow<List<BookmarkEntity>>(emptyList())
         val converter = spyk(ChineseTextConverter())
         val viewModel: ReaderViewModel
+        val annotationScheduler = mockk<com.mozhi.reader.ai.companion.ProactiveAnnotationScheduler>(relaxed = true) {
+            every { results } returns kotlinx.coroutines.flow.MutableSharedFlow()
+        }
 
         init {
             val book = BookEntity(
@@ -283,6 +306,7 @@ class ReaderViewModelPersistenceTest {
             )
             val bookDao = mockk<BookDao> {
                 coEvery { getBook(1) } returns book
+                every { observeBook(1) } returns flowOf(book)
                 coEvery { getChapters(1) } returns listOf(chapter)
                 every { observeBookmarks(1) } returns storedBookmarks
                 every { observeTocEntries(1) } returns flowOf(emptyList())
@@ -293,7 +317,7 @@ class ReaderViewModelPersistenceTest {
                     bookmarks.send(row)
                     1L
                 }
-                coEvery { updateProgress(1, any(), 0, any(), any()) } coAnswers {
+                coEvery { updateProgress(1, any(), 0, any(), any(), any()) } coAnswers {
                     progress.send(SavedProgress(secondArg(), arg(3)))
                 }
             }
@@ -319,6 +343,7 @@ class ReaderViewModelPersistenceTest {
                 every { cachedSettings } returns MutableStateFlow(settings)
                 every { this@mockk.settings } returns flowOf(settings)
                 every { showAiAnnotations } returns flowOf(true)
+                every { companionAutonomySettings } returns flowOf(com.mozhi.reader.core.datastore.CompanionAutonomySettings())
                 every { lastAnnotationStyle } returns flowOf("highlight")
                 every { lastAnnotationColor } returns flowOf("")
                 coEvery { setBookChineseConversionMode(1, any()) } returns Unit
@@ -332,8 +357,8 @@ class ReaderViewModelPersistenceTest {
             viewModel = ReaderViewModel(
                 SavedStateHandle(mapOf("bookId" to 1L)), libraryRepository,
                 AnnotationRepository(annotationDao), illustrations, mediaStore, layoutStore,
-                settingsRepository, mockk(), mockk(), mockk(), mockk(), mockk(), mockk(),
-                ChineseChapterPresenter(converter), converter
+                settingsRepository, mockk(), mockk(), mockk(), mockk(), mockk(),
+                annotationScheduler, mockk(), ChineseChapterPresenter(converter), converter
             )
             viewModel.contentController.updateEnvironment(
                 TypesetSpec(100f, 200f, 25f, 34f, 9f, 9f, 10f, 25f),

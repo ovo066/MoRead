@@ -53,6 +53,80 @@ class CompanionChatListTest {
     )
 
     @Test
+    fun `无正文思维链的Room落库也使用同轮过程key`() {
+        val saved = message(5, "assistant", "").copy(
+            clientRoundId = "live", reasoningContent = "thinking")
+        val live = entries(liveReasoning = "thinking", isStreaming = true)
+            .filterIsInstance<ChatEntry.Process>().single()
+        val timeline = buildCompanionTimeline(listOf(saved))
+        assertEquals("live", timeline.filterIsInstance<CompanionTimelineItem.Process>().single().clientRoundId)
+        val result = entries(timeline = timeline,
+            liveReasoning = "thinking", isStreaming = true)
+            .filterIsInstance<ChatEntry.Process>()
+        assertEquals(1, result.size)
+        assertEquals("process-live", result.single().key)
+        assertEquals(live.key, result.single().key)
+        val reopened = entries(timeline = timeline).filterIsInstance<ChatEntry.Process>().single()
+        assertEquals(live.key, reopened.key)
+        val legacy = entries(timeline = buildCompanionTimeline(listOf(saved.copy(clientRoundId = null))))
+            .filterIsInstance<ChatEntry.Process>().single()
+        assertEquals("process-5", legacy.key)
+    }
+
+    @Test
+    fun `多段列表和围栏从最后一帧到落库保留同一结构`() {
+        val text = "开头\n[整段]\n- 一\n- 二\n[/整段]\n```kotlin\nval x = 1\n```\n结束"
+        val live = entries(streamingText = text, isStreaming = true, multiBubble = true)
+            .filterIsInstance<ChatEntry.Bubble>()
+        val saved = message(8, "assistant", text).copy(clientRoundId = "live")
+        val committed = entries(timeline = buildCompanionTimeline(listOf(saved)), multiBubble = true)
+            .filterIsInstance<ChatEntry.Bubble>()
+        assertEquals(live.map { it.key }, committed.map { it.key })
+        assertEquals(live.map { it.part }, committed.map { it.part })
+        assertEquals(live.map { it.contentType }, committed.map { it.contentType })
+    }
+
+    @Test
+    fun `Room先到或事件先到都只显示一个同key气泡`() {
+        val message = message(42, "assistant", "一行很长的回复").copy(clientRoundId = "round-1")
+        fun build(timeline: List<CompanionTimelineItem>, text: String?) =
+            buildCompanionChatEntries(timeline, emptyList(), null, text, true, null, "思考中",
+                null, null, null, "第一章", multiBubble = false,
+                liveEntryId = "round-1")
+                .filterIsInstance<ChatEntry.Bubble>()
+        val live = build(emptyList(), message.content)
+        val roomFirst = build(buildCompanionTimeline(listOf(message)), "一行")
+        val eventLater = build(buildCompanionTimeline(listOf(message)), null)
+        val reconciler = CompanionMessageReconciler(1)
+        reconciler.committed(message)
+        val eventFirst = build(buildCompanionTimeline(reconciler.observe(emptyList())), null)
+        assertEquals(listOf("bubble-round-1-0"), live.map { it.key })
+        assertEquals(live.map { it.key }, roomFirst.map { it.key })
+        assertEquals(live.map { it.key }, eventLater.map { it.key })
+        assertEquals(live.map { it.key }, eventFirst.map { it.key })
+        assertEquals(live.single().contentType, roomFirst.single().contentType)
+    }
+
+    @Test
+    fun `不同轮相同文本和旧记录不得吞掉新回复`() {
+        val old = message(1, "assistant", "好的") // migrated/imported rows have no round ID
+        val timeline = buildCompanionTimeline(listOf(old))
+        val result = entries(timeline = timeline, streamingText = "好", isStreaming = true,
+            multiBubble = false).filterIsInstance<ChatEntry.Bubble>()
+        assertEquals(2, result.size)
+        assertTrue(result.any { it.key == "bubble-live-0" })
+        assertTrue(result.any { it.key == "bubble-1-0" })
+    }
+
+    @Test
+    fun `重新进入会话不需要内存别名仍保留持久轮key`() {
+        val saved = message(7, "assistant", "第一行\n第二行").copy(clientRoundId = "saved-round")
+        val result = entries(timeline = buildCompanionTimeline(listOf(saved)), multiBubble = true)
+            .filterIsInstance<ChatEntry.Bubble>()
+        assertEquals(listOf("bubble-saved-round-0", "bubble-saved-round-1"), result.map { it.key })
+    }
+
+    @Test
     fun `场景头永远是第一项`() {
         val result = entries()
         assertTrue(result.first() is ChatEntry.Scene)
@@ -109,7 +183,7 @@ class CompanionChatListTest {
     fun `落库回复与流式快照相同时只显示历史气泡`() {
         val reply = "〔原文 第2章〕「这是可以跳转的原文引用」"
         val timeline = buildCompanionTimeline(
-            listOf(message(1, "user"), message(2, "assistant", reply))
+            listOf(message(1, "user"), message(2, "assistant", reply).copy(clientRoundId = "live"))
         )
 
         val result = entries(
@@ -125,7 +199,7 @@ class CompanionChatListTest {
     @Test
     fun `落库完整回复先到时隐藏尚未追平的多气泡快照`() {
         val timeline = buildCompanionTimeline(
-            listOf(message(1, "user", "继续"), message(2, "assistant", "111。\n222。"))
+            listOf(message(1, "user", "继续"), message(2, "assistant", "111。\n222。").copy(clientRoundId = "live"))
         )
 
         val bubbles = entries(
@@ -269,7 +343,7 @@ class CompanionChatListTest {
 
         val committed = buildCompanionChatEntries(
             timeline = buildCompanionTimeline(
-                listOf(message(9, "assistant", "第一段\n第二段\n第三段"))
+                listOf(message(9, "assistant", "第一段\n第二段\n第三段").copy(clientRoundId = "live"))
             ),
             liveSteps = emptyList(),
             liveReasoning = null,
@@ -282,8 +356,7 @@ class CompanionChatListTest {
             embeddingProgress = null,
             sceneQuote = "第一章",
             multiBubble = false,
-            liveEntryId = "live",
-            messageKeyAliases = mapOf(9L to "live")
+            liveEntryId = "live"
         ).filterIsInstance<ChatEntry.Bubble>()
         assertEquals(1, committed.size)
         assertEquals(after.single().key, committed.single().key)
@@ -330,7 +403,7 @@ class CompanionChatListTest {
         ).filterIsInstance<ChatEntry.Bubble>().map(ChatEntry::key)
 
         val timeline = buildCompanionTimeline(
-            listOf(message(9, "assistant", "第一行\n第二行"))
+            listOf(message(9, "assistant", "第一行\n第二行").copy(clientRoundId = "live"))
         )
         val committed = buildCompanionChatEntries(
             timeline = timeline,
@@ -345,8 +418,7 @@ class CompanionChatListTest {
             embeddingProgress = null,
             sceneQuote = "第一章",
             multiBubble = true,
-            liveEntryId = "live",
-            messageKeyAliases = mapOf(9L to "live")
+            liveEntryId = "live"
         ).filterIsInstance<ChatEntry.Bubble>().map(ChatEntry::key)
 
         assertEquals(live, committed)

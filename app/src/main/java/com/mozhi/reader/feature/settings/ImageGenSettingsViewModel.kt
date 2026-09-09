@@ -1,6 +1,8 @@
 package com.mozhi.reader.feature.settings
 
 import android.content.Context
+import com.mozhi.reader.core.di.ApplicationScope
+import kotlinx.coroutines.CoroutineScope
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mozhi.reader.ai.client.AiClientException
@@ -37,7 +39,8 @@ class ImageGenSettingsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val store: ImageApiSettingsStore,
     private val apiKeyStore: ApiKeyStore,
-    private val clientFactory: AiClientFactory
+    private val clientFactory: AiClientFactory,
+    @ApplicationScope private val applicationScope: CoroutineScope
 ) : ViewModel() {
 
     private val hasKey = MutableStateFlow(
@@ -46,6 +49,18 @@ class ImageGenSettingsViewModel @Inject constructor(
     private val testing = MutableStateFlow(false)
     private val testImage = MutableStateFlow<String?>(null)
     private val message = MutableStateFlow<String?>(null)
+    private val writes = SettingsWriteQueue(
+        CoroutineScope(applicationScope.coroutineContext + Dispatchers.Main.immediate)
+    ) { error -> message.value = "保存失败：${error.message ?: "请重试"}" }
+
+    suspend fun flushPendingWrites(retry: Boolean = false): Boolean {
+        if (retry) writes.retryFailed()
+        val saved = writes.flush()
+        if (saved && message.value?.startsWith("保存失败") == true) message.value = null
+        return saved
+    }
+
+    fun discardFailedWrites() { writes.discardFailures() }
 
     val uiState = combine(
         store.settings,
@@ -61,7 +76,7 @@ class ImageGenSettingsViewModel @Inject constructor(
         initialValue = ImageGenSettingsUiState()
     )
 
-    fun setProvider(provider: ImageApiProvider) = update {
+    fun setProvider(provider: ImageApiProvider) = update("setProvider") {
         it.copy(
             provider = provider,
             baseUrl = provider.defaultBaseUrl(),
@@ -70,14 +85,14 @@ class ImageGenSettingsViewModel @Inject constructor(
         )
     }
 
-    fun setBaseUrl(value: String) = update { it.copy(baseUrl = value.trim()) }
-    fun setModel(value: String) = update { it.copy(model = value.trim()) }
-    fun setSize(value: String) = update { it.copy(size = value.trim()) }
-    fun setPositivePrompt(value: String) = update { it.copy(positivePrompt = value) }
-    fun setNegativePrompt(value: String) = update { it.copy(negativePrompt = value) }
-    fun setSampler(value: String) = update { it.copy(sampler = value.trim()) }
-    fun setSteps(value: Int) = update { it.copy(steps = value.coerceIn(1, 50)) }
-    fun setScale(value: Float) = update { it.copy(scale = value.coerceIn(0f, 10f)) }
+    fun setBaseUrl(value: String) = update("setBaseUrl") { it.copy(baseUrl = value) }
+    fun setModel(value: String) = update("setModel") { it.copy(model = value) }
+    fun setSize(value: String) = update("setSize") { it.copy(size = value) }
+    fun setPositivePrompt(value: String) = update("setPositivePrompt") { it.copy(positivePrompt = value) }
+    fun setNegativePrompt(value: String) = update("setNegativePrompt") { it.copy(negativePrompt = value) }
+    fun setSampler(value: String) = update("setSampler") { it.copy(sampler = value) }
+    fun setSteps(value: Int) = update("setSteps") { it.copy(steps = value.coerceIn(1, 50)) }
+    fun setScale(value: Float) = update("setScale") { it.copy(scale = value.coerceIn(0f, 10f)) }
 
     fun saveApiKey(raw: String) {
         val key = raw.trim()
@@ -97,11 +112,12 @@ class ImageGenSettingsViewModel @Inject constructor(
     fun testGenerate() {
         if (testing.value) return
         viewModelScope.launch {
+            if (!writes.flush() || testing.value) return@launch
             testing.value = true
             message.value = null
             try {
                 val resolved = clientFactory.imageGeneration()
-                val current = uiState.value.settings
+                val current = store.current()
                 val prompt = if (current.configured && current.provider == ImageApiProvider.NOVELAI) {
                     TEST_NOVELAI_PROMPT
                 } else {
@@ -132,9 +148,8 @@ class ImageGenSettingsViewModel @Inject constructor(
         }
     }
 
-    private fun update(transform: (ImageApiSettings) -> ImageApiSettings) {
-        viewModelScope.launch { store.update(transform) }
-    }
+    private fun update(key: String, transform: (ImageApiSettings) -> ImageApiSettings) =
+        writes.enqueue(key) { store.update(transform) }
 
     private companion object {
         const val TEST_PROMPT = "安静的书斋一角，暖色台灯下摊开的线装书，水墨插画风格，无文字"

@@ -11,12 +11,17 @@ import kotlinx.serialization.json.Json
  * 下限只是写进提示词的请求——找不到值得回应的原文时模型仍然可以少给，强求只会逼出凑数的批注。
  */
 @Serializable
+enum class ProactiveAnnotationTiming { AFTER_CHAPTER_COMPLETE, ON_CHAPTER_ENTRY }
+
+@Serializable
 data class ProactiveAnnotationLimits(
     val minPerChapter: Int = 1,
     val maxPerChapter: Int = 2,
     val dailyMax: Int = 10,
     val dailyVoiceMax: Int = 3,
-    val dailyImageMax: Int = 3
+    val dailyImageMax: Int = 3,
+    val timing: ProactiveAnnotationTiming = ProactiveAnnotationTiming.AFTER_CHAPTER_COMPLETE,
+    val aheadChapters: Int = 0
 ) {
     val chapterUnlimited: Boolean get() = maxPerChapter == UNLIMITED
     val dailyUnlimited: Boolean get() = dailyMax == UNLIMITED
@@ -30,8 +35,15 @@ data class ProactiveAnnotationLimits(
             maxPerChapter = max,
             dailyMax = if (dailyMax == UNLIMITED) UNLIMITED else dailyMax.coerceIn(1, MAX_DAILY),
             dailyVoiceMax = if (dailyVoiceMax == UNLIMITED) UNLIMITED else dailyVoiceMax.coerceIn(0, MAX_DAILY),
-            dailyImageMax = if (dailyImageMax == UNLIMITED) UNLIMITED else dailyImageMax.coerceIn(0, MAX_DAILY)
+            dailyImageMax = if (dailyImageMax == UNLIMITED) UNLIMITED else dailyImageMax.coerceIn(0, MAX_DAILY),
+            timing = timing,
+            aheadChapters = aheadChapters.coerceIn(0, 5)
         )
+    }
+
+    fun timingSummary(): String = when (timing) {
+        ProactiveAnnotationTiming.AFTER_CHAPTER_COMPLETE -> "读完一章后生成"
+        ProactiveAnnotationTiming.ON_CHAPTER_ENTRY -> "进入章节时预生成（本章+$aheadChapters 章）"
     }
 
     /** 设置页与开关副标题共用的一行摘要。 */

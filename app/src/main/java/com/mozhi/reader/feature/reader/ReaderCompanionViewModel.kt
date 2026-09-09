@@ -44,6 +44,11 @@ import kotlinx.coroutines.CancellationException
 import com.mozhi.reader.core.library.QuoteChapter
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.buffer
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -106,14 +111,23 @@ data class CompanionChatContext(
     val sceneQuote: String = ""
 )
 
+data class StoppedCompanionReply(
+    val conversationId: Long,
+    val roundId: String,
+    val text: String,
+    val reasoning: String
+)
+
 data class CompanionChatUiState(
     val personas: List<PersonaEntity> = emptyList(),
     val activePersona: PersonaEntity? = null,
     val conversationId: Long? = null,
+    val isLoadingMessages: Boolean = true,
     val conversations: List<ConversationEntity> = emptyList(),
     val messages: List<MessageEntity> = emptyList(),
-    /** 当前进程内给流式回复分配的稳定 UI key；落库后仍沿用，避免 LazyColumn 重建气泡。 */
-    val messageUiKeys: Map<Long, String> = emptyMap(),
+    val composerDraft: String = "",
+    val stoppedReply: StoppedCompanionReply? = null,
+    val isSavingStoppedReply: Boolean = false,
     val liveEntryId: String = "live-initial",
     /** 仅包含已在本书已读正文中实际命中的引用，按消息 id 索引。 */
     val locatedCitations: Map<Long, List<LocatedCompanionCitation>> = emptyMap(),
@@ -169,6 +183,12 @@ class ReaderCompanionViewModel @Inject constructor(
     @ApplicationScope private val applicationScope: CoroutineScope
 ) : ViewModel() {
 
+    fun updateComposerDraft(text: String, personaId: Long?) {
+        if (session.value.personaId == personaId) {
+            session.value = session.value.copy(composerDraft = session.value.composerDraft.edit(personaId, text))
+        }
+    }
+
     private val bookId = MutableStateFlow<Long?>(null)
     private val session = MutableStateFlow(SessionState())
     private var streamJob: Job? = null
@@ -180,20 +200,20 @@ class ReaderCompanionViewModel @Inject constructor(
     private val eventChannel = Channel<CompanionChatEvent>(Channel.BUFFERED)
     val events = eventChannel.receiveAsFlow()
 
-    /**
-     * 流式正文的真源。SSE 增量只追加到这里（主线程独占），UI 快照由节拍器按
-     * 显示帧节拍发布到 session，避免逐 token 重组整页与 O(n²) 拼串。
-     */
-    private val streamBuffer = StringBuilder()
-
-    /** 思维链的真源，与 [streamBuffer] 同一纪律：只在节拍上发布快照，不逐 token 重组。 */
-    private val reasoningBuffer = StringBuilder()
+    /** Mutable buffers are exclusively owned by the Main event/frame reducer. */
+    private val streaming = CompanionStreamingReducer()
+    private val messageReconciler = CompanionMessageReconciler()
 
     private data class SessionState(
+        val bookId: Long? = null,
+        val personaId: Long? = null,
+        val composerDraft: CompanionComposerDraft = CompanionComposerDraft(personaId),
+        val stoppedReply: StoppedCompanionReply? = null,
+        val isSavingStoppedReply: Boolean = false,
         val conversationId: Long? = null,
+        val isLoadingMessages: Boolean = true,
         val conversations: List<ConversationEntity> = emptyList(),
         val messages: List<MessageEntity> = emptyList(),
-        val messageUiKeys: Map<Long, String> = emptyMap(),
         val liveEntryId: String = "live-initial",
         val locatedCitations: Map<Long, List<LocatedCompanionCitation>> = emptyMap(),
         val streamingText: String? = null,
@@ -271,9 +291,13 @@ class ReaderCompanionViewModel @Inject constructor(
             personas = personas,
             activePersona = active,
             conversationId = session.conversationId,
+            isLoadingMessages = session.isLoadingMessages ||
+                !companionSessionMatches(bookId.value, session.bookId, active?.id, session.personaId),
             conversations = session.conversations,
             messages = session.messages,
-            messageUiKeys = session.messageUiKeys,
+            composerDraft = session.composerDraft.visibleTo(active?.id),
+            stoppedReply = session.stoppedReply,
+            isSavingStoppedReply = session.isSavingStoppedReply,
             liveEntryId = session.liveEntryId,
             locatedCitations = session.locatedCitations,
             streamingText = session.streamingText,
@@ -308,22 +332,33 @@ class ReaderCompanionViewModel @Inject constructor(
         viewModelScope.launch {
             combine(bookId, activePersona) { book, (_, active) -> book to active?.id }
                 .distinctUntilChanged()
-                .collect { (book, personaId) ->
+                .collectLatest { (book, personaId) ->
                     session.value.conversationId?.let(memoryScheduler::onConversationClosed)
                     streamJob?.cancel()
                     messagesJob?.cancel()
+                    generationJob?.cancel()
                     conversationsJob?.cancel()
                     suggestionJob?.cancel()
-                    session.value = SessionState()
+                    messageReconciler.clear()
+                    session.value = SessionState(bookId = book, personaId = personaId)
                     if (book != null && personaId != null) {
                         val existing = chatRepository.findLatestConversation(
                             bookId = book,
                             personaId = personaId,
                             type = CONVERSATION_TYPE
                         )
-                        session.value = SessionState(conversationId = existing?.id)
-                        existing?.id?.let(::observeMessages)
+                        messageReconciler.clear(existing?.id)
+                        session.value = session.value.copy(
+                            conversationId = existing?.id,
+                            isLoadingMessages = existing != null
+                        )
+                        existing?.id?.let {
+                            observeMessages(it)
+                            observeGeneration(it)
+                        }
                         observeConversations(book, personaId)
+                    } else {
+                        session.value = SessionState(bookId = book, personaId = personaId, isLoadingMessages = book == null)
                     }
                 }
         }
@@ -335,6 +370,7 @@ class ReaderCompanionViewModel @Inject constructor(
 
     /** 切换伴读角色：写 DataStore，与伴读页共用同一份选择。 */
     fun selectPersona(personaId: Long) {
+        if (session.value.stoppedReply != null) return
         viewModelScope.launch { settingsRepository.setActivePersonaId(personaId) }
     }
 
@@ -455,7 +491,7 @@ class ReaderCompanionViewModel @Inject constructor(
     fun newConversation() {
         val book = bookId.value ?: return
         val persona = uiState.value.activePersona ?: return
-        if (session.value.isStreaming) return
+        if (session.value.isStreaming || session.value.stoppedReply != null) return
         viewModelScope.launch {
             runCatching {
                 session.value.conversationId?.let(memoryScheduler::onConversationClosed)
@@ -467,14 +503,14 @@ class ReaderCompanionViewModel @Inject constructor(
     }
 
     fun selectConversation(conversationId: Long) {
-        if (conversationId == session.value.conversationId || session.value.isStreaming) return
+        if (conversationId == session.value.conversationId || session.value.isStreaming || session.value.stoppedReply != null) return
         if (session.value.conversations.none { it.id == conversationId }) return
         session.value.conversationId?.let(memoryScheduler::onConversationClosed)
         activateConversation(conversationId)
     }
 
     fun renameConversation(conversationId: Long, title: String) {
-        if (session.value.isStreaming) return
+        if (session.value.isStreaming || session.value.stoppedReply != null) return
         viewModelScope.launch {
             runCatching { chatRepository.renameConversation(conversationId, title) }
                 .onFailure { error ->
@@ -484,7 +520,7 @@ class ReaderCompanionViewModel @Inject constructor(
     }
 
     fun deleteConversation(conversationId: Long) {
-        if (session.value.isStreaming) return
+        if (session.value.isStreaming || session.value.stoppedReply != null) return
         viewModelScope.launch {
             runCatching { chatRepository.deleteConversation(conversationId) }
                 .onSuccess {
@@ -494,8 +530,10 @@ class ReaderCompanionViewModel @Inject constructor(
                         }?.id
                         if (fallback == null) {
                             messagesJob?.cancel()
+                            messageReconciler.clear()
                             session.value = session.value.copy(
                                 conversationId = null,
+                                isLoadingMessages = false,
                                 messages = emptyList(),
                                 executionSteps = emptyList()
                             )
@@ -510,51 +548,93 @@ class ReaderCompanionViewModel @Inject constructor(
         }
     }
 
+    private suspend fun <T> removingMessages(rows: List<MessageEntity>, mutation: suspend () -> T): T {
+        val conversationId = session.value.conversationId
+        val ids = rows.mapTo(hashSetOf()) { it.id }
+        messageReconciler.forget(ids)
+        val removesLiveRound = rows.any { it.clientRoundId == session.value.liveEntryId }
+        session.value = session.value.copy(
+            messages = session.value.messages.filterNot { it.id in ids },
+            // Removed persisted tool rows must not reappear through the leftover live pipeline.
+            executionSteps = if (removesLiveRound) emptyList() else session.value.executionSteps,
+            streamingText = if (removesLiveRound) null else session.value.streamingText,
+            streamingReasoning = if (removesLiveRound) null else session.value.streamingReasoning,
+            toolStatus = if (removesLiveRound) null else session.value.toolStatus
+        )
+        try {
+            return withContext(Dispatchers.IO) { mutation() }
+        } catch (error: Throwable) {
+            if (session.value.conversationId == conversationId) {
+                messageReconciler.restore(rows)
+                session.value = session.value.copy(
+                    messages = (session.value.messages + rows).distinctBy { it.id }.sortedBy { it.id })
+            }
+            throw error
+        }
+    }
+
     fun editMessage(messageId: Long, content: String, sceneQuote: String) {
-        if (session.value.isStreaming) return
+        if (session.value.isStreaming || session.value.stoppedReply != null) return
         val book = bookId.value ?: return
         val persona = uiState.value.activePersona ?: return
         viewModelScope.launch {
-            runCatching { chatRepository.editMessage(messageId, content) }
+            val target = session.value.messages.firstOrNull { it.id == messageId } ?: return@launch
+            val removed = if (target.role == "user") session.value.messages.filter { it.id > messageId } else emptyList()
+            runCatching { removingMessages(removed) { chatRepository.editMessage(messageId, content) } }
                 .onSuccess { result ->
-                    if (result.shouldRegenerate) {
+                    if (result.shouldRegenerate && result.conversationId == session.value.conversationId) {
                         stream(book, persona, result.conversationId, sceneQuote, content.trim())
                     }
                 }
                 .onFailure { error ->
-                    session.value = session.value.copy(error = error.userMessage())
+                    if (session.value.conversationId == target.conversationId) {
+                        session.value = session.value.copy(error = error.userMessage())
+                    }
                 }
         }
     }
 
     fun deleteMessage(messageId: Long) {
-        if (session.value.isStreaming) return
+        if (session.value.isStreaming || session.value.stoppedReply != null) return
         viewModelScope.launch {
-            runCatching { chatRepository.deleteMessage(messageId) }
+            val messages = session.value.messages
+            val target = messages.firstOrNull { it.id == messageId } ?: return@launch
+            val nextUser = messages.firstOrNull { it.id > messageId && it.role == "user" }?.id ?: Long.MAX_VALUE
+            val removed = messages.filter {
+                if (target.role == "user") it.id >= messageId && it.id < nextUser else it.id == messageId
+            }
+            runCatching { removingMessages(removed) { chatRepository.deleteMessage(messageId) } }
                 .onFailure { error ->
-                    session.value = session.value.copy(error = error.userMessage())
+                    if (session.value.conversationId == target.conversationId) {
+                        session.value = session.value.copy(error = error.userMessage())
+                    }
                 }
         }
     }
 
     fun reroll(messageId: Long, sceneQuote: String) {
-        if (session.value.isStreaming) return
+        if (session.value.isStreaming || session.value.stoppedReply != null) return
         val book = bookId.value ?: return
         val persona = uiState.value.activePersona ?: return
         viewModelScope.launch {
-            runCatching { chatRepository.prepareReroll(messageId) }
+            val precedingUser = session.value.messages.lastOrNull { it.id < messageId && it.role == "user" }
+                ?: return@launch
+            val removed = session.value.messages.filter { it.id > precedingUser.id }
+            runCatching { removingMessages(removed) { chatRepository.prepareReroll(messageId) } }
                 .onSuccess { conversationId ->
-                    stream(book, persona, conversationId, sceneQuote, memoryQuery = null)
+                    if (session.value.conversationId == conversationId) stream(book, persona, conversationId, sceneQuote, memoryQuery = null)
                 }
                 .onFailure { error ->
-                    session.value = session.value.copy(error = error.userMessage())
+                    if (session.value.conversationId == precedingUser.conversationId) {
+                        session.value = session.value.copy(error = error.userMessage())
+                    }
                 }
         }
     }
 
     fun branchFrom(messageId: Long) {
         val currentConversation = session.value.conversationId ?: return
-        if (session.value.isStreaming) return
+        if (session.value.isStreaming || session.value.stoppedReply != null) return
         viewModelScope.launch {
             runCatching {
                 chatRepository.branchConversation(currentConversation, messageId)
@@ -593,7 +673,7 @@ class ReaderCompanionViewModel @Inject constructor(
         attachments: List<PendingAttachment> = emptyList()
     ) {
         val trimmed = text.trim()
-        if ((trimmed.isEmpty() && attachments.isEmpty()) || session.value.isStreaming) return
+        if ((trimmed.isEmpty() && attachments.isEmpty()) || session.value.isStreaming || session.value.stoppedReply != null) return
         val book = bookId.value ?: return
         val persona = uiState.value.activePersona ?: return
         viewModelScope.launch {
@@ -638,33 +718,70 @@ class ReaderCompanionViewModel @Inject constructor(
 
     /** Cancels the stream and keeps whatever arrived as a persisted partial reply. */
     fun stop() {
-        val partial = streamBuffer.toString()
-        val conversationId = session.value.conversationId
-        streamJob?.cancel()
+        if (session.value.stoppedReply != null) return
+        val conversationId = session.value.conversationId ?: return
+        val draft = StoppedCompanionReply(conversationId, session.value.liveEntryId, streaming.text, streaming.reasoning)
+        val cancelledJob = streamJob
+        cancelledJob?.cancel()
         streamJob = null
-        // 也可能是上一次进来时留下的后台生成：那时本 ViewModel 手里没有它的 Job。
-        conversationId?.let(generationTracker::cancel)
-        streamBuffer.setLength(0)
-        reasoningBuffer.setLength(0)
+        generationTracker.cancel(conversationId)
+        streaming.clear()
+        val hasPartial = draft.text.isNotBlank() || draft.reasoning.isNotBlank()
         session.value = session.value.copy(
             isStreaming = false,
-            streamingText = null,
-            streamingReasoning = null,
+            stoppedReply = draft.takeIf { hasPartial },
+            streamingText = draft.text.takeIf(String::isNotBlank),
+            streamingReasoning = draft.reasoning.takeIf(String::isNotBlank),
             toolStatus = null
         )
-        if (partial.isNotBlank() && conversationId != null) {
-            viewModelScope.launch {
-                chatRepository.appendAssistantMessage(conversationId, partial)
-                memoryScheduler.afterTurn(conversationId)
+        if (hasPartial) saveStoppedReply(cancelledJob)
+    }
+
+    fun retryStoppedReply() { saveStoppedReply() }
+
+    fun discardStoppedReply() {
+        if (session.value.isSavingStoppedReply) return
+        session.value = session.value.copy(stoppedReply = null, error = null)
+    }
+
+    private fun saveStoppedReply(cancelledJob: Job? = null) {
+        val draft = session.value.stoppedReply ?: return
+        if (session.value.isSavingStoppedReply) return
+        session.value = session.value.copy(isSavingStoppedReply = true, error = null)
+        applicationScope.launch(Dispatchers.Main.immediate) {
+            try {
+                cancelledJob?.cancelAndJoin()
+                val saved = withContext(Dispatchers.IO) {
+                    chatRepository.appendAssistantMessage(draft.conversationId, draft.text,
+                        clientRoundId = draft.roundId, reasoningContent = draft.reasoning)
+                } ?: error("没有可保存的回复")
+                if (session.value.conversationId == draft.conversationId && session.value.stoppedReply == draft) {
+                    check(messageReconciler.committed(saved)) { "该回复已被删除，无法恢复到当前会话" }
+                    session.value = session.value.copy(
+                        messages = (session.value.messages + saved).distinctBy { it.id }.sortedBy { it.id },
+                        stoppedReply = null, isSavingStoppedReply = false,
+                        streamingText = null, streamingReasoning = null, error = null)
+                }
+                withContext(Dispatchers.IO) { memoryScheduler.afterTurn(draft.conversationId) }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                if (session.value.conversationId == draft.conversationId && session.value.stoppedReply == draft) {
+                    // The immutable recovery draft, including reasoning, survives repeated failures.
+                    session.value = session.value.copy(isSavingStoppedReply = false,
+                        streamingText = null, streamingReasoning = null,
+                        error = "停止的回复未能保存；残段已保留，可重试保存或明确舍弃。${error.message.orEmpty()}")
+                }
             }
         }
     }
 
     fun retry(sceneQuote: String) {
+        if (session.value.stoppedReply != null) { retryStoppedReply(); return }
         val book = bookId.value ?: return
         val persona = uiState.value.activePersona ?: return
         val conversationId = session.value.conversationId ?: return
-        if (session.value.isStreaming) return
+        if (session.value.isStreaming || session.value.stoppedReply != null) return
         session.value = session.value.copy(error = null)
         viewModelScope.launch {
             stream(book, persona, conversationId, sceneQuote, memoryQuery = null)
@@ -702,27 +819,31 @@ class ReaderCompanionViewModel @Inject constructor(
     }
 
     private suspend fun createConversation(book: Long, persona: PersonaEntity): Long {
-        val conversationId = chatRepository.startConversation(
-            bookId = book,
-            title = AiChatRepository.NEW_CONVERSATION_TITLE,
-            type = CONVERSATION_TYPE,
-            // 落库的 system 只是快照；每轮真正生效的由 ContextBuilder 重建。
-            systemPrompt = contextBuilder.build(
-                persona = persona,
+        val conversationId = prepareCompanionContext {
+            val conversationId = chatRepository.startConversation(
                 bookId = book,
-                readingScope = libraryRepository.getBook(book)?.let { entity ->
-                    ReadingScopeResolver.resolve(
-                        settingsRepository.companionSpoilerProtectionEnabled.first(),
-                        entity
-                    )
-                } ?: error("未找到当前书籍")
-            ),
-            firstUserMessage = null,
-            personaId = persona.id
-        )
-        if (persona.greeting.isNotBlank()) {
-            chatRepository.appendAssistantMessage(conversationId, persona.greeting)
+                title = AiChatRepository.NEW_CONVERSATION_TITLE,
+                type = CONVERSATION_TYPE,
+                // 落库的 system 只是快照；每轮真正生效的由 ContextBuilder 重建。
+                systemPrompt = contextBuilder.build(
+                    persona = persona,
+                    bookId = book,
+                    readingScope = libraryRepository.getBook(book)?.let { entity ->
+                        ReadingScopeResolver.resolve(
+                            settingsRepository.companionSpoilerProtectionEnabled.first(),
+                            entity
+                        )
+                    } ?: error("未找到当前书籍")
+                ),
+                firstUserMessage = null,
+                personaId = persona.id
+            )
+            if (persona.greeting.isNotBlank()) {
+                chatRepository.appendAssistantMessage(conversationId, persona.greeting)
+            }
+            conversationId
         }
+        if (session.value.personaId != persona.id || bookId.value != book) throw CancellationException("伴读会话已切换")
         activateConversation(conversationId)
         return conversationId
     }
@@ -730,12 +851,14 @@ class ReaderCompanionViewModel @Inject constructor(
     private fun activateConversation(conversationId: Long) {
         streamJob?.cancel()
         suggestionJob?.cancel()
-        streamBuffer.setLength(0)
-        reasoningBuffer.setLength(0)
+        streaming.clear()
+        messageReconciler.clear(conversationId)
         session.value = session.value.copy(
+            composerDraft = CompanionComposerDraft(session.value.personaId),
             conversationId = conversationId,
+            isLoadingMessages = true,
             messages = emptyList(),
-            messageUiKeys = emptyMap(),
+            locatedCitations = emptyMap(),
             liveEntryId = newLiveEntryId(conversationId),
             streamingText = null,
             streamingReasoning = null,
@@ -778,21 +901,31 @@ class ReaderCompanionViewModel @Inject constructor(
         messagesJob?.cancel()
         messagesJob = viewModelScope.launch {
             chatRepository.observeMessages(conversationId).collectLatest { messages ->
+                if (session.value.conversationId != conversationId) return@collectLatest
                 // 保留隐藏 tool 管道，界面会把它重建为可折叠执行时间线；system 仍不展示。
-                val visibleMessages = messages.filter { it.role != "system" }
+                val visibleMessages = messageReconciler.observe(messages.filter { it.role != "system" })
+                val previousMessages = session.value.messages.associateBy { it.id }
+                val currentMessages = visibleMessages.associateBy { it.id }
+                val retainedCitations = session.value.locatedCitations.filterKeys { id ->
+                    currentMessages[id]?.content == previousMessages[id]?.content && id in currentMessages
+                }
                 session.value = session.value.copy(
                     messages = visibleMessages,
-                    locatedCitations = emptyMap()
+                    isLoadingMessages = false,
+                    locatedCitations = retainedCitations
                 )
+                // Existing chips keep their height while only new/edited rows are resolved.
                 val located = try {
-                    locateMessageCitations(visibleMessages)
+                    withContext(Dispatchers.IO) {
+                        locateMessageCitations(visibleMessages.filterNot { it.id in retainedCitations })
+                    }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: Exception) {
                     emptyMap()
                 }
                 if (session.value.conversationId == conversationId && session.value.messages == visibleMessages) {
-                    session.value = session.value.copy(locatedCitations = located)
+                    session.value = session.value.copy(locatedCitations = retainedCitations + located)
                 }
             }
         }
@@ -854,8 +987,11 @@ class ReaderCompanionViewModel @Inject constructor(
         suggestionJob?.cancel()
         // 生成挂在应用作用域而不是 viewModelScope：退出聊天页不该把已经流了一半的回复
         // 连同它一起取消。AgentLoop 完成时会把回复落库，用户回来就能在列表里看到它。
-        streamJob = applicationScope.launch {
-            var currentLiveEntryId = newLiveEntryId(conversationId)
+        // UI actions, Room reconciliation, frame snapshots and stream reduction all have
+        // ONE Main owner. The buffered upstream is a channel: network/tool work never
+        // writes session state or touches either mutable buffer.
+        streamJob = applicationScope.launch(Dispatchers.Main.immediate) {
+            val currentLiveEntryId = newLiveEntryId(conversationId)
             session.value = session.value.copy(
                 isStreaming = true,
                 streamingText = "",
@@ -866,86 +1002,94 @@ class ReaderCompanionViewModel @Inject constructor(
                 suggestions = emptyList(),
                 error = null
             )
-            streamBuffer.setLength(0)
-            reasoningBuffer.setLength(0)
+            streaming.clear()
             val ticker = viewModelScope.launchStreamingTicker(::publishStreamingSnapshot)
             try {
-                val webSearchEnabled = webSearchSettingsStore.current().enabled
-                val readingScope = libraryRepository.getBook(book)?.let { entity ->
-                    ReadingScopeResolver.resolve(
-                        settingsRepository.companionSpoilerProtectionEnabled.first(),
-                        entity
-                    )
-                } ?: error("未找到当前书籍")
-                val memorySettings = settingsRepository.companionMemorySettings.first()
-                val autonomy = settingsRepository.companionAutonomySettings.first()
-                val multiBubble = settingsRepository.companionMultiBubbleEnabled.first()
-                // 语音要「开关开着」且「这个角色真绑了音色」两个条件都成立才算有这项能力。
-                val voiceEnabled = autonomy.voiceRepliesEnabled && persona.voiceId.isNotBlank()
-                // 主伴读会话始终把角色获准的完整工具集交给模型，让模型自己决定是否调用。
-                // 之前按关键词裁剪会让大量正常说法落成空 tools，模型只能回答“没有工具”。
-                val enabledTools = CompanionToolRouter.available(
-                    personaEnabledTools = persona.enabledTools().toSet(),
-                    requiredTools = requiredTools,
-                    webSearchEnabled = webSearchEnabled,
-                    longTermMemoryEnabled = memorySettings.longTermEnabled && persona.memoryEnabled
-                ).let { selected ->
-                    // 自主生图关着就直接把工具摘掉：留一个用了会被拒的工具只会诱导模型去调。
-                    // 用户在扩展面板里显式点「生成插图」时走 requiredTools，不受此限。
-                    if (autonomy.imageRepliesEnabled || "generate_image" in requiredTools) {
-                        selected
-                    } else {
-                        selected - "generate_image"
+                val (tools, systemPrompt) = prepareCompanionContext {
+                    val webSearchEnabled = webSearchSettingsStore.current().enabled
+                    val readingScope = libraryRepository.getBook(book)?.let { entity ->
+                        ReadingScopeResolver.resolve(
+                            settingsRepository.companionSpoilerProtectionEnabled.first(),
+                            entity
+                        )
+                    } ?: error("未找到当前书籍")
+                    val memorySettings = settingsRepository.companionMemorySettings.first()
+                    val autonomy = settingsRepository.companionAutonomySettings.first()
+                    val multiBubble = settingsRepository.companionMultiBubbleEnabled.first()
+                    // 语音要「开关开着」且「这个角色真绑了音色」两个条件都成立才算有这项能力。
+                    val voiceEnabled = autonomy.voiceRepliesEnabled && persona.voiceId.isNotBlank()
+                    // 主伴读会话始终把角色获准的完整工具集交给模型，让模型自己决定是否调用。
+                    // 之前按关键词裁剪会让大量正常说法落成空 tools，模型只能回答“没有工具”。
+                    val enabledTools = CompanionToolRouter.available(
+                        personaEnabledTools = persona.enabledTools().toSet(),
+                        requiredTools = requiredTools,
+                        webSearchEnabled = webSearchEnabled,
+                        longTermMemoryEnabled = memorySettings.longTermEnabled && persona.memoryEnabled
+                    ).let { selected ->
+                        // 自主生图关着就直接把工具摘掉：留一个用了会被拒的工具只会诱导模型去调。
+                        // 用户在扩展面板里显式点「生成插图」时走 requiredTools，不受此限。
+                        if (autonomy.imageRepliesEnabled || "generate_image" in requiredTools) {
+                            selected
+                        } else {
+                            selected - "generate_image"
+                        }
                     }
+                    val tools = readerToolset.forBook(
+                        bookId = book,
+                        personaId = persona.id,
+                        conversationId = conversationId,
+                        enabledTools = enabledTools,
+                        readingScope = readingScope,
+                        memoryScope = MemoryScope(
+                            longTermEnabled = memorySettings.longTermEnabled && persona.memoryEnabled,
+                            crossBookChatSearch = memorySettings.crossBookChatSearchEnabled,
+                            maskId = userMaskStore.activeMask()?.id ?: 0L
+                        )
+                    )
+                    val systemPrompt = contextBuilder.build(
+                        persona = persona,
+                        bookId = book,
+                        scene = sceneQuote.takeIf(String::isNotBlank),
+                        memoryQuery = memoryQuery,
+                        readingScope = readingScope,
+                        conversationShape = ConversationShape(
+                            multiBubble = multiBubble,
+                            voiceEnabled = voiceEnabled
+                        )
+                    )
+                    tools to systemPrompt
                 }
-                val tools = readerToolset.forBook(
-                    bookId = book,
-                    personaId = persona.id,
-                    conversationId = conversationId,
-                    enabledTools = enabledTools,
-                    readingScope = readingScope,
-                    memoryScope = MemoryScope(
-                        longTermEnabled = memorySettings.longTermEnabled && persona.memoryEnabled,
-                        crossBookChatSearch = memorySettings.crossBookChatSearchEnabled,
-                        maskId = userMaskStore.activeMask()?.id ?: 0L
-                    )
-                )
-                val systemPrompt = contextBuilder.build(
-                    persona = persona,
-                    bookId = book,
-                    scene = sceneQuote.takeIf(String::isNotBlank),
-                    memoryQuery = memoryQuery,
-                    readingScope = readingScope,
-                    conversationShape = ConversationShape(
-                        multiBubble = multiBubble,
-                        voiceEnabled = voiceEnabled
-                    )
-                )
-                agentLoop.run(conversationId, tools, systemPrompt).collect { event ->
+                if (session.value.conversationId != conversationId) return@launch
+                agentLoop.run(conversationId, tools, systemPrompt)
+                    .buffer(Channel.BUFFERED)
+                    .flowOn(Dispatchers.Default)
+                    .collect { event ->
+                    if (session.value.conversationId != conversationId) return@collect
+                    if (event is AgentEvent.RoundCommitted && !messageReconciler.committed(event.message)) return@collect
+                    streaming.reduce(event)
                     when (event) {
+                        is AgentEvent.RoundStarted -> {
+                            session.value = session.value.copy(
+                                liveEntryId = event.roundId,
+                                streamingText = "",
+                                streamingReasoning = null
+                            )
+                        }
                         is AgentEvent.Text -> {
-                            streamBuffer.append(event.text)
                             // 正文一到就撤下工具状态行；文本快照本身交给节拍器。
                             if (session.value.toolStatus != null) {
                                 session.value = session.value.copy(toolStatus = null)
                             }
                         }
-                        is AgentEvent.Reasoning -> reasoningBuffer.append(event.text)
+                        is AgentEvent.Reasoning -> Unit
                         is AgentEvent.RoundCommitted -> {
-                            streamBuffer.setLength(0)
-                            reasoningBuffer.setLength(0)
                             val messages = session.value.messages
-                            val committedUiKeys = session.value.messageUiKeys +
-                                (event.message.id to currentLiveEntryId)
-                            currentLiveEntryId = newLiveEntryId(conversationId)
                             session.value = session.value.copy(
                                 messages = if (messages.any { it.id == event.message.id }) {
                                     messages
                                 } else {
                                     messages + event.message
                                 },
-                                messageUiKeys = committedUiKeys,
-                                liveEntryId = currentLiveEntryId,
                                 streamingText = "",
                                 streamingReasoning = null
                             )
@@ -987,9 +1131,9 @@ class ReaderCompanionViewModel @Inject constructor(
                 ) {
                     throw IllegalStateException("模型没有调用保存工具，剧情梗概尚未入库；可重试或换用支持工具调用的模型")
                 }
-                memoryScheduler.afterTurn(conversationId)
-                streamBuffer.setLength(0)
-                reasoningBuffer.setLength(0)
+                withContext(Dispatchers.IO) { memoryScheduler.afterTurn(conversationId) }
+                if (session.value.conversationId != conversationId) return@launch
+                streaming.clear()
                 session.value = session.value.copy(
                     isStreaming = false,
                     streamingText = null,
@@ -999,13 +1143,14 @@ class ReaderCompanionViewModel @Inject constructor(
                 refreshSuggestions(persona, conversationId)
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
+                if (session.value.conversationId != conversationId) return@launch
                 // 已到达的残段完整亮出来，和错误行一起停留在气泡里等重试。
                 session.value = session.value.copy(
                     isStreaming = false,
                     toolStatus = null,
-                    streamingText = streamBuffer.toString().takeIf(String::isNotBlank),
+                    streamingText = streaming.text.takeIf(String::isNotBlank),
                     // 失败时思维链尤其有用：它常常说明模型卡在了哪一步。
-                    streamingReasoning = reasoningBuffer.toString().takeIf(String::isNotBlank),
+                    streamingReasoning = streaming.reasoning.takeIf(String::isNotBlank),
                     error = error.userMessage()
                 )
             } finally {
@@ -1035,12 +1180,9 @@ class ReaderCompanionViewModel @Inject constructor(
     private fun publishStreamingSnapshot() {
         val current = session.value
         if (!current.isStreaming) return
-        val text = nextStreamingFrame(current.streamingText.orEmpty(), streamBuffer.toString())
-        val reasoningTarget = reasoningBuffer.toString()
-        val reasoning = nextStreamingFrame(
-            current = current.streamingReasoning.orEmpty(),
-            target = reasoningTarget
-        ).takeIf(String::isNotBlank)
+        val frame = streaming.frame()
+        val text = frame.text
+        val reasoning = frame.reasoning
         if (current.streamingText != text || current.streamingReasoning != reasoning) {
             session.value = current.copy(streamingText = text, streamingReasoning = reasoning)
         }

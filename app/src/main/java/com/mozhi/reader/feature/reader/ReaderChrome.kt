@@ -259,7 +259,8 @@ fun ReaderChrome(
     onCompanion: () -> Unit,
     onSearch: () -> Unit,
     onReidentifyChapters: () -> Unit,
-    onTextReplacementRules: () -> Unit
+    onTextReplacementRules: () -> Unit,
+    pageLabel: String? = null
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
         AnimatedVisibility(
@@ -292,6 +293,7 @@ fun ReaderChrome(
         ) {
             ReaderBottomBar(
                 chapterProgress = chapterProgress,
+                pageLabel = pageLabel,
                 palette = palette,
                 onPrevChapter = onPrevChapter,
                 onNextChapter = onNextChapter,
@@ -456,6 +458,7 @@ private fun GlassIconButton(
 @Composable
 private fun ReaderBottomBar(
     chapterProgress: Float,
+    pageLabel: String?,
     palette: ReaderPalette,
     onPrevChapter: () -> Unit,
     onNextChapter: () -> Unit,
@@ -475,6 +478,7 @@ private fun ReaderBottomBar(
     ) {
         ChapterHelm(
             chapterProgress = chapterProgress,
+            pageLabel = pageLabel,
             palette = palette,
             onPrevChapter = onPrevChapter,
             onNextChapter = onNextChapter,
@@ -510,6 +514,7 @@ private fun ReaderBottomBar(
 @Composable
 private fun ChapterHelm(
     chapterProgress: Float,
+    pageLabel: String?,
     palette: ReaderPalette,
     onPrevChapter: () -> Unit,
     onNextChapter: () -> Unit,
@@ -561,7 +566,7 @@ private fun ChapterHelm(
                     }
                 )
                 Text(
-                    text = "${(shown * 100).toInt()}%",
+                    text = pageLabel?.takeUnless { dragging } ?: "${(shown * 100).toInt()}%",
                     style = MaterialTheme.typography.labelSmall,
                     color = palette.muted,
                     modifier = Modifier.padding(start = 10.dp)

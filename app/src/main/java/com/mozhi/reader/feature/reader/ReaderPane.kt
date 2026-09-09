@@ -17,14 +17,11 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.HelpOutline
@@ -65,6 +62,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -92,12 +90,16 @@ import com.mozhi.reader.feature.reader.engine.dragSelectionHandle
 import com.mozhi.reader.feature.reader.engine.hitTextPos
 import com.mozhi.reader.feature.reader.engine.inlineMarkerLayout
 import com.mozhi.reader.feature.reader.engine.linkAt
+import com.mozhi.reader.feature.reader.engine.ReaderVisibleReadSnapshot
 import com.mozhi.reader.feature.reader.engine.selectionBodyRange
 import com.mozhi.reader.feature.reader.engine.selectionRects
 import com.mozhi.reader.feature.reader.engine.textPosAtBodyOffset
 import com.mozhi.reader.feature.reader.engine.wordSelectionAt
 import com.mozhi.reader.feature.reader.render.PageBitmapRenderer
 import com.mozhi.reader.feature.reader.render.ReaderPageStyle
+import com.mozhi.reader.feature.reader.render.SpreadGeometry
+import com.mozhi.reader.feature.reader.render.Leaf
+import com.mozhi.reader.feature.reader.render.PageHit
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -110,8 +112,9 @@ import kotlinx.coroutines.launch
  * Replaces the Readium WebView host.
  */
 @Composable
-fun ReaderPane(
+internal fun ReaderPane(
     controller: ReaderContentController,
+    holder: ReaderPaneHolder,
     settings: ReaderSettings,
     palette: ReaderPalette,
     enabled: Boolean,
@@ -131,6 +134,8 @@ fun ReaderPane(
     onImageAction: (selection: String, context: String, range: IntRange) -> Unit,
     onEditText: ((selection: String, range: IntRange) -> Unit)?,
     pageTurnRequest: ReaderPageTurnRequest? = null,
+    onSpreadModeChanged: (Boolean) -> Unit = {},
+    onVisiblePagesDrawn: (ReaderVisibleReadSnapshot) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -138,13 +143,23 @@ fun ReaderPane(
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
     val clipboard = LocalClipboardManager.current
-    val statusBarPx = WindowInsets.statusBars.getTop(density).toFloat()
-    val navBarPx = WindowInsets.navigationBars.getBottom(density).toFloat()
+    val safeInsets = readerSafeInsets()
+    val statusBarPx = safeInsets.topPx
+    val navBarPx = safeInsets.bottomPx
+    val windowWidthDp = com.mozhi.reader.ui.LocalMoReadWindowWidthDp.current?.value
+        ?: LocalConfiguration.current.screenWidthDp.toFloat()
 
     var frameTick by remember { mutableIntStateOf(0) }
     var backgroundTick by remember { mutableIntStateOf(0) }
-    var viewport by remember { mutableStateOf(IntSize.Zero) }
-    val holder = remember(controller) { ReaderPaneHolder(controller) }
+    var viewport by remember(holder) { mutableStateOf(IntSize(holder.viewWidth, holder.viewHeight)) }
+    val spreadMode = SpreadLayoutPolicy.resolve(
+        settings.widePageLayout, viewport.width / density.density, windowWidthDp, settings.pageMode
+    )
+    val spreadGeometry = if (spreadMode) SpreadGeometry(
+        viewport.width.toFloat(), viewport.height.toFloat(), with(density) { SpreadLayoutPolicy.GUTTER_DP.dp.toPx() }
+    ) else null
+    val visiblePagesCallback by androidx.compose.runtime.rememberUpdatedState(onVisiblePagesDrawn)
+    LaunchedEffect(spreadMode) { onSpreadModeChanged(spreadMode) }
     val selection = remember(controller) {
         ReaderSelectionController(controller, holder) {
             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -164,11 +179,7 @@ fun ReaderPane(
 
                 override fun fillPage(direction: PageTurnDirection) {
                     holder.prepareTurn(direction)
-                    val moved = if (direction == PageTurnDirection.NEXT) {
-                        controller.moveToNextPage()
-                    } else {
-                        controller.moveToPrevPage()
-                    }
+                    val moved = holder.commitTurn(direction)
                     // A refused commit (e.g. the window shifted mid-animation) must still leave
                     // the bitmaps matching the unchanged position instead of a stale frame.
                     if (!moved) {
@@ -176,6 +187,7 @@ fun ReaderPane(
                         holder.refresh(0)
                         frameTick++
                     }
+                    holder.finishFollowTurn(committed = moved)
                 }
 
                 override fun onBoundaryHit(direction: PageTurnDirection) = onBoundary(direction)
@@ -185,16 +197,20 @@ fun ReaderPane(
                 }
 
                 override fun onTurnStarted(direction: PageTurnDirection) {
-                    holder.ensureFresh()
+                    holder.startTurn()
                 }
             }
         )
     }
     driver.mode = when (settings.pageTurnAnimation) {
-        PageTurnAnimation.SIMULATION -> PageTurnDriver.Mode.SIMULATION
+        // A hinge uses relative travel, including cancellation back to startX; no corner curl.
+        PageTurnAnimation.SIMULATION -> if (spreadMode) PageTurnDriver.Mode.FLAT else PageTurnDriver.Mode.SIMULATION
         PageTurnAnimation.COVER, PageTurnAnimation.SLIDE -> PageTurnDriver.Mode.FLAT
         PageTurnAnimation.NONE -> PageTurnDriver.Mode.INSTANT
     }
+
+    driver.hingeLeafWidth = spreadGeometry?.leafWidth
+        ?.takeIf { settings.pageTurnAnimation == PageTurnAnimation.SIMULATION }
 
     // 位图正被翻页合成器读取时，普通内容/批注/时钟更新等到手势落定后再发布。
     // 唯一例外是 fillPage 已登记的提交刷新：它只重画已经离窗的缓冲，而且必须在
@@ -220,62 +236,41 @@ fun ReaderPane(
 
     LaunchedEffect(pageTurnRequest?.sequence) {
         val request = pageTurnRequest ?: return@LaunchedEffect
-        if (enabled) driver.turnByTap(request.direction)
+        if (enabled) {
+            driver.finishActiveTurn()
+            holder.followRequest = request.takeIf { it.focusTarget != null }
+            if (holder.followWasSuperseded()) {
+                holder.finishFollowTurn()
+            } else if (request.focusTarget?.let { controller.isDisplaying(it.first, it.second) } == true) {
+                holder.finishFollowTurn(committed = true)
+            } else {
+                driver.turnByTap(request.direction)
+                if (!driver.isRunning) holder.finishFollowTurn()
+            }
+        } else request.onFinished?.invoke(ReaderTurnResult.CANCELLED)
     }
 
     // Environment: relayout when the typography inputs change; repaint when only colors change.
-    val environment = ReaderEnvironmentKey(
-        fontScale = settings.fontScale,
-        font = settings.font,
-        customFontPath = settings.customFontPath,
-        lineHeight = settings.lineHeight,
-        publisherStyleMode = settings.publisherStyleMode,
-        pageMarginsHash = listOf(
-            settings.pageMarginLeft,
-            settings.pageMarginRight,
-            settings.pageMarginTop,
-            settings.pageMarginBottom
-        ).hashCode(),
-        advancedTypographyHash = listOf(
-            settings.fontWeight,
-            settings.letterSpacingEm,
-            settings.paragraphSpacingEm,
-            settings.firstLineIndentEm,
-            settings.titleScale,
-            settings.titleTopSpacing,
-            settings.titleBottomSpacing,
-            settings.textJustification,
-            settings.showHeader,
-            settings.showFooter,
-            settings.headerMarginTop,
-            settings.footerMarginBottom
-        ).hashCode(),
-        syntaxHighlightEnabled = settings.syntaxHighlightEnabled,
-        syntaxRulesHash = settings.syntaxHighlightRules.hashCode(),
-        width = viewport.width,
-        height = viewport.height
+    val styleKey = readerRenderStyleKey(
+        settings, palette, density, viewport, statusBarPx, navBarPx, spreadGeometry
     )
-    remember(
-        environment,
-        palette,
-        settings.backgroundImagePath,
-        settings.backgroundImageOpacity
-    ) {
+    val environment = styleKey.environment
+    remember(styleKey) {
         if (viewport.width > 0 && viewport.height > 0) {
-            val style = ReaderPageStyle.resolve(
-                settings = settings,
-                palette = palette,
-                density = density,
-                viewWidth = viewport.width,
-                viewHeight = viewport.height,
-                statusBarPx = statusBarPx,
-                navigationBarPx = navBarPx
-            )
             driver.cancelActiveTurn()
+            holder.finishFollowTurn()
             selection.clear()
             val relayout = holder.applyStyle(
-                style = style,
-                environment = environment,
+                key = styleKey,
+                createStyle = {
+                    ReaderPageStyle.resolve(
+                        settings = settings, palette = palette, density = density,
+                        viewWidth = environment.leafWidth, viewHeight = viewport.height,
+                        statusBarPx = statusBarPx, navigationBarPx = navBarPx,
+                        columnWidthPx = environment.columnWidth
+                    )
+                },
+                spread = spreadGeometry,
                 includeBackgroundInPages = settings.pageTurnAnimation.usesEmbeddedPageBackground(),
                 // 背景图在后台合成，落地后只刷新真正把纸面烘进位图的仿真模式。
                 // 平移/覆盖模式的纸面是独立静态层；重画正在翻动的透明页会短暂露底，
@@ -293,11 +288,7 @@ fun ReaderPane(
                     }
                 }
             )
-            if (relayout) {
-                controller.updateEnvironment(style.spec, style.measure)
-            } else {
-                holder.refresh(0)
-            }
+            if (!relayout) holder.refresh(0)
             frameTick++
             backgroundTick++
         }
@@ -307,6 +298,7 @@ fun ReaderPane(
     // 动画模式切换只改变页面快照是否嵌背景，不重建/重解码 BackgroundProvider。
     LaunchedEffect(settings.pageTurnAnimation) {
         driver.cancelActiveTurn()
+        holder.finishFollowTurn()
         selection.clear()
         if (holder.setIncludeBackgroundInPages(
                 settings.pageTurnAnimation.usesEmbeddedPageBackground()
@@ -337,7 +329,9 @@ fun ReaderPane(
         onDispose {
             registerContentHook(null)
             driver.cancelActiveTurn()
-            holder.release()
+            // The reader entry still owns this cache while chat is on top. Drop UI callbacks,
+            // not full-screen bitmaps/typesetting; ViewModel.onCleared releases the resources.
+            holder.detach()
         }
     }
 
@@ -380,10 +374,9 @@ fun ReaderPane(
             modifier = Modifier
                 .fillMaxSize()
                 .onSizeChanged { size ->
-                    if (holder.setViewport(size.width, size.height)) {
-                        driver.setViewport(size.width.toFloat(), size.height.toFloat())
-                        viewport = size
-                    }
+                    // The driver is new after navigation even when the retained cache has this size.
+                    driver.setViewport(size.width.toFloat(), size.height.toFloat())
+                    if (holder.setViewport(size.width, size.height)) viewport = size
                 }
                 .magnifier(
                     sourceCenter = { selection.magnifierCenter ?: Offset.Unspecified },
@@ -419,14 +412,13 @@ fun ReaderPane(
                         onLinkClick(link)
                         return@readerPageTouch
                     }
-                    val fraction = position.x / holder.viewWidth.coerceAtLeast(1)
-                    when {
-                        fraction < PREV_TAP_ZONE -> driver.turnByTap(PageTurnDirection.PREVIOUS)
-                        fraction > NEXT_TAP_ZONE -> driver.turnByTap(PageTurnDirection.NEXT)
-                        // Legado suppresses only the center action after an aborted settle.
-                        !fromAbort -> onCenterTap()
-                        else -> Unit
-                    }
+                    val tapDirection = readerTapDirection(
+                        position.x, holder.viewWidth.toFloat(), holder.spread,
+                        minimumChromeWidthPx = with(density) { SpreadLayoutPolicy.CHROME_TOUCH_DP.dp.toPx() }
+                    )
+                    if (tapDirection != null) driver.turnByTap(tapDirection)
+                    // Legado suppresses only the chrome action after an aborted settle.
+                    else if (!fromAbort) onCenterTap()
                 }
                 .drawBehind {
                     frameTick // draw-phase read: content/style changes invalidate this scope
@@ -455,11 +447,15 @@ fun ReaderPane(
                             width = size.width,
                             height = size.height,
                             backgroundColor = holder.backgroundColor,
-                            darkTheme = palette.isDark
+                            spread = holder.spread
                         )
                     } else {
                         holder.curBitmap?.takeUnless(Bitmap::isRecycled)?.let {
                             canvas.drawBitmap(it, 0f, 0f, null)
+                            holder.onCurrentBitmapDrawn(
+                                isSettled = { !driver.isRunning },
+                                onVisible = { visiblePagesCallback(it) }
+                            )
                         }
                         selection.drawHighlight(this, palette)
                     }
@@ -614,10 +610,72 @@ internal const val NEXT_TAP_ZONE = 0.72f
 /** 单调序号确保连续按同一枚音量键也会触发 Compose effect。 */
 data class ReaderPageTurnRequest(
     val sequence: Int,
-    val direction: PageTurnDirection
+    val direction: PageTurnDirection,
+    val focusTarget: Pair<Int, Int>? = null,
+    val navigationGeneration: Int? = null,
+    val sourceGeneration: Int? = null,
+    val onFinished: ((ReaderTurnResult) -> Unit)? = null
 )
 
-private data class ReaderEnvironmentKey(
+/** Only inputs that affect typography/ink participate in the retained render cache. */
+internal fun readerRenderStyleKey(
+    settings: ReaderSettings,
+    palette: ReaderPalette,
+    density: Density,
+    viewport: IntSize,
+    statusBarPx: Float,
+    navigationBarPx: Float,
+    spread: SpreadGeometry? = null
+): ReaderRenderStyleKey {
+    val environment = ReaderEnvironmentKey(
+        fontScale = settings.fontScale,
+        font = settings.font,
+        customFontPath = settings.customFontPath,
+        lineHeight = settings.lineHeight,
+        publisherStyleMode = settings.publisherStyleMode,
+        pageMarginsHash = listOf(
+            settings.pageMarginLeft,
+            settings.pageMarginRight,
+            settings.pageMarginTop,
+            settings.pageMarginBottom
+        ).hashCode(),
+        advancedTypographyHash = listOf(
+            settings.fontWeight,
+            settings.letterSpacingEm,
+            settings.paragraphSpacingEm,
+            settings.firstLineIndentEm,
+            settings.titleScale,
+            settings.titleTopSpacing,
+            settings.titleBottomSpacing,
+            settings.textJustification,
+            settings.showHeader,
+            settings.showFooter,
+            settings.headerMarginTop,
+            settings.footerMarginBottom
+        ).hashCode(),
+        syntaxHighlightEnabled = settings.syntaxHighlightEnabled,
+        syntaxRulesHash = settings.syntaxHighlightRules.hashCode(),
+        fontLibraryHash = settings.fontLibrary.hashCode(),
+        width = viewport.width,
+        height = viewport.height,
+        spread = spread != null,
+        leafWidth = spread?.leafWidth?.toInt() ?: viewport.width,
+        columnWidth = spread?.leafWidth ?:
+            with(density) { SpreadLayoutPolicy.singleColumnWidthDp(viewport.width / density.density).dp.toPx() },
+        density = density.density,
+        systemFontScale = density.fontScale,
+        statusBarPx = statusBarPx,
+        navigationBarPx = navigationBarPx
+    )
+    return ReaderRenderStyleKey(
+        environment, palette, settings.backgroundImagePath, settings.backgroundImageOpacity,
+        paperGrain = settings.activeCustomThemeId == null &&
+            settings.theme == com.mozhi.reader.core.datastore.ReaderTheme.PAPER,
+        preferReaderBackground = settings.backgroundImagePath != null || settings.activeCustomThemeId != null
+    )
+}
+
+internal data class ReaderEnvironmentKey(
     val fontScale: Float,
     val font: ReaderFont,
     val customFontPath: String?,
@@ -627,8 +685,25 @@ private data class ReaderEnvironmentKey(
     val advancedTypographyHash: Int,
     val syntaxHighlightEnabled: Boolean,
     val syntaxRulesHash: Int,
+    val fontLibraryHash: Int,
     val width: Int,
-    val height: Int
+    val height: Int,
+    val spread: Boolean,
+    val leafWidth: Int,
+    val columnWidth: Float,
+    val density: Float,
+    val systemFontScale: Float,
+    val statusBarPx: Float,
+    val navigationBarPx: Float
+)
+
+internal data class ReaderRenderStyleKey(
+    val environment: ReaderEnvironmentKey,
+    val palette: ReaderPalette,
+    val backgroundImagePath: String?,
+    val backgroundImageOpacity: Float,
+    val paperGrain: Boolean,
+    val preferReaderBackground: Boolean
 )
 
 /**
@@ -668,8 +743,9 @@ private class ReaderSelectionController(
     override val isActive: Boolean get() = active != null
 
     override fun begin(position: Offset): Boolean {
-        val laid = controller.curPage() as? RenderPage.Laid ?: return false
-        val local = holder.toContentLocal(position) ?: return false
+        val pageHit = holder.hitAt(position) ?: return false
+        val laid = pageHit.page
+        val local = pageHit.local
         val hit = laid.page.hitTextPos(local.x, local.y, exact = true) ?: return false
         val word = laid.page.wordSelectionAt(hit)
         val range = laid.page.selectionBodyRange(word.first, word.second)
@@ -689,11 +765,13 @@ private class ReaderSelectionController(
 
     override fun grabHandle(position: Offset, radiusPx: Float): Boolean {
         val current = active ?: return false
-        val laid = controller.curPage() as? RenderPage.Laid ?: return false
-        if (laid.chapterIndex != current.chapterIndex) return false
-        val origin = holder.contentOrigin() ?: return false
-        val startCenter = endpointCenter(laid.page, current.startOffset, origin, startSide = true)
-        val endCenter = endpointCenter(laid.page, current.endOffset, origin, startSide = false)
+        val pages = holder.visiblePages().filter { it.first.chapterIndex == current.chapterIndex }
+        val startCenter = pages.firstNotNullOfOrNull { (laid, origin) ->
+            endpointCenter(laid.page, current.startOffset, origin, startSide = true)
+        }
+        val endCenter = pages.firstNotNullOfOrNull { (laid, origin) ->
+            endpointCenter(laid.page, current.endOffset, origin, startSide = false)
+        }
         val startDistance = startCenter?.let { (position - it).getDistance() } ?: Float.MAX_VALUE
         val endDistance = endCenter?.let { (position - it).getDistance() } ?: Float.MAX_VALUE
         draggedHandle = when {
@@ -710,9 +788,10 @@ private class ReaderSelectionController(
         magnifierCenter = position
         val current = active ?: return
         if (autoTurnAtEdge(position, current)) return
-        val laid = controller.curPage() as? RenderPage.Laid ?: return
+        val pageHit = holder.hitAt(position) ?: return
+        val laid = pageHit.page
         if (laid.chapterIndex != current.chapterIndex) return
-        val local = holder.toContentLocal(position) ?: return
+        val local = pageHit.local
         val hit = laid.page.hitTextPos(local.x, local.y, exact = false) ?: return
         val hitRange = laid.page.selectionBodyRange(hit, hit)
         val handle = draggedHandle
@@ -748,10 +827,13 @@ private class ReaderSelectionController(
 
     private fun autoTurnAtEdge(position: Offset, current: ActiveSelection): Boolean {
         val now = SystemClock.uptimeMillis()
-        val edge = holder.viewHeight * AUTO_TURN_EDGE_FRACTION
+        val horizontal = holder.spread != null
+        val extent = if (horizontal) holder.viewWidth.toFloat() else holder.viewHeight.toFloat()
+        val coordinate = if (horizontal) position.x else position.y
+        val edge = extent * AUTO_TURN_EDGE_FRACTION
         val direction = when {
-            position.y <= edge -> PageTurnDirection.PREVIOUS
-            position.y >= holder.viewHeight - edge -> PageTurnDirection.NEXT
+            coordinate <= edge -> PageTurnDirection.PREVIOUS
+            coordinate >= extent - edge -> PageTurnDirection.NEXT
             else -> {
                 edgeDirection = null
                 edgeEnteredAt = 0L
@@ -767,8 +849,8 @@ private class ReaderSelectionController(
             now - lastAutoTurnAt < AUTO_TURN_COOLDOWN_MS
         ) return false
         val candidate = when (direction) {
-            PageTurnDirection.PREVIOUS -> controller.prevPage()
-            PageTurnDirection.NEXT -> controller.nextPage()
+            PageTurnDirection.PREVIOUS -> if (controller.spreadMode) controller.prevSpread().first else controller.prevPage()
+            PageTurnDirection.NEXT -> if (controller.spreadMode) controller.nextSpread().first else controller.nextPage()
         } as? RenderPage.Laid ?: return false
         if (candidate.chapterIndex != current.chapterIndex) return false
         preserveNextPageChange = true
@@ -817,27 +899,27 @@ private class ReaderSelectionController(
 
     fun drawHighlight(drawScope: DrawScope, palette: ReaderPalette) {
         val current = active ?: return
-        val laid = controller.curPage() as? RenderPage.Laid ?: return
-        if (laid.chapterIndex != current.chapterIndex) return
-        val origin = holder.contentOrigin() ?: return
-        val rects = laid.page.selectionRects(current.bodyRange)
-        val color = palette.accent.copy(alpha = if (palette.isDark) 0.18f else 0.30f)
-        for (rect in rects) {
-            drawScope.drawRect(
-                color = color,
-                topLeft = Offset(origin.x + rect.left, origin.y + rect.top),
-                size = Size(rect.right - rect.left, rect.bottom - rect.top)
-            )
-        }
-        endpointCenter(laid.page, current.startOffset, origin, startSide = true)?.let { center ->
-            val pos = laid.page.textPosAtBodyOffset(current.startOffset) ?: return@let
-            val line = laid.page.lines[pos.lineIndex]
-            drawHandle(drawScope, palette, center.x, origin.y + line.lineTop, origin.y + line.lineBottom)
-        }
-        endpointCenter(laid.page, current.endOffset, origin, startSide = false)?.let { center ->
-            val pos = laid.page.textPosAtBodyOffset(current.endOffset) ?: return@let
-            val line = laid.page.lines[pos.lineIndex]
-            drawHandle(drawScope, palette, center.x, origin.y + line.lineTop, origin.y + line.lineBottom)
+        for ((laid, origin) in holder.visiblePages()) {
+            if (laid.chapterIndex != current.chapterIndex) continue
+            val rects = laid.page.selectionRects(current.bodyRange)
+            val color = palette.accent.copy(alpha = if (palette.isDark) 0.18f else 0.30f)
+            for (rect in rects) {
+                drawScope.drawRect(
+                    color = color,
+                    topLeft = Offset(origin.x + rect.left, origin.y + rect.top),
+                    size = Size(rect.right - rect.left, rect.bottom - rect.top)
+                )
+            }
+            endpointCenter(laid.page, current.startOffset, origin, startSide = true)?.let { center ->
+                val pos = laid.page.textPosAtBodyOffset(current.startOffset) ?: return@let
+                val line = laid.page.lines[pos.lineIndex]
+                drawHandle(drawScope, palette, center.x, origin.y + line.lineTop, origin.y + line.lineBottom)
+            }
+            endpointCenter(laid.page, current.endOffset, origin, startSide = false)?.let { center ->
+                val pos = laid.page.textPosAtBodyOffset(current.endOffset) ?: return@let
+                val line = laid.page.lines[pos.lineIndex]
+                drawHandle(drawScope, palette, center.x, origin.y + line.lineTop, origin.y + line.lineBottom)
+            }
         }
     }
 
@@ -877,8 +959,9 @@ private class ReaderSelectionController(
     }
 
     fun toolbarTop(current: ActiveSelection, density: Density): Int {
-        val laid = controller.curPage() as? RenderPage.Laid ?: return 0
-        val origin = holder.contentOrigin() ?: return 0
+        val (laid, origin) = holder.visiblePages().firstOrNull {
+            it.first.page.selectionRects(current.bodyRange).isNotEmpty()
+        } ?: return 0
         val rects = laid.page.selectionRects(current.bodyRange)
         val gap = with(density) { 12.dp.toPx() }
         val barHeight = with(density) { 48.dp.toPx() }
@@ -899,7 +982,7 @@ private class ReaderSelectionController(
 private const val BACKGROUND_SWAP_POLL_MS = 16L
 private const val PAGE_REFRESH_POLL_MS = 16L
 
-private class ReaderPaneHolder(private val controller: ReaderContentController) {
+internal class ReaderPaneHolder(private val controller: ReaderContentController) {
     var viewWidth = 0
         private set
     var viewHeight = 0
@@ -909,10 +992,14 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
 
     val compositor = PageTurnCompositor()
 
-    private var style: ReaderPageStyle? = null
+    var style: ReaderPageStyle? = null
+        private set
     private var renderer: PageBitmapRenderer? = null
     private var includeBackgroundInPages = true
-    private var appliedEnvironment: ReaderEnvironmentKey? = null
+    private var appliedStyleKey: ReaderRenderStyleKey? = null
+    private var appliedEnvironmentGeneration: Int? = null
+    private var backgroundReadyCallback: (() -> Unit)? = null
+    private var renderRevision = 0L
     private var timeText: String = timeFormat.format(Date())
     private var batteryPercent: Int = 100
     private var annotations: List<ReaderAnnotationMark> = emptyList()
@@ -920,6 +1007,69 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
     private var transientHighlight: TransientHighlightSpan? = null
     private var dirty = true
     private var preparedTurn: PageTurnDirection? = null
+    private var forwardTurn: com.mozhi.reader.feature.reader.engine.ReaderTurnSnapshot? = null
+    private var backwardTurn: com.mozhi.reader.feature.reader.engine.ReaderTurnSnapshot? = null
+    var followRequest: ReaderPageTurnRequest? = null
+
+    private fun followResult(request: ReaderPageTurnRequest, committed: Boolean) = readerFollowTurnResult(
+        committed, request.navigationGeneration, controller.navigationGeneration,
+        request.sourceGeneration, controller.sourceGeneration
+    )
+
+    fun followWasSuperseded(): Boolean = followRequest?.let {
+        followResult(it, false) == ReaderTurnResult.CANCELLED
+    } == true
+
+    fun finishFollowTurn(committed: Boolean = false) {
+        val request = followRequest ?: return
+        followRequest = null
+        val result = followResult(request, committed)
+        if (result == ReaderTurnResult.COMMITTED) {
+            request.focusTarget?.let { (chapter, offset) ->
+                if (controller.chapterIndex == chapter) controller.focus(offset)
+            }
+        }
+        request.onFinished?.invoke(result)
+    }
+
+    private val renderedSnapshots = java.util.IdentityHashMap<Bitmap, ReaderVisibleReadSnapshot>()
+    private val renderedPages = java.util.IdentityHashMap<Bitmap, List<RenderPage>>()
+    private val renderedRevisions = java.util.IdentityHashMap<Bitmap, Long>()
+    private var pendingDrawnSnapshot: ReaderVisibleReadSnapshot? = null
+
+    private fun recordRendered(bitmap: Bitmap, pages: List<RenderPage>, replaced: Bitmap? = null) {
+        if (replaced != null && replaced !== bitmap) {
+            renderedPages.remove(replaced)
+            renderedSnapshots.remove(replaced)
+            renderedRevisions.remove(replaced)
+            if (!replaced.isRecycled) replaced.recycle()
+        }
+        renderedPages[bitmap] = pages.toList()
+        renderedRevisions[bitmap] = renderRevision
+        val snapshot = controller.captureVisibleRead(pages)
+        if (snapshot == null) renderedSnapshots.remove(bitmap) else renderedSnapshots[bitmap] = snapshot
+    }
+
+    /** Called only after drawBitmap of a non-animating current frame, never during prefilling. */
+    fun onCurrentBitmapDrawn(isSettled: () -> Boolean, onVisible: (ReaderVisibleReadSnapshot) -> Unit) {
+        if (!isSettled()) return
+        val bitmap = curBitmap ?: return
+        if (bitmap.width != viewWidth || bitmap.height != viewHeight) return
+        val captured = renderedSnapshots[bitmap] ?: return
+        val drawn = controller.rebaseDrawnSnapshot(captured) ?: return
+        if (pendingDrawnSnapshot == drawn) return
+        pendingDrawnSnapshot = drawn
+        mainHandler.post {
+            if (pendingDrawnSnapshot != drawn) return@post
+            pendingDrawnSnapshot = null
+            if (isSettled() && bitmap === curBitmap && !bitmap.isRecycled &&
+                controller.isCurrentVisibleRead(drawn)
+            ) onVisible(drawn)
+        }
+    }
+
+    var spread: SpreadGeometry? = null
+        private set
     /** 邻页渲染已排到下一帧、尚未执行。 */
     private var pendingNeighbors = false
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -936,22 +1086,53 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
         return true
     }
 
-    /** Returns true when the typography environment changed and a relayout is required. */
+    /** Returning from chat with an identical key does not resolve fonts, decode or typeset. */
     fun applyStyle(
-        style: ReaderPageStyle,
-        environment: ReaderEnvironmentKey,
+        key: ReaderRenderStyleKey,
+        createStyle: () -> ReaderPageStyle,
+        spread: SpreadGeometry?,
         includeBackgroundInPages: Boolean,
         onBackgroundReady: () -> Unit
     ): Boolean {
-        val relayout = appliedEnvironment != environment
-        appliedEnvironment = environment
-        this.style = style
-        this.includeBackgroundInPages = includeBackgroundInPages
-        backgroundColor = style.backgroundColor
-        renderer?.release()
-        renderer = PageBitmapRenderer(style).also { it.prepareBackground(onBackgroundReady) }
-        dirty = true
+        backgroundReadyCallback = onBackgroundReady
+        updateTime()
+        // The scroll surface can replace the controller environment while this cache is detached.
+        val relayout = appliedStyleKey?.environment != key.environment ||
+            appliedEnvironmentGeneration != controller.environmentGeneration
+        if (appliedStyleKey != key || renderer == null) {
+            val nextStyle = createStyle()
+            appliedStyleKey = key
+            style = nextStyle
+            renderedSnapshots.clear()
+            renderedPages.clear()
+            renderedRevisions.clear()
+            pendingDrawnSnapshot = null
+            this.spread = spread
+            this.includeBackgroundInPages = includeBackgroundInPages
+            backgroundColor = nextStyle.backgroundColor
+            renderer?.release()
+            renderer = PageBitmapRenderer(nextStyle).also { next ->
+                // This closure owns only the holder. A disposed Compose scope is never retained.
+                next.prepareBackground {
+                    invalidatePages()
+                    backgroundReadyCallback?.invoke()
+                }
+            }
+            invalidatePages()
+        } else {
+            setIncludeBackgroundInPages(includeBackgroundInPages)
+        }
+        if (relayout) {
+            val currentStyle = checkNotNull(style)
+            controller.updateEnvironment(currentStyle.spec, currentStyle.measure, spread != null)
+            appliedEnvironmentGeneration = controller.environmentGeneration
+        }
         return relayout
+    }
+
+    private fun invalidatePages() {
+        renderRevision++
+        dirty = true
     }
 
     fun drawBackground(canvas: android.graphics.Canvas, width: Float, height: Float) {
@@ -963,51 +1144,74 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
     fun setIncludeBackgroundInPages(value: Boolean): Boolean {
         if (includeBackgroundInPages == value) return false
         includeBackgroundInPages = value
-        dirty = true
+        invalidatePages()
         return true
     }
 
     fun setAnnotations(value: List<ReaderAnnotationMark>): Boolean {
         if (annotations == value) return false
         annotations = value
-        dirty = true
+        invalidatePages()
         return true
     }
 
     fun setIllustrations(value: List<ReaderIllustrationMark>): Boolean {
         if (illustrations == value) return false
         illustrations = value
-        dirty = true
+        invalidatePages()
         return true
     }
 
     fun setTransientHighlight(value: TransientHighlightSpan?): Boolean {
         if (transientHighlight == value) return false
         transientHighlight = value
-        dirty = true
+        invalidatePages()
         return true
     }
 
-    /** Top-left of the typeset content area；特殊页不再保留已隐藏页眉的空白带。 */
-    fun contentOrigin(): Offset? = style?.let { currentStyle ->
-        val page = (controller.curPage() as? RenderPage.Laid)?.page
-        val reclaimsHeader = page?.immersive == true || page?.hideHeader == true
-        Offset(
-            currentStyle.paddingLeft,
+    private fun contentOrigin(page: RenderPage.Laid, leaf: Leaf = Leaf.LEFT): Offset {
+        val currentStyle = style ?: return Offset.Zero
+        val reclaimsHeader = page.page.immersive || page.page.hideHeader
+        return Offset(
+            (spread?.originX(leaf) ?: 0f) + currentStyle.paddingLeft,
             if (reclaimsHeader) currentStyle.immersiveContentTop else currentStyle.contentTop
         )
     }
 
+    fun visiblePages(): List<Pair<RenderPage.Laid, Offset>> {
+        if (spread == null) {
+            val laid = controller.curPage() as? RenderPage.Laid ?: return emptyList()
+            return listOf(laid to contentOrigin(laid))
+        }
+        val pages = controller.curSpread()
+        return listOfNotNull(
+            (pages.first as? RenderPage.Laid)?.let { it to contentOrigin(it, Leaf.LEFT) },
+            (pages.second as? RenderPage.Laid)?.let { it to contentOrigin(it, Leaf.RIGHT) }
+        )
+    }
+
+    /** Returned local coordinates are content-local, including per-page hidden-header policy. */
+    fun hitAt(position: Offset): PageHit? {
+        val geometry = spread
+        val hit = if (geometry != null) geometry.hitAt(position, controller.curSpread()) else {
+            val page = controller.curPage() as? RenderPage.Laid ?: return null
+            PageHit(Leaf.LEFT, page, position)
+        } ?: return null
+        return hit.copy(local = position - contentOrigin(hit.page, hit.leaf))
+    }
+
     fun linkAt(position: Offset): ReaderPageLink? {
-        val page = controller.curPage() as? RenderPage.Laid ?: return null
-        val local = toContentLocal(position) ?: return null
+        val hit = hitAt(position) ?: return null
+        val page = hit.page
+        val local = hit.local
         return page.page.linkAt(local.x, local.y, page.chapterIndex)
     }
 
     fun annotationIdsAt(position: Offset): List<Long> {
         val currentStyle = style ?: return emptyList()
-        val page = controller.curPage() as? RenderPage.Laid ?: return emptyList()
-        val local = toContentLocal(position) ?: return emptyList()
+        val hit = hitAt(position) ?: return emptyList()
+        val page = hit.page
+        val local = hit.local
         // 与 PageBitmapRenderer.drawBody 的 marker 参数保持一致，否则点击热区和画出的圆点对不上
         val markerRadius = (currentStyle.tipSizePx * 0.72f).coerceAtLeast(8f)
         val geometry = page.page.inlineMarkerLayout(
@@ -1035,8 +1239,9 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
 
     fun illustrationIdsAt(position: Offset): List<Long> {
         val currentStyle = style ?: return emptyList()
-        val page = controller.curPage() as? RenderPage.Laid ?: return emptyList()
-        val local = toContentLocal(position) ?: return emptyList()
+        val hit = hitAt(position) ?: return emptyList()
+        val page = hit.page
+        val local = hit.local
         val markerRadius = (currentStyle.tipSizePx * 0.72f).coerceAtLeast(8f)
         val markers = page.page.inlineMarkerLayout(
             annotations = annotations.filter { it.chapterIndex == page.chapterIndex },
@@ -1054,11 +1259,6 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
         }?.illustrationIds.orEmpty()
     }
 
-    fun toContentLocal(position: Offset): Offset? {
-        val origin = contentOrigin() ?: return null
-        return Offset(position.x - origin.x, position.y - origin.y)
-    }
-
     fun bitmapFor(direction: PageTurnDirection?, front: Boolean): Bitmap? = when (direction) {
         PageTurnDirection.NEXT -> if (front) curBitmap else nextBitmap
         PageTurnDirection.PREVIOUS -> if (front) prevBitmap else curBitmap
@@ -1070,6 +1270,19 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
         // 翻页真要用到邻页了，把推迟的那两张立刻补上。
         if (pendingNeighbors) renderNeighborsNow()
     }
+
+    fun startTurn() {
+        ensureFresh()
+        val source = curBitmap?.let(renderedPages::get)
+        val next = nextBitmap?.let(renderedPages::get)
+        val previous = prevBitmap?.let(renderedPages::get)
+        forwardTurn = if (source != null && next != null) controller.captureTurn(true, source, next) else null
+        backwardTurn = if (source != null && previous != null) controller.captureTurn(false, source, previous) else null
+    }
+
+    private fun frozenTurn(direction: PageTurnDirection) = if (direction == PageTurnDirection.NEXT) forwardTurn else backwardTurn
+
+    fun commitTurn(direction: PageTurnDirection): Boolean = frozenTurn(direction)?.let(controller::commitTurn) == true
 
     fun prepareTurn(direction: PageTurnDirection) {
         preparedTurn = direction
@@ -1100,7 +1313,8 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
                 scheduleNeighbors()
             }
         }
-        dirty = false
+        // A neighbor-only load must not consume a pending repaint of the current page.
+        if (relativePosition == 0) dirty = false
     }
 
     private fun scheduleNeighbors() {
@@ -1124,6 +1338,8 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
         prevBitmap = rotated.previous
         curBitmap = rotated.current
         nextBitmap = rotated.next
+        // Usually a cache hit; repaint if marks/background changed during the active turn.
+        curBitmap = renderPage(renderer, curBitmap, RelativePage.CUR)
         when (direction) {
             PageTurnDirection.NEXT -> {
                 nextBitmap = renderPage(renderer, rotated.reusable, RelativePage.NEXT)
@@ -1141,32 +1357,55 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
         into: Bitmap?,
         which: RelativePage
     ): Bitmap {
-        val page = when (which) {
+        val geometry = spread
+        val pageSpread = if (geometry == null) null else when (which) {
+            RelativePage.PREV -> controller.prevSpread()
+            RelativePage.CUR -> controller.curSpread()
+            RelativePage.NEXT -> controller.nextSpread()
+        }
+        val pages = pageSpread?.toList() ?: listOf(when (which) {
             RelativePage.PREV -> controller.prevPage()
             RelativePage.CUR -> controller.curPage()
             RelativePage.NEXT -> controller.nextPage()
+        })
+        if (into != null && !into.isRecycled && into.width == viewWidth && into.height == viewHeight &&
+            renderedRevisions[into] == renderRevision && renderedPages[into] == pages
+        ) {
+            // Rebase the read watermark if an identical page survived a navigation generation.
+            recordRendered(into, pages)
+            return into
         }
+        if (geometry != null && pageSpread != null) {
+            return renderer.renderSpread(
+                pages = pageSpread, into = into, geometry = geometry,
+                bookProgress = (pageSpread.first as? RenderPage.Laid)?.let {
+                    controller.progressAt(it.chapterIndex, it.page.chapterPosition)
+                } ?: controller.bookProgress(),
+                timeText = timeText, batteryPercent = batteryPercent,
+                annotations = annotations, illustrations = illustrations,
+                transientHighlight = transientHighlight, includeBackground = includeBackgroundInPages
+            ).also { recordRendered(it, pages, into) }
+        }
+        val page = pages.single()
         val progress = when (page) {
             is RenderPage.Laid -> controller.progressAt(page.chapterIndex, page.page.chapterPosition)
             else -> controller.bookProgress()
         }
         return renderer.render(
-            page = page,
-            into = into,
-            bookProgress = progress,
-            timeText = timeText,
-            batteryPercent = batteryPercent,
+            page = page, into = into, bookProgress = progress,
+            timeText = timeText, batteryPercent = batteryPercent,
             annotations = annotations.filter { it.chapterIndex == page.chapterIndex },
             illustrations = illustrations.filter { it.chapterIndex == page.chapterIndex },
             transientHighlight = transientHighlight?.takeIf { it.chapterIndex == page.chapterIndex },
             includeBackground = includeBackgroundInPages
-        )
+        ).also { recordRendered(it, pages, into) }
     }
 
     fun updateTime(): Boolean {
         val next = timeFormat.format(Date())
         if (next == timeText) return false
         timeText = next
+        invalidatePages()
         return true
     }
 
@@ -1177,20 +1416,39 @@ private class ReaderPaneHolder(private val controller: ReaderContentController) 
         val next = (level * 100) / scale
         if (next == batteryPercent) return false
         batteryPercent = next
+        invalidatePages()
         return true
     }
 
-    fun release() {
+    fun detach() {
+        finishFollowTurn()
+        preparedTurn = null
+        forwardTurn = null
+        backwardTurn = null
+        backgroundReadyCallback = null
+        pendingDrawnSnapshot = null
         pendingNeighbors = false
         mainHandler.removeCallbacksAndMessages(null)
+    }
+
+    fun release() {
+        detach()
         renderer?.release()
         renderer = null
+        style = null
+        appliedStyleKey = null
+        appliedEnvironmentGeneration = null
+        dirty = true
         curBitmap?.recycle()
         nextBitmap?.recycle()
         prevBitmap?.recycle()
         curBitmap = null
         nextBitmap = null
         prevBitmap = null
+        pendingDrawnSnapshot = null
+        renderedSnapshots.clear()
+        renderedPages.clear()
+        renderedRevisions.clear()
     }
 
     private companion object {

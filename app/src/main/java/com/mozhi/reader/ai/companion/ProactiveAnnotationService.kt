@@ -5,20 +5,14 @@ import com.mozhi.reader.ai.client.AiJson
 import com.mozhi.reader.ai.client.ChatMessage
 import com.mozhi.reader.ai.client.ChatRole
 import com.mozhi.reader.ai.media.AiMediaGenerationService
-import com.mozhi.reader.ai.persona.PersonaRepository
 import com.mozhi.reader.core.database.entity.AnnotationColors
 import com.mozhi.reader.core.database.entity.AnnotationStyle
 import com.mozhi.reader.core.database.entity.ModelRole
-import com.mozhi.reader.core.datastore.ProactiveAnnotationQuota
-import com.mozhi.reader.core.datastore.ReaderSettingsRepository
 import com.mozhi.reader.core.library.AnnotationMedia
-import com.mozhi.reader.core.library.AnnotationRepository
 import com.mozhi.reader.core.library.BookQuoteLocator
-import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.library.QuoteChapter
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlinx.coroutines.flow.first
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 
@@ -50,7 +44,10 @@ internal object ProactiveAnnotationParser {
                         AiJson.decodeFromJsonElement(ProactiveAnnotationDraft.serializer(), element)
                     }.getOrNull()
                 }
-                else -> AiJson.decodeFromString(ProactiveAnnotationEnvelope.serializer(), clean).annotations
+                is kotlinx.serialization.json.JsonObject -> if ("quote" in root) {
+                    listOf(AiJson.decodeFromJsonElement(ProactiveAnnotationDraft.serializer(), root))
+                } else AiJson.decodeFromString(ProactiveAnnotationEnvelope.serializer(), clean).annotations
+                else -> emptyList()
             }
         }.getOrDefault(emptyList())
             .filter { it.quote.isNotBlank() && it.note.isNotBlank() }
@@ -59,114 +56,118 @@ internal object ProactiveAnnotationParser {
     }
 }
 
+/** Scheduler-owned immutable identity and transactional sink; the service never writes progress. */
+data class ProactiveAnnotationRequest(
+    val bookId: Long,
+    val chapterIndex: Int,
+    val body: String,
+    val persona: com.mozhi.reader.core.database.entity.PersonaEntity,
+    val candidateLimit: Int,
+    val doneParagraphEnds: Set<Int>
+)
+
+data class ProactiveAnnotationGenerationResult(val failed: Boolean, val stopped: Boolean)
+
 @Singleton
 class ProactiveAnnotationService @Inject constructor(
-    private val libraryRepository: LibraryRepository,
-    private val annotationRepository: AnnotationRepository,
-    private val personaRepository: PersonaRepository,
-    private val settingsRepository: ReaderSettingsRepository,
     private val clientFactory: AiClientFactory,
-    private val mediaService: AiMediaGenerationService,
-    private val quota: ProactiveAnnotationQuota
+    private val mediaService: AiMediaGenerationService
 ) {
-    suspend fun generateForCompletedChapter(bookId: Long, chapterIndex: Int) {
-        val autonomy = settingsRepository.companionAutonomySettings.first()
-        if (!autonomy.proactiveAnnotationsEnabled) return
-        val personaId = settingsRepository.activePersonaId.first() ?: return
-        val persona = personaRepository.getPersona(personaId) ?: return
-        val allowance = quota.reserve(
-            bookId = bookId,
-            chapterIndex = chapterIndex,
-            limits = autonomy.annotationLimitsFor(bookId),
-            requestVoice = autonomy.annotationVoiceActive && persona.voiceId.isNotBlank(),
-            requestImages = autonomy.annotationImageActive
-        )
-        if (!allowance.accepted || allowance.maxAnnotations <= 0) return
-
-        val chapter = libraryRepository.getChapters(bookId)
-            .firstOrNull { it.chapterIndex == chapterIndex } ?: return
-        val body = libraryRepository.readChapterText(bookId, chapter)
-        if (body.isBlank()) return
-        val book = libraryRepository.getBook(bookId) ?: return
-        val resolved = clientFactory.forRole(ModelRole.CHEAP)
-        val countInstruction = if (allowance.annotationsUnlimited) {
-            "至少 ${allowance.minAnnotations.coerceAtLeast(1)} 段，条数不限，但只挑真正值得回应的地方，不要为凑数硬写"
-        } else if (allowance.minAnnotations in 1 until allowance.maxAnnotations) {
-            "${allowance.minAnnotations} 到 ${allowance.maxAnnotations} 段"
-        } else {
-            "最多 ${allowance.maxAnnotations} 段"
-        }
-        val raw = resolved.client.chat(
-            messages = listOf(
-                ChatMessage(
-                    ChatRole.SYSTEM,
-                    """
-                    你是阅读应用的随读段评编辑。只根据用户刚读完的这一章写批注，绝不引用或暗示后续剧情。
-                    选择 $countInstruction 值得回应的原文，quote 必须逐字复制自输入正文，note 用角色口吻写简短中文段评。
-                    style 只能是 HIGHLIGHT、UNDERLINE、WAVY。voice 仅在适合像私语一样说出时为 true；image_prompt 仅在值得配图时给中文提示词。
-                    只输出 JSON：{"annotations":[{"quote":"原文","note":"段评","style":"HIGHLIGHT","voice":false,"image_prompt":null}]}
-                    """.trimIndent()
-                ),
-                ChatMessage(
-                    ChatRole.USER,
-                    "书名：《${book.title}》\n章节：${chapter.title}\n角色：${persona.name}\n角色风格：${persona.speakingStyle}\n\n正文：\n${body.take(MAX_CHAPTER_CHARS)}"
+    /** Revalidation is mandatory before every paid call and immediately before the atomic sink. */
+    suspend fun generateForChapter(
+        request: ProactiveAnnotationRequest,
+        allowance: suspend () -> com.mozhi.reader.core.datastore.ProactiveAnnotationAllowance?,
+        recordMedia: suspend (voices: Int, images: Int) -> Unit,
+        commit: suspend (com.mozhi.reader.core.database.entity.AnnotationEntity, Int, com.mozhi.reader.core.database.entity.IllustrationEntity?) -> Boolean
+    ): ProactiveAnnotationGenerationResult {
+        var failed = false
+        for (paragraph in ProactiveAnnotationParagraphs.candidates(request.body, request.candidateLimit)) {
+            if (paragraph.end in request.doneParagraphEnds) continue
+            val permit = allowance() ?: return ProactiveAnnotationGenerationResult(failed, stopped = true)
+            if (!permit.accepted || permit.maxAnnotations <= 0) return ProactiveAnnotationGenerationResult(failed, true)
+            var detachedImage: com.mozhi.reader.core.database.entity.IllustrationEntity? = null
+            var committed = false
+            try {
+                val resolved = clientFactory.forRole(ModelRole.CHEAP)
+                val raw = resolved.client.chat(
+                    messages = listOf(
+                        ChatMessage(ChatRole.SYSTEM, """
+                            你是随读段评编辑。只根据给出的正文前缀，写一条对最后一段的简短中文段评。
+                            绝不推测后文；quote 必须逐字复制自最后一段，不能引用之前的段落。
+                            style 必须按这一处内容的语义选择一个，不能把整批段评固定为同一种，也不要随机轮换或为了凑齐三种而强行选择：
+                            HIGHLIGHT（荧光）：金句、精彩描写、值得回味的段落。
+                            WAVY（波浪线）：当前正文前缀中已能看出的线索、伏笔、暗线或前后呼应；不能据此断言未读剧情。
+                            UNDERLINE（直线）：知识点、典故、术语、需要记住的事实或解释。
+                            没有明显线索或知识点时才选 HIGHLIGHT，不要把它当作所有段评的固定样式。
+                            voice 表示适合私语；image_prompt 可为 null。
+                            只输出一个 JSON 对象，字段为 quote（原文字符串）、note（段评字符串）、style（上述三个枚举之一）、voice（布尔值）、image_prompt（字符串或 null）。不要 Markdown 或额外解释。
+                        """.trimIndent()),
+                        ChatMessage(ChatRole.USER, "角色：${request.persona.name}\n角色风格：${request.persona.speakingStyle}\n" +
+                            "正文前缀（最后一段是唯一目标）：\n${ProactiveAnnotationParagraphs.prefix(request.body, paragraph)}")
+                    ),
+                    options = resolved.options
                 )
-            ),
-            options = resolved.options
-        )
-
-        var created = 0
-        var voices = 0
-        var images = 0
-        ProactiveAnnotationParser.parse(raw, allowance.maxAnnotations).forEach { draft ->
-            val location = BookQuoteLocator.locateAll(
-                listOf(QuoteChapter(chapterIndex, body)),
-                draft.quote.trim()
-            ).firstOrNull() ?: return@forEach
-            var audioPath: String? = null
-            var illustrationId: Long? = null
-            if (draft.voice && voices < allowance.maxVoice && persona.voiceId.isNotBlank()) {
-                audioPath = runCatching {
-                    mediaService.synthesizeSpeech(
-                        bookId = bookId,
-                        text = draft.note,
-                        voiceId = persona.voiceId,
-                        emotion = persona.voiceEmotion.takeIf(String::isNotBlank)
-                    ).path
-                }.getOrNull()
-                if (audioPath != null) voices++
+                val draft = ProactiveAnnotationParser.parse(raw, 1).firstOrNull()
+                if (draft == null) { failed = true; continue }
+                val location = BookQuoteLocator.locateAll(
+                    listOf(QuoteChapter(request.chapterIndex, request.body)), draft.quote.trim()
+                ).firstOrNull { it.startCharOffset >= paragraph.start && it.endCharOffset <= paragraph.end }
+                if (location == null || request.body.substring(location.startCharOffset, location.endCharOffset) != draft.quote.trim()) { failed = true; continue }
+                var audioPath: String? = null
+                if (draft.voice && request.persona.voiceId.isNotBlank()) {
+                    val mediaPermit = allowance() ?: return ProactiveAnnotationGenerationResult(failed, true)
+                    if (mediaPermit.maxVoice > 0) {
+                        // Charge before requesting, so failed/crashed requests cannot silently reuse a media cap.
+                        recordMedia(1, 0)
+                        audioPath = optionalMedia {
+                            mediaService.synthesizeSpeech(bookId = request.bookId, text = draft.note, voiceId = request.persona.voiceId,
+                                emotion = request.persona.voiceEmotion.takeIf(String::isNotBlank),
+                                beforePaidRequest = { allowance() != null }).path
+                        }
+                    }
+                }
+                if (!draft.imagePrompt.isNullOrBlank()) {
+                    val mediaPermit = allowance() ?: return ProactiveAnnotationGenerationResult(failed, true)
+                    if (mediaPermit.maxImages > 0) {
+                        recordMedia(0, 1)
+                        detachedImage = optionalMedia {
+                            mediaService.generateIllustration(
+                                bookId = request.bookId, chapterIndex = request.chapterIndex,
+                                charOffset = location.startCharOffset, sourceText = draft.quote,
+                                prompt = draft.imagePrompt, personaId = request.persona.id, persist = false,
+                                beforePaidRequest = { allowance() != null }
+                            )
+                        }
+                    }
+                }
+                val row = com.mozhi.reader.core.database.entity.AnnotationEntity(
+                    bookId = request.bookId, personaId = request.persona.id,
+                    chapterIndex = request.chapterIndex,
+                    startCharOffset = location.startCharOffset, endCharOffset = location.endCharOffset,
+                    selectedText = draft.quote.trim(), note = draft.note.trim(),
+                    colorTag = AnnotationColors.forPersona(request.persona.id),
+                    style = AnnotationStyle.fromWire(draft.style).wire,
+                    mediaJson = AnnotationMedia(audioPath, null).encode(),
+                    sourceScopeChapterIndex = request.chapterIndex, sourceScopeCharOffset = paragraph.end,
+                    createdAt = System.currentTimeMillis()
+                )
+                committed = commit(row, paragraph.end, detachedImage)
+                if (!committed) return ProactiveAnnotationGenerationResult(failed, true)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                failed = true // A bad paragraph must not prevent the remaining paragraphs from being tried.
+            } finally {
+                // Sink guarantees null/throw means rollback; committed acknowledgement is cancellation-safe.
+                if (!committed) detachedImage?.let { java.io.File(it.imagePath).delete() }
             }
-            if (!draft.imagePrompt.isNullOrBlank() && images < allowance.maxImages) {
-                illustrationId = runCatching {
-                    mediaService.generateIllustration(
-                        bookId = bookId,
-                        chapterIndex = chapterIndex,
-                        charOffset = location.startCharOffset,
-                        sourceText = draft.quote,
-                        prompt = draft.imagePrompt,
-                        personaId = persona.id
-                    ).id
-                }.getOrNull()
-                if (illustrationId != null) images++
-            }
-            annotationRepository.add(
-                bookId = bookId,
-                personaId = persona.id,
-                chapterIndex = chapterIndex,
-                startCharOffset = location.startCharOffset,
-                endCharOffset = location.endCharOffset,
-                selectedText = draft.quote.trim(),
-                note = draft.note.trim(),
-                colorTag = AnnotationColors.forPersona(persona.id),
-                style = AnnotationStyle.fromWire(draft.style),
-                mediaJson = AnnotationMedia(audioPath, illustrationId).encode()
-            )
-            created++
         }
-        quota.recordCreated(created, voices, images)
+        return ProactiveAnnotationGenerationResult(failed, stopped = false)
     }
 
-    private companion object {
-        const val MAX_CHAPTER_CHARS = 28_000
-    }
+    private suspend fun <T> optionalMedia(block: suspend () -> T): T? = try {
+        block()
+    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+        throw cancelled
+    } catch (_: Exception) { null }
 }

@@ -1,5 +1,8 @@
 package com.mozhi.reader.feature.settings
 
+import com.mozhi.reader.core.di.ApplicationScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineScope
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mozhi.reader.ai.media.AiMediaGenerationService
@@ -35,7 +38,8 @@ class TtsSettingsViewModel @Inject constructor(
     private val settingsStore: TtsSettingsStore,
     private val systemTtsSpeaker: SystemTtsSpeaker,
     private val mediaService: AiMediaGenerationService,
-    private val apiKeyStore: ApiKeyStore
+    private val apiKeyStore: ApiKeyStore,
+    @ApplicationScope private val applicationScope: CoroutineScope
 ) : ViewModel() {
 
     private val engines = MutableStateFlow<List<SystemTtsEngineInfo>>(emptyList())
@@ -44,6 +48,18 @@ class TtsSettingsViewModel @Inject constructor(
     )
     private val preview = MutableStateFlow(false)
     private val message = MutableStateFlow<String?>(null)
+    private val writes = SettingsWriteQueue(
+        CoroutineScope(applicationScope.coroutineContext + Dispatchers.Main.immediate)
+    ) { error -> message.value = "保存失败：${error.message ?: "请重试"}" }
+
+    suspend fun flushPendingWrites(retry: Boolean = false): Boolean {
+        if (retry) writes.retryFailed()
+        val saved = writes.flush()
+        if (saved && message.value?.startsWith("保存失败") == true) message.value = null
+        return saved
+    }
+
+    fun discardFailedWrites() { writes.discardFailures() }
 
     val uiState = combine(
         settingsStore.settings,
@@ -65,26 +81,26 @@ class TtsSettingsViewModel @Inject constructor(
         }
     }
 
-    fun setEngineMode(mode: TtsEngineMode) = update { it.copy(engineMode = mode) }
-    fun setSystemEngine(packageName: String) = update { it.copy(systemEnginePackage = packageName) }
-    fun setSystemLanguage(tag: String) = update { it.copy(systemLanguageTag = tag.trim()) }
-    fun setSystemRate(rate: Float) = update { it.copy(systemRate = rate) }
-    fun setSystemPitch(pitch: Float) = update { it.copy(systemPitch = pitch) }
-    fun setAiVoice(voice: String) = update { it.copy(aiVoiceId = voice.trim()) }
-    fun setAiSpeed(speed: Float) = update { it.copy(aiSpeed = speed) }
-    fun setAiVolume(volume: Float) = update { it.copy(aiVolume = volume) }
-    fun setAiPitch(pitch: Int) = update { it.copy(aiPitch = pitch) }
-    fun setAllowAudioMixing(value: Boolean) = update { it.copy(allowAudioMixing = value) }
-    fun setTrimSilence(value: Boolean) = update { it.copy(trimSilence = value) }
+    fun setEngineMode(mode: TtsEngineMode) = update("setEngineMode") { it.copy(engineMode = mode) }
+    fun setSystemEngine(packageName: String) = update("setSystemEngine") { it.copy(systemEnginePackage = packageName) }
+    fun setSystemLanguage(tag: String) = update("setSystemLanguage") { it.copy(systemLanguageTag = tag) }
+    fun setSystemRate(rate: Float) = update("setSystemRate") { it.copy(systemRate = rate) }
+    fun setSystemPitch(pitch: Float) = update("setSystemPitch") { it.copy(systemPitch = pitch) }
+    fun setAiVoice(voice: String) = update("setAiVoice") { it.copy(aiVoiceId = voice) }
+    fun setAiSpeed(speed: Float) = update("setAiSpeed") { it.copy(aiSpeed = speed) }
+    fun setAiVolume(volume: Float) = update("setAiVolume") { it.copy(aiVolume = volume) }
+    fun setAiPitch(pitch: Int) = update("setAiPitch") { it.copy(aiPitch = pitch) }
+    fun setAllowAudioMixing(value: Boolean) = update("setAllowAudioMixing") { it.copy(allowAudioMixing = value) }
+    fun setTrimSilence(value: Boolean) = update("setTrimSilence") { it.copy(trimSilence = value) }
     fun setSynthesisGranularity(value: TtsSynthesisGranularity) =
-        update { it.copy(synthesisGranularity = value) }
-    fun setMaxSynthesisChars(value: Int) = update { it.copy(maxSynthesisChars = value) }
-    fun setSynthesisConcurrency(value: Int) = update { it.copy(synthesisConcurrency = value) }
-    fun setRetryCount(value: Int) = update { it.copy(retryCount = value) }
-    fun setPrefetchCount(value: Int) = update { it.copy(prefetchCount = value) }
+        update("setSynthesisGranularity") { it.copy(synthesisGranularity = value) }
+    fun setMaxSynthesisChars(value: Int) = update("setMaxSynthesisChars") { it.copy(maxSynthesisChars = value) }
+    fun setSynthesisConcurrency(value: Int) = update("setSynthesisConcurrency") { it.copy(synthesisConcurrency = value) }
+    fun setRetryCount(value: Int) = update("setRetryCount") { it.copy(retryCount = value) }
+    fun setPrefetchCount(value: Int) = update("setPrefetchCount") { it.copy(prefetchCount = value) }
 
     /** 切服务商预设时把 Base URL / 模型重置为该预设默认值（可再手改）。 */
-    fun setAiProvider(provider: TtsApiProvider) = update {
+    fun setAiProvider(provider: TtsApiProvider) = update("setAiProvider") {
         it.copy(
             aiProvider = provider,
             aiBaseUrl = provider.defaultBaseUrl(),
@@ -92,9 +108,9 @@ class TtsSettingsViewModel @Inject constructor(
         )
     }
 
-    fun setAiBaseUrl(value: String) = update { it.copy(aiBaseUrl = value.trim()) }
-    fun setAiGroupId(value: String) = update { it.copy(aiGroupId = value.trim()) }
-    fun setAiModel(value: String) = update { it.copy(aiModel = value.trim()) }
+    fun setAiBaseUrl(value: String) = update("setAiBaseUrl") { it.copy(aiBaseUrl = value) }
+    fun setAiGroupId(value: String) = update("setAiGroupId") { it.copy(aiGroupId = value) }
+    fun setAiModel(value: String) = update("setAiModel") { it.copy(aiModel = value) }
 
     fun saveApiKey(raw: String) {
         val key = raw.trim()
@@ -112,6 +128,7 @@ class TtsSettingsViewModel @Inject constructor(
 
     fun preview() {
         viewModelScope.launch {
+            if (!writes.flush() || preview.value) return@launch
             preview.value = true
             message.value = null
             try {
@@ -151,9 +168,8 @@ class TtsSettingsViewModel @Inject constructor(
         player.prepareAsync()
     }
 
-    private fun update(transform: (TtsSettings) -> TtsSettings) {
-        viewModelScope.launch { settingsStore.update(transform) }
-    }
+    private fun update(key: String, transform: (TtsSettings) -> TtsSettings) =
+        writes.enqueue(key) { settingsStore.update(transform) }
 
     override fun onCleared() {
         systemTtsSpeaker.stop()

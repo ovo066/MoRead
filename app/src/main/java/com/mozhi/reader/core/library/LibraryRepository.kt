@@ -235,15 +235,26 @@ class LibraryRepository @Inject constructor(
         bookId: Long,
         locatorJson: String,
         chapterIndex: Int,
-        charOffset: Int = 0
+        charOffset: Int = 0,
+        reachedEnd: Boolean = false
     ) {
         bookDao.updateProgress(
             bookId = bookId,
             locatorJson = locatorJson,
             chapterIndex = chapterIndex,
             charOffset = charOffset,
-            readAt = System.currentTimeMillis()
+            readAt = System.currentTimeMillis(),
+            reachedEnd = reachedEnd
         )
+    }
+
+    /**
+     * Advances only the monotonic spoiler boundary to the end of text actually displayed.
+     * Reader callers must supply original-source UTF-16 coordinates, never prefetched/generated text.
+     * Does not change resume locator/position, lastReadAt, or reachedEnd.
+     */
+    suspend fun markVisibleReadEnd(bookId: Long, chapterIndex: Int, charOffset: Int) {
+        bookDao.markVisibleReadEnd(bookId, chapterIndex, charOffset)
     }
 
     suspend fun booksNeedingText(): List<BookEntity> =

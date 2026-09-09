@@ -1,5 +1,14 @@
 package com.mozhi.reader.feature.settings
 
+import com.mozhi.reader.ui.components.committedDraft
+import com.mozhi.reader.ui.components.rememberCommittedTextFieldState
+import com.mozhi.reader.ui.components.rememberCommittedDrafts
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -65,6 +74,23 @@ fun ImageGenSettingsScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val settings = state.settings
+    val drafts = rememberCommittedDrafts()
+    val focusManager = LocalFocusManager.current
+    val baseUrlDraft = rememberCommittedTextFieldState(drafts, "baseUrl", settings.baseUrl,
+        trim = true, onCommit = viewModel::setBaseUrl)
+    val modelDraft = rememberCommittedTextFieldState(drafts, "model", settings.model,
+        trim = true, onCommit = viewModel::setModel)
+    val sizeDraft = rememberCommittedTextFieldState(drafts, "size", settings.size,
+        trim = true, onCommit = viewModel::setSize)
+    val positivePromptDraft = rememberCommittedTextFieldState(drafts, "positivePrompt", settings.positivePrompt,
+        trim = false, onCommit = viewModel::setPositivePrompt)
+    val negativePromptDraft = rememberCommittedTextFieldState(drafts, "negativePrompt", settings.negativePrompt,
+        trim = false, onCommit = viewModel::setNegativePrompt)
+    val saveGate = rememberDraftSaveGate(drafts, viewModel::flushPendingWrites, viewModel::discardFailedWrites)
+    fun afterDrafts(action: () -> Unit) { saveGate.run(action = action) }
+    fun leaveAfterDrafts(action: () -> Unit) { saveGate.run(navigation = true, action = action) }
+    BackHandler { leaveAfterDrafts(onBack) }
+    DraftSaveDialogs(saveGate)
 
     MoReadBackdrop {
         Column(
@@ -78,7 +104,7 @@ fun ImageGenSettingsScreen(
                     .padding(horizontal = 4.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = onBack) {
+                IconButton(onClick = { leaveAfterDrafts(onBack) }) {
                     Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回")
                 }
                 Text(
@@ -128,7 +154,7 @@ fun ImageGenSettingsScreen(
                                 text = { Text(provider.label()) },
                                 onClick = {
                                     providerMenuExpanded = false
-                                    viewModel.setProvider(provider)
+                                    afterDrafts { drafts.acceptExternalChanges(); viewModel.setProvider(provider) }
                                 }
                             )
                         }
@@ -136,8 +162,10 @@ fun ImageGenSettingsScreen(
                 }
 
                 OutlinedTextField(
-                    value = settings.baseUrl,
-                    onValueChange = viewModel::setBaseUrl,
+                    value = baseUrlDraft.value,
+                    onValueChange = baseUrlDraft::edit,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                     label = { Text("Base URL") },
                     supportingText = {
                         Text(
@@ -148,9 +176,10 @@ fun ImageGenSettingsScreen(
                         )
                     },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().committedDraft(baseUrlDraft)
                 )
 
+                // Secret entry deliberately stays out of savedInstanceState; only explicit Save uses encrypted storage.
                 var keyInput by remember { mutableStateOf("") }
                 OutlinedTextField(
                     value = keyInput,
@@ -164,8 +193,11 @@ fun ImageGenSettingsScreen(
                     trailingIcon = {
                         TextButton(
                             onClick = {
-                                viewModel.saveApiKey(keyInput)
-                                keyInput = ""
+                                val pendingKey = keyInput
+                                afterDrafts {
+                                    viewModel.saveApiKey(pendingKey)
+                                    if (keyInput == pendingKey) keyInput = ""
+                                }
                             },
                             enabled = keyInput.isNotBlank()
                         ) { Text("保存") }
@@ -173,12 +205,14 @@ fun ImageGenSettingsScreen(
                     modifier = Modifier.fillMaxWidth()
                 )
                 if (state.hasApiKey) {
-                    TextButton(onClick = viewModel::clearApiKey) { Text("删除已保存的 Key") }
+                    TextButton(onClick = { afterDrafts(viewModel::clearApiKey) }) { Text("删除已保存的 Key") }
                 }
 
                 OutlinedTextField(
-                    value = settings.model,
-                    onValueChange = viewModel::setModel,
+                    value = modelDraft.value,
+                    onValueChange = modelDraft::edit,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                     label = { Text("模型") },
                     supportingText = {
                         Text(
@@ -190,14 +224,16 @@ fun ImageGenSettingsScreen(
                         )
                     },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().committedDraft(modelDraft)
                 )
 
                 var sizeMenuExpanded by remember { mutableStateOf(false) }
                 Box {
                     OutlinedTextField(
-                        value = settings.size,
-                        onValueChange = viewModel::setSize,
+                        value = sizeDraft.value,
+                        onValueChange = sizeDraft::edit,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                         label = { Text("图片尺寸") },
                         placeholder = { Text(settings.effectiveSize) },
                         supportingText = {
@@ -215,7 +251,7 @@ fun ImageGenSettingsScreen(
                                 Icon(Icons.Outlined.ExpandMore, contentDescription = "常用尺寸")
                             }
                         },
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth().committedDraft(sizeDraft)
                     )
                     DropdownMenu(
                         expanded = sizeMenuExpanded,
@@ -226,7 +262,7 @@ fun ImageGenSettingsScreen(
                                 text = { Text(option) },
                                 onClick = {
                                     sizeMenuExpanded = false
-                                    viewModel.setSize(option)
+                                    afterDrafts { drafts.acceptExternalChanges(); viewModel.setSize(option) }
                                 }
                             )
                         }
@@ -235,14 +271,14 @@ fun ImageGenSettingsScreen(
 
                 if (settings.provider == ImageApiProvider.NOVELAI) {
                     OutlinedTextField(
-                        value = settings.positivePrompt,
-                        onValueChange = viewModel::setPositivePrompt,
+                        value = positivePromptDraft.value,
+                        onValueChange = positivePromptDraft::edit,
                         label = { Text("固定正面提示词（可选）") },
                         supportingText = {
                             Text("英文 tags，会加在自动生成的提示词前面")
                         },
                         minLines = 2,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth().committedDraft(positivePromptDraft)
                     )
                     var samplerMenuExpanded by remember { mutableStateOf(false) }
                     ExposedDropdownMenuBox(
@@ -270,7 +306,7 @@ fun ImageGenSettingsScreen(
                                     text = { Text(option) },
                                     onClick = {
                                         samplerMenuExpanded = false
-                                        viewModel.setSampler(option)
+                                        afterDrafts { viewModel.setSampler(option) }
                                     }
                                 )
                             }
@@ -300,17 +336,17 @@ fun ImageGenSettingsScreen(
                         )
                     }
                     OutlinedTextField(
-                        value = settings.negativePrompt,
-                        onValueChange = viewModel::setNegativePrompt,
+                        value = negativePromptDraft.value,
+                        onValueChange = negativePromptDraft::edit,
                         label = { Text("负面提示词（可选）") },
                         supportingText = { Text("英文 tags；留空用内置默认负面词") },
                         minLines = 2,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth().committedDraft(negativePromptDraft)
                     )
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = viewModel::testGenerate, enabled = !state.isTesting) {
+                    TextButton(onClick = { afterDrafts(viewModel::testGenerate) }, enabled = !state.isTesting) {
                         if (state.isTesting) {
                             CircularProgressIndicator(
                                 strokeWidth = 2.dp,

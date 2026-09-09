@@ -24,6 +24,7 @@ data class BookReadSpan(
 fun readFraction(book: BookEntity, span: BookReadSpan?): Float {
     if (book.lastReadAt == 0L) return 0f
     val total = span?.totalChars ?: 0L
+    if (book.reachedEnd) return 1f
     if (span == null || total <= 0L) {
         if (book.totalChapters <= 0) return 0f
         return ((book.lastReadChapterIndex + 1f) / book.totalChapters).coerceIn(0f, 1f)

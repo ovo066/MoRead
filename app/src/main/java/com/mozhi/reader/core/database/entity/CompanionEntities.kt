@@ -132,7 +132,7 @@ fun encodeWorldBook(entries: List<PersonaLoreEntry>): String =
             onDelete = ForeignKey.CASCADE
         )
     ],
-    indices = [Index(value = ["bookId", "chapterIndex"])]
+    indices = [Index(value = ["bookId", "chapterIndex"]), Index(value = ["createdAt", "proactiveJobId"])]
 )
 data class AnnotationEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -159,7 +159,9 @@ data class AnnotationEntity(
     val sourceScopeCharOffset: Int? = null,
     @ColumnInfo(defaultValue = "''")
     val textAnchorJson: String = "",
-    val createdAt: Long
+    val createdAt: Long,
+    /** Explicit proactive origin; manual/user-requested AI annotations keep null. */
+    val proactiveJobId: Long? = null
 )
 
 /**

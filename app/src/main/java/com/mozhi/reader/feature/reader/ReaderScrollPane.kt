@@ -16,10 +16,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.magnifier
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -90,8 +87,9 @@ import kotlinx.coroutines.launch
  * 的字符写回；目录/书签/搜索等外部跳转通过 contentHook 通知本面重锚。
  */
 @Composable
-fun ReaderScrollPane(
+internal fun ReaderScrollPane(
     controller: ReaderContentController,
+    holder: ScrollPaneHolder,
     settings: ReaderSettings,
     palette: ReaderPalette,
     enabled: Boolean,
@@ -120,14 +118,14 @@ fun ReaderScrollPane(
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
     val clipboard = LocalClipboardManager.current
-    val statusBarPx = WindowInsets.statusBars.getTop(density).toFloat()
-    val navBarPx = WindowInsets.navigationBars.getBottom(density).toFloat()
+    val safeInsets = readerSafeInsets()
+    val statusBarPx = safeInsets.topPx
+    val navBarPx = safeInsets.bottomPx
     val flingDecay = rememberSplineBasedDecay<Float>()
 
     var frameTick by remember { mutableIntStateOf(0) }
     var backgroundTick by remember { mutableIntStateOf(0) }
-    var viewport by remember { mutableStateOf(IntSize.Zero) }
-    val holder = remember(controller) { ScrollPaneHolder(controller) }
+    var viewport by remember(holder) { mutableStateOf(IntSize(holder.viewWidth, holder.viewHeight)) }
     val selection = remember(controller) {
         ScrollSelectionController(
             holder = holder,
@@ -201,70 +199,24 @@ fun ReaderScrollPane(
     }
 
     // 排版环境：字号/字体/行距/边距/视口变化触发重排，仅调色变化只重绘。
-    val environment = ReaderScrollEnvironmentKey(
-        fontScale = settings.fontScale,
-        font = settings.font,
-        customFontPath = settings.customFontPath,
-        lineHeight = settings.lineHeight,
-        publisherStyleMode = settings.publisherStyleMode,
-        pageMarginsHash = listOf(
-            settings.pageMarginLeft,
-            settings.pageMarginRight,
-            settings.pageMarginTop,
-            settings.pageMarginBottom
-        ).hashCode(),
-        advancedTypographyHash = listOf(
-            settings.fontWeight,
-            settings.letterSpacingEm,
-            settings.paragraphSpacingEm,
-            settings.firstLineIndentEm,
-            settings.titleScale,
-            settings.titleTopSpacing,
-            settings.titleBottomSpacing,
-            settings.textJustification,
-            settings.showHeader,
-            settings.showFooter,
-            settings.headerMarginTop,
-            settings.footerMarginBottom
-        ).hashCode(),
-        syntaxHighlightEnabled = settings.syntaxHighlightEnabled,
-        syntaxRulesHash = settings.syntaxHighlightRules.hashCode(),
-        width = viewport.width,
-        height = viewport.height
-    )
-    remember(
-        environment,
-        palette,
-        settings.backgroundImagePath,
-        settings.backgroundImageOpacity
-    ) {
+    val styleKey = readerRenderStyleKey(settings, palette, density, viewport, statusBarPx, navBarPx)
+    remember(styleKey) {
         if (viewport.width > 0 && viewport.height > 0) {
-            val style = ReaderPageStyle.resolve(
-                settings = settings,
-                palette = palette,
-                density = density,
-                viewWidth = viewport.width,
-                viewHeight = viewport.height,
-                statusBarPx = statusBarPx,
-                navigationBarPx = navBarPx
-            )
             holder.interruptScroll()
             selection.clear()
-            // 背景图在后台合成，落地后再重绘——首帧不等它。
-            val relayout = holder.applyStyle(style, environment) {
+            holder.applyStyle(styleKey, createStyle = {
+                ReaderPageStyle.resolve(
+                    settings, palette, density, viewport.width, viewport.height,
+                    statusBarPx, navBarPx, styleKey.environment.columnWidth
+                )
+            }, onBackgroundReady = {
                 invalidate()
                 backgroundTick++
-            }
-            if (relayout) {
-                // 字号、边距或视口改变后必须按当前位置重新落点；不能把这次真正的
-                // 排版跳转误认成滚动过程中异步章节完成，从而保留旧像素锚点。
-                holder.requirePositionReanchor()
-                controller.updateEnvironment(style.spec, style.measure)
-            }
+            })
             invalidate()
             backgroundTick++
         }
-        environment
+        styleKey
     }
 
     LaunchedEffect(annotations) {
@@ -300,8 +252,7 @@ fun ReaderScrollPane(
         }
         onDispose {
             registerContentHook(null)
-            holder.interruptScroll()
-            holder.release()
+            holder.detach()
         }
     }
 
@@ -537,20 +488,6 @@ fun ReaderScrollPane(
     }
 }
 
-private data class ReaderScrollEnvironmentKey(
-    val fontScale: Float,
-    val font: com.mozhi.reader.core.datastore.ReaderFont,
-    val customFontPath: String?,
-    val lineHeight: Float,
-    val publisherStyleMode: com.mozhi.reader.core.datastore.PublisherStyleMode,
-    val pageMarginsHash: Int,
-    val advancedTypographyHash: Int,
-    val syntaxHighlightEnabled: Boolean,
-    val syntaxRulesHash: Int,
-    val width: Int,
-    val height: Int
-)
-
 /** 视口内一个章节块：条带原点在内容带坐标系（0 = 页眉下沿）里的位置。 */
 private data class ChapterBlock(
     val chapterIndex: Int,
@@ -559,14 +496,14 @@ private data class ChapterBlock(
 )
 
 /** 命中解析结果：页与页内局部坐标（内容局部系，可直接喂选区/批注几何）。 */
-private data class ResolvedScrollPoint(
+internal data class ResolvedScrollPoint(
     val chapterIndex: Int,
     val pageIndex: Int,
     val page: TextPage,
     val local: Offset
 )
 
-private data class VisibleScrollPage(
+internal data class VisibleScrollPage(
     val pageIndex: Int,
     val page: TextPage,
     val origin: Offset
@@ -577,7 +514,7 @@ private data class VisibleScrollPage(
  * 锚点模型 = (controller.chapterIndex, anchorY)：anchorY 是视口内容带顶边在当前章条带
  * 里的 Y。跨章由 applyScroll 归一化，controller 滑窗跟着走。
  */
-private class ScrollPaneHolder(private val controller: ReaderContentController) {
+internal class ScrollPaneHolder(private val controller: ReaderContentController) {
     var viewWidth = 0
         private set
     var viewHeight = 0
@@ -585,7 +522,9 @@ private class ScrollPaneHolder(private val controller: ReaderContentController) 
 
     private var style: ReaderPageStyle? = null
     private var renderer: PageBitmapRenderer? = null
-    private var appliedEnvironment: ReaderScrollEnvironmentKey? = null
+    private var appliedStyleKey: ReaderRenderStyleKey? = null
+    private var appliedEnvironmentGeneration: Int? = null
+    private var backgroundReadyCallback: (() -> Unit)? = null
     private val strips = HashMap<Int, ChapterStrip>()
     private var timeText: String = timeFormat.format(Date())
     private var batteryPercent: Int = 100
@@ -616,17 +555,32 @@ private class ScrollPaneHolder(private val controller: ReaderContentController) 
         return true
     }
 
+    /** Navigation detaches the UI, not the reader entry's fonts and chapter strips. */
     fun applyStyle(
-        style: ReaderPageStyle,
-        environment: ReaderScrollEnvironmentKey,
+        key: ReaderRenderStyleKey,
+        createStyle: () -> ReaderPageStyle,
         onBackgroundReady: () -> Unit
     ): Boolean {
-        val relayout = appliedEnvironment != environment
-        appliedEnvironment = environment
-        this.style = style
-        renderer?.release()
-        renderer = PageBitmapRenderer(style).also { it.prepareBackground(onBackgroundReady) }
-        strips.clear()
+        backgroundReadyCallback = onBackgroundReady
+        updateTime()
+        val relayout = appliedStyleKey?.environment != key.environment ||
+            appliedEnvironmentGeneration != controller.environmentGeneration
+        if (appliedStyleKey != key || renderer == null) {
+            val nextStyle = createStyle()
+            appliedStyleKey = key
+            style = nextStyle
+            renderer?.release()
+            renderer = PageBitmapRenderer(nextStyle).also { next ->
+                next.prepareBackground { backgroundReadyCallback?.invoke() }
+            }
+        }
+        if (relayout) {
+            strips.clear()
+            requirePositionReanchor()
+            val currentStyle = checkNotNull(style)
+            controller.updateEnvironment(currentStyle.spec, currentStyle.measure)
+            appliedEnvironmentGeneration = controller.environmentGeneration
+        }
         return relayout
     }
 
@@ -641,10 +595,22 @@ private class ScrollPaneHolder(private val controller: ReaderContentController) 
         flinging = false
     }
 
+    fun detach() {
+        if (dragging || flinging) syncPosition()
+        interruptScroll()
+        dragging = false
+        backgroundReadyCallback = null
+    }
+
     fun release() {
+        detach()
         renderer?.release()
         renderer = null
+        style = null
+        appliedStyleKey = null
+        appliedEnvironmentGeneration = null
         strips.clear()
+        requirePositionReanchor()
     }
 
     // ---- 条带缓存 ----
@@ -673,6 +639,7 @@ private class ScrollPaneHolder(private val controller: ReaderContentController) 
     fun applyScroll(delta: Float): PageTurnDirection? {
         val style = style ?: return null
         val viewportH = style.contentHeight
+        if (controller.laidChapter(0) == null) return null
         var y = anchorY + delta
         var guard = 0
         while (guard++ < 8) {
@@ -698,6 +665,12 @@ private class ScrollPaneHolder(private val controller: ReaderContentController) 
                 return null
             }
             if (y >= height) {
+                if (controller.laidChapter(1) == null) {
+                    // Stop on the placeholder boundary without spending the unread chapter.
+                    anchorY = height
+                    controller.scrollWithinWindow(chapter + 1, 0)
+                    return null
+                }
                 switchChapter(chapter + 1, forward = true)
                 y -= height
                 continue
@@ -717,16 +690,17 @@ private class ScrollPaneHolder(private val controller: ReaderContentController) 
         }
         lastSyncedChapter = target
         lastSyncedOffset = guessOffset
-        controller.scrollTo(target, guessOffset)
+        controller.scrollWithinWindow(target, guessOffset)
     }
 
     /** 把视口顶部字符写回 controller（进度持久化与伴读/听书上下文都吃它）。 */
     fun syncPosition() {
         val strip = stripFor(controller.chapterIndex) ?: return
+        if (anchorY >= strip.totalHeight && controller.laidChapter(1) == null) return
         val offset = strip.charOffsetAt(anchorY)
         lastSyncedChapter = controller.chapterIndex
         lastSyncedOffset = offset
-        controller.scrollTo(controller.chapterIndex, offset)
+        controller.scrollWithinWindow(controller.chapterIndex, offset)
     }
 
     /**

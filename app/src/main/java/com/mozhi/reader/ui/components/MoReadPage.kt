@@ -2,6 +2,7 @@ package com.mozhi.reader.ui.components
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
@@ -34,9 +36,24 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.mozhi.reader.ui.MoReadLayoutPolicy
+import com.mozhi.reader.ui.rememberMoReadWindowWidth
 import com.mozhi.reader.ui.theme.MoReadTokens
 import com.mozhi.reader.ui.theme.sectionHairline
+
+/** Center a page without constraining its surrounding backdrop or navigation overlays. */
+@Composable
+fun MoReadBoundedContent(
+    modifier: Modifier = Modifier,
+    maxWidth: Dp = MoReadLayoutPolicy.FormMaxWidthDp.dp,
+    content: @Composable BoxScope.() -> Unit
+) {
+    Box(modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        Box(Modifier.widthIn(max = maxWidth).fillMaxSize(), content = content)
+    }
+}
 
 /**
  * 全 App 唯一的页壳。
@@ -66,41 +83,47 @@ fun MoReadSecondaryPage(
     }
 
     MoReadBackdrop(modifier = modifier) {
-        Column(Modifier.fillMaxSize()) {
-            MoReadTopBar(
-                title = title,
-                titleAlpha = collapsedAlpha,
-                onBack = onBack,
-                actions = actions
-            )
-            Box(Modifier.fillMaxWidth().weight(1f)) {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(
-                        start = MoReadTokens.PageGutter,
-                        end = MoReadTokens.PageGutter,
-                        top = 4.dp,
-                        bottom = if (bottomBar == null) 32.dp else 12.dp
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(MoReadTokens.SectionGap)
-                ) {
-                    item(key = "page-hero", contentType = "hero") {
-                        PageHeroTitle(title = title, subtitle = subtitle)
-                    }
-                    content()
-                }
-            }
-            if (bottomBar != null) {
-                bottomBar()
-            } else {
-                // 键盘弹出时 navigationBars.exclude(ime) 归零，避免与调用点的 imePadding()
-                // 叠出一条空隙（角色编辑页就是这么用的）。
-                Box(
-                    Modifier.windowInsetsPadding(
-                        WindowInsets.navigationBars.exclude(WindowInsets.ime)
-                    )
+        Box(Modifier.fillMaxSize()) {
+            Column(
+                Modifier.align(Alignment.TopCenter)
+                    .widthIn(max = MoReadLayoutPolicy.FormMaxWidthDp.dp)
+                    .fillMaxSize()
+            ) {
+                MoReadTopBar(
+                    title = title,
+                    titleAlpha = collapsedAlpha,
+                    onBack = onBack,
+                    actions = actions
                 )
+                Box(Modifier.fillMaxWidth().weight(1f)) {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(
+                            start = MoReadTokens.PageGutter,
+                            end = MoReadTokens.PageGutter,
+                            top = 4.dp,
+                            bottom = if (bottomBar == null) 32.dp else 12.dp
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(MoReadTokens.SectionGap)
+                    ) {
+                        item(key = "page-hero", contentType = "hero") {
+                            PageHeroTitle(title = title, subtitle = subtitle)
+                        }
+                        content()
+                    }
+                }
+                if (bottomBar != null) {
+                    bottomBar()
+                } else {
+                    // 键盘弹出时 navigationBars.exclude(ime) 归零，避免与调用点的 imePadding()
+                    // 叠出一条空隙（角色编辑页就是这么用的）。
+                    Box(
+                        Modifier.windowInsetsPadding(
+                            WindowInsets.navigationBars.exclude(WindowInsets.ime)
+                        )
+                    )
+                }
             }
         }
     }
@@ -119,16 +142,19 @@ fun MoReadRootPage(
     listState: LazyListState = rememberLazyListState(),
     content: LazyListScope.() -> Unit
 ) {
+    val windowWidth = rememberMoReadWindowWidth()
     Box(modifier = modifier.fillMaxSize().padding(contentPadding)) {
         LazyColumn(
             state = listState,
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.align(Alignment.TopCenter)
+                .widthIn(max = MoReadLayoutPolicy.FormMaxWidthDp.dp)
+                .fillMaxSize(),
             contentPadding = PaddingValues(
                 start = MoReadTokens.PageGutter,
                 end = MoReadTokens.PageGutter,
                 top = 18.dp,
                 // 底部玻璃导航舱要压在内容上，留出它的高度否则最后一组永远被挡。
-                bottom = 124.dp
+                bottom = MoReadLayoutPolicy.rootBottomPaddingDp(windowWidth).dp
             ),
             verticalArrangement = Arrangement.spacedBy(MoReadTokens.SectionGap)
         ) {

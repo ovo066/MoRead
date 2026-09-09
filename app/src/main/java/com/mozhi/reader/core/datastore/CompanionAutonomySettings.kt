@@ -1,5 +1,7 @@
 package com.mozhi.reader.core.datastore
 
+enum class ProactiveAnnotationNotice { OFF, BUILT_IN, FAST_MODEL }
+
 /**
  * agent 主动调用的总闸（2026-08-24 用户定调的硬规则）。
  *
@@ -19,12 +21,13 @@ data class CompanionAutonomySettings(
     val voiceRepliesEnabled: Boolean = false,
     /** 允许 AI 自己决定生成插图。关＝generate_image 不注册。 */
     val imageRepliesEnabled: Boolean = false,
-    /** 随读段评：读完一章后自动产出 ≤2 条批注。 */
+    /** 随读段评总开关；默认关闭，生成时机与额度单独配置。 */
     val proactiveAnnotationsEnabled: Boolean = false,
     /** 段评附语音；受 [proactiveAnnotationsEnabled] 约束。 */
     val proactiveAnnotationVoiceEnabled: Boolean = false,
     /** 段评附插图；受 [proactiveAnnotationsEnabled] 约束。 */
     val proactiveAnnotationImageEnabled: Boolean = false,
+    val annotationNotice: ProactiveAnnotationNotice = ProactiveAnnotationNotice.BUILT_IN,
     /** 段评数量与频控的全局默认值；单本书可在详情页覆盖。 */
     val annotationLimits: ProactiveAnnotationLimits = ProactiveAnnotationLimits(),
     /** 按书覆盖表，键为书 id；`enabled` 为假的条目视为跟随全局。 */
@@ -39,6 +42,9 @@ data class CompanionAutonomySettings(
 
     val annotationImageActive: Boolean
         get() = proactiveAnnotationsEnabled && proactiveAnnotationImageEnabled
+
+    val noticeActive: Boolean
+        get() = proactiveAnnotationsEnabled && annotationNotice != ProactiveAnnotationNotice.OFF
 
     /** 有没有任何一项主动调用是开着的；设置页据此写摘要。 */
     val anyEnabled: Boolean

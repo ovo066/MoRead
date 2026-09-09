@@ -1148,6 +1148,42 @@ class MigrationTest {
         }
     }
 
+    @Test
+    fun migrate24To25AddsStableMessageIdentityAndDurableParagraphLedger() {
+        helper.createDatabase(DB_NAME, 24).use { db ->
+            db.execSQL("INSERT INTO conversations (id, bookId, title, type, createdAt, updatedAt) VALUES (1, NULL, '会话', 'COMPANION', 1, 1)")
+            db.execSQL("INSERT INTO messages (id, conversationId, role, content, createdAt) VALUES (1, 1, 'assistant', '保留正文', 1)")
+        }
+        helper.runMigrationsAndValidate(DB_NAME, 25, true, DatabaseMigrations.Migration24To25).use { db ->
+            db.query("SELECT content, clientRoundId FROM messages WHERE id = 1").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("保留正文", cursor.getString(0))
+                assertTrue(cursor.isNull(1))
+            }
+            db.execSQL("UPDATE messages SET clientRoundId = 'live:round-1' WHERE id = 1")
+            db.query("PRAGMA table_info(annotations)").use { cursor ->
+                var hasOrigin = false
+                while (cursor.moveToNext()) if (cursor.getString(cursor.getColumnIndexOrThrow("name")) == "proactiveJobId") hasOrigin = true
+                assertTrue(hasOrigin)
+            }
+            val insert = "INSERT OR IGNORE INTO proactive_annotation_jobs " +
+                "(bookId, chapterIndex, personaId, sourceRevision, status, attempts, doneParagraphEnds, createdAt, updatedAt) " +
+                "VALUES (7, 3, 2, 'sha256', 'FAILED', 1, '[100,200]', 1, 2)"
+            db.execSQL(insert)
+            db.execSQL(insert)
+            db.query("SELECT COUNT(*), doneParagraphEnds FROM proactive_annotation_jobs").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(1, cursor.getInt(0))
+                assertEquals("[100,200]", cursor.getString(1))
+            }
+            db.execSQL("INSERT INTO proactive_annotation_jobs (bookId, chapterIndex, personaId, sourceRevision, status, attempts, doneParagraphEnds, createdAt, updatedAt) VALUES (7, 3, 4, 'sha256', 'DONE', 1, '[]', 1, 2)")
+            db.execSQL("INSERT INTO proactive_annotation_jobs (bookId, chapterIndex, personaId, sourceRevision, status, attempts, doneParagraphEnds, createdAt, updatedAt) VALUES (7, 3, 2, 'changed', 'DONE', 1, '[]', 1, 2)")
+            db.query("SELECT COUNT(*) FROM proactive_annotation_jobs").use { cursor ->
+                assertTrue(cursor.moveToFirst()); assertEquals(3, cursor.getInt(0))
+            }
+        }
+    }
+
     private companion object {
         const val DB_NAME = "migration-test.db"
     }

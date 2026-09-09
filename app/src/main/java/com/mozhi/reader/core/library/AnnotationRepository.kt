@@ -34,6 +34,11 @@ class AnnotationRepository @Inject constructor(
         toIndex: Int
     ): List<AnnotationEntity> = annotationDao.getForChapterRange(bookId, fromIndex, toIndex)
 
+    suspend fun getVisibleCounts(bookId: Long, chapterIndex: Int, scope: com.mozhi.reader.core.retrieval.ReadingScope):
+        com.mozhi.reader.core.database.dao.AnnotationVisibleCounts = annotationDao.getVisibleCounts(
+            bookId, chapterIndex, scope.isWholeBook, scope.maxChapterIndex, scope.maxCharOffset,
+            com.mozhi.reader.core.retrieval.AnnotationVisibility.sqlWhitespace)
+
     suspend fun getCountForBook(bookId: Long): Int = annotationDao.getCountForBook(bookId)
 
     suspend fun getCountForChapter(bookId: Long, chapterIndex: Int): Int =

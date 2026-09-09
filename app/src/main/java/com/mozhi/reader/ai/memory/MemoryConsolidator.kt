@@ -283,8 +283,9 @@ class MemoryConsolidator @Inject constructor(
             sourceCharOffset = batch.sourceScope.second
         )
 
-        // 画像只记本人：面具期间的批次不改写它（提示词也已声明，这里是第二道闸）。
-        if (batch.maskId == 0L) {
+        // 画像是角色级全局数据，无法标注 bookId。只有全局会话或用户明确允许跨书时
+        // 才更新；否则模型即使误把书中事实写进画像，也会污染其他书的伴读。
+        if (batch.maskId == 0L && (bookId == null || memorySettings.crossBookEnabled)) {
             draft.userProfile?.takeIf { it != currentProfile }?.let { profile ->
                 personaDao.updateUserProfile(personaId, profile)
             }

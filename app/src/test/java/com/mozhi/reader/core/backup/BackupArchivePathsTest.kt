@@ -6,6 +6,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BackupArchivePathsTest {
+    @Test fun backupVersionTracksLedgerAndStableMessageMigration() {
+        org.junit.Assert.assertEquals(25, BackupArchiveManager.CURRENT_DATABASE_VERSION)
+        org.junit.Assert.assertEquals(com.mozhi.reader.core.database.MoReadDatabase.VERSION,
+            BackupArchiveManager.CURRENT_DATABASE_VERSION)
+    }
+
     @Test
     fun rejectsZipSlipAndUnknownRoots() {
         assertTrue(isSafeBackupEntry("files/books/1.epub"))

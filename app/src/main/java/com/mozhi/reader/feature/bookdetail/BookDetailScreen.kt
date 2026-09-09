@@ -626,6 +626,12 @@ fun BookDetailScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
                 )
+                if (state.hiddenAnnotationCount > 0) {
+                    Text("还有 ${state.hiddenAnnotationCount} 条读到后会出现",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 8.dp))
+                }
                 // 作者筛选：全部 / 我的 / 各角色（学习向用户复习时常只看自己的划线）
                 var authorFilter by remember { mutableStateOf<Long?>(FILTER_ALL) }
                 val annotationAuthors = remember(state.annotations) {

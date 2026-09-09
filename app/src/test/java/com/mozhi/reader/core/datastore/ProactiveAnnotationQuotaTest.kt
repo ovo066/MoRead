@@ -10,7 +10,7 @@ class ProactiveAnnotationQuotaTest {
     private val defaults = ProactiveAnnotationLimits()
 
     @Test
-    fun chapterIsReservedOnceAndMediaCapsAreApplied() {
+    fun ledgerOwnsRetryDedupAndDailyMediaCapsAreApplied() {
         val state = ProactiveAnnotationQuotaState(
             epochDay = 10,
             annotationCount = 8,
@@ -20,7 +20,6 @@ class ProactiveAnnotationQuotaTest {
         val (reserved, allowance) = evaluateProactiveAnnotationQuota(
             state,
             today = 10,
-            chapterKey = "7:3",
             limits = defaults,
             requestVoice = true,
             requestImages = true
@@ -30,31 +29,28 @@ class ProactiveAnnotationQuotaTest {
         assertEquals(2, allowance.maxAnnotations)
         assertEquals(1, allowance.maxVoice)
         assertEquals(0, allowance.maxImages)
-        assertTrue("7:3" in reserved.attemptedChapters)
+        assertEquals(state, reserved)
 
         val (_, repeated) = evaluateProactiveAnnotationQuota(
             reserved,
             today = 10,
-            chapterKey = "7:3",
             limits = defaults,
             requestVoice = true,
             requestImages = true
         )
-        assertFalse(repeated.accepted)
+        assertTrue(repeated.accepted)
     }
 
     @Test
-    fun newDayResetsCountsAndAttempts() {
+    fun newDayResetsAllDailyCounts() {
         val (_, allowance) = evaluateProactiveAnnotationQuota(
             ProactiveAnnotationQuotaState(
                 epochDay = 9,
-                attemptedChapters = setOf("7:3"),
                 annotationCount = 10,
                 voiceCount = 3,
                 imageCount = 3
             ),
             today = 10,
-            chapterKey = "7:3",
             limits = defaults,
             requestVoice = true,
             requestImages = true
@@ -78,7 +74,6 @@ class ProactiveAnnotationQuotaTest {
         val (_, allowance) = evaluateProactiveAnnotationQuota(
             ProactiveAnnotationQuotaState(epochDay = 3, annotationCount = 12, imageCount = 1),
             today = 3,
-            chapterKey = "1:1",
             limits = limits,
             requestVoice = true,
             requestImages = true
@@ -97,7 +92,6 @@ class ProactiveAnnotationQuotaTest {
         val (_, allowance) = evaluateProactiveAnnotationQuota(
             ProactiveAnnotationQuotaState(epochDay = 3, annotationCount = 8),
             today = 3,
-            chapterKey = "1:1",
             limits = limits,
             requestVoice = false,
             requestImages = false
@@ -115,7 +109,6 @@ class ProactiveAnnotationQuotaTest {
         val (_, allowance) = evaluateProactiveAnnotationQuota(
             ProactiveAnnotationQuotaState(epochDay = 3, annotationCount = 500),
             today = 3,
-            chapterKey = "1:1",
             limits = limits,
             requestVoice = false,
             requestImages = false
@@ -130,7 +123,6 @@ class ProactiveAnnotationQuotaTest {
         val (_, allowance) = evaluateProactiveAnnotationQuota(
             ProactiveAnnotationQuotaState(epochDay = 3, annotationCount = 6),
             today = 3,
-            chapterKey = "1:1",
             limits = ProactiveAnnotationLimits(dailyMax = 3),
             requestVoice = false,
             requestImages = false

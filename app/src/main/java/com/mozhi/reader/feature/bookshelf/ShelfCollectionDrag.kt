@@ -38,6 +38,9 @@ data class ShelfDropRegion(
     val bounds: Rect
 )
 
+/** Registered targets use root coordinates; overlays live inside the rail-offset content pane. */
+internal fun shelfBoundsInContainer(bounds: Rect, origin: Offset): Rect = bounds.translate(-origin)
+
 internal fun ShelfEntry.dropTarget(): ShelfDropTarget = when (this) {
     is ShelfEntry.Book -> ShelfDropTarget(key, book.id, null)
     is ShelfEntry.Collection -> ShelfDropTarget(key, null, collection.id)

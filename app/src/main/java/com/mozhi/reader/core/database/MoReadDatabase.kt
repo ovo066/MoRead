@@ -41,6 +41,7 @@ import com.mozhi.reader.core.database.entity.TtsVoiceEntity
 
 @Database(
     entities = [
+        com.mozhi.reader.core.database.entity.ProactiveAnnotationJobEntity::class,
         BookEntity::class,
         ChapterEntity::class,
         BookmarkEntity::class,
@@ -72,6 +73,7 @@ import com.mozhi.reader.core.database.entity.TtsVoiceEntity
 )
 @TypeConverters(DatabaseConverters::class)
 abstract class MoReadDatabase : RoomDatabase() {
+    abstract fun proactiveAnnotationJobDao(): com.mozhi.reader.core.database.dao.ProactiveAnnotationJobDao
     abstract fun bookDao(): BookDao
     abstract fun aiProviderDao(): AiProviderDao
     abstract fun chatDao(): ChatDao
@@ -84,6 +86,6 @@ abstract class MoReadDatabase : RoomDatabase() {
     abstract fun audiobookDao(): AudiobookDao
 
     companion object {
-        const val VERSION = 23
+        const val VERSION = 25
     }
 }

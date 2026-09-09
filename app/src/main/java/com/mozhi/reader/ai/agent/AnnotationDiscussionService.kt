@@ -16,6 +16,7 @@ import javax.inject.Singleton
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.first
 
 /**
  * 段评讨论串的 AI 应答：以角色身份对一条批注的讨论作答。
@@ -30,7 +31,8 @@ class AnnotationDiscussionService @Inject constructor(
     private val toolset: ReaderToolset,
     private val libraryRepository: LibraryRepository,
     private val annotationRepository: AnnotationRepository,
-    private val personaRepository: PersonaRepository
+    private val personaRepository: PersonaRepository,
+    private val settingsRepository: com.mozhi.reader.core.datastore.ReaderSettingsRepository
 ) {
     sealed interface Event {
         data class Text(val delta: String) : Event
@@ -51,9 +53,14 @@ class AnnotationDiscussionService @Inject constructor(
                 ?: run { emit(Event.Failed("这条批注已被删除")); return@flow }
             val book = libraryRepository.getBook(bookId)
                 ?: run { emit(Event.Failed("书籍不存在")); return@flow }
+            val scope = com.mozhi.reader.core.retrieval.ReadingScopeResolver.resolve(
+                settingsRepository.companionSpoilerProtectionEnabled.first(), book)
+            if (annotation.bookId != bookId || !com.mozhi.reader.core.retrieval.AnnotationVisibility.isVisible(annotation, scope)) {
+                emit(Event.Failed("读到这段正文后才能参与讨论")); return@flow
+            }
             val replies = annotationRepository.getReplies(annotationId)
             val personaNames = personaRepository.getPersonas().associate { it.id to it.name }
-            val neighborhood = loadAnchorNeighborhood(book, annotation)
+            val neighborhood = loadAnchorNeighborhood(book, annotation, scope)
             val transcript = buildDiscussionTranscript(annotation, replies, personaNames)
             val system = buildDiscussionSystemPrompt(
                 persona = persona,
@@ -77,7 +84,7 @@ class AnnotationDiscussionService @Inject constructor(
                 bookId = bookId,
                 personaId = personaId,
                 enabledTools = enabledTools,
-                readingScope = ReadingScope.uptoProgress(book)
+                readingScope = scope
             )
             val history = listOf(
                 ChatMessage(ChatRole.SYSTEM, system),
@@ -94,6 +101,7 @@ class AnnotationDiscussionService @Inject constructor(
                         text.append(event.text)
                         emit(Event.Text(event.text))
                     }
+                    is AgentEvent.RoundStarted -> Unit
                     is AgentEvent.RoundCommitted -> Unit
                     // 讨论串是段落里的一条短发言，不该被一大段思维链压住。
                     is AgentEvent.Reasoning -> Unit
@@ -106,6 +114,11 @@ class AnnotationDiscussionService @Inject constructor(
                 emit(Event.Failed("角色没有说出话来，请重试"))
                 return@flow
             }
+            val currentBook = libraryRepository.getBook(bookId) ?: return@flow
+            val currentAnnotation = annotationRepository.getAnnotation(annotationId) ?: return@flow
+            val currentScope = com.mozhi.reader.core.retrieval.ReadingScopeResolver.resolve(
+                settingsRepository.companionSpoilerProtectionEnabled.first(), currentBook)
+            if (!com.mozhi.reader.core.retrieval.AnnotationVisibility.isVisible(currentAnnotation, currentScope)) return@flow
             val replyId = annotationRepository.addReply(
                 annotationId = annotationId,
                 personaId = personaId,
@@ -122,17 +135,14 @@ class AnnotationDiscussionService @Inject constructor(
     /** 锚点原文邻域：前后各 ~[NEIGHBORHOOD_RADIUS] 字；当前章截到用户实际阅读位置。 */
     private suspend fun loadAnchorNeighborhood(
         book: BookEntity,
-        annotation: AnnotationEntity
+        annotation: AnnotationEntity,
+        scope: ReadingScope
     ): String {
         val chapter = libraryRepository.getChapters(book.id)
             .firstOrNull { it.chapterIndex == annotation.chapterIndex }
             ?: return annotation.selectedText
         val body = libraryRepository.readChapterText(book.id, chapter)
-        val readLimit = if (annotation.chapterIndex == book.lastReadChapterIndex) {
-            book.lastReadCharOffset
-        } else {
-            null
-        }
+        val readLimit = scope.readableEnd(annotation.chapterIndex, body)
         return extractAnchorNeighborhood(
             chapterText = body,
             start = annotation.startCharOffset,

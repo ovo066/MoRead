@@ -37,6 +37,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 data class SettingsUiState(
+    val isLoaded: Boolean = false,
     val providers: List<AiProviderEntity> = emptyList(),
     /** All models across providers, in provider order. */
     val models: List<AiModelEntity> = emptyList(),
@@ -128,6 +129,7 @@ class SettingsViewModel @Inject constructor(
         storage
     ) { ai, appearance, prefs, isWorking, usage ->
         SettingsUiState(
+            isLoaded = true,
             providers = ai.providers,
             models = ai.models,
             assignments = ai.assignments.associate { it.role to it.modelId },
@@ -238,6 +240,10 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             readerSettingsRepository.setCompanionProactiveAnnotationImage(enabled)
         }
+    }
+
+    fun setAnnotationNotice(value: com.mozhi.reader.core.datastore.ProactiveAnnotationNotice) {
+        viewModelScope.launch { readerSettingsRepository.setCompanionAnnotationNotice(value) }
     }
 
     fun setAnnotationLimits(limits: ProactiveAnnotationLimits) {

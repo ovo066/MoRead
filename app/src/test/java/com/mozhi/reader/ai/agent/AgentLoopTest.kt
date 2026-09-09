@@ -9,6 +9,7 @@ import com.mozhi.reader.ai.client.ToolSpec
 import com.mozhi.reader.core.database.dao.ChatDao
 import com.mozhi.reader.core.database.entity.ConversationEntity
 import com.mozhi.reader.core.database.entity.MessageEntity
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
@@ -27,6 +28,7 @@ class AgentLoopTest {
     private class FakeChatDao(seed: List<MessageEntity>) : ChatDao {
         val messages = seed.toMutableList()
         private var nextId = seed.size + 1L
+        var onInsert: (MessageEntity) -> Unit = {}
 
         override suspend fun insertConversation(conversation: ConversationEntity): Long = 1
         override suspend fun getConversation(conversationId: Long): ConversationEntity? = null
@@ -57,6 +59,7 @@ class AgentLoopTest {
 
         override suspend fun deleteConversation(conversationId: Long) = Unit
         override suspend fun insertMessage(message: MessageEntity): Long {
+            onInsert(message)
             messages.add(message.copy(id = nextId))
             return nextId++
         }
@@ -91,6 +94,30 @@ class AgentLoopTest {
             conversationId: Long,
             messageId: Long
         ) = Unit
+    }
+
+    @Test
+    fun `round identity exists at insert before committed event delivery`() = runTest {
+        val dao = FakeChatDao(seed(ChatRole.USER to "hello"))
+        var startedId: String? = null
+        var committed = false
+        dao.onInsert = { message ->
+            if (message.role == "assistant") {
+                assertTrue(!committed)
+                assertEquals(startedId, message.clientRoundId)
+                assertTrue(!message.clientRoundId.isNullOrBlank())
+            }
+        }
+        loop(dao).runWith(1, emptyList()) {
+            AgentLoop.Streamer { _, _ -> flowOf(ChatDelta.Text("reply")) }
+        }.collect { event ->
+            when (event) {
+                is AgentEvent.RoundStarted -> startedId = event.roundId
+                is AgentEvent.RoundCommitted -> committed = true
+                else -> Unit
+            }
+        }
+        assertTrue(committed)
     }
 
     private class EchoTool(private val reply: String) : AgentTool {
@@ -140,9 +167,13 @@ class AgentLoopTest {
         val events = loop(dao).runWith(1, emptyList()) {
             AgentLoop.Streamer { _, _ -> flowOf(ChatDelta.Text("你"), ChatDelta.Text("好")) }
         }.toList()
-        assertEquals(AgentEvent.Text("你"), events[0])
-        assertEquals(AgentEvent.Text("好"), events[1])
-        assertTrue(events[2] is AgentEvent.RoundCommitted)
+        val started = events[0] as AgentEvent.RoundStarted
+        assertTrue(started.roundId.isNotBlank())
+        assertEquals(AgentEvent.Text("你"), events[1])
+        assertEquals(AgentEvent.Text("好"), events[2])
+        val committed = events[3] as AgentEvent.RoundCommitted
+        assertEquals(started.roundId, committed.message.clientRoundId)
+        assertEquals(started.roundId, dao.messages.last().clientRoundId)
         val persisted = dao.messages.last()
         assertEquals(ChatRole.ASSISTANT.wire, persisted.role)
         assertEquals("你好", persisted.content)
@@ -218,11 +249,16 @@ class AgentLoopTest {
             }
         }.toList()
 
-        assertEquals(AgentEvent.Text("我来查一下。"), events[0])
-        assertTrue(events[1] is AgentEvent.RoundCommitted)
-        assertTrue(events[2] is AgentEvent.ToolRun)
-        assertTrue(events[3] is AgentEvent.ToolFinished)
-        assertEquals(AgentEvent.Text("今天的新闻如下。"), events[4])
+        val rounds = events.filterIsInstance<AgentEvent.RoundStarted>()
+        assertEquals(2, rounds.size)
+        assertTrue(rounds[0].roundId != rounds[1].roundId)
+        assertEquals(AgentEvent.Text("我来查一下。"), events[1])
+        assertTrue(events[2] is AgentEvent.RoundCommitted)
+        assertTrue(events[3] is AgentEvent.ToolRun)
+        assertTrue(events[4] is AgentEvent.ToolFinished)
+        assertEquals(AgentEvent.Text("今天的新闻如下。"), events[6])
+        assertEquals(rounds.map { it.roundId },
+            dao.messages.filter { it.role == "assistant" }.map { it.clientRoundId })
         assertEquals(
             listOf("我来查一下。", "今天的新闻如下。"),
             dao.messages.filter { it.role == "assistant" }.map { it.content }

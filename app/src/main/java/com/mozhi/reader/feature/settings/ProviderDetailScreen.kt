@@ -278,7 +278,7 @@ private fun ProviderForm(
                     FrostedSurface(shape = CircleShape, shadowElevation = 6.dp) {
                         IconButton(
                             onClick = { onSave(buildDraft()) },
-                            enabled = name.isNotBlank() && baseUrl.isNotBlank()
+                            enabled = !state.isWorking && name.isNotBlank() && baseUrl.isNotBlank()
                         ) {
                             Icon(
                                 Icons.Outlined.Check,
@@ -467,10 +467,19 @@ private fun ProviderForm(
         }
 
         if (!state.isNew) {
+            item {
+                Text(
+                    "连接测试与拉取模型只使用上次保存的配置；修改后请先点右上角保存。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 24.dp)
+                )
+            }
             item { SectionLabel(title = "模型") }
             item {
                 ModelsCard(
                     models = state.models,
+                    canFetch = !state.isWorking,
                     onFetchModels = onFetchModels,
                     onAddModel = onAddModel,
                     onEditModel = onEditModel
@@ -479,6 +488,7 @@ private fun ProviderForm(
             item {
                 Button(
                     onClick = onTest,
+                    enabled = !state.isWorking,
                     shape = MoReadTokens.CapsuleShape,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -570,6 +580,7 @@ private fun ModelTypeChips(selected: AiModelType, onSelect: (AiModelType) -> Uni
 @Composable
 private fun ModelsCard(
     models: List<AiModelEntity>,
+    canFetch: Boolean,
     onFetchModels: () -> Unit,
     onAddModel: () -> Unit,
     onEditModel: (AiModelEntity) -> Unit
@@ -610,6 +621,7 @@ private fun ModelsCard(
                 }
                 AssistChip(
                     onClick = onFetchModels,
+                    enabled = canFetch,
                     shape = MoReadTokens.CapsuleShape,
                     label = { Text("拉取模型") },
                     leadingIcon = {

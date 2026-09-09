@@ -164,6 +164,10 @@ interface BookDao {
                 WHEN :chapterIndex = maxReachedChapterIndex AND :charOffset > maxReachedCharOffset THEN :charOffset
                 ELSE maxReachedCharOffset
             END,
+            reachedEnd = CASE
+                WHEN :reachedEnd THEN 1
+                ELSE reachedEnd
+            END,
             lastReadAt = :readAt
         WHERE id = :bookId
         """
@@ -173,8 +177,23 @@ interface BookDao {
         locatorJson: String,
         chapterIndex: Int,
         charOffset: Int,
-        readAt: Long
+        readAt: Long,
+        reachedEnd: Boolean = false
     )
+
+    /** Actual foreground viewport only; never a resume-position or chapter-completion write. */
+    @Query(
+        """
+        UPDATE books
+        SET maxReachedChapterIndex = :chapterIndex,
+            maxReachedCharOffset = :charOffset
+        WHERE id = :bookId
+          AND :chapterIndex >= 0 AND :charOffset >= 0
+          AND (:chapterIndex > maxReachedChapterIndex OR
+              (:chapterIndex = maxReachedChapterIndex AND :charOffset > maxReachedCharOffset))
+        """
+    )
+    suspend fun markVisibleReadEnd(bookId: Long, chapterIndex: Int, charOffset: Int)
 
     @Query("SELECT * FROM books WHERE textVersion < :version")
     suspend fun getBooksBelowTextVersion(version: Int): List<BookEntity>
@@ -199,7 +218,11 @@ interface BookDao {
         WHERE id = :bookId
         """
     )
-    suspend fun updateReadPosition(bookId: Long, chapterIndex: Int, charOffset: Int)
+    suspend fun updateReadPosition(
+        bookId: Long,
+        chapterIndex: Int,
+        charOffset: Int
+    )
 
     @Query(
         """

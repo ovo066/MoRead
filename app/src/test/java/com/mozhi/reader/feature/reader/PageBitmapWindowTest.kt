@@ -10,6 +10,17 @@ import org.junit.Test
 class PageBitmapWindowTest {
 
     @Test
+    fun `spread window rotates the composite without splitting leaves`() {
+        val previous = listOf("previous-left", "previous-right")
+        val current = listOf("current-left", "current-right")
+        val next = listOf("next-left", "blank-right")
+        val rotated = rotatePageWindow(previous, current, next, PageTurnDirection.NEXT)
+        org.junit.Assert.assertSame(next, rotated.current)
+        org.junit.Assert.assertSame(current, rotated.previous)
+        org.junit.Assert.assertSame(previous, rotated.reusable)
+    }
+
+    @Test
     fun `next turn reuses previous buffer for new next page`() {
         val rotated = rotatePageWindow("previous", "current", "next", PageTurnDirection.NEXT)
 

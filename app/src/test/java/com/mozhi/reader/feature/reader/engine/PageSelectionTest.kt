@@ -27,6 +27,32 @@ class PageSelectionTest {
             .first()
 
     @Test
+    fun `same chapter selection crosses both leaves with independent translated rectangles`() {
+        val chapter = ChapterTypesetter(spec.copy(visibleHeight = 80f), FakeMeasure())
+            .typeset(102, "", paragraph.repeat(6))
+        val left = chapter.pages[0]
+        val right = chapter.pages[1]
+        val range = (left.chapterPosition + left.charLength - 2)..(right.chapterPosition + 2)
+        val leftRects = left.selectionRects(range)
+        val rightRects = right.selectionRects(range)
+        assertTrue(leftRects.isNotEmpty())
+        assertTrue(rightRects.isNotEmpty())
+        val geometry = com.mozhi.reader.feature.reader.render.SpreadGeometry(240f, 100f, 40f)
+        val rightOrigin = geometry.rightOriginX
+        assertTrue(leftRects.all { it.right <= geometry.leafWidth })
+        assertTrue(rightRects.all { it.left + rightOrigin >= geometry.rightOriginX })
+        val line = right.lines.first { it.charLength > 0 }
+        val column = line.columns[1]
+        val local = geometry.toLeafLocal(
+            androidx.compose.ui.geometry.Offset(rightOrigin + (column.start + column.end) / 2f,
+                (line.lineTop + line.lineBottom) / 2f),
+            com.mozhi.reader.feature.reader.render.Leaf.RIGHT
+        )
+        val hit = right.hitTextPos(local.x, local.y, exact = true)!!
+        assertTrue(right.selectionBodyRange(hit, hit).first >= right.chapterPosition)
+    }
+
+    @Test
     fun `hit test resolves the cluster under the point`() {
         val page = page()
         val line = page.lines.first()

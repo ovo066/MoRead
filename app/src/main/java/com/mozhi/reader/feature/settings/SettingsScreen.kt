@@ -256,14 +256,14 @@ fun AiAndCompanionSettingsScreen(
                 MoReadSwitchRow(
                     icon = Icons.Outlined.BorderColor,
                     title = "随读段评",
-                    subtitle = "读完一章后自动留下批注（${state.autonomy.annotationLimits.summary()}）",
+                    subtitle = state.autonomy.annotationLimits.timingSummary(),
                     checked = state.autonomy.proactiveAnnotationsEnabled,
                     onCheckedChange = viewModel::setProactiveAnnotations
                 )
                 MoReadRowDivider()
                 MoReadRow(
                     icon = Icons.Outlined.Tune,
-                    title = "段评数量与频率",
+                    title = "随读段评设置",
                     subtitle = state.autonomy.annotationLimits.summary() + "；单本书可在书籍详情页单独设",
                     onClick = onOpenAnnotationLimits
                 )
@@ -271,7 +271,7 @@ fun AiAndCompanionSettingsScreen(
                 MoReadSwitchRow(
                     icon = Icons.Outlined.RecordVoiceOver,
                     title = "段评附语音",
-                    subtitle = "批注可带一段语音，每日上限见「段评数量与频率」",
+                    subtitle = "批注可带一段语音，每日上限见「随读段评设置」",
                     checked = state.autonomy.proactiveAnnotationVoiceEnabled,
                     enabled = state.autonomy.proactiveAnnotationsEnabled,
                     onCheckedChange = viewModel::setProactiveAnnotationVoice
@@ -280,7 +280,7 @@ fun AiAndCompanionSettingsScreen(
                 MoReadSwitchRow(
                     icon = Icons.Outlined.Image,
                     title = "段评附插图",
-                    subtitle = "批注可带一张插图，每日上限见「段评数量与频率」",
+                    subtitle = "批注可带一张插图，每日上限见「随读段评设置」",
                     checked = state.autonomy.proactiveAnnotationImageEnabled,
                     enabled = state.autonomy.proactiveAnnotationsEnabled,
                     onCheckedChange = viewModel::setProactiveAnnotationImage

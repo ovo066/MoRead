@@ -99,17 +99,21 @@ class AiMediaGenerationService @Inject constructor(
         sourceText: String,
         prompt: String,
         personaId: Long?,
-        textAnchorJson: String = ""
+        textAnchorJson: String = "",
+        persist: Boolean = true,
+        beforePaidRequest: suspend () -> Boolean = { true }
     ): IllustrationEntity {
         val cleanPrompt = prompt.trim().take(MAX_PROMPT_CHARS)
         require(cleanPrompt.isNotEmpty()) { "生图提示词不能为空" }
+        check(beforePaidRequest()) { "生成条件已改变" }
         val generatedPrompt = imagePromptComposer.compose(cleanPrompt).take(MAX_PROMPT_CHARS)
         val resolved = clientFactory.imageGeneration()
+        check(beforePaidRequest()) { "生成条件已改变" }
         val generated = resolved.client.generateImages(prompt = generatedPrompt).first()
         val bytes = resolved.client.materializeImage(generated)
         require(bytes.size <= MAX_MEDIA_BYTES) { "生成图片超过 30 MB，已取消保存" }
         return withContext(Dispatchers.IO) {
-            val directory = File(context.filesDir, "illustrations/$bookId").apply { mkdirs() }
+            val directory = File(context.filesDir, if (persist) "illustrations/$bookId" else "illustrations/$bookId/annotations").apply { mkdirs() }
             val output = File(
                 directory,
                 "illustration-${System.currentTimeMillis()}-${System.nanoTime()}.${imageExtension(generated.mediaType, bytes)}"
@@ -118,22 +122,21 @@ class AiMediaGenerationService @Inject constructor(
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(output.absolutePath, bounds)
             try {
-                illustrations.insert(
-                    IllustrationEntity(
-                        bookId = bookId,
-                        chapterIndex = chapterIndex,
-                        charOffset = charOffset,
-                        textAnchorJson = textAnchorJson,
-                        sourceText = sourceText,
-                        prompt = generatedPrompt,
-                        imagePath = output.absolutePath,
-                        mediaType = generated.mediaType,
-                        pixelWidth = bounds.outWidth.coerceAtLeast(0),
-                        pixelHeight = bounds.outHeight.coerceAtLeast(0),
-                        createdByPersonaId = personaId,
-                        createdAt = System.currentTimeMillis()
-                    )
+                val asset = IllustrationEntity(
+                    bookId = bookId,
+                    chapterIndex = chapterIndex,
+                    charOffset = charOffset,
+                    textAnchorJson = textAnchorJson,
+                    sourceText = sourceText,
+                    prompt = generatedPrompt,
+                    imagePath = output.absolutePath,
+                    mediaType = generated.mediaType,
+                    pixelWidth = bounds.outWidth.coerceAtLeast(0),
+                    pixelHeight = bounds.outHeight.coerceAtLeast(0),
+                    createdByPersonaId = personaId,
+                    createdAt = System.currentTimeMillis()
                 )
+                if (persist) illustrations.insert(asset) else asset
             } catch (error: Throwable) {
                 output.delete()
                 throw error
@@ -151,7 +154,8 @@ class AiMediaGenerationService @Inject constructor(
         pitch: Int? = null,
         format: String? = null,
         emotion: String? = null,
-        instruction: String? = null
+        instruction: String? = null,
+        beforePaidRequest: suspend () -> Boolean = { true }
     ): CachedSpeech {
         val cleanText = text.trim().take(MAX_SPEECH_CHARS)
         require(cleanText.isNotEmpty()) { "朗读文本不能为空" }
@@ -182,6 +186,7 @@ class AiMediaGenerationService @Inject constructor(
                 }
                 null
             } ?: run {
+                check(beforePaidRequest()) { "生成条件已改变" }
                 val generated = resolved.client.synthesizeSpeech(
                     text = cleanText,
                     voice = voiceId,

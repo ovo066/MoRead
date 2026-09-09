@@ -8,11 +8,11 @@ import com.mozhi.reader.ai.media.AgentMediaResult
 import com.mozhi.reader.core.database.entity.MessageEntity
 
 /**
- * 全屏伴读聊天的扁平列表模型（正向 LazyColumn，业内 AI 聊天通用形态）。
+ * 全屏伴读聊天的扁平列表模型（时间顺序；界面以稳定 key 保持浏览锚点）。
  *
  * 列表自上而下：场景头 → 索引胶囊 → 开场白 → 历史（过程卡 / 气泡 / 媒体）→
- * 本轮过程卡 → 流式气泡 → 状态行 → 错误行。流式增长发生在列表尾部；界面层会在
- * 用户没有主动翻看历史时逐帧补偿新增高度，用户一旦下拉则立即停止自动跟随。
+ * 本轮过程卡 → 流式气泡 → 状态行 → 错误行。用户翻看历史时保持稳定 key 和滚动位置，
+ * 只有停在底部或主动发送/返回最新消息时才自动跟随。
  *
  * 一条 AI 消息可以拆成多个 [ChatEntry.Bubble]（多气泡 / 语音行），
  * 气泡组的尖角、头像与时间戳在 [buildCompanionChatEntries] 里一次算清，
@@ -98,9 +98,18 @@ internal fun buildCompanionChatEntries(
     sceneQuote: String,
     multiBubble: Boolean,
     lastAssistantMessageId: Long? = null,
-    liveEntryId: String = "live",
-    messageKeyAliases: Map<Long, String> = emptyMap()
+    liveEntryId: String = "live"
 ): List<ChatEntry> {
+    // Room and the stream collector may arrive in either order. Identity, never text,
+    // decides whether persistence has taken over this round.
+    val persistedRoundIds = timeline.mapNotNull {
+        when (it) {
+            is CompanionTimelineItem.Bubble -> it.message.clientRoundId
+            is CompanionTimelineItem.Process -> it.clientRoundId
+            is CompanionTimelineItem.Media -> null
+        }
+    }.toSet()
+    val liveRoundCommitted = liveEntryId in persistedRoundIds
     val entries = buildList {
         add(ChatEntry.Scene(sceneQuote))
         embeddingProgress?.let { add(ChatEntry.Embedding(it)) }
@@ -115,8 +124,7 @@ internal fun buildCompanionChatEntries(
                 // 过程卡在它所属消息的气泡之前：先看到「想了什么、查了什么」，再看到答案。
                 is CompanionTimelineItem.Process -> add(
                     ChatEntry.Process(
-                        id = messageKeyAliases[item.sourceMessageId]
-                            ?: item.sourceMessageId.toString(),
+                        id = item.clientRoundId ?: item.sourceMessageId.toString(),
                         steps = item.steps,
                         reasoning = item.reasoning,
                         isLive = false
@@ -124,8 +132,7 @@ internal fun buildCompanionChatEntries(
                 )
                 is CompanionTimelineItem.Bubble -> {
                     val fromUser = item.message.role == "user"
-                    val messageUiId = messageKeyAliases[item.message.id]
-                        ?: item.message.id.toString()
+                    val messageUiId = item.message.clientRoundId ?: item.message.id.toString()
                     val parts = if (fromUser) {
                         // 用户消息原样一条，不参与多气泡与语音标记解析。
                         listOf(CompanionBubblePart.Text(item.message.content))
@@ -150,7 +157,7 @@ internal fun buildCompanionChatEntries(
                 is CompanionTimelineItem.Media -> add(ChatEntry.Media(item.callId, item.result))
             }
         }
-        if (liveSteps.isNotEmpty() || !liveReasoning.isNullOrBlank()) {
+        if (!liveRoundCommitted && (liveSteps.isNotEmpty() || !liveReasoning.isNullOrBlank())) {
             add(
                 ChatEntry.Process(
                     id = liveEntryId,
@@ -162,47 +169,24 @@ internal fun buildCompanionChatEntries(
         }
         streamingText
             ?.takeIf(String::isNotBlank)
-            ?.takeUnless { text -> timeline.hasCommittedAssistantCovering(text) }
+            ?.takeUnless { liveRoundCommitted }
             ?.let { text ->
-                if (!multiBubble) {
-                    // 单气泡模式从首个 token 到落库始终只有一个条目。不能为了稳定多气泡的
-                    // 尾段而在换行处临时拆项，否则用户会看到两个气泡，结束时再突然合并。
+                // Keep the same parser during streaming and persistence. Cutting at
+                // the last newline loses fenced/list block context and merges rows at commit.
+                val parts = parseCompanionParts(text, multiBubble)
+                parts.forEachIndexed { index, part ->
+                    val unfinishedVoice = isStreaming && index == parts.lastIndex &&
+                        part is CompanionBubblePart.Voice
                     add(
                         ChatEntry.Bubble(
-                            id = "$liveEntryId-0",
-                            part = CompanionBubblePart.Text(text),
+                            id = "$liveEntryId-$index",
+                            // Do not synthesize audio for every growing voice token.
+                            part = if (unfinishedVoice) CompanionBubblePart.Text(part.text) else part,
                             fromUser = false,
-                            streaming = true
+                            streaming = isStreaming && index == parts.lastIndex,
+                            freezeGroupTail = multiBubble && isStreaming
                         )
                     )
-                } else {
-                    // 多气泡模式只把「已经换行落定」的段落切成稳定气泡，最后一段跟着 token 长；
-                    // 否则每来一个字都会重排整条消息的气泡结构。
-                    val settled = text.substringBeforeLast('\n', missingDelimiterValue = "")
-                    val tailText = text.removePrefix(settled).removePrefix("\n")
-                    val settledParts = parseCompanionParts(settled, multiBubble = true)
-                    settledParts.forEachIndexed { index, part ->
-                        add(
-                            ChatEntry.Bubble(
-                                id = "$liveEntryId-$index",
-                                part = part,
-                                fromUser = false,
-                                freezeGroupTail = isStreaming
-                            )
-                        )
-                    }
-                    tailText.takeIf(String::isNotBlank)?.let { tail ->
-                        add(
-                            ChatEntry.Bubble(
-                                // 尾段转为已落定段后仍沿用同一序号，避免换行时 dispose/recreate。
-                                id = "$liveEntryId-${settledParts.size}",
-                                part = CompanionBubblePart.Text(tail),
-                                fromUser = false,
-                                streaming = true,
-                                freezeGroupTail = isStreaming
-                            )
-                        )
-                    }
                 }
             }
         if (isStreaming || toolStatus != null) {
@@ -284,33 +268,11 @@ internal fun chatEntryTopSpacing(previous: ChatEntry?, current: ChatEntry): Int 
 internal const val SPACING_WITHIN_GROUP = 3
 internal const val SPACING_BETWEEN_GROUPS = 12
 
-/**
- * 数据库 Flow 可能先于 RoundCommitted 抵达 UI。尤其在多气泡模式下，Room 已经给出完整
- * 回复时，节拍器发布的流式快照还可能少最后几个字；若只判断完全相等，就会短暂画出一份
- * 完整历史气泡，再画一份「完整前文 + 被截断尾段」的流式副本。
- *
- * 只检查时间线最后一条可见消息：若用户已经发了下一问，它会挡在旧 AI 回复后面，不会把
- * 新一轮恰好相同的开头误判成旧回复。统一换行后，已落库正文等于或覆盖当前快照都说明历史
- * 已经接管显示，应隐藏流式副本。
- */
-private fun List<CompanionTimelineItem>.hasCommittedAssistantCovering(text: String): Boolean {
-    val latestMessage = asReversed()
-        .filterIsInstance<CompanionTimelineItem.Bubble>()
-        .firstOrNull()
-        ?.message
-        ?: return false
-    if (latestMessage.role != "assistant") return false
-
-    val snapshot = text.normalizedLineEndings()
-    val committed = latestMessage.content.normalizedLineEndings()
-    return committed == snapshot || committed.startsWith(snapshot)
-}
-
-private fun String.normalizedLineEndings(): String = replace("\r\n", "\n").replace('\r', '\n')
-
 /** 正向列表的贴底判定容差；「回到底部」浮钮与建议条都以它为界。 */
 internal const val CHAT_BOTTOM_SLACK_PX = 32
 private const val CHAT_ANIMATED_TAIL_ITEMS = 2
+// Large but overflow-safe; LazyColumn clamps to the actual content end in a single measure.
+internal const val CHAT_TAIL_SCROLL_OFFSET = Int.MAX_VALUE / 2
 
 /** 最后一项完全露出（含容差）才算在底部；空列表视为在底部。 */
 internal fun isChatListAtBottom(
@@ -346,12 +308,11 @@ internal fun LazyListState.distanceFromLatest(): Int {
     return (last.offset + last.size - viewportBottom).coerceAtLeast(0)
 }
 
-/** 立即定位到列表真实底部（最后一项可能比视口还高，先进视口再补余量）。 */
+/** 一次测量定位到列表真实底部，最后一项高于视口时也无需先露出顶部。 */
 internal suspend fun LazyListState.snapToLatest() {
     val lastIndex = layoutInfo.totalItemsCount - 1
     if (lastIndex < 0) return
-    scrollToItem(lastIndex)
-    remainingToBottom()?.let { scrollBy(it) }
+    scrollToItem(lastIndex, CHAT_TAIL_SCROLL_OFFSET)
 }
 
 /** 平滑滚动到列表真实底部（「回到底部」浮钮用）。 */

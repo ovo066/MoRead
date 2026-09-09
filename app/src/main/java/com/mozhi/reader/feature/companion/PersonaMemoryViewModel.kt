@@ -95,24 +95,41 @@ class PersonaMemoryViewModel @Inject constructor(
 
     fun delete(memory: StoredMemory) {
         viewModelScope.launch {
-            memories.delete(memory.id)
-            mutableState.update { state ->
-                state.copy(
-                    memories = state.memories.filterNot { it.id == memory.id },
-                    total = (state.total - 1).coerceAtLeast(0)
-                )
-            }
-            eventChannel.send(PersonaMemoryEvent.Message("已删除这条记忆"))
+            runCatching { memories.delete(memory, personaId) }
+                .onSuccess {
+                    mutableState.update { state ->
+                        state.copy(
+                            memories = state.memories.filterNot { it.id == memory.id },
+                            total = (state.total - 1).coerceAtLeast(0),
+                            profile = ""
+                        )
+                    }
+                    eventChannel.send(
+                        PersonaMemoryEvent.Message("已删除长期记忆并清空画像；当前对话历史仍会保留")
+                    )
+                }
+                .onFailure { error ->
+                    eventChannel.send(
+                        PersonaMemoryEvent.Message("删除失败：${error.message ?: "未知错误"}")
+                    )
+                }
         }
     }
 
     fun clearAll() {
         viewModelScope.launch {
-            memories.clear(personaId)
-            mutableState.update {
-                it.copy(memories = emptyList(), total = 0, profile = "")
-            }
-            eventChannel.send(PersonaMemoryEvent.Message("已清空该角色的记忆与画像"))
+            runCatching { memories.clear(personaId) }
+                .onSuccess {
+                    mutableState.update {
+                        it.copy(memories = emptyList(), total = 0, profile = "")
+                    }
+                    eventChannel.send(PersonaMemoryEvent.Message("已清空该角色的记忆与画像"))
+                }
+                .onFailure { error ->
+                    eventChannel.send(
+                        PersonaMemoryEvent.Message("清空失败：${error.message ?: "未知错误"}")
+                    )
+                }
         }
     }
 

@@ -23,6 +23,46 @@ class ShelfCollectionDragTest {
     )
 
     @Test
+    fun fiveAndSixColumnGridsUseMeasuredBoundsIncludingRailAndPageOffsets() {
+        listOf(5, 6).forEach { columns ->
+            val origin = Offset(180f, 32f)
+            val regions = (0 until columns * 2).map { index ->
+                val left = origin.x + (index % columns) * 114f
+                val top = origin.y + (index / columns) * 170f
+                ShelfDropRegion(
+                    ShelfDropTarget("book:${index + 1}", bookId = index + 1L, collectionId = null),
+                    Rect(left, top, left + 100f, top + 150f)
+                )
+            }
+            val lastInRow = regions[columns - 1]
+            val nextRow = regions[columns]
+            assertEquals(
+                ShelfDrop(lastInRow.target, ShelfDropPlacement.MERGE),
+                findShelfDrop(lastInRow.bounds.center, 1, regions, horizontal = true, allowMerge = true)
+            )
+            assertEquals(
+                ShelfDrop(nextRow.target, ShelfDropPlacement.BEFORE),
+                findShelfDrop(
+                    nextRow.bounds.topLeft + Offset(5f, 50f), 1, regions,
+                    horizontal = true, allowMerge = true
+                )
+            )
+            assertEquals(
+                ShelfDrop(lastInRow.target, ShelfDropPlacement.AFTER),
+                findShelfDrop(
+                    Offset(lastInRow.bounds.center.x, lastInRow.bounds.bottom + 5f),
+                    1, regions, horizontal = true, allowMerge = true
+                )
+            )
+            assertEquals(
+                Rect(0f, 170f, 100f, 320f),
+                shelfBoundsInContainer(nextRow.bounds, origin)
+            )
+            assertNull(findShelfDrop(Offset(50f, 80f), 1, regions, true, true))
+        }
+    }
+
+    @Test
     fun findsTargetUnderPointerAndSkipsTheSourceBook() {
         val source = ShelfDropTarget("book:1", bookId = 1, collectionId = null)
         val book = ShelfDropTarget("book:2", bookId = 2, collectionId = null)

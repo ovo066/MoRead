@@ -2,22 +2,17 @@ package com.mozhi.reader.feature.reader
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.graphics.ColorMatrix
-import android.graphics.ColorMatrixColorFilter
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.drawable.GradientDrawable
 import com.mozhi.reader.core.datastore.PageTurnAnimation
-import kotlin.math.abs
-import kotlin.math.atan2
-import kotlin.math.cos
 import kotlin.math.hypot
-import kotlin.math.min
-import kotlin.math.sin
+import com.mozhi.reader.feature.reader.render.SpreadGeometry
+import com.mozhi.reader.feature.reader.render.Leaf
 
 /**
- * Composites the two real page bitmaps for one animation frame, a straight port of Legado's
+ * Composites the two real page bitmaps for one animation frame, adapting Legado's
  * `CoverPageDelegate` / `SlidePageDelegate` / `SimulationPageDelegate` drawing code working in
  * absolute view space:
  *
@@ -29,48 +24,15 @@ import kotlin.math.sin
 class PageTurnCompositor {
 
     private val geometry = PageFoldGeometry()
-    private val path0 = Path()
-    private val path1 = Path()
+    private val foldPath = Path()
+    private val backFacePath = Path()
     private val foldMatrix = Matrix()
     private val matrixValues = floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
     private val bitmapPaint = Paint()
-    private val foldPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private val foldPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+        alpha = BACK_FACE_INK_ALPHA
+    }
 
-    private val lightBackFilter = dimFilter(scale = 0.62f, lift = 54f)
-    private val darkBackFilter = dimFilter(scale = 0.62f, lift = 26f)
-
-    private val folderShadowLeft = GradientDrawable(
-        GradientDrawable.Orientation.LEFT_RIGHT,
-        intArrayOf(0x10333333, 0x98333333.toInt())
-    )
-    private val folderShadowRight = GradientDrawable(
-        GradientDrawable.Orientation.RIGHT_LEFT,
-        intArrayOf(0x98333333.toInt(), 0x10333333)
-    )
-    private val backShadowLeft = GradientDrawable(
-        GradientDrawable.Orientation.LEFT_RIGHT,
-        intArrayOf(0x6A111111, 0x00111111)
-    )
-    private val backShadowRight = GradientDrawable(
-        GradientDrawable.Orientation.RIGHT_LEFT,
-        intArrayOf(0x00111111, 0x6A111111)
-    )
-    private val frontShadowVerticalLeft = GradientDrawable(
-        GradientDrawable.Orientation.LEFT_RIGHT,
-        intArrayOf(0x78111111, 0x00111111)
-    )
-    private val frontShadowVerticalRight = GradientDrawable(
-        GradientDrawable.Orientation.RIGHT_LEFT,
-        intArrayOf(0x00111111, 0x78111111)
-    )
-    private val frontShadowTop = GradientDrawable(
-        GradientDrawable.Orientation.TOP_BOTTOM,
-        intArrayOf(0x78111111, 0x00111111)
-    )
-    private val frontShadowBottom = GradientDrawable(
-        GradientDrawable.Orientation.BOTTOM_TOP,
-        intArrayOf(0x00111111, 0x78111111)
-    )
     /** Legado's cover shadow: darkest at the moving page's edge, fading onto the revealed page. */
     private val edgeShadow = GradientDrawable(
         GradientDrawable.Orientation.LEFT_RIGHT,
@@ -94,12 +56,19 @@ class PageTurnCompositor {
         width: Float,
         height: Float,
         backgroundColor: Int,
-        darkTheme: Boolean
+        spread: SpreadGeometry? = null
     ) {
+        if (animation == PageTurnAnimation.SIMULATION && spread != null) {
+            // Existing flat compositor contract supplies (prev,cur) for a backward turn.
+            val current = if (direction == PageTurnDirection.NEXT) front else under
+            val target = if (direction == PageTurnDirection.NEXT) under else front
+            drawSpreadSimulation(canvas, direction, current, target, touchX, startX, spread, backgroundColor)
+            return
+        }
         when (animation) {
             PageTurnAnimation.SIMULATION -> drawSimulation(
                 canvas, direction, front, under, touchX, touchY, cornerAtTop,
-                width, height, backgroundColor, darkTheme
+                width, height, backgroundColor
             )
             PageTurnAnimation.COVER -> drawCover(
                 canvas, direction, front, under, touchX - startX, width, height
@@ -108,6 +77,60 @@ class PageTurnCompositor {
                 canvas, direction, front, under, touchX - startX, width, height
             )
             PageTurnAnimation.NONE -> drawFullBitmap(canvas, front, width, height)
+        }
+    }
+
+    private fun drawSpreadSimulation(
+        canvas: Canvas,
+        direction: PageTurnDirection,
+        current: Bitmap,
+        target: Bitmap,
+        touchX: Float,
+        startX: Float,
+        spread: SpreadGeometry,
+        backgroundColor: Int
+    ) {
+        val turn = SpreadLeafGeometry.fromTouch(direction, touchX, startX, spread)
+        if (turn.angle <= 0f || turn.angle >= 180f) {
+            drawFullBitmap(canvas, if (turn.angle <= 0f) current else target, spread.paneWidth, spread.paneHeight)
+            return
+        }
+        val count = canvas.save()
+        try {
+            canvas.clipRect(0f, 0f, spread.paneWidth, spread.paneHeight)
+            canvas.drawColor(backgroundColor or OPAQUE_ALPHA_MASK)
+            drawFullBitmap(canvas, target, spread.paneWidth, spread.paneHeight)
+            val stationary = if (direction == PageTurnDirection.NEXT) Leaf.LEFT else Leaf.RIGHT
+            val stationaryRect = spread.leafSrcRect(stationary)
+            canvas.save()
+            canvas.clipRect(stationaryRect.left, 0f, stationaryRect.right, spread.paneHeight)
+            drawFullBitmap(canvas, current, spread.paneWidth, spread.paneHeight)
+            canvas.restore()
+            val face = if (turn.showBack) target else current
+            val faceLeaf = when {
+                direction == PageTurnDirection.NEXT && !turn.showBack -> Leaf.RIGHT
+                direction == PageTurnDirection.PREVIOUS && turn.showBack -> Leaf.RIGHT
+                else -> Leaf.LEFT
+            }
+            val source = spread.leafSrcRect(faceLeaf)
+            val src = floatArrayOf(source.left, 0f, source.right, 0f,
+                source.right, spread.paneHeight, source.left, spread.paneHeight)
+            val quad = turn.dstQuad
+            val facePath = Path().apply {
+                moveTo(quad[0], quad[1]); lineTo(quad[2], quad[3])
+                lineTo(quad[4], quad[5]); lineTo(quad[6], quad[7]); close()
+            }
+            val matrix = Matrix()
+            if (matrix.setPolyToPoly(src, 0, quad, 0, 4)) {
+                canvas.save()
+                canvas.clipPath(facePath)
+                canvas.drawBitmap(face, matrix, bitmapPaint)
+                val shade = Paint().apply { color = android.graphics.Color.BLACK; alpha = (turn.shadowAlpha * 255).toInt() }
+                canvas.drawPath(facePath, shade)
+                canvas.restore()
+            }
+        } finally {
+            canvas.restoreToCount(count)
         }
     }
 
@@ -198,244 +221,94 @@ class PageTurnCompositor {
         cornerAtTop: Boolean,
         width: Float,
         height: Float,
-        backgroundColor: Int,
-        darkTheme: Boolean
+        backgroundColor: Int
     ) {
-        geometry.updateFromTouch(width, height, touchX, touchY, cornerAtTop)
-        if (!geometry.isFinite()) {
-            // Degenerate geometry: fall back to a cover-style frame rather than a corrupt fold.
-            drawCover(canvas, direction, front, under, touchX - width, width, height)
-            return
+        val saveCount = canvas.save()
+        try {
+            canvas.clipRect(0f, 0f, width, height)
+            val paperColor = backgroundColor or OPAQUE_ALPHA_MASK
+            // Every frame owns every viewport pixel, even with translucent theme/page snapshots.
+            // Never depend on pixels left in the target Canvas by a preceding frame.
+            canvas.drawColor(paperColor)
+            geometry.updateFromTouch(width, height, touchX, touchY, cornerAtTop)
+            if (!geometry.isFinite()) {
+                // A corrupt fold must not bring back the COVER mode's shadow as a fallback.
+                val current = if (direction == PageTurnDirection.NEXT) front else under
+                drawFullBitmap(canvas, current, width, height)
+                return
+            }
+            buildFoldPaths()
+
+            // The revealed page is a full, opaque base, not a chord-clipped approximation of the
+            // curl. The other two surfaces completely cover the parts that should remain hidden.
+            drawFullBitmap(canvas, under, width, height)
+
+            canvas.save()
+            canvas.clipOutPath(foldPath)
+            canvas.drawColor(paperColor)
+            drawFullBitmap(canvas, front, width, height)
+            canvas.restore()
+
+            // Fainter mirrored ink distinguishes the back without cast shadows or fold gradients.
+            drawBackFace(canvas, front, width, height, paperColor)
+        } finally {
+            canvas.restoreToCount(saveCount)
         }
-        val maxLength = hypot(width.toDouble(), height.toDouble()).toFloat()
-        val cornerX = geometry.cornerX
-        val cornerY = geometry.cornerY
-        // Legado's mIsRtOrLb: with the corner always on the right edge this is "corner at top".
-        val rightTop = cornerAtTop
-
-        buildFoldPath(width, height)
-
-        // 1. The un-turned part of the sheet.
-        canvas.save()
-        canvas.clipOutPath(path0)
-        drawFullBitmap(canvas, front, width, height)
-        canvas.restore()
-
-        // 2. The revealed page + its shadow band along the fold.
-        path1.reset()
-        path1.moveTo(geometry.start1X, geometry.start1Y)
-        path1.lineTo(geometry.vertex1X, geometry.vertex1Y)
-        path1.lineTo(geometry.vertex2X, geometry.vertex2Y)
-        path1.lineTo(geometry.start2X, geometry.start2Y)
-        path1.lineTo(cornerX, cornerY)
-        path1.close()
-        val degrees = Math.toDegrees(
-            atan2(
-                (geometry.control1X - cornerX).toDouble(),
-                geometry.control2Y - cornerY.toDouble()
-            )
-        ).toFloat()
-        canvas.save()
-        canvas.clipPath(path0)
-        canvas.clipPath(path1)
-        drawFullBitmap(canvas, under, width, height)
-        canvas.rotate(degrees, geometry.start1X, geometry.start1Y)
-        val backShadow = if (rightTop) backShadowLeft else backShadowRight
-        val backLeft: Int
-        val backRight: Int
-        if (rightTop) {
-            backLeft = geometry.start1X.toInt()
-            backRight = (geometry.start1X + geometry.touchToCornerDistance / 4f).toInt()
-        } else {
-            backLeft = (geometry.start1X - geometry.touchToCornerDistance / 4f).toInt()
-            backRight = geometry.start1X.toInt()
-        }
-        backShadow.setBounds(
-            backLeft,
-            geometry.start1Y.toInt(),
-            backRight,
-            (maxLength + geometry.start1Y).toInt()
-        )
-        backShadow.draw(canvas)
-        canvas.restore()
-
-        // 3. The floating shadows along the lifted sheet's edges.
-        drawFrontShadows(canvas, rightTop, maxLength, height)
-
-        // 4. The sheet's back face, mirrored through the fold line and dimmed.
-        drawBackFace(canvas, front, backgroundColor, darkTheme, rightTop, maxLength)
     }
 
-    private fun buildFoldPath(width: Float, height: Float) {
-        path0.reset()
-        path0.moveTo(geometry.start1X, geometry.start1Y)
-        path0.quadTo(geometry.control1X, geometry.control1Y, geometry.end1X, geometry.end1Y)
-        path0.lineTo(geometry.touchX, geometry.touchY)
-        path0.lineTo(geometry.end2X, geometry.end2Y)
-        path0.quadTo(geometry.control2X, geometry.control2Y, geometry.start2X, geometry.start2Y)
-        path0.lineTo(geometry.cornerX, geometry.cornerY)
-        path0.close()
-    }
+    private fun buildFoldPaths() {
+        foldPath.reset()
+        foldPath.moveTo(geometry.start1X, geometry.start1Y)
+        foldPath.quadTo(geometry.control1X, geometry.control1Y, geometry.end1X, geometry.end1Y)
+        foldPath.lineTo(geometry.touchX, geometry.touchY)
+        foldPath.lineTo(geometry.end2X, geometry.end2Y)
+        foldPath.quadTo(geometry.control2X, geometry.control2Y, geometry.start2X, geometry.start2Y)
+        foldPath.lineTo(geometry.cornerX, geometry.cornerY)
+        foldPath.close()
 
-    private fun drawFrontShadows(
-        canvas: Canvas,
-        rightTop: Boolean,
-        maxLength: Float,
-        height: Float
-    ) {
-        val touchX = geometry.touchX
-        val touchY = geometry.touchY
-        val control1X = geometry.control1X
-        val control1Y = geometry.control1Y
-        val control2X = geometry.control2X
-        val control2Y = geometry.control2Y
-
-        val degree = if (rightTop) {
-            Math.PI / 4 - atan2((control1Y - touchY).toDouble(), (touchX - control1X).toDouble())
-        } else {
-            Math.PI / 4 - atan2((touchY - control1Y).toDouble(), (touchX - control1X).toDouble())
-        }
-        val d1 = FRONT_SHADOW_SIZE * 1.414f * cos(degree).toFloat()
-        val d2 = FRONT_SHADOW_SIZE * 1.414f * sin(degree).toFloat()
-        val shadowX = touchX + d1
-        val shadowY = if (rightTop) touchY + d2 else touchY - d2
-
-        path1.reset()
-        path1.moveTo(shadowX, shadowY)
-        path1.lineTo(touchX, touchY)
-        path1.lineTo(control1X, control1Y)
-        path1.lineTo(geometry.start1X, geometry.start1Y)
-        path1.close()
-        canvas.save()
-        canvas.clipOutPath(path0)
-        canvas.clipPath(path1)
-        var drawable = if (rightTop) frontShadowVerticalLeft else frontShadowVerticalRight
-        var left: Int
-        var right: Int
-        if (rightTop) {
-            left = control1X.toInt()
-            right = (control1X + FRONT_SHADOW_SIZE).toInt()
-        } else {
-            left = (control1X - FRONT_SHADOW_SIZE).toInt()
-            right = (control1X + 1f).toInt()
-        }
-        var rotation = Math.toDegrees(
-            atan2((touchX - control1X).toDouble(), (control1Y - touchY).toDouble())
-        ).toFloat()
-        canvas.rotate(rotation, control1X, control1Y)
-        drawable.setBounds(left, (control1Y - maxLength).toInt(), right, control1Y.toInt())
-        drawable.draw(canvas)
-        canvas.restore()
-
-        path1.reset()
-        path1.moveTo(shadowX, shadowY)
-        path1.lineTo(touchX, touchY)
-        path1.lineTo(control2X, control2Y)
-        path1.lineTo(geometry.start2X, geometry.start2Y)
-        path1.close()
-        canvas.save()
-        canvas.clipOutPath(path0)
-        canvas.clipPath(path1)
-        drawable = if (rightTop) frontShadowTop else frontShadowBottom
-        if (rightTop) {
-            left = control2Y.toInt()
-            right = (control2Y + FRONT_SHADOW_SIZE).toInt()
-        } else {
-            left = (control2Y - FRONT_SHADOW_SIZE).toInt()
-            right = (control2Y + 1f).toInt()
-        }
-        rotation = Math.toDegrees(
-            atan2((control2Y - touchY).toDouble(), (control2X - touchX).toDouble())
-        ).toFloat()
-        canvas.rotate(rotation, control2X, control2Y)
-        val verticalOffset = if (control2Y < 0f) control2Y - height else control2Y
-        val hypotenuse = hypot(control2X.toDouble(), verticalOffset.toDouble())
-        if (hypotenuse > maxLength) {
-            drawable.setBounds(
-                (control2X - FRONT_SHADOW_SIZE - hypotenuse).toInt(),
-                left,
-                (control2X + maxLength - hypotenuse).toInt(),
-                right
-            )
-        } else {
-            drawable.setBounds((control2X - maxLength).toInt(), left, control2X.toInt(), right)
-        }
-        drawable.draw(canvas)
-        canvas.restore()
+        // Retain the existing back-face polygon. Intersecting it with foldPath below keeps
+        // the same curved outline as the turning sheet without changing the fold geometry.
+        backFacePath.reset()
+        backFacePath.moveTo(geometry.vertex2X, geometry.vertex2Y)
+        backFacePath.lineTo(geometry.vertex1X, geometry.vertex1Y)
+        backFacePath.lineTo(geometry.end1X, geometry.end1Y)
+        backFacePath.lineTo(geometry.touchX, geometry.touchY)
+        backFacePath.lineTo(geometry.end2X, geometry.end2Y)
+        backFacePath.close()
     }
 
     private fun drawBackFace(
         canvas: Canvas,
         front: Bitmap,
-        backgroundColor: Int,
-        darkTheme: Boolean,
-        rightTop: Boolean,
-        maxLength: Float
+        width: Float,
+        height: Float,
+        paperColor: Int
     ) {
-        val firstMidpoint = ((geometry.start1X + geometry.control1X) / 2f).toInt()
-        val firstDistance = abs(firstMidpoint - geometry.control1X)
-        val secondMidpoint = ((geometry.start2Y + geometry.control2Y) / 2f).toInt()
-        val secondDistance = abs(secondMidpoint - geometry.control2Y)
-        val shadowWidth = min(firstDistance, secondDistance)
-
-        path1.reset()
-        path1.moveTo(geometry.vertex2X, geometry.vertex2Y)
-        path1.lineTo(geometry.vertex1X, geometry.vertex1Y)
-        path1.lineTo(geometry.end1X, geometry.end1Y)
-        path1.lineTo(geometry.touchX, geometry.touchY)
-        path1.lineTo(geometry.end2X, geometry.end2Y)
-        path1.close()
-
-        val drawable: GradientDrawable
-        val left: Int
-        val right: Int
-        if (rightTop) {
-            left = (geometry.start1X - 1f).toInt()
-            right = (geometry.start1X + shadowWidth + 1f).toInt()
-            drawable = folderShadowLeft
-        } else {
-            left = (geometry.start1X - shadowWidth - 1f).toInt()
-            right = (geometry.start1X + 1f).toInt()
-            drawable = folderShadowRight
-        }
-
         canvas.save()
-        canvas.clipPath(path0)
-        canvas.clipPath(path1)
-        canvas.drawColor(backgroundColor)
-
-        val distance = hypot(
-            (geometry.cornerX - geometry.control1X).toDouble(),
-            (geometry.control2Y - geometry.cornerY).toDouble()
-        ).toFloat().coerceAtLeast(0.1f)
-        val ratioX = (geometry.cornerX - geometry.control1X) / distance
-        val ratioY = (geometry.control2Y - geometry.cornerY) / distance
-        matrixValues[0] = 1f - 2f * ratioY * ratioY
-        matrixValues[1] = 2f * ratioX * ratioY
-        matrixValues[3] = matrixValues[1]
-        matrixValues[4] = 1f - 2f * ratioX * ratioX
-        foldMatrix.reset()
-        foldMatrix.setValues(matrixValues)
-        foldMatrix.preTranslate(-geometry.control1X, -geometry.control1Y)
-        foldMatrix.postTranslate(geometry.control1X, geometry.control1Y)
-        foldPaint.colorFilter = if (darkTheme) darkBackFilter else lightBackFilter
-        canvas.drawBitmap(front, foldMatrix, foldPaint)
-        foldPaint.colorFilter = null
-
-        val degrees = Math.toDegrees(
-            atan2(
-                (geometry.control1X - geometry.cornerX).toDouble(),
-                geometry.control2Y - geometry.cornerY.toDouble()
-            )
-        ).toFloat()
-        canvas.rotate(degrees, geometry.start1X, geometry.start1Y)
-        drawable.setBounds(
-            left,
-            geometry.start1Y.toInt(),
-            right,
-            (geometry.start1Y + maxLength).toInt()
-        )
-        drawable.draw(canvas)
+        canvas.clipPath(foldPath)
+        canvas.clipPath(backFacePath)
+        // Fade only the reflected ink: the opaque paper still blocks the page underneath.
+        canvas.drawColor(paperColor)
+        if (!front.isRecycled) {
+            val distance = hypot(
+                (geometry.cornerX - geometry.control1X).toDouble(),
+                (geometry.control2Y - geometry.cornerY).toDouble()
+            ).toFloat().coerceAtLeast(0.1f)
+            val ratioX = (geometry.cornerX - geometry.control1X) / distance
+            val ratioY = (geometry.control2Y - geometry.cornerY) / distance
+            matrixValues[0] = 1f - 2f * ratioY * ratioY
+            matrixValues[1] = 2f * ratioX * ratioY
+            matrixValues[3] = matrixValues[1]
+            matrixValues[4] = 1f - 2f * ratioX * ratioX
+            foldMatrix.reset()
+            foldMatrix.setValues(matrixValues)
+            foldMatrix.preTranslate(-geometry.control1X, -geometry.control1Y)
+            foldMatrix.postTranslate(geometry.control1X, geometry.control1Y)
+            if (front.width.toFloat() != width || front.height.toFloat() != height) {
+                foldMatrix.preScale(width / front.width, height / front.height)
+            }
+            canvas.drawBitmap(front, foldMatrix, foldPaint)
+        }
         canvas.restore()
     }
 
@@ -451,20 +324,9 @@ class PageTurnCompositor {
         }
     }
 
-    private fun dimFilter(scale: Float, lift: Float): ColorMatrixColorFilter =
-        ColorMatrixColorFilter(
-            ColorMatrix(
-                floatArrayOf(
-                    scale, 0f, 0f, 0f, lift,
-                    0f, scale, 0f, 0f, lift,
-                    0f, 0f, scale, 0f, lift,
-                    0f, 0f, 0f, 0.86f, 0f
-                )
-            )
-        )
-
     private companion object {
-        const val FRONT_SHADOW_SIZE = 25f
         const val EDGE_SHADOW_WIDTH = 30f
+        const val BACK_FACE_INK_ALPHA = 128
+        const val OPAQUE_ALPHA_MASK = 0xFF000000.toInt()
     }
 }

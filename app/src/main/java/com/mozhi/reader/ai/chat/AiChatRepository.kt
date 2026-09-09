@@ -111,7 +111,8 @@ class AiChatRepository @Inject constructor(
         attachmentsJson: String? = null,
         maskId: Long = 0L,
         sourceScopeChapterIndex: Int = -1,
-        sourceScopeCharOffset: Int = -1
+        sourceScopeCharOffset: Int = -1,
+        clientRoundId: String? = null
     ) {
         val clean = content.trim()
         require(clean.isNotEmpty() || attachmentsJson != null) { "消息不能为空" }
@@ -126,7 +127,8 @@ class AiChatRepository @Inject constructor(
                     attachmentsJson = attachmentsJson,
                     maskId = maskId,
                     sourceScopeChapterIndex = sourceScopeChapterIndex,
-                    sourceScopeCharOffset = sourceScopeCharOffset
+                    sourceScopeCharOffset = sourceScopeCharOffset,
+                    clientRoundId = clientRoundId
                 )
             )
             val conversation = chatDao.getConversation(conversationId)
@@ -143,19 +145,32 @@ class AiChatRepository @Inject constructor(
     }
 
     /** Persists a (possibly partial) assistant reply, e.g. when the user stops generation. */
-    suspend fun appendAssistantMessage(conversationId: Long, content: String) {
-        if (content.isBlank()) return
+    suspend fun appendAssistantMessage(
+        conversationId: Long,
+        content: String,
+        clientRoundId: String? = null,
+        reasoningContent: String? = null
+    ): MessageEntity? {
+        if (content.isBlank() && reasoningContent.isNullOrBlank()) return null
         val now = System.currentTimeMillis()
-        database.withTransaction {
-            chatDao.insertMessage(
-                MessageEntity(
-                    conversationId = conversationId,
-                    role = ChatRole.ASSISTANT.wire,
-                    content = content,
-                    createdAt = now
-                )
+        return database.withTransaction {
+            // Cancellation can happen after AgentLoop inserted but before it delivered its event.
+            // Keep stop/retry idempotent, including two retries around a delayed observer.
+            clientRoundId?.let { round ->
+                chatDao.getMessages(conversationId).firstOrNull { it.clientRoundId == round }
+                    ?.let { return@withTransaction it }
+            }
+            val message = MessageEntity(
+                conversationId = conversationId,
+                role = ChatRole.ASSISTANT.wire,
+                clientRoundId = clientRoundId,
+                content = content,
+                reasoningContent = reasoningContent?.takeIf(String::isNotBlank),
+                createdAt = now
             )
+            val id = chatDao.insertMessage(message)
             chatDao.touchConversation(conversationId, now)
+            message.copy(id = id)
         }
     }
 

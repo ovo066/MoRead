@@ -152,7 +152,8 @@ internal sealed interface CompanionTimelineItem {
     data class Process(
         val sourceMessageId: Long,
         val steps: List<AgentExecutionStep>,
-        val reasoning: String?
+        val reasoning: String?,
+        val clientRoundId: String? = null
     ) : CompanionTimelineItem {
         override val key: String = "process-$sourceMessageId"
     }
@@ -202,7 +203,8 @@ internal fun buildCompanionTimeline(messages: List<MessageEntity>): List<Compani
                             CompanionTimelineItem.Process(
                                 sourceMessageId = message.id,
                                 steps = steps,
-                                reasoning = message.reasoningContent
+                                reasoning = message.reasoningContent,
+                                clientRoundId = message.clientRoundId
                             )
                         )
                     }
@@ -418,11 +420,8 @@ private fun BubbleBody(
         else -> {
             // 引用标记是给程序看的，渲染前摘掉；引文本身留在正文里保持句子通顺。
             val parsed = remember(text) { CompanionCitationParser.parse(text) }
-            if (entry.streaming) {
-                StreamingAiRichText(content = parsed.displayText, palette = palette)
-            } else {
-                AiRichText(content = parsed.displayText, palette = palette)
-            }
+            // Keep the exact same block tree at commit; only the unfinished block changes.
+            StreamingAiRichText(content = parsed.displayText, palette = palette)
             if (locatedCitations.isNotEmpty() && entry.isTail) {
                 CitationChips(
                     citations = locatedCitations,

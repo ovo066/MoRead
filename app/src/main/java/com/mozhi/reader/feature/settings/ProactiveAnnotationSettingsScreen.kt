@@ -2,6 +2,20 @@ package com.mozhi.reader.feature.settings
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.BorderColor
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.dp
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Text
+import androidx.compose.material3.MaterialTheme
+import com.mozhi.reader.core.datastore.ProactiveAnnotationTiming
+import com.mozhi.reader.core.datastore.ProactiveAnnotationNotice
+import com.mozhi.reader.ui.components.MoReadSegmented
+import com.mozhi.reader.ui.components.MoReadRow
+import com.mozhi.reader.ui.components.PersonaAvatarImage
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -28,6 +42,23 @@ fun ProactiveAnnotationSettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    ProactiveAnnotationSettingsContent(
+        bookId, state, onBack, viewModel::setAnnotationLimits,
+        viewModel::setBookAnnotationLimits, viewModel::setProactiveAnnotations,
+        viewModel::setAnnotationNotice
+    )
+}
+
+@Composable
+internal fun ProactiveAnnotationSettingsContent(
+    bookId: Long?,
+    state: SettingsUiState,
+    onBack: () -> Unit,
+    onSetLimits: (ProactiveAnnotationLimits) -> Unit,
+    onSetBookLimits: (Long, BookProactiveAnnotationLimits?) -> Unit,
+    onSetEnabled: (Boolean) -> Unit,
+    onSetNotice: (ProactiveAnnotationNotice) -> Unit
+) {
     val global = state.autonomy.annotationLimits
     val override = bookId?.let { state.autonomy.annotationLimitsByBook[it] }
     val perBookActive = override?.enabled == true
@@ -35,17 +66,20 @@ fun ProactiveAnnotationSettingsScreen(
 
     fun commit(next: ProactiveAnnotationLimits) {
         if (bookId == null) {
-            viewModel.setAnnotationLimits(next)
+            onSetLimits(next)
         } else {
-            viewModel.setBookAnnotationLimits(bookId, BookProactiveAnnotationLimits(true, next))
+            onSetBookLimits(bookId, BookProactiveAnnotationLimits(true, next))
         }
     }
 
     MoReadSecondaryPage(
-        title = if (bookId == null) "段评数量与频率" else "本书随读段评",
+        title = if (bookId == null) "随读段评" else "本书随读段评",
         subtitle = if (bookId == null) null else "只影响这一本书",
         onBack = onBack
     ) {
+        // A cold entry shows the stable page shell, never fake default switch/slider values.
+        // Normal settings navigation shares the already-loaded parent ViewModel.
+        if (!state.isLoaded) return@MoReadSecondaryPage
         if (bookId != null) {
             item {
                 MoReadSection(
@@ -58,7 +92,7 @@ fun ProactiveAnnotationSettingsScreen(
                         subtitle = if (perBookActive) editing.summary() else "当前跟随全局：${global.summary()}",
                         checked = perBookActive,
                         onCheckedChange = { enabled ->
-                            viewModel.setBookAnnotationLimits(
+                            onSetBookLimits(
                                 bookId,
                                 if (enabled) BookProactiveAnnotationLimits(true, editing) else null
                             )
@@ -67,11 +101,76 @@ fun ProactiveAnnotationSettingsScreen(
                 }
             }
         }
+        if (bookId == null) {
+            item {
+                MoReadSection(title = "总开关", footer = "默认关闭。开启后会消耗 API 额度。") {
+                    MoReadSwitchRow(icon = Icons.Outlined.BorderColor, title = "随读段评",
+                        subtitle = "按下面的方式自动留下批注",
+                        checked = state.autonomy.proactiveAnnotationsEnabled,
+                        onCheckedChange = onSetEnabled)
+                }
+            }
+        }
+        item {
+            MoReadSection(title = "生成方式", footer = if (editing.timing == ProactiveAnnotationTiming.ON_CHAPTER_ENTRY) {
+                "预生成会让 AI 提前读到你还没读到的段落；段评按段落逐条生成、只看到该段之前的正文，" +
+                    "且在你读到之前不会出现在聊天、工具或通知里。每条段评一次快速模型调用；提前 N 章会预先消耗 N 章的额度。"
+            } else "读完一章后为刚读完的章节生成，不读取未读正文。每条段评一次快速模型调用。") {
+                MoReadBlock {
+                    MoReadSegmented(options = ProactiveAnnotationTiming.entries.toList(), selected = editing.timing,
+                        onSelect = { if (bookId == null || perBookActive) commit(editing.copy(timing = it)) },
+                        label = { if (it == ProactiveAnnotationTiming.ON_CHAPTER_ENTRY) "进入章节预生成" else "读完后生成上一章" })
+                }
+                if (editing.timing == ProactiveAnnotationTiming.ON_CHAPTER_ENTRY) {
+                    MoReadRowDivider()
+                    LimitSlider(label = "额外提前", value = editing.aheadChapters, from = 0, to = 5,
+                        allowUnlimited = false, enabled = bookId == null || perBookActive,
+                        unit = "章", onValueChange = { commit(editing.copy(aheadChapters = it)) })
+                    MoReadValueRow(title = "提前范围", value = "0 = 仅本章")
+                }
+            }
+        }
+        if (bookId == null) {
+            item {
+                MoReadSection(title = "伴读弹幕", footer = "5 秒自动收起，「查看」只指向已读到的段评。" +
+                    "快速模型按角色性格和语气说一句共读感想，不发送正文、段评或聊天记录，也不暗示未读剧情。" +
+                    "每次额外 1 次调用，失败或超时回落为自然短句，不播报条数。") {
+                    ProactiveAnnotationNotice.entries.forEachIndexed { index, mode ->
+                        if (index > 0) MoReadRowDivider()
+                        MoReadRow(title = when (mode) {
+                            ProactiveAnnotationNotice.OFF -> "不提示"
+                            ProactiveAnnotationNotice.BUILT_IN -> "内置提示（默认）"
+                            ProactiveAnnotationNotice.FAST_MODEL -> "快速模型 · 角色互动"
+                        }, subtitle = when (mode) {
+                            ProactiveAnnotationNotice.OFF -> "段评静默写入，不做完成提示"
+                            ProactiveAnnotationNotice.BUILT_IN -> "头像胶囊只说条数，不额外调用模型"
+                            ProactiveAnnotationNotice.FAST_MODEL -> "像角色边读边说话，例如：还挺有意思，你怎么看？"
+                        }, onClick = { onSetNotice(mode) }, trailing = {
+                            RadioButton(selected = state.autonomy.annotationNotice == mode,
+                                onClick = { onSetNotice(mode) })
+                        })
+                    }
+                    if (state.autonomy.annotationNotice != ProactiveAnnotationNotice.OFF) {
+                        MoReadBlock {
+                            Row(verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                                PersonaAvatarImage("知墨", null, Modifier.size(30.dp))
+                                Text(
+                                    if (state.autonomy.annotationNotice == ProactiveAnnotationNotice.FAST_MODEL)
+                                        "还挺有意思，你怎么看？" else "知墨 写了 3 条段评",
+                                    style = MaterialTheme.typography.labelMedium
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
         item {
             MoReadSection(
                 title = "每章条数",
                 footer = "下限只是写给模型的请求：本章确实没有值得回应的地方时，它仍然可以少给几条。" +
-                    "上限选「不限制」＝由模型自己决定写几条，可能明显多花 API 额度。"
+                    "上限选「不限制」时每章仍最多挑选 10 个候选段落，避免请求失控。"
             ) {
                 LimitSlider(
                     label = "下限",
@@ -101,7 +200,7 @@ fun ProactiveAnnotationSettingsScreen(
         item {
             MoReadSection(
                 title = "每日上限",
-                footer = "按自然日计，跨天自动归零。每章仍然只生成一次，回头重读不会重复出批注。"
+                footer = "按自然日计，跨天自动归零。同一角色与正文版本完成后不重复生成；提高数量上限不会为已完成章节补生成。失败最多两轮，切换设置或离开不占失败次数，已完成段落不重复。"
             ) {
                 LimitSlider(
                     label = "段评",
@@ -153,6 +252,7 @@ private fun LimitSlider(
     to: Int,
     allowUnlimited: Boolean,
     enabled: Boolean,
+    unit: String = "条",
     onValueChange: (Int) -> Unit
 ) {
     val steps = ProactiveAnnotationLimitSteps.steps(from, to, allowUnlimited)
@@ -161,7 +261,7 @@ private fun LimitSlider(
         MoReadSlider(
             label = label,
             valueText = ProactiveAnnotationLimitSteps.label(
-                ProactiveAnnotationLimitSteps.valueAt(steps, index)
+                ProactiveAnnotationLimitSteps.valueAt(steps, index), unit
             ),
             value = index.toFloat(),
             range = 0f..(steps.size - 1).coerceAtLeast(1).toFloat(),

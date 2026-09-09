@@ -35,6 +35,8 @@ enum class ReaderTheme {
     MIST
 }
 
+enum class WidePageLayout { SINGLE, DUAL }
+
 enum class PageMode {
     PAGINATED,
     SCROLL
@@ -124,6 +126,8 @@ data class ReaderSettings(
     val showFooter: Boolean = true,
     val theme: ReaderTheme = ReaderTheme.SYSTEM,
     val pageMode: PageMode = PageMode.PAGINATED,
+    val widePageLayout: WidePageLayout = WidePageLayout.SINGLE,
+    val companionSidePaneEnabled: Boolean = false,
     val pageTurnAnimation: PageTurnAnimation = PageTurnAnimation.SIMULATION,
     val shelfLayout: ShelfLayout = ShelfLayout.GRID,
     val shelfBookOrder: List<Long> = emptyList(),
@@ -243,6 +247,9 @@ class ReaderSettingsRepository @Inject constructor(
                 ?.let { runCatching { ReaderTheme.valueOf(it) }.getOrNull() }
                 ?: ReaderTheme.SYSTEM,
             // 2026-08-03 滚动模式回归：以章节为单位的连续滚动（上下滑动翻页）。
+            widePageLayout = preferences[Keys.WidePageLayout]
+                ?.let { runCatching { WidePageLayout.valueOf(it) }.getOrNull() } ?: WidePageLayout.SINGLE,
+            companionSidePaneEnabled = preferences[Keys.CompanionSidePaneEnabled] ?: false,
             pageMode = preferences[Keys.PageMode]
                 ?.let { runCatching { PageMode.valueOf(it) }.getOrNull() }
                 ?: PageMode.PAGINATED,
@@ -756,6 +763,14 @@ class ReaderSettingsRepository @Inject constructor(
             if (migrated != images) preferences[Keys.ImageLibrary] = ReaderImageLibraryCodec.encode(migrated)
         }
     }
+    suspend fun setWidePageLayout(value: WidePageLayout) {
+        dataStore.edit { it[Keys.WidePageLayout] = value.name }
+    }
+
+    suspend fun setCompanionSidePaneEnabled(value: Boolean) {
+        dataStore.edit { it[Keys.CompanionSidePaneEnabled] = value }
+    }
+
     suspend fun setPageMode(value: PageMode) {
         dataStore.edit { it[Keys.PageMode] = value.name }
     }
@@ -1071,6 +1086,9 @@ class ReaderSettingsRepository @Inject constructor(
                     preferences[Keys.CompanionProactiveAnnotationVoice] ?: false,
                 proactiveAnnotationImageEnabled =
                     preferences[Keys.CompanionProactiveAnnotationImage] ?: false,
+                annotationNotice = preferences[Keys.CompanionAnnotationNotice]
+                    ?.let { runCatching { ProactiveAnnotationNotice.valueOf(it) }.getOrNull() }
+                    ?: ProactiveAnnotationNotice.BUILT_IN,
                 annotationLimits = ProactiveAnnotationLimitsCodec.decodeGlobal(
                     preferences[Keys.CompanionAnnotationLimits]
                 ),
@@ -1098,6 +1116,10 @@ class ReaderSettingsRepository @Inject constructor(
 
     suspend fun setCompanionProactiveAnnotationImage(value: Boolean) {
         dataStore.edit { it[Keys.CompanionProactiveAnnotationImage] = value }
+    }
+
+    suspend fun setCompanionAnnotationNotice(value: ProactiveAnnotationNotice) {
+        dataStore.edit { it[Keys.CompanionAnnotationNotice] = value.name }
     }
 
     suspend fun setCompanionAnnotationLimits(limits: ProactiveAnnotationLimits) {
@@ -1152,6 +1174,9 @@ class ReaderSettingsRepository @Inject constructor(
         val ShowHeader = booleanPreferencesKey("reader_show_header")
         val ShowFooter = booleanPreferencesKey("reader_show_footer")
         val Theme = stringPreferencesKey("reader_theme")
+        val WidePageLayout = stringPreferencesKey("reader_wide_page_layout")
+        val CompanionSidePaneEnabled = booleanPreferencesKey("reader_companion_side_pane")
+        val CompanionAnnotationNotice = stringPreferencesKey("companion_annotation_notice")
         val PageMode = stringPreferencesKey("reader_page_mode")
         val PageTurnAnimation = stringPreferencesKey("reader_page_turn_animation")
         val ShelfLayout = stringPreferencesKey("shelf_layout")

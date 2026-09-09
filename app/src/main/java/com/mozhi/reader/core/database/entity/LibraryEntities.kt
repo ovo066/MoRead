@@ -82,6 +82,9 @@ data class BookEntity(
      */
     @ColumnInfo(defaultValue = "NULL")
     val manualReadState: String? = null,
+    /** 已真实抵达书末；与续读坐标分开，回看上一章也不会丢失 100%。 */
+    @ColumnInfo(defaultValue = "0")
+    val reachedEnd: Boolean = false,
     /** 置顶时间戳；0 = 未置顶。置顶书在书架里按此倒序排最前。 */
     @ColumnInfo(defaultValue = "0")
     val pinnedAt: Long = 0,
@@ -115,7 +118,7 @@ fun BookEntity.readState(): BookReadState =
     manualReadState?.let { name -> runCatching { BookReadState.valueOf(name) }.getOrNull() }
         ?: when {
             lastReadAt == 0L -> BookReadState.UNREAD
-            totalChapters > 0 && lastReadChapterIndex >= totalChapters - 1 -> BookReadState.FINISHED
+            reachedEnd -> BookReadState.FINISHED
             else -> BookReadState.READING
         }
 
@@ -360,7 +363,9 @@ data class MessageEntity(
     @ColumnInfo(defaultValue = "-1")
     val sourceScopeChapterIndex: Int = -1,
     @ColumnInfo(defaultValue = "-1")
-    val sourceScopeCharOffset: Int = -1
+    val sourceScopeCharOffset: Int = -1,
+    /** Stable identity shared with the streaming entry before Room publishes the row. */
+    val clientRoundId: String? = null
 )
 
 /** RikkaHub-style assignment: a role points at one concrete model, not a whole provider. */

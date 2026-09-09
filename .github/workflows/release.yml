@@ -82,8 +82,15 @@ jobs:
           TITLE="墨知 ${RELEASE_TAG#v}"
           APK_PATH=$(find dist -maxdepth 1 -type f -name '*.apk' -print -quit)
 
+          NOTES_PATH="docs/releases/${RELEASE_TAG}.md"
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release create "$RELEASE_TAG" --verify-tag --generate-notes --latest --title "$TITLE"
+            if test -s "$NOTES_PATH"; then
+              gh release create "$RELEASE_TAG" --verify-tag --notes-file "$NOTES_PATH" --latest --title "$TITLE"
+            else
+              gh release create "$RELEASE_TAG" --verify-tag --generate-notes --latest --title "$TITLE"
+            fi
+          elif test -s "$NOTES_PATH"; then
+            gh release edit "$RELEASE_TAG" --notes-file "$NOTES_PATH"
           fi
 
           gh release upload "$RELEASE_TAG" "$APK_PATH" --clobber

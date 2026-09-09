@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.History
@@ -38,7 +39,8 @@ internal fun CompanionChatHeader(
     onDismissPersonaMenu: () -> Unit,
     onSelectPersona: (Long) -> Unit,
     onNewConversation: () -> Unit,
-    onShowConversations: () -> Unit
+    onShowConversations: () -> Unit,
+    embedded: Boolean = false
 ) {
     Row(
         modifier = Modifier
@@ -49,8 +51,8 @@ internal fun CompanionChatHeader(
     ) {
         IconButton(onClick = onBack, modifier = Modifier.size(44.dp)) {
             Icon(
-                Icons.AutoMirrored.Outlined.ArrowBack,
-                contentDescription = "返回",
+                if (embedded) Icons.Outlined.Close else Icons.AutoMirrored.Outlined.ArrowBack,
+                contentDescription = if (embedded) "关闭伴读面板" else "返回",
                 tint = palette.onBackground
             )
         }

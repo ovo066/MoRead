@@ -148,8 +148,60 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         when (page) {
             is RenderPage.Laid -> drawBody(canvas, page, annotations, illustrations, transientHighlight)
             is RenderPage.Placeholder -> drawPlaceholder(canvas, page)
+            is RenderPage.Blank -> Unit
         }
         drawFooter(canvas, page, bookProgress, timeText, batteryPercent)
+        return bitmap
+    }
+
+    /** Draw both logical pages directly into the full-width window; no temporary leaf bitmaps. */
+    fun renderSpread(
+        pages: Pair<RenderPage, RenderPage>,
+        into: Bitmap?,
+        geometry: SpreadGeometry,
+        bookProgress: Float,
+        timeText: String,
+        batteryPercent: Int,
+        annotations: List<ReaderAnnotationMark> = emptyList(),
+        illustrations: List<ReaderIllustrationMark> = emptyList(),
+        transientHighlight: TransientHighlightSpan? = null,
+        includeBackground: Boolean = true
+    ): Bitmap {
+        val width = geometry.paneWidth.toInt().coerceAtLeast(1)
+        val height = geometry.paneHeight.toInt().coerceAtLeast(1)
+        val bitmap = into?.takeIf { !it.isRecycled && it.width == width && it.height == height }
+            ?: Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        bitmap.eraseColor(Color.TRANSPARENT)
+        val canvas = Canvas(bitmap)
+        if (includeBackground) drawBackdrop(canvas, width.toFloat(), height.toFloat())
+        for (leaf in Leaf.entries) {
+            val page = if (leaf == Leaf.LEFT) pages.first else pages.second
+            canvas.save()
+            canvas.translate(geometry.originX(leaf), 0f)
+            canvas.clipRect(0f, 0f, geometry.leafWidth, geometry.paneHeight)
+            if (leaf == Leaf.LEFT && page !is RenderPage.Blank) drawHeader(canvas, page)
+            when (page) {
+                is RenderPage.Laid -> drawBody(
+                    canvas, page,
+                    annotations.filter { it.chapterIndex == page.chapterIndex },
+                    illustrations.filter { it.chapterIndex == page.chapterIndex },
+                    transientHighlight?.takeIf { it.chapterIndex == page.chapterIndex }
+                )
+                is RenderPage.Placeholder -> drawPlaceholder(canvas, page)
+                is RenderPage.Blank -> Unit
+            }
+            drawFooter(canvas, page, bookProgress, timeText, batteryPercent, leaf)
+            canvas.restore()
+        }
+        val shade = Paint().apply {
+            shader = android.graphics.LinearGradient(
+                geometry.leafWidth, 0f, geometry.rightOriginX, 0f,
+                intArrayOf(0x00000000, 0x10000000, 0x00000000), null, Shader.TileMode.CLAMP
+            )
+        }
+        canvas.drawRect(geometry.leafWidth, 0f, geometry.rightOriginX, geometry.paneHeight, shade)
+        val spine = Paint().apply { color = pageStyle.mutedColor; alpha = 24; strokeWidth = 1f }
+        canvas.drawLine(geometry.spineX, 0f, geometry.spineX, geometry.paneHeight, spine)
         return bitmap
     }
 
@@ -1051,12 +1103,14 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         page: RenderPage,
         bookProgress: Float,
         timeText: String,
-        batteryPercent: Int
+        batteryPercent: Int,
+        leaf: Leaf? = null
     ) {
         if (!pageStyle.showFooter || (page as? RenderPage.Laid)?.page?.immersive == true) return
         val baseline = pageStyle.footerBaseline
-        val pageText = "${page.pageIndex + 1} / ${page.pageCount} 页"
+        val pageText = com.mozhi.reader.feature.reader.engine.leafPageLabel(page)
         canvas.drawText(pageText, pageStyle.paddingLeft, baseline, tipPaint)
+        if (leaf == Leaf.LEFT) return
 
         val progressText = String.format(Locale.ROOT, "%.1f%%", bookProgress * 100)
         val rightText = "$progressText · $timeText"

@@ -12,6 +12,8 @@ data class AnnotationReplyCount(
     val replyCount: Int
 )
 
+data class AnnotationVisibleCounts(val total: Int, val currentChapter: Int)
+
 @Dao
 interface AnnotationDao {
     @Insert
@@ -54,6 +56,11 @@ interface AnnotationDao {
         fromIndex: Int,
         toIndex: Int
     ): List<AnnotationEntity>
+
+    @Query("SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN chapterIndex = :chapterIndex THEN 1 ELSE 0 END), 0) AS currentChapter " +
+        "FROM annotations WHERE bookId = :bookId AND " + com.mozhi.reader.core.retrieval.AnnotationVisibility.SQL_PREDICATE)
+    suspend fun getVisibleCounts(bookId: Long, chapterIndex: Int, wholeBook: Boolean, maxChapter: Int,
+        maxOffset: Int, whitespace: String): AnnotationVisibleCounts
 
     @Query("SELECT COUNT(*) FROM annotations WHERE bookId = :bookId")
     suspend fun getCountForBook(bookId: Long): Int

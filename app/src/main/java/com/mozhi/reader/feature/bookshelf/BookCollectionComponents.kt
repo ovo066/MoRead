@@ -68,6 +68,7 @@ import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.mozhi.reader.core.database.entity.BookCollectionEntity
 import com.mozhi.reader.core.database.entity.BookEntity
+import com.mozhi.reader.ui.MoReadLayoutPolicy
 import com.mozhi.reader.ui.components.FrostedSurface
 import com.mozhi.reader.ui.components.MoReadMenuItem
 import com.mozhi.reader.ui.components.MoReadStableDropdownMenu
@@ -263,10 +264,8 @@ internal fun CollectionDragOverlay(
         book = book,
         modifier = Modifier
             .offset {
-                IntOffset(
-                    (state.dragBounds.left - origin.x).roundToInt(),
-                    (state.dragBounds.top - origin.y).roundToInt()
-                )
+                val bounds = shelfBoundsInContainer(state.dragBounds, origin)
+                IntOffset(bounds.left.roundToInt(), bounds.top.roundToInt())
             }
             .size(width = width, height = height)
             .graphicsLayer { alpha = 0.92f }
@@ -285,6 +284,7 @@ internal fun CollectionPickerSheet(
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
+        sheetMaxWidth = MoReadLayoutPolicy.SheetMaxWidthDp.dp,
         sheetGesturesEnabled = false,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ) {
@@ -296,7 +296,7 @@ internal fun CollectionPickerSheet(
         ) {
             Text("将 $selectedCount 本书加入合集", style = MaterialTheme.typography.titleLarge)
             LazyVerticalGrid(
-                columns = GridCells.Fixed(3),
+                columns = ShelfGridCells,
                 modifier = Modifier.fillMaxWidth().height(400.dp),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -395,6 +395,7 @@ internal fun CollectionContentsSheet(
     }
     ModalBottomSheet(
         onDismissRequest = onDismiss,
+        sheetMaxWidth = MoReadLayoutPolicy.SheetMaxWidthDp.dp,
         dragHandle = {
             Box(
                 modifier = Modifier.fillMaxWidth().clickable(onClick = onDismiss),
@@ -453,7 +454,7 @@ internal fun CollectionContentsSheet(
                     }
                 }
                 LazyVerticalGrid(
-                    columns = GridCells.Fixed(3),
+                    columns = ShelfGridCells,
                     state = memberGridState,
                     modifier = Modifier
                         .fillMaxWidth()

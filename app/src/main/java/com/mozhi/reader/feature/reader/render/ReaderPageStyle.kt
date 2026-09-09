@@ -136,8 +136,10 @@ class ReaderPageStyle(
             viewWidth: Int,
             viewHeight: Int,
             statusBarPx: Float,
-            navigationBarPx: Float
+            navigationBarPx: Float,
+            columnWidthPx: Float = viewWidth.toFloat()
         ): ReaderPageStyle {
+            val columnInset = ((viewWidth - columnWidthPx.coerceAtLeast(1f)) / 2f).coerceAtLeast(0f)
             val contentSize = with(density) { (BASE_CONTENT_SP * settings.fontScale).sp.toPx() }
             val tipSize = with(density) { TIP_SP.sp.toPx() }
             val headerPadding = with(density) { HEADER_PADDING_DP.dp.toPx() }
@@ -171,8 +173,8 @@ class ReaderPageStyle(
             return ReaderPageStyle(
                 viewWidth = viewWidth,
                 viewHeight = viewHeight,
-                paddingLeft = left,
-                paddingRight = right,
+                paddingLeft = left + columnInset,
+                paddingRight = right + columnInset,
                 headerHeight = if (settings.showHeader) {
                     statusBarPx + headerPadding + tipSize * 1.6f
                 } else {

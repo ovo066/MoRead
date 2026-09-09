@@ -86,12 +86,17 @@ class VectorStoreSpikeTest {
             memory(personaId = 1, summary = "本章后半剧透", x = 1f, y = 0.001f, bookId = 1, sourceChapter = 3, sourceOffset = 100),
             memory(personaId = 1, summary = "后文章节剧透", x = 1f, y = 0.002f, bookId = 1, sourceChapter = 9, sourceOffset = 10),
             memory(personaId = 1, summary = "旧版无来源记忆", x = 1f, y = 0.003f, bookId = 1),
-            memory(personaId = 1, summary = "其他书记忆", x = 1f, y = 0.004f, bookId = 2, sourceChapter = 99, sourceOffset = 10)
+            memory(personaId = 1, summary = "其他书记忆", x = 1f, y = 0.004f, bookId = 2, sourceChapter = 99, sourceOffset = 10),
+            memory(personaId = 1, summary = "全局记忆", x = 1f, y = 0.005f)
         )
 
         val strict = VectorQueries.searchMemories(
             store, 1, direction(1f, 0f), 10,
             null, 0, 1, 3, 50
+        ).map { it.get().summary }
+        val currentBookOnly = VectorQueries.searchMemories(
+            store, 1, direction(1f, 0f), 10,
+            1, 0, 1, 3, 50
         ).map { it.get().summary }
         val wholeBook = VectorQueries.searchMemories(
             store, 1, direction(1f, 0f), 10,
@@ -100,10 +105,14 @@ class VectorStoreSpikeTest {
 
         assertTrue(strict.contains("已读记忆"))
         assertTrue(strict.contains("其他书记忆"))
+        assertTrue(strict.contains("全局记忆"))
         assertFalse(strict.contains("本章后半剧透"))
         assertFalse(strict.contains("后文章节剧透"))
         assertFalse(strict.contains("旧版无来源记忆"))
-        assertEquals(5, wholeBook.size)
+        assertEquals(listOf("已读记忆"), currentBookOnly)
+        assertFalse(currentBookOnly.contains("其他书记忆"))
+        assertFalse(currentBookOnly.contains("全局记忆"))
+        assertEquals(6, wholeBook.size)
     }
 
     /** 维度必须等于 [VectorDb.EMBEDDING_DIMENSIONS]，否则不进 HNSW 索引；前两维承载方向。 */

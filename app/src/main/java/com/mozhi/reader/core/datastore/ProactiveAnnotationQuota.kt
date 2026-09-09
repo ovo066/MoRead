@@ -5,7 +5,6 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
-import androidx.datastore.preferences.core.stringSetPreferencesKey
 import java.time.LocalDate
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -13,7 +12,6 @@ import kotlinx.coroutines.flow.first
 
 data class ProactiveAnnotationQuotaState(
     val epochDay: Long,
-    val attemptedChapters: Set<String> = emptySet(),
     val annotationCount: Int = 0,
     val voiceCount: Int = 0,
     val imageCount: Int = 0
@@ -33,7 +31,6 @@ data class ProactiveAnnotationAllowance(
 internal fun evaluateProactiveAnnotationQuota(
     state: ProactiveAnnotationQuotaState,
     today: Long,
-    chapterKey: String,
     limits: ProactiveAnnotationLimits,
     requestVoice: Boolean,
     requestImages: Boolean
@@ -41,7 +38,7 @@ internal fun evaluateProactiveAnnotationQuota(
     val effective = limits.normalized()
     val current = if (state.epochDay == today) state else ProactiveAnnotationQuotaState(today)
     val dailyExhausted = !effective.dailyUnlimited && current.annotationCount >= effective.dailyMax
-    if (chapterKey in current.attemptedChapters || dailyExhausted) {
+    if (dailyExhausted) {
         return current to ProactiveAnnotationAllowance(accepted = false)
     }
     val allowance = ProactiveAnnotationAllowance(
@@ -64,7 +61,7 @@ internal fun evaluateProactiveAnnotationQuota(
             0
         }
     )
-    return current.copy(attemptedChapters = current.attemptedChapters + chapterKey) to allowance
+    return current to allowance
 }
 
 private fun remaining(
@@ -82,39 +79,12 @@ class ProactiveAnnotationQuota @Inject constructor(
     private val dataStore: DataStore<Preferences>
 ) {
     suspend fun reserve(
-        bookId: Long,
-        chapterIndex: Int,
         limits: ProactiveAnnotationLimits,
         requestVoice: Boolean,
         requestImages: Boolean,
         today: Long = LocalDate.now().toEpochDay()
     ): ProactiveAnnotationAllowance {
-        val chapterKey = "$bookId:$chapterIndex"
-        var result = ProactiveAnnotationAllowance(false)
-        dataStore.edit { preferences ->
-            val state = ProactiveAnnotationQuotaState(
-                epochDay = preferences[DAY] ?: today,
-                attemptedChapters = preferences[ATTEMPTED].orEmpty(),
-                annotationCount = preferences[ANNOTATIONS] ?: 0,
-                voiceCount = preferences[VOICES] ?: 0,
-                imageCount = preferences[IMAGES] ?: 0
-            )
-            val (updated, allowance) = evaluateProactiveAnnotationQuota(
-                state = state,
-                today = today,
-                chapterKey = chapterKey,
-                limits = limits,
-                requestVoice = requestVoice,
-                requestImages = requestImages
-            )
-            result = allowance
-            preferences[DAY] = updated.epochDay
-            preferences[ATTEMPTED] = updated.attemptedChapters
-            preferences[ANNOTATIONS] = updated.annotationCount
-            preferences[VOICES] = updated.voiceCount
-            preferences[IMAGES] = updated.imageCount
-        }
-        return result
+        return evaluateProactiveAnnotationQuota(snapshot(today), today, limits, requestVoice, requestImages).second
     }
 
     suspend fun recordCreated(
@@ -125,12 +95,11 @@ class ProactiveAnnotationQuota @Inject constructor(
     ) {
         dataStore.edit { preferences ->
             if ((preferences[DAY] ?: today) != today) {
-                preferences[DAY] = today
-                preferences[ATTEMPTED] = emptySet()
                 preferences[ANNOTATIONS] = 0
                 preferences[VOICES] = 0
                 preferences[IMAGES] = 0
             }
+            preferences[DAY] = today
             // 计数只累加、按天归零。旧版本会 coerceAtMost 到硬编码的 10/3/3——
             // 限额一旦可配，那种夹值就是错的。
             preferences[ANNOTATIONS] = (preferences[ANNOTATIONS] ?: 0) + annotations
@@ -144,7 +113,6 @@ class ProactiveAnnotationQuota @Inject constructor(
         if ((preferences[DAY] ?: today) != today) return ProactiveAnnotationQuotaState(today)
         return ProactiveAnnotationQuotaState(
             epochDay = today,
-            attemptedChapters = preferences[ATTEMPTED].orEmpty(),
             annotationCount = preferences[ANNOTATIONS] ?: 0,
             voiceCount = preferences[VOICES] ?: 0,
             imageCount = preferences[IMAGES] ?: 0
@@ -153,7 +121,6 @@ class ProactiveAnnotationQuota @Inject constructor(
 
     private companion object {
         val DAY = longPreferencesKey("proactive_annotation_epoch_day")
-        val ATTEMPTED = stringSetPreferencesKey("proactive_annotation_attempted_chapters")
         val ANNOTATIONS = intPreferencesKey("proactive_annotation_daily_count")
         val VOICES = intPreferencesKey("proactive_annotation_daily_voice_count")
         val IMAGES = intPreferencesKey("proactive_annotation_daily_image_count")

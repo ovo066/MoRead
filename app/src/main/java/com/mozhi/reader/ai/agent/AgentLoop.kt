@@ -16,6 +16,7 @@ import com.mozhi.reader.core.database.entity.MessageEntity
 import com.mozhi.reader.core.database.entity.ModelRole
 import com.mozhi.reader.core.library.AttachmentStore
 import com.mozhi.reader.core.library.MessageAttachment
+import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
@@ -27,6 +28,9 @@ import kotlinx.serialization.json.jsonObject
 
 /** What the UI sees while the agent works. */
 sealed interface AgentEvent {
+    /** Identity allocated before the first token AND before the database insert. */
+    data class RoundStarted(val roundId: String) : AgentEvent
+
     /** Incremental assistant text of the current round. */
     data class Text(val text: String) : AgentEvent
 
@@ -230,6 +234,8 @@ class AgentLoop @Inject constructor(
         var producedText = false
 
         repeat(MAX_ROUNDS) { round ->
+            val roundId = UUID.randomUUID().toString()
+            emit(AgentEvent.RoundStarted(roundId))
             val text = StringBuilder()
             // 思维链按轮累积：它属于「这一条回复是怎么想出来的」，跟着该轮的 assistant 消息落库。
             val reasoning = StringBuilder()
@@ -256,7 +262,8 @@ class AgentLoop @Inject constructor(
                         conversationId = conversationId,
                         content = reply,
                         toolCalls = emptyList(),
-                        reasoning = reasoning.toString()
+                        reasoning = reasoning.toString(),
+                        clientRoundId = roundId
                     )?.let { message ->
                         emit(AgentEvent.RoundCommitted(message))
                     }
@@ -269,7 +276,8 @@ class AgentLoop @Inject constructor(
                 conversationId = conversationId,
                 content = text.toString(),
                 toolCalls = requested,
-                reasoning = reasoning.toString()
+                reasoning = reasoning.toString(),
+                clientRoundId = roundId
             )
             if (committedMessage != null) {
                 emit(AgentEvent.RoundCommitted(committedMessage))
@@ -325,8 +333,10 @@ class AgentLoop @Inject constructor(
 
             if (round == MAX_ROUNDS - 1) {
                 val notice = "（已达到单轮工具调用上限，回复基于目前掌握的信息）"
+                val noticeRoundId = UUID.randomUUID().toString()
+                emit(AgentEvent.RoundStarted(noticeRoundId))
                 emit(AgentEvent.Text(notice))
-                persistAssistant(conversationId, notice, emptyList())?.let { message ->
+                persistAssistant(conversationId, notice, emptyList(), clientRoundId = noticeRoundId)?.let { message ->
                     emit(AgentEvent.RoundCommitted(message))
                 }
             }
@@ -337,7 +347,8 @@ class AgentLoop @Inject constructor(
         conversationId: Long,
         content: String,
         toolCalls: List<ToolCall>,
-        reasoning: String = ""
+        reasoning: String = "",
+        clientRoundId: String
     ): MessageEntity? {
         if (content.isBlank() && toolCalls.isEmpty()) return null
         val now = System.currentTimeMillis()
@@ -349,7 +360,8 @@ class AgentLoop @Inject constructor(
                 ?.let { AiJson.encodeToString(ListSerializer(ToolCall.serializer()), it) },
             // 空串存 null：界面据「是否为 null」决定整条思维链条要不要出现。
             reasoningContent = reasoning.takeIf(String::isNotBlank)?.take(MAX_REASONING_CHARS),
-            createdAt = now
+            createdAt = now,
+            clientRoundId = clientRoundId
         )
         val messageId = chatDao.insertMessage(message)
         chatDao.touchConversation(conversationId, now)

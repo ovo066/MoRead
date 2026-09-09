@@ -37,7 +37,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
@@ -130,6 +129,8 @@ import com.mozhi.reader.core.datastore.ShelfLayout
 import com.mozhi.reader.core.library.BookReadSpan
 import com.mozhi.reader.core.library.readFraction
 import com.mozhi.reader.core.library.readPercent
+import com.mozhi.reader.ui.MoReadLayoutPolicy
+import com.mozhi.reader.ui.rememberMoReadWindowWidth
 import com.mozhi.reader.ui.components.FrostedSurface
 import com.mozhi.reader.ui.components.MoReadMenuDivider
 import com.mozhi.reader.ui.components.MoReadMenuExpandableItem
@@ -182,6 +183,7 @@ fun BookshelfScreen(
     var dissolveCollection by remember { mutableStateOf<BookCollectionEntity?>(null) }
     var deleteSelected by remember { mutableStateOf(false) }
     var rootSize by remember { mutableStateOf(IntSize.Zero) }
+    var rootOrigin by remember { mutableStateOf(Offset.Zero) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
     val collectionDragState = remember { ShelfCollectionDragState() }
     val context = LocalContext.current
@@ -340,6 +342,7 @@ fun BookshelfScreen(
         modifier = Modifier
             .fillMaxSize()
             .onSizeChanged { rootSize = it }
+            .onGloballyPositioned { rootOrigin = it.boundsInRoot().topLeft }
     ) {
         // 长按浮层出现时内容整体虚化（API 31+；以下靠更重的压暗兜底）。
         val blurRadius by animateDpAsState(
@@ -349,6 +352,8 @@ fun BookshelfScreen(
         )
         Box(
             modifier = Modifier
+                .align(Alignment.TopCenter)
+                .widthIn(max = MoReadLayoutPolicy.LibraryMaxWidthDp.dp)
                 .fillMaxSize()
                 .blur(blurRadius, BlurredEdgeTreatment.Unbounded)
                 .padding(contentPadding)
@@ -435,12 +440,12 @@ fun BookshelfScreen(
             }
         }
 
-        CollectionDragOverlay(collectionDragState)
+        CollectionDragOverlay(collectionDragState, origin = rootOrigin)
 
         longPressTarget?.let { target ->
             BackHandler { longPressTarget = null }
             BookLongPressOverlay(
-                target = target,
+                target = target.copy(bounds = shelfBoundsInContainer(target.bounds, rootOrigin)),
                 readSpan = state.readSpans[target.book.id],
                 rootSize = rootSize,
                 onDismiss = { longPressTarget = null },
@@ -640,6 +645,7 @@ private fun ImportMethodSheet(
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
+        sheetMaxWidth = MoReadLayoutPolicy.SheetMaxWidthDp.dp,
         sheetState = rememberModalBottomSheetState()
     ) {
         Column(
@@ -712,7 +718,10 @@ private fun ImportMethodRow(
 private fun EmptyBookshelfFeed(onImport: () -> Unit) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 20.dp, top = 18.dp, end = 20.dp, bottom = 124.dp),
+        contentPadding = PaddingValues(
+            start = 20.dp, top = 18.dp, end = 20.dp,
+            bottom = MoReadLayoutPolicy.rootBottomPaddingDp(rememberMoReadWindowWidth()).dp
+        ),
         verticalArrangement = Arrangement.spacedBy(24.dp)
     ) {
         item { GreetingHeader() }
@@ -753,12 +762,15 @@ private fun BookGrid(
         )
     }
     LazyVerticalGrid(
-        columns = GridCells.Fixed(3),
+        columns = ShelfGridCells,
         state = gridState,
         modifier = Modifier
             .fillMaxSize()
             .onGloballyPositioned { collectionDragState.setViewport(it.boundsInRoot()) },
-        contentPadding = PaddingValues(start = 20.dp, top = 18.dp, end = 20.dp, bottom = 124.dp),
+        contentPadding = PaddingValues(
+            start = 20.dp, top = 18.dp, end = 20.dp,
+            bottom = MoReadLayoutPolicy.rootBottomPaddingDp(rememberMoReadWindowWidth()).dp
+        ),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
@@ -857,7 +869,10 @@ private fun BookList(
         modifier = Modifier
             .fillMaxSize()
             .onGloballyPositioned { collectionDragState.setViewport(it.boundsInRoot()) },
-        contentPadding = PaddingValues(start = 20.dp, top = 18.dp, end = 20.dp, bottom = 124.dp),
+        contentPadding = PaddingValues(
+            start = 20.dp, top = 18.dp, end = 20.dp,
+            bottom = MoReadLayoutPolicy.rootBottomPaddingDp(rememberMoReadWindowWidth()).dp
+        ),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         item {

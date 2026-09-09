@@ -5,6 +5,16 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProactiveAnnotationLimitsTest {
+    @Test fun timingCodecDefaultsAndBoundsAreMigrationSafe() {
+        val legacy = ProactiveAnnotationLimitsCodec.decodeGlobal("{}")
+        assertEquals(ProactiveAnnotationTiming.AFTER_CHAPTER_COMPLETE, legacy.timing)
+        assertEquals(0, legacy.aheadChapters)
+        assertEquals(0, legacy.copy(aheadChapters = -5).normalized().aheadChapters)
+        val value = legacy.copy(timing = ProactiveAnnotationTiming.ON_CHAPTER_ENTRY, aheadChapters = 50).normalized()
+        assertEquals(5, value.aheadChapters)
+        assertEquals(value, ProactiveAnnotationLimitsCodec.decodeGlobal(ProactiveAnnotationLimitsCodec.encodeGlobal(value)))
+    }
+
 
     @Test
     fun normalizeKeepsLowerBoundUnderUpperBound() {

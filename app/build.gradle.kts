@@ -44,8 +44,8 @@ android {
         minSdk = 26
         targetSdk = 37
         // 测试期曾发过仓库外的高编号包，编号跳档保证覆盖安装不降级。
-        versionCode = 70
-        versionName = "1.0.7"
+        versionCode = 71
+        versionName = "1.0.8"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
 
@@ -197,6 +197,8 @@ dependencies {
     annotationProcessor(libs.objectbox.processor)
 
     testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
+    testImplementation("androidx.compose.ui:ui-test-junit4")
     testImplementation("io.mockk:mockk:1.14.6")
     testImplementation(libs.kotlinx.coroutines.test)
     // 桌面原生库：让向量检索可以在本机 JVM 单测里真跑（Windows 开发机 / Linux CI）。

@@ -103,6 +103,7 @@ internal fun TypographyMainPanel(
     onEditCustomTheme: (CustomReaderTheme) -> Unit,
     onCreateCustomTheme: () -> Unit
 ) {
+    WidePageLayoutControl(settings, palette, actions)
     TypographySliderRow(
         startLabel = "暗",
         endLabel = "亮",
@@ -372,10 +373,12 @@ internal fun TypographyToggleButton(
     text: String,
     selected: Boolean,
     palette: ReaderPalette,
+    enabled: Boolean = true,
     onClick: () -> Unit
 ) {
     Surface(
         onClick = onClick,
+        enabled = enabled,
         shape = CircleShape,
         color = if (selected) palette.accentContainer else Color.Transparent,
         contentColor = if (selected) palette.accent else palette.muted,
@@ -829,6 +832,7 @@ internal fun PageTurnPage(
     palette: ReaderPalette,
     actions: ReaderTypographyActions
 ) {
+    WidePageLayoutControl(settings, palette, actions)
     val paginated = settings.pageMode == PageMode.PAGINATED
     Text("翻页方式", style = MaterialTheme.typography.labelMedium, color = palette.muted)
     PageTurnAnimation.entries.forEach { animation ->
@@ -856,6 +860,38 @@ internal fun PageTurnPage(
         settings.volumeKeysPageTurn,
         palette,
         actions.onVolumeKeysPageTurnChange
+    )
+}
+
+@Composable
+private fun WidePageLayoutControl(
+    settings: ReaderSettings,
+    palette: ReaderPalette,
+    actions: ReaderTypographyActions
+) {
+    if (com.mozhi.reader.ui.rememberMoReadWindowWidth() != com.mozhi.reader.ui.MoReadWindowWidth.EXPANDED) return
+    val paginated = settings.pageMode == PageMode.PAGINATED
+    Text("宽屏排版", style = MaterialTheme.typography.labelMedium, color = palette.muted)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        com.mozhi.reader.core.datastore.WidePageLayout.entries.forEach { layout ->
+            TypographyToggleButton(
+                text = if (layout == com.mozhi.reader.core.datastore.WidePageLayout.SINGLE) "单页" else "双页",
+                selected = settings.widePageLayout == layout,
+                palette = palette,
+                enabled = paginated
+            ) { actions.onWidePageLayoutChange(layout) }
+        }
+    }
+    Text(
+        text = when {
+            !paginated -> "滚动始终单栏"
+            settings.widePageLayout == com.mozhi.reader.core.datastore.WidePageLayout.DUAL && !actions.spreadActive ->
+                "当前宽度不足，暂按单页显示"
+            actions.spreadActive -> "双页 · 当前生效，仿真以书脊为轴翻动单张书页"
+            else -> "阅读区至少 720dp 时可用双页；宽度变化会保留阅读位置"
+        },
+        style = MaterialTheme.typography.labelSmall,
+        color = palette.muted
     )
 }
 

@@ -337,6 +337,7 @@ private class GetReadingProgressTool(
         val book = libraryRepository.getBook(bookId) ?: return "未找到当前书籍"
         val currentIndex = book.lastReadChapterIndex.coerceAtLeast(0)
         val notes = noteRepository.getForBook(bookId)
+        val visibleAnnotations = annotationRepository.getVisibleCounts(bookId, currentIndex, readingScope)
         return formatProgressOverview(
             overview = ProgressOverview(
                 book = book,
@@ -351,8 +352,8 @@ private class GetReadingProgressTool(
                 readingDays = libraryRepository.getReadingDays(bookId),
                 noteCount = notes.count { it.kind == NoteRepository.KIND_NOTE },
                 plotSummaries = notes.filter { it.kind == NoteRepository.KIND_PLOT_SUMMARY },
-                annotationCount = annotationRepository.getCountForBook(bookId),
-                currentChapterAnnotationCount = annotationRepository.getCountForChapter(bookId, currentIndex),
+                annotationCount = visibleAnnotations.total,
+                currentChapterAnnotationCount = visibleAnnotations.currentChapter,
                 bookmarkCount = libraryRepository.getBookmarks(bookId).size
             ),
             readingScope = readingScope

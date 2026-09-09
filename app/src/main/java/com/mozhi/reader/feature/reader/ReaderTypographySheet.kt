@@ -150,7 +150,9 @@ data class ReaderTypographyActions(
     val onVolumeKeysPageTurnChange: (Boolean) -> Unit,
     val onChineseConversionModeChange: (ChineseConversionMode) -> Unit,
     /** [com.mozhi.reader.core.datastore.FOLLOW_SYSTEM_BRIGHTNESS] 或 0..1。 */
-    val onScreenBrightnessChange: (Float) -> Unit
+    val onScreenBrightnessChange: (Float) -> Unit,
+    val onWidePageLayoutChange: (com.mozhi.reader.core.datastore.WidePageLayout) -> Unit = {},
+    val spreadActive: Boolean = false
 )
 
 /** 待编辑的自定义主题草稿；[slot] 决定保存后应用到日间还是夜间。 */

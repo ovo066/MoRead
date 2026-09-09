@@ -188,6 +188,13 @@ fun ReaderScreen(
     val selectionMediaState by selectionMediaViewModel.uiState.collectAsStateWithLifecycle()
     val listenState by listenViewModel.state.collectAsStateWithLifecycle()
     val sleepTimer by listenViewModel.sleepTimer.collectAsStateWithLifecycle()
+    val wideWindow = com.mozhi.reader.ui.rememberMoReadWindowWidth() ==
+        com.mozhi.reader.ui.MoReadWindowWidth.EXPANDED
+    val companionPaneVisible = wideWindow && state.settings.companionSidePaneEnabled
+    val openCompanion: () -> Unit = {
+        if (wideWindow) viewModel.setCompanionSidePaneEnabled(!companionPaneVisible)
+        else onOpenCompanionChat(bookId)
+    }
     val snackbarHostState = remember { SnackbarHostState() }
     var activeSheet by remember { mutableStateOf<ReaderSheet?>(null) }
     // 排版细调走屏幕中央的悬浮卡片，不是弹层里的又一张二级页：那一类设置每改一格都要看重排，
@@ -206,6 +213,7 @@ fun ReaderScreen(
     var textRuleDraft by remember { mutableStateOf<ReaderTextReplacementRule?>(null) }
     var aiTextRuleDialogVisible by remember { mutableStateOf(false) }
     var hardwarePageTurnRequest by remember { mutableStateOf<ReaderPageTurnRequest?>(null) }
+    var spreadActive by remember { mutableStateOf(false) }
     var pendingFont by remember { mutableStateOf<PendingReaderFont?>(null) }
     var pendingFontName by remember { mutableStateOf("") }
     var chromeVisible by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(true) }
@@ -282,13 +290,30 @@ fun ReaderScreen(
         ActivityResultContracts.GetContent()
     ) { uri -> uri?.let(viewModel::importCustomFont) }
 
+    // A cancelled automatic turn must not undo a newer manual navigation. Once its source is
+    // ready, sync listening to that newer anchor instead of retrying the obsolete sentence.
+    var pendingManualListenSync by remember { mutableStateOf<Int?>(null) }
+    LaunchedEffect(pendingManualListenSync, state.isContentReady, state.contentRevision) {
+        if (pendingManualListenSync == null || !state.isContentReady || !listeningThisBook) return@LaunchedEffect
+        val controller = viewModel.contentController
+        val generation = controller.navigationGeneration
+        val chapter = controller.chapterIndex
+        val offset = controller.charOffset
+        val sourceOffset = viewModel.sourceOffsetForDisplayed(chapter, offset) ?: return@LaunchedEffect
+        if (generation == controller.navigationGeneration && listenViewModel.state.value?.bookId == bookId) {
+            listenViewModel.seekTo(chapter, sourceOffset)
+            pendingManualListenSync = null
+        }
+    }
+
     // 听书自动翻页：朗读句越过当前页边界时，直接跳到句首所在页（无翻页动画）。
     LaunchedEffect(
         listeningThisBook,
         scrollMode,
         currentListenRange,
         listenState?.isPlaying,
-        pendingListenFollow
+        pendingListenFollow,
+        state.contentRevision
     ) {
         if (!listeningThisBook) {
             pendingListenFollow = null
@@ -298,11 +323,11 @@ fun ReaderScreen(
             pendingListenFollow = null
             return@LaunchedEffect
         }
+        if (pendingManualListenSync != null) return@LaunchedEffect
         pendingListenFollow?.let { pending ->
-            pendingListenFollow = acknowledgeReaderListenFollow(
-                pending,
-                viewModel.isShowingPosition(pending.chapterIndex, pending.displayOffset)
-            )
+            val showing = viewModel.isShowingPosition(pending.chapterIndex, pending.displayOffset)
+            pendingListenFollow = acknowledgeReaderListenFollow(pending, showing)
+            if (showing) viewModel.focusReadingPosition(pending.chapterIndex, pending.displayOffset)
             return@LaunchedEffect
         }
         currentListenRange?.let { presented ->
@@ -311,7 +336,33 @@ fun ReaderScreen(
                     chapterIndex = presented.chapterIndex,
                     displayOffset = presented.range.start
                 )
-                viewModel.goToPosition(presented.chapterIndex, presented.range.start)
+                if (viewModel.canTurnToListeningPosition(presented.chapterIndex, presented.range.start)) {
+                    hardwarePageTurnRequest = ReaderPageTurnRequest(
+                        sequence = (hardwarePageTurnRequest?.sequence ?: 0) + 1,
+                        direction = PageTurnDirection.NEXT,
+                        focusTarget = presented.chapterIndex to presented.range.start,
+                        navigationGeneration = viewModel.contentController.navigationGeneration,
+                        sourceGeneration = viewModel.contentController.sourceGeneration,
+                        onFinished = { result ->
+                            if (result == ReaderTurnResult.CANCELLED) {
+                                pendingManualListenSync = viewModel.contentController.navigationGeneration
+                                pendingListenFollow = null
+                            } else {
+                                if (!viewModel.isShowingPosition(presented.chapterIndex, presented.range.start)) {
+                                    viewModel.goToPosition(presented.chapterIndex, presented.range.start)
+                                }
+                                viewModel.focusReadingPosition(presented.chapterIndex, presented.range.start)
+                                if (viewModel.isShowingPosition(presented.chapterIndex, presented.range.start)) {
+                                    pendingListenFollow = null
+                                }
+                            }
+                        }
+                    )
+                } else {
+                    viewModel.goToPosition(presented.chapterIndex, presented.range.start)
+                }
+            } else {
+                viewModel.focusReadingPosition(presented.chapterIndex, presented.range.start)
             }
         }
     }
@@ -441,38 +492,49 @@ fun ReaderScreen(
         }
     }
     // AI 批注开关只影响阅读页渲染；关闭时角色划线与标记不再出现（详情页仍可回顾）
-    val visibleAnnotations = remember(state.annotations, state.showAiAnnotations) {
-        if (state.showAiAnnotations) {
-            state.annotations
-        } else {
-            state.annotations.filter { it.personaId == null }
+    val annotationScope = state.book?.let {
+        com.mozhi.reader.core.retrieval.ReadingScopeResolver.resolve(companionState.spoilerProtectionEnabled, it)
+    } ?: com.mozhi.reader.core.retrieval.ReadingScope.upto(0, 0)
+    val visibleAnnotations = remember(state.annotations, state.showAiAnnotations, annotationScope) {
+        state.annotations.filter { annotation ->
+            (state.showAiAnnotations || annotation.personaId == null) &&
+                com.mozhi.reader.core.retrieval.AnnotationVisibility.isVisible(annotation, annotationScope)
         }
     }
     val markKey = conversionMode
-    val annotationMarks = remember(
-        visibleAnnotations,
-        state.repliedAnnotationIds,
-        state.contentRevision,
-        markKey
-    ) {
-        visibleAnnotations.mapNotNull { annotation ->
-            val range = viewModel.resolveAnnotationRange(annotation) ?: return@mapNotNull null
-            ReaderAnnotationMark(
-                id = annotation.id,
-                chapterIndex = annotation.chapterIndex,
-                startCharOffset = range.start,
-                endCharOffset = range.end,
-                hasComment = annotation.note.isNotBlank() ||
-                    annotation.id in state.repliedAnnotationIds,
-                style = annotation.style,
-                colorTag = annotation.colorTag.ifBlank {
-                    annotation.personaId?.let(AnnotationColors::forPersona).orEmpty()
+    // Source identity, not contentRevision (which advances on every page turn), owns range work.
+    // At most three chapters are resolved; each chapter has an independent Compose cache.
+    val annotationsByChapter = remember(visibleAnnotations) { visibleAnnotations.groupBy { it.chapterIndex } }
+    val annotationMarks = ((state.currentChapterIndex - 1)..(state.currentChapterIndex + 1)).flatMap { chapter ->
+        androidx.compose.runtime.key(chapter) {
+            val chapterAnnotations = annotationsByChapter[chapter].orEmpty()
+            val repliedIds = state.repliedAnnotationIds.intersect(chapterAnnotations.map { it.id }.toSet())
+            val source = viewModel.contentController.chapterSource(chapter)
+            remember(chapterAnnotations, repliedIds, source, markKey) {
+                chapterAnnotations.mapNotNull { annotation ->
+                    val range = viewModel.resolveAnnotationRange(annotation) ?: return@mapNotNull null
+                    ReaderAnnotationMark(
+                        id = annotation.id,
+                        chapterIndex = annotation.chapterIndex,
+                        startCharOffset = range.start,
+                        endCharOffset = range.end,
+                        hasComment = annotation.note.isNotBlank() || annotation.id in repliedIds,
+                        style = annotation.style,
+                        colorTag = annotation.colorTag.ifBlank {
+                            annotation.personaId?.let(AnnotationColors::forPersona).orEmpty()
+                        }
+                    )
                 }
-            )
+            }
         }
     }
-    val illustrationMarks = remember(state.illustrations, state.contentRevision, markKey) {
-        state.illustrations.mapNotNull { illustration ->
+    val visibleIllustrations = remember(state.illustrations, state.annotations, annotationScope) {
+        state.illustrations.filter {
+            com.mozhi.reader.core.retrieval.AnnotationVisibility.isIllustrationVisible(it, state.annotations, annotationScope)
+        }
+    }
+    val illustrationMarks = remember(visibleIllustrations, state.contentRevision, markKey) {
+        visibleIllustrations.mapNotNull { illustration ->
             val chapter = illustration.chapterIndex ?: return@mapNotNull null
             val range = viewModel.resolveIllustrationRange(illustration) ?: return@mapNotNull null
             ReaderIllustrationMark(
@@ -495,7 +557,7 @@ fun ReaderScreen(
         viewModel.contentController.setInlineMarkers(reservations)
     }
     val threadAnnotations = annotationThread?.let { key ->
-        state.annotations.filter { it.id in key.annotationIds }
+        visibleAnnotations.filter { it.id in key.annotationIds }
     }.orEmpty()
 
     LaunchedEffect(bookId) { companionViewModel.bind(bookId) }
@@ -571,9 +633,14 @@ fun ReaderScreen(
         }
     }
     DisposableEffect(lifecycleOwner, viewModel) {
+        viewModel.setReaderVisible(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_START -> readerStarted = true
+                Lifecycle.Event.ON_RESUME -> {
+                    viewModel.setReaderVisible(true)
+                }
+                Lifecycle.Event.ON_PAUSE -> viewModel.setReaderVisible(false)
                 Lifecycle.Event.ON_STOP -> {
                     readerStarted = false
                     viewModel.flushProgress()
@@ -584,6 +651,7 @@ fun ReaderScreen(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
+            viewModel.setReaderVisible(false)
             viewModel.onReaderPaused()
             viewModel.flushProgress()
         }
@@ -653,6 +721,8 @@ fun ReaderScreen(
         onDeleteSyntaxRule = viewModel::deleteSyntaxHighlightRule,
         onAnimationChange = viewModel::setPageTurnAnimation,
         onPageModeChange = viewModel::setPageMode,
+        onWidePageLayoutChange = viewModel::setWidePageLayout,
+        spreadActive = spreadActive && !scrollMode,
         onKeepScreenOnChange = viewModel::setKeepScreenOn,
         onImmersiveReadingChange = viewModel::setImmersiveReading,
         onVolumeKeysPageTurnChange = viewModel::setVolumeKeysPageTurn,
@@ -660,10 +730,31 @@ fun ReaderScreen(
         onScreenBrightnessChange = viewModel::setScreenBrightness
     )
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(palette.background)
+    BackHandler(enabled = companionPaneVisible && activeSheet == null && !detailsVisible && !typographyCardVisible) {
+        viewModel.setCompanionSidePaneEnabled(false)
+    }
+    ReaderCompanionLayout(
+        companionVisible = companionPaneVisible,
+        modifier = Modifier.fillMaxSize().background(palette.background),
+        companion = {
+            CompanionChatPane(
+                bookId = bookId,
+                onClose = { viewModel.setCompanionSidePaneEnabled(false) },
+                companionViewModel = companionViewModel,
+                mediaViewModel = selectionMediaViewModel,
+                onLocateInBook = { chapter, start, end, anchor ->
+                    coroutineScope.launch {
+                        val range = viewModel.resolveSourceRange(chapter, start, end, anchor)
+                        if (range != null) {
+                            viewModel.goToPosition(chapter, range.start)
+                            locateHighlight = com.mozhi.reader.feature.reader.engine.TransientHighlightSpan(
+                                chapterIndex = chapter, startCharOffset = range.start, endCharOffset = range.end
+                            )
+                        }
+                    }
+                }
+            )
+        }
     ) {
         when {
             state.errorMessage != null -> ReaderError(
@@ -712,7 +803,7 @@ fun ReaderScreen(
                     annotationThread = AnnotationThreadKey(ids.toSet())
                 }
                 val paneIllustrationClick: (List<Long>) -> Unit = { ids ->
-                    state.illustrations.firstOrNull { it.id in ids }?.let { illustration ->
+                    visibleIllustrations.firstOrNull { it.id in ids }?.let { illustration ->
                         selectionMediaViewModel.showSavedImage(
                             illustration.imagePath,
                             illustration.prompt
@@ -760,6 +851,7 @@ fun ReaderScreen(
                 if (scrollMode) {
                     ReaderScrollPane(
                         controller = viewModel.contentController,
+                        holder = viewModel.scrollPaneHolder,
                         settings = readerSettings,
                         palette = palette,
                         enabled = paneEnabled,
@@ -786,6 +878,7 @@ fun ReaderScreen(
                 } else {
                     ReaderPane(
                         controller = viewModel.contentController,
+                        holder = viewModel.paneHolder,
                         settings = readerSettings,
                         palette = palette,
                         enabled = paneEnabled,
@@ -803,6 +896,10 @@ fun ReaderScreen(
                         onImageAction = paneImageAction,
                         onEditText = paneEditText,
                         pageTurnRequest = hardwarePageTurnRequest,
+                        onSpreadModeChanged = { spreadActive = it },
+                        onVisiblePagesDrawn = { snapshot ->
+                            if (contentVisible && readerStarted) viewModel.markVisiblePageRead(snapshot)
+                        },
                         onCenterTap = { chromeVisible = !chromeVisible },
                         onBoundary = viewModel::onBoundaryHit,
                         modifier = Modifier.fillMaxSize()
@@ -837,6 +934,9 @@ fun ReaderScreen(
                 bookTitle = state.book?.title ?: stringResource(R.string.app_name),
                 chapterTitle = chapterTitle.ifBlank { "正在载入" },
                 chapterProgress = state.chapterProgress,
+                pageLabel = if (spreadActive && !scrollMode) {
+                    com.mozhi.reader.feature.reader.engine.spreadPageLabel(state.pageIndex, state.pageCount)
+                } else null,
                 palette = palette,
                 onBack = onBack,
                 onOpenDetails = {
@@ -874,7 +974,7 @@ fun ReaderScreen(
                         }
                     }
                 },
-                onCompanion = { onOpenCompanionChat(bookId) },
+                onCompanion = openCompanion,
                 onSearch = { activeSheet = ReaderSheet.SEARCH },
                 onReidentifyChapters = { activeSheet = ReaderSheet.REIDENTIFY_CHAPTERS },
                 onTextReplacementRules = { activeSheet = ReaderSheet.TEXT_REPLACEMENT_RULES }
@@ -907,11 +1007,28 @@ fun ReaderScreen(
             )
         }
 
+        state.annotationNotice?.takeIf { contentVisible && !detailsVisible && activeSheet == null }?.let { notice ->
+            ReaderAnnotationNoticeCapsule(
+                result = notice.result,
+                message = notice.message,
+                annotations = visibleAnnotations,
+                readingScope = annotationScope,
+                palette = palette,
+                onView = { annotation ->
+                    // The target is already source-scope eligible; never navigate to an unread note.
+                    val range = viewModel.resolveAnnotationRange(annotation)
+                    if (range != null) viewModel.goToPosition(annotation.chapterIndex, range.start)
+                    annotationThread = AnnotationThreadKey(setOf(annotation.id))
+                },
+                onDismiss = viewModel::dismissAnnotationNotice,
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 44.dp, start = 16.dp, end = 16.dp)
+            )
+        }
         DraggableCompanionOrb(
             persona = companionState.activePersona,
             palette = palette,
             visible = !detailsVisible && contentVisible,
-            onClick = { onOpenCompanionChat(bookId) },
+            onClick = openCompanion,
             interactionSignal = state.currentChapterIndex * 10_000 + state.pageIndex
         )
 
@@ -944,7 +1061,7 @@ fun ReaderScreen(
         val activeInkFloater = inkFloater
         ReaderAnnotationInkOverlay(
             annotation = activeInkFloater?.let { floater ->
-                state.annotations.firstOrNull { it.id == floater.annotationId }
+                visibleAnnotations.firstOrNull { it.id == floater.annotationId }
             },
             topPx = activeInkFloater?.topPx,
             palette = palette,
@@ -1254,7 +1371,7 @@ fun ReaderScreen(
                 streaming = discussionState.streaming,
                 error = discussionState.error,
                 personas = companionState.personas,
-                illustrations = state.illustrations,
+                illustrations = visibleIllustrations,
                 palette = palette,
                 onPlayAudio = selectionMediaViewModel::playCachedSpeech,
                 onSend = { target, text, respondPersonaId ->

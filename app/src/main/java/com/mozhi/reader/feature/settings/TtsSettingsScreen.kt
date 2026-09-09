@@ -1,5 +1,14 @@
 package com.mozhi.reader.feature.settings
 
+import com.mozhi.reader.ui.components.committedDraft
+import com.mozhi.reader.ui.components.rememberCommittedTextFieldState
+import com.mozhi.reader.ui.components.rememberCommittedDrafts
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -60,6 +69,23 @@ fun TtsSettingsScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val settings = state.settings
+    val drafts = rememberCommittedDrafts()
+    val focusManager = LocalFocusManager.current
+    val systemLanguageTagDraft = rememberCommittedTextFieldState(drafts, "systemLanguageTag", settings.systemLanguageTag,
+        trim = true, onCommit = viewModel::setSystemLanguage)
+    val aiBaseUrlDraft = rememberCommittedTextFieldState(drafts, "aiBaseUrl", settings.aiBaseUrl,
+        trim = true, onCommit = viewModel::setAiBaseUrl)
+    val aiGroupIdDraft = rememberCommittedTextFieldState(drafts, "aiGroupId", settings.aiGroupId,
+        trim = true, onCommit = viewModel::setAiGroupId)
+    val aiModelDraft = rememberCommittedTextFieldState(drafts, "aiModel", settings.aiModel,
+        trim = true, onCommit = viewModel::setAiModel)
+    val aiVoiceIdDraft = rememberCommittedTextFieldState(drafts, "aiVoiceId", settings.aiVoiceId,
+        trim = true, onCommit = viewModel::setAiVoice)
+    val saveGate = rememberDraftSaveGate(drafts, viewModel::flushPendingWrites, viewModel::discardFailedWrites)
+    fun afterDrafts(action: () -> Unit) { saveGate.run(action = action) }
+    fun leaveAfterDrafts(action: () -> Unit) { saveGate.run(navigation = true, action = action) }
+    BackHandler { leaveAfterDrafts(onBack) }
+    DraftSaveDialogs(saveGate)
 
     MoReadBackdrop {
         Column(
@@ -73,7 +99,7 @@ fun TtsSettingsScreen(
                     .padding(horizontal = 4.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = onBack) {
+                IconButton(onClick = { leaveAfterDrafts(onBack) }) {
                     Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回")
                 }
                 Text(
@@ -82,8 +108,8 @@ fun TtsSettingsScreen(
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier.weight(1f)
                 )
-                TextButton(onClick = onOpenVoiceLibrary) { Text("音色库") }
-                TextButton(onClick = onOpenSpeechCache) { Text("缓存") }
+                TextButton(onClick = { leaveAfterDrafts(onOpenVoiceLibrary) }) { Text("音色库") }
+                TextButton(onClick = { leaveAfterDrafts(onOpenSpeechCache) }) { Text("缓存") }
             }
 
             Column(
@@ -97,12 +123,12 @@ fun TtsSettingsScreen(
                 SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                     SegmentedButton(
                         selected = settings.engineMode == TtsEngineMode.SYSTEM,
-                        onClick = { viewModel.setEngineMode(TtsEngineMode.SYSTEM) },
+                        onClick = { afterDrafts { viewModel.setEngineMode(TtsEngineMode.SYSTEM) } },
                         shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
                     ) { Text("系统 TTS") }
                     SegmentedButton(
                         selected = settings.engineMode == TtsEngineMode.AI,
-                        onClick = { viewModel.setEngineMode(TtsEngineMode.AI) },
+                        onClick = { afterDrafts { viewModel.setEngineMode(TtsEngineMode.AI) } },
                         shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
                     ) { Text("AI TTS") }
                 }
@@ -157,12 +183,14 @@ fun TtsSettingsScreen(
                         }
                     }
                     OutlinedTextField(
-                        value = settings.systemLanguageTag,
-                        onValueChange = viewModel::setSystemLanguage,
+                        value = systemLanguageTagDraft.value,
+                        onValueChange = systemLanguageTagDraft::edit,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                         label = { Text("语言标签（可选）") },
                         supportingText = { Text("BCP-47，如 zh-CN；留空用引擎默认语言") },
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth().committedDraft(systemLanguageTagDraft)
                     )
                     LabeledSlider(
                         label = "语速",
@@ -210,15 +238,17 @@ fun TtsSettingsScreen(
                                     text = { Text(provider.label()) },
                                     onClick = {
                                         apiProviderMenuExpanded = false
-                                        viewModel.setAiProvider(provider)
+                                        afterDrafts { drafts.acceptExternalChanges(); viewModel.setAiProvider(provider) }
                                     }
                                 )
                             }
                         }
                     }
                     OutlinedTextField(
-                        value = settings.aiBaseUrl,
-                        onValueChange = viewModel::setAiBaseUrl,
+                        value = aiBaseUrlDraft.value,
+                        onValueChange = aiBaseUrlDraft::edit,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                         label = { Text("Base URL") },
                         supportingText = {
                             Text(
@@ -231,8 +261,9 @@ fun TtsSettingsScreen(
                             )
                         },
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth().committedDraft(aiBaseUrlDraft)
                     )
+                    // Secret entry deliberately stays out of savedInstanceState; only explicit Save uses encrypted storage.
                     var apiKeyInput by remember { mutableStateOf("") }
                     OutlinedTextField(
                         value = apiKeyInput,
@@ -246,8 +277,11 @@ fun TtsSettingsScreen(
                         trailingIcon = {
                             TextButton(
                                 onClick = {
-                                    viewModel.saveApiKey(apiKeyInput)
-                                    apiKeyInput = ""
+                                    val pendingKey = apiKeyInput
+                                    afterDrafts {
+                                        viewModel.saveApiKey(pendingKey)
+                                        if (apiKeyInput == pendingKey) apiKeyInput = ""
+                                    }
                                 },
                                 enabled = apiKeyInput.isNotBlank()
                             ) { Text("保存") }
@@ -259,17 +293,21 @@ fun TtsSettingsScreen(
                         settings.aiProvider == TtsApiProvider.MINIMAX_INTL
                     ) {
                         OutlinedTextField(
-                            value = settings.aiGroupId,
-                            onValueChange = viewModel::setAiGroupId,
+                            value = aiGroupIdDraft.value,
+                            onValueChange = aiGroupIdDraft::edit,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Done),
+                            keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                             label = { Text("GroupId（可选）") },
                             supportingText = { Text("MiniMax 控制台的 GroupId；部分账号必填") },
                             singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth().committedDraft(aiGroupIdDraft)
                         )
                     }
                     OutlinedTextField(
-                        value = settings.aiModel,
-                        onValueChange = viewModel::setAiModel,
+                        value = aiModelDraft.value,
+                        onValueChange = aiModelDraft::edit,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                         label = { Text("模型") },
                         supportingText = {
                             Text(
@@ -285,17 +323,19 @@ fun TtsSettingsScreen(
                             )
                         },
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth().committedDraft(aiModelDraft)
                     )
                     OutlinedTextField(
-                        value = settings.aiVoiceId,
-                        onValueChange = viewModel::setAiVoice,
+                        value = aiVoiceIdDraft.value,
+                        onValueChange = aiVoiceIdDraft::edit,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                         label = { Text("音色 ID（可选）") },
                         supportingText = {
                             Text("OpenAI 如 alloy / nova；MiniMax 与 GMI 可填系统或克隆音色 ID")
                         },
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth().committedDraft(aiVoiceIdDraft)
                     )
                     LabeledSlider(
                         label = "语速",
@@ -337,8 +377,8 @@ fun TtsSettingsScreen(
                     includeEngineSection = false,
                     includeRateControls = false,
                     actions = TtsTuningActions(
-                        onEngineModeChange = viewModel::setEngineMode,
-                        onAiVoiceChange = viewModel::setAiVoice,
+                        onEngineModeChange = { mode -> afterDrafts { viewModel.setEngineMode(mode) } },
+                        onAiVoiceChange = { voice -> afterDrafts { drafts.acceptExternalChanges(); viewModel.setAiVoice(voice) } },
                         onSystemRateChange = viewModel::setSystemRate,
                         onSystemPitchChange = viewModel::setSystemPitch,
                         onAiSpeedChange = viewModel::setAiSpeed,
@@ -351,12 +391,12 @@ fun TtsSettingsScreen(
                         onConcurrencyChange = viewModel::setSynthesisConcurrency,
                         onRetryCountChange = viewModel::setRetryCount,
                         onPrefetchCountChange = viewModel::setPrefetchCount,
-                        onOpenVoiceLibrary = onOpenVoiceLibrary
+                        onOpenVoiceLibrary = { leaveAfterDrafts(onOpenVoiceLibrary) }
                     )
                 )
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = viewModel::preview, enabled = !state.isPreviewing) {
+                    TextButton(onClick = { afterDrafts(viewModel::preview) }, enabled = !state.isPreviewing) {
                         Icon(Icons.Outlined.PlayArrow, contentDescription = null)
                         Text(if (state.isPreviewing) "正在试听…" else "试听")
                     }

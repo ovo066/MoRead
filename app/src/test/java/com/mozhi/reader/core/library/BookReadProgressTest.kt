@@ -2,6 +2,7 @@ package com.mozhi.reader.core.library
 
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.BookSourceType
+import com.mozhi.reader.core.database.entity.readState
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -11,7 +12,8 @@ class BookReadProgressTest {
         chapterIndex: Int = 0,
         charOffset: Int = 0,
         totalChapters: Int = 50,
-        lastReadAt: Long = 1_000L
+        lastReadAt: Long = 1_000L,
+        reachedEnd: Boolean = false
     ) = BookEntity(
         id = 1,
         title = "书",
@@ -23,7 +25,8 @@ class BookReadProgressTest {
         totalChapters = totalChapters,
         lastReadChapterIndex = chapterIndex,
         lastReadCharOffset = charOffset,
-        lastReadAt = lastReadAt
+        lastReadAt = lastReadAt,
+        reachedEnd = reachedEnd
     )
 
     @Test
@@ -57,6 +60,24 @@ class BookReadProgressTest {
         assertEquals(1f, readFraction(book(chapterIndex = 49, charOffset = 9_999), span), 0f)
         val negative = BookReadSpan(charsBeforeChapter = 0, totalChars = 50_000)
         assertEquals(0f, readFraction(book(charOffset = -20), negative), 0f)
+    }
+
+    @Test
+    fun explicitBookEndIsOneHundredEvenThoughResumeAnchorStaysAtPageStart() {
+        val span = BookReadSpan(charsBeforeChapter = 49_000, totalChars = 50_000)
+        assertEquals(1f, readFraction(book(chapterIndex = 49, charOffset = 100, reachedEnd = true), span), 0f)
+    }
+
+    @Test
+    fun enteringLastChapterAloneDoesNotMarkBookFinished() {
+        assertEquals(
+            com.mozhi.reader.core.database.entity.BookReadState.READING,
+            book(chapterIndex = 49).readState()
+        )
+        assertEquals(
+            com.mozhi.reader.core.database.entity.BookReadState.FINISHED,
+            book(chapterIndex = 49, reachedEnd = true).readState()
+        )
     }
 
     @Test

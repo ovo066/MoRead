@@ -139,9 +139,9 @@ public final class VectorQueries {
         }
     }
 
-    /** 删除单条记忆（记忆管理页的左滑删除）。 */
-    public static void removeMemory(BoxStore store, long id) {
-        store.boxFor(MemoryEntry.class).remove(id);
+    /** 删除单条记忆（记忆管理页的左滑删除）。返回 false 表示目标本来就不存在。 */
+    public static boolean removeMemory(BoxStore store, long id) {
+        return store.boxFor(MemoryEntry.class).remove(id);
     }
 
     /** 清空某角色的全部记忆；角色卡本身与它写下的批注笔记不受影响。 */

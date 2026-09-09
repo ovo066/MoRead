@@ -17,6 +17,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -75,6 +76,7 @@ import com.mozhi.reader.feature.listen.AudiobookRoleScreen
 import com.mozhi.reader.feature.listen.AudiobookScriptScreen
 import com.mozhi.reader.feature.listen.ListenPlayerScreen
 import com.mozhi.reader.feature.reader.CompanionChatScreen
+import com.mozhi.reader.feature.reader.ReaderCompanionViewModel
 import com.mozhi.reader.feature.reader.ReaderLocateRequest
 import com.mozhi.reader.feature.reader.ReaderScreen
 import com.mozhi.reader.feature.settings.AiServiceScreen
@@ -101,6 +103,7 @@ import com.mozhi.reader.feature.settings.WebSearchSettingsScreen
 import com.mozhi.reader.feature.stats.StatsScreen
 import com.mozhi.reader.ui.components.BlurredGlassSurface
 import com.mozhi.reader.ui.components.MoReadBackdrop
+import com.mozhi.reader.ui.components.MoReadBoundedContent
 import com.mozhi.reader.ui.theme.MoReadTokens
 import com.mozhi.reader.ui.theme.navSelectedColor
 import com.mozhi.reader.ui.theme.onNavSelectedColor
@@ -216,9 +219,15 @@ fun MoReadApp(
     }
 
     MoReadBackdrop {
-        Box(Modifier.fillMaxSize()) {
+        MoReadWindowLayout { windowWidth ->
+            val expanded = windowWidth == MoReadWindowWidth.EXPANDED
+            val isRootRoute = RootDestination.entries.any { it.route == currentRoute }
             Scaffold(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(start = if (expanded && isRootRoute) {
+                        MoReadLayoutPolicy.NavigationRailWidthDp.dp
+                    } else 0.dp),
                 // 背景由 MoReadBackdrop 画，Scaffold 只做布局所以是透明的；但 contentColor
                 // 必须显式给 —— 默认 contentColorFor(Transparent) 匹配不到任何角色，会返回
                 // Color.Unspecified，于是所有没写死颜色的 Text 都拿不到前景色（夜间即黑底黑字）。
@@ -262,16 +271,18 @@ fun MoReadApp(
                     )
                 }
                 composable(RootDestination.Stats.route) {
-                    StatsScreen(contentPadding = padding)
+                    MoReadBoundedContent { StatsScreen(contentPadding = padding) }
                 }
                 composable(RootDestination.Companion.route) {
-                    CompanionScreen(
-                        contentPadding = padding,
-                        onEditPersona = { personaId ->
-                            navController.navigate("persona/$personaId")
-                        },
-                        onCreatePersona = { navController.navigate("persona/0") }
-                    )
+                    MoReadBoundedContent {
+                        CompanionScreen(
+                            contentPadding = padding,
+                            onEditPersona = { personaId ->
+                                navController.navigate("persona/$personaId")
+                            },
+                            onCreatePersona = { navController.navigate("persona/0") }
+                        )
+                    }
                 }
                 composable(RootDestination.Settings.route) { entry ->
                     SettingsScreen(
@@ -314,17 +325,24 @@ fun MoReadApp(
                         viewModel = hiltViewModel<SettingsViewModel>(settingsEntry)
                     )
                 }
-                pushComposable("annotation-limits") {
+                pushComposable("annotation-limits") { entry ->
+                    val settingsEntry = remember(entry) {
+                        navController.getBackStackEntry(RootDestination.Settings.route)
+                    }
                     ProactiveAnnotationSettingsScreen(
                         bookId = null,
-                        onBack = navController::popBackStack
+                        onBack = navController::popBackStack,
+                        viewModel = hiltViewModel<SettingsViewModel>(settingsEntry)
                     )
                 }
                 pushComposable("annotation-limits/{bookId}") { entry ->
+                    // Keep a book's settings warm when revisiting from the same detail page.
+                    val owner = remember(entry) { navController.previousBackStackEntry ?: entry }
                     ProactiveAnnotationSettingsScreen(
                         bookId = entry.arguments?.getString("bookId")?.toLongOrNull()
                             ?: return@pushComposable,
-                        onBack = navController::popBackStack
+                        onBack = navController::popBackStack,
+                        viewModel = hiltViewModel<SettingsViewModel>(owner)
                     )
                 }
                 pushComposable("settings-data") { entry ->
@@ -573,9 +591,21 @@ fun MoReadApp(
                     )
                 }
                 pushComposable("companion-chat/{bookId}") { entry ->
+                    val bookId = entry.arguments?.getString("bookId")?.toLongOrNull()
+                        ?: return@pushComposable
+                    // The same reader session survives side-pane -> full-screen navigation.
+                    // Standalone/deep-linked chat still owns a VM on its own entry.
+                    val readerEntry = remember(entry, bookId) {
+                        try {
+                            navController.getBackStackEntry("reader/$bookId")
+                        } catch (_: IllegalArgumentException) {
+                            null
+                        }
+                    }
+                    val companionViewModel: ReaderCompanionViewModel = hiltViewModel(readerEntry ?: entry)
                     CompanionChatScreen(
-                        bookId = entry.arguments?.getString("bookId")?.toLongOrNull()
-                            ?: return@pushComposable,
+                        bookId = bookId,
+                        companionViewModel = companionViewModel,
                         onBack = navController::popBackStack,
                         onLocateInBook = { chapterIndex, start, end, sourceAnchorJson ->
                             navController.previousBackStackEntry?.savedStateHandle?.let { handle ->
@@ -608,9 +638,10 @@ fun MoReadApp(
             // Dock 是覆盖在内容上的浮层，不占 Scaffold 的 bottomBar 布局高度。
             // 否则 Scaffold 会在整屏底部预留一条矩形空白，看起来像胶囊背后的白横条。
             if (showBottomBar) {
-                BottomNavDock(
+                AdaptiveNavDock(
                     hazeState = hazeState,
-                    modifier = Modifier.align(Alignment.BottomCenter),
+                    vertical = expanded,
+                    modifier = Modifier.align(if (expanded) Alignment.CenterStart else Alignment.BottomCenter),
                     selectedRoute = currentRoute,
                     onSelect = { item ->
                         navController.navigate(item.route) {
@@ -631,17 +662,19 @@ fun MoReadApp(
  * 低成本玻璃材质，避免整页大量离屏合成。
  */
 @Composable
-private fun BottomNavDock(
+private fun AdaptiveNavDock(
     hazeState: HazeState,
+    vertical: Boolean,
     modifier: Modifier = Modifier,
     selectedRoute: String?,
     onSelect: (RootDestination) -> Unit
 ) {
     Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .navigationBarsPadding()
-            .padding(bottom = 10.dp),
+        modifier = if (vertical) {
+            modifier.padding(start = 14.dp)
+        } else {
+            modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 10.dp)
+        },
         contentAlignment = Alignment.Center
     ) {
         BlurredGlassSurface(
@@ -650,18 +683,28 @@ private fun BottomNavDock(
             tint = MaterialTheme.colorScheme.surface,
             shadowElevation = 6.dp
         ) {
-            Row(
-                modifier = Modifier.padding(6.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            val items: @Composable () -> Unit = {
                 RootDestination.entries.forEach { item ->
                     NavDockItem(
                         item = item,
                         selected = selectedRoute == item.route,
+                        vertical = vertical,
                         onClick = { onSelect(item) }
                     )
                 }
+            }
+            if (vertical) {
+                Column(
+                    modifier = Modifier.padding(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) { items() }
+            } else {
+                Row(
+                    modifier = Modifier.padding(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) { items() }
             }
         }
     }
@@ -671,6 +714,7 @@ private fun BottomNavDock(
 private fun NavDockItem(
     item: RootDestination,
     selected: Boolean,
+    vertical: Boolean = false,
     onClick: () -> Unit
 ) {
     val containerColor by animateColorAsState(
@@ -693,7 +737,25 @@ private fun NavDockItem(
         color = containerColor,
         contentColor = contentColor
     ) {
-        Row(
+        if (vertical) {
+            Column(
+                modifier = Modifier.size(width = 56.dp, height = if (selected) 64.dp else 56.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    imageVector = if (selected) item.selectedIcon else item.icon,
+                    contentDescription = null,
+                    modifier = Modifier.size(22.dp)
+                )
+                Text(
+                    text = item.label,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
+        } else Row(
             modifier = Modifier
                 .animateContentSize(animationSpec = tween(240))
                 .padding(

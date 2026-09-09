@@ -297,10 +297,7 @@ internal class ListAnnotationsTool(
         val query = arguments.text("query")
         val rows = annotations.getForChapterRange(bookId, from - 1, to - 1)
             .filter { row ->
-                row.personaId == null || readingScope.isWholeBook ||
-                    row.sourceScopeChapterIndex?.let { chapter ->
-                        readingScope.allowsPosition(chapter, row.sourceScopeCharOffset ?: Int.MAX_VALUE)
-                    } == true
+                com.mozhi.reader.core.retrieval.AnnotationVisibility.isVisible(row, readingScope)
             }
         val counts = annotations.getReplyCounts(rows.map { it.id })
         return formatAnnotationList(book.title, from, to, rows, counts, author, query, currentPersonaId)

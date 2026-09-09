@@ -1,8 +1,11 @@
 package com.mozhi.reader.feature.reader.engine
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.job
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertSame
@@ -122,6 +125,59 @@ class ReaderContentControllerScrollTest {
         assertEquals(30, controller.charOffset)
         assertEquals(30, listener.lastOffset)
         assertEquals("同章滚动不应触发内容重绘回调", changesBefore, listener.contentChanges)
+    }
+
+    @Test
+    fun `viewport gestures cannot use far navigation to skip the current window`() = runTest {
+        val controller = ReaderContentController(this, { ReaderChapterContent(chapterBody()) }, RecordingListener())
+        controller.setChapters(metas(6))
+        controller.updateEnvironment(spec(), FakeMeasure())
+        advanceUntilIdle()
+        coroutineContext.job.children.forEach { it.join() }
+        val current = controller.laidChapter(0)
+        val generation = controller.navigationGeneration
+        controller.scrollWithinWindow(4, 22)
+        assertEquals(0, controller.chapterIndex)
+        assertEquals(0, controller.charOffset)
+        assertSame(current, controller.laidChapter(0))
+        assertEquals(generation, controller.navigationGeneration)
+    }
+
+    @Test
+    fun `explicit far navigation supersedes a pending unavailable neighbor without a completion signal`() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val currentReady = CompletableDeferred<Unit>()
+        lateinit var controller: ReaderContentController
+        val listener = object : ReaderContentController.Listener {
+            override fun onContentChanged(relativePosition: Int) {
+                if (controller.chapterIndex == 0 && controller.isReady) currentReady.complete(Unit)
+            }
+            override fun onPositionChanged(chapterIndex: Int, charOffset: Int, pageIndex: Int,
+                pageCount: Int, bookProgress: Float) = Unit
+        }
+        controller = ReaderContentController(this, { index ->
+            if (index == 1) gate.await()
+            ReaderChapterContent(chapterBody())
+        }, listener)
+        controller.setChapters(metas(6))
+        controller.updateEnvironment(spec(), FakeMeasure())
+        currentReady.await()
+        controller.scrollWithinWindow(1, 5)
+        assertEquals(0, controller.chapterIndex)
+        val generation = controller.navigationGeneration
+        controller.scrollTo(4, 22)
+        assertEquals(4, controller.chapterIndex)
+        assertEquals(22, controller.charOffset)
+        assertFalse(controller.positionChangeIsSequential)
+        assertTrue(controller.navigationGeneration > generation)
+        gate.complete(Unit)
+        advanceUntilIdle()
+        coroutineContext.job.children.forEach { it.join() }
+        assertEquals(4, controller.chapterIndex) // The old neighbor's late load cannot pull us back.
+        assertEquals(22, controller.charOffset)
+        assertNotNull(controller.laidChapter(-1))
+        assertNotNull(controller.laidChapter(0))
+        assertNotNull(controller.laidChapter(1))
     }
 
     @Test

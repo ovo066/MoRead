@@ -754,4 +754,35 @@ object DatabaseMigrations {
         }
     }
 
+    /** 自动读完必须基于真实书末信号，不能因为停在最后一章就误标。 */
+    val Migration23To24 = object : Migration(23, 24) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `books` ADD COLUMN `reachedEnd` INTEGER NOT NULL DEFAULT 0")
+        }
+    }
+
+    val Migration24To25 = object : Migration(24, 25) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `messages` ADD COLUMN `clientRoundId` TEXT")
+            db.execSQL("ALTER TABLE `annotations` ADD COLUMN `proactiveJobId` INTEGER")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_annotations_createdAt_proactiveJobId` ON `annotations` (`createdAt`, `proactiveJobId`)")
+            db.execSQL("""
+                CREATE TABLE IF NOT EXISTS `proactive_annotation_jobs` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `bookId` INTEGER NOT NULL,
+                    `chapterIndex` INTEGER NOT NULL,
+                    `personaId` INTEGER NOT NULL,
+                    `sourceRevision` TEXT NOT NULL,
+                    `status` TEXT NOT NULL,
+                    `attempts` INTEGER NOT NULL,
+                    `doneParagraphEnds` TEXT NOT NULL,
+                    `failureReason` TEXT,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL
+                )
+            """.trimIndent())
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_proactive_annotation_jobs_bookId_chapterIndex_personaId_sourceRevision` ON `proactive_annotation_jobs` (`bookId`, `chapterIndex`, `personaId`, `sourceRevision`)")
+        }
+    }
+
 }

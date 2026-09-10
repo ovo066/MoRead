@@ -189,4 +189,33 @@ class ProactiveAnnotationServiceTest {
         assertTrue(result.stopped)
         coVerify(exactly = 1) { client.chat(any(), any()) }
     }
+
+    @Test fun promptSpeaksAsThePersonaNotAsAnAnonymousEditor() {
+        // 用户反馈段评「没有角色性格」：以前系统提示词只说「你是随读段评编辑」，人设整段没进提示词。
+        val roleplay = persona.copy(
+            isRoleplay = true,
+            personality = "冷淡的图书馆管理员，嘴上挑剔，实际很在意读者的感受",
+            speakingStyle = "短句，偶尔带一点讽刺",
+            exampleDialogsJson = """[{"user":"这本书好看吗","assistant":"先读到第三章再问我。"}]"""
+        )
+        val messages = proactiveAnnotationMessages(roleplay, "正文前缀\n最后一段")
+        val system = messages.first().content.orEmpty()
+        assertTrue(system.startsWith("你是「知墨」。"))
+        assertTrue(system.contains(roleplay.personality))
+        assertTrue(system.contains(roleplay.speakingStyle))
+        assertTrue(system.contains("先读到第三章再问我。"))
+        assertTrue(system.contains("用你自己的口吻和性格写"))
+        assertFalse(system.contains("你是随读段评编辑"))
+        // 写作规则仍然完整：样式语义、防剧透与 JSON 契约一个都不能丢。
+        assertTrue(system.contains("HIGHLIGHT（荧光）：金句"))
+        assertTrue(system.contains("绝不推测后文"))
+        assertTrue(system.contains("只输出一个 JSON 对象"))
+        // 正文只在用户消息里，且以目标段落结尾；角色资料不再混进正文消息。
+        val user = messages.last().content.orEmpty()
+        assertTrue(user.endsWith("最后一段"))
+        assertFalse(user.contains(roleplay.personality))
+        // 超长人设按成本上限收口，而不是原样塞给 CHEAP 模型。
+        val huge = proactiveAnnotationMessages(roleplay.copy(personality = "长".repeat(10_000)), "前缀").first().content.orEmpty()
+        assertTrue(huge.length < PROACTIVE_PERSONA_MAX_CHARS + 1_200)
+    }
 }

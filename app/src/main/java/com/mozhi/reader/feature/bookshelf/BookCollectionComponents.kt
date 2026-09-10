@@ -67,6 +67,9 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.mozhi.reader.core.database.entity.BookCollectionEntity
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
+import com.mozhi.reader.R
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.ui.MoReadLayoutPolicy
 import com.mozhi.reader.ui.components.FrostedSurface
@@ -124,6 +127,8 @@ internal fun GridCollectionItem(
     modifier: Modifier = Modifier
 ) {
     val target = remember(entry.key) { entry.dropTarget() }
+    val acceptsDrop = collectionDragState.activeDrop == ShelfDrop(target, ShelfDropPlacement.MERGE)
+    val collectionActions = stringResource(R.string.shelf_collection_actions)
     val registrationOwner = remember { Any() }
     DisposableEffect(entry.key) {
         onDispose { collectionDragState.unregister(entry.key, registrationOwner) }
@@ -141,7 +146,7 @@ internal fun GridCollectionItem(
             .clip(RoundedCornerShape(12.dp))
             .clickable(onClick = onOpen)
             .semantics {
-                if (!selectionMode) onLongClick(label = "合集操作") { onOpen(); true }
+                if (!selectionMode) onLongClick(label = collectionActions) { onOpen(); true }
             }
             .onGloballyPositioned {
                 collectionDragState.register(target, it.boundsInRoot(), registrationOwner)
@@ -172,7 +177,10 @@ internal fun GridCollectionItem(
             modifier = Modifier.padding(top = 9.dp)
         )
         Text(
-            text = "${entry.books.size} 本",
+            text = if (acceptsDrop) stringResource(R.string.shelf_collection_drop_hint)
+            else pluralStringResource(R.plurals.shelf_collection_book_count, entry.books.size, entry.books.size),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 2.dp)
@@ -190,6 +198,8 @@ internal fun ListCollectionItem(
     modifier: Modifier = Modifier
 ) {
     val target = remember(entry.key) { entry.dropTarget() }
+    val acceptsDrop = collectionDragState.activeDrop == ShelfDrop(target, ShelfDropPlacement.MERGE)
+    val collectionActions = stringResource(R.string.shelf_collection_actions)
     val registrationOwner = remember { Any() }
     DisposableEffect(entry.key) {
         onDispose { collectionDragState.unregister(entry.key, registrationOwner) }
@@ -207,7 +217,7 @@ internal fun ListCollectionItem(
             )
             .clickable(onClick = onOpen)
             .semantics {
-                if (!selectionMode) onLongClick(label = "合集操作") { onOpen(); true }
+                if (!selectionMode) onLongClick(label = collectionActions) { onOpen(); true }
             }
             .onGloballyPositioned {
                 collectionDragState.register(target, it.boundsInRoot(), registrationOwner)
@@ -241,7 +251,10 @@ internal fun ListCollectionItem(
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = "${entry.books.size} 本书",
+                    text = if (acceptsDrop) stringResource(R.string.shelf_collection_drop_hint)
+                    else pluralStringResource(R.plurals.shelf_collection_book_count, entry.books.size, entry.books.size),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 4.dp)

@@ -1,6 +1,11 @@
 package com.mozhi.reader.feature.reader
 
 import android.net.Uri
+import androidx.annotation.StringRes
+import com.mozhi.reader.R
+import com.mozhi.reader.core.datastore.PageMode
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -33,6 +38,7 @@ import com.mozhi.reader.core.datastore.ReaderThemeSlot
 import com.mozhi.reader.core.datastore.chineseConversionModeFor
 import com.mozhi.reader.core.datastore.validationError
 import com.mozhi.reader.core.library.AnnotationRepository
+import com.mozhi.reader.core.epub.dom.EpubDomFragmentLocator
 import com.mozhi.reader.core.library.BookLayoutStore
 import com.mozhi.reader.core.library.BookMediaStore
 import com.mozhi.reader.core.library.EditableChapterDraft
@@ -142,6 +148,7 @@ enum class PageTurnDirection {
 
 sealed interface ReaderEvent {
     data class ShowMessage(val message: String) : ReaderEvent
+    data class ShowLocalizedMessage(@param:StringRes val resourceId: Int) : ReaderEvent
     data class ConfirmFontImport(val pending: PendingReaderFont) : ReaderEvent
     data class TextReplacementRuleSuggested(val rule: ReaderTextReplacementRule) : ReaderEvent
 }
@@ -177,6 +184,7 @@ class ReaderViewModel @Inject constructor(
         ReaderUiState(settings = settingsRepository.cachedSettings.value)
     )
     val uiState = mutableState.asStateFlow()
+    private val bookmarkMutex = Mutex()
     private val eventChannel = Channel<ReaderEvent>(Channel.BUFFERED)
     val events = eventChannel.receiveAsFlow()
 
@@ -964,6 +972,12 @@ class ReaderViewModel @Inject constructor(
         }
         val bundle = presented.epubLayout
             ?: return EpubTarget(targetChapterIndex, 0, 0, mode, presented)
+        // 片段锚点优先在 DOM 里找：新导入的书不再落盘旧引擎的块列表，只有 DOM 知道 id 在哪。
+        bundle.dom?.let { dom ->
+            EpubDomFragmentLocator.locate(dom.bodyNode, fragment)?.let { range ->
+                return EpubTarget(targetChapterIndex, range.first, range.last + 1, mode, presented)
+            }
+        }
         val matches = bundle.document.blocks.filter { block ->
             block.element.id == fragment || block.ancestors.any { it.id == fragment } ||
                 block.spans.any { span -> span.elements.any { it.id == fragment } }
@@ -1045,35 +1059,59 @@ class ReaderViewModel @Inject constructor(
             .joinToString(separator = "\n") { it.text }.trim()
     }
 
-    fun toggleBookmark() {
+    fun toggleBookmark() = updateBookmark(addOnly = false)
+
+    /** Pull gestures only add: repeating one must never remove a bookmark. */
+    fun addBookmarkFromPull() {
+        if (mutableState.value.settings.pageMode == PageMode.SCROLL) return
+        updateBookmark(addOnly = true)
+    }
+
+    private fun updateBookmark(addOnly: Boolean) {
         val chapterIndex = contentController.chapterIndex
         val charOffset = contentController.charOffset
         if (!mutableState.value.isContentReady) return
         val anchor = currentAnchor(chapterIndex, charOffset) ?: return
         val source = contentController.chapterSource(chapterIndex) ?: return
-        val existing = mutableState.value.bookmarks.firstOrNull {
+        // Capture the displayed anchor and original source before any page/conversion change.
+        val knownId = mutableState.value.bookmarks.firstOrNull {
             it.chapterIndex == chapterIndex && bookmarkDisplayOffset(it) == charOffset
-        }
+        }?.id
+        val label = chapterEntities.getOrNull(chapterIndex)?.title ?: "阅读书签"
         viewModelScope.launch {
-            if (existing != null) {
-                libraryRepository.deleteBookmark(existing.id)
-                eventChannel.send(ReaderEvent.ShowMessage("已取消书签"))
-                return@launch
+            val message = try {
+                // Re-read under the lock: Room's observed UI list can lag behind a quick second pull.
+                bookmarkMutex.withLock {
+                    val sourceOffset = sourceOffsetForCapturedPresentation(charOffset, anchor, source)
+                        ?: return@withLock R.string.reader_bookmark_failed
+                    val excerpt = source.body.substring(sourceOffset).lineSequence().firstOrNull()
+                        .orEmpty().trim().take(48)
+                    val existing = libraryRepository.getBookmarks(bookId).firstOrNull {
+                        it.chapterIndex == chapterIndex && (it.id == knownId || it.charOffset == sourceOffset)
+                    }
+                    if (existing != null) {
+                        if (addOnly) R.string.reader_bookmark_exists else {
+                            libraryRepository.deleteBookmark(existing.id)
+                            R.string.reader_bookmark_removed
+                        }
+                    } else {
+                        libraryRepository.addBookmark(
+                            bookId = bookId,
+                            chapterIndex = chapterIndex,
+                            charOffset = sourceOffset,
+                            locatorJson = ReaderTextAnchorCodec.encode(anchor),
+                            excerpt = excerpt,
+                            label = label
+                        )
+                        R.string.reader_bookmark_added
+                    }
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                R.string.reader_bookmark_failed
             }
-            val sourceOffset = sourceOffsetForCapturedPresentation(charOffset, anchor, source)
-                ?: return@launch
-            val label = chapterEntities.getOrNull(chapterIndex)?.title ?: "阅读书签"
-            val excerpt = source.body.substring(sourceOffset).lineSequence().firstOrNull()
-                .orEmpty().trim().take(48)
-            libraryRepository.addBookmark(
-                bookId = bookId,
-                chapterIndex = chapterIndex,
-                charOffset = sourceOffset,
-                locatorJson = ReaderTextAnchorCodec.encode(anchor),
-                excerpt = excerpt,
-                label = label
-            )
-            eventChannel.send(ReaderEvent.ShowMessage("已添加书签"))
+            eventChannel.send(ReaderEvent.ShowLocalizedMessage(message))
         }
     }
 

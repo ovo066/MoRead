@@ -331,11 +331,14 @@ fun Modifier.readerPageTouch(
     enabled: Boolean,
     driver: PageTurnDriver,
     selection: SelectionGestureHooks? = null,
+    onBookmarkPull: ((Float) -> Unit)? = null,
+    onAddBookmark: (() -> Unit)? = null,
     onTap: (position: Offset, fromAbort: Boolean) -> Unit
-): Modifier = pointerInput(enabled, driver, selection) {
+): Modifier = pointerInput(enabled, driver, selection, onAddBookmark != null) {
     if (!enabled) return@pointerInput
     val slop = viewConfiguration.touchSlop
     val handleGrabRadius = 24.dp.toPx()
+    val bookmarkDistance = 88.dp.toPx()
     awaitEachGesture {
         val down = awaitFirstDown()
         driver.setViewport(size.width.toFloat(), size.height.toFloat())
@@ -346,53 +349,81 @@ fun Modifier.readerPageTouch(
             if (!selecting) selection?.clear()
         }
         driver.onDown(down.position.x, down.position.y)
+        var bookmarkGesture = if (!hadSelection && onAddBookmark != null) {
+            PullBookmarkGesture(slop, bookmarkDistance)
+        } else null
         val pointerId = down.id
         var upPosition = down.position
         var longPressFired = false
         var slopCrossed = false
         var lastUptime = down.uptimeMillis
-        while (true) {
-            val event = if (selection != null && !longPressFired && !slopCrossed && !hadSelection) {
-                val remaining = LONG_PRESS_TIMEOUT_MS - (lastUptime - down.uptimeMillis)
-                // AwaitPointerEventScope's own timeout member — the scope is restricted-suspension.
-                withTimeoutOrNull(remaining.coerceAtLeast(1L)) { awaitPointerEvent() }
-            } else {
-                awaitPointerEvent()
-            }
-            if (event == null) {
-                longPressFired = true
-                selecting = selection?.begin(upPosition) == true
-                continue
-            }
-            val change = event.changes.firstOrNull { it.id == pointerId } ?: break
-            upPosition = change.position
-            lastUptime = change.uptimeMillis
-            // Legado samples direction only from MOVE events: the release position must not feed
-            // the cancel/commit decision, or lift-off roll jitter flips a committed fling.
-            if (!change.pressed) break
-            if (change.positionChanged()) {
-                if (selecting) {
-                    selection?.drag(change.position)
-                    change.consume()
+        var released = false
+        try {
+            while (true) {
+                val event = if (selection != null && !longPressFired && !slopCrossed && !hadSelection) {
+                    val remaining = LONG_PRESS_TIMEOUT_MS - (lastUptime - down.uptimeMillis)
+                    withTimeoutOrNull(remaining.coerceAtLeast(1L)) { awaitPointerEvent() }
+                } else {
+                    awaitPointerEvent()
+                }
+                if (event == null) {
+                    longPressFired = true
+                    bookmarkGesture = null
+                    selecting = selection?.begin(upPosition) == true
                     continue
                 }
-                val deltaX = change.position.x - down.position.x
-                val deltaY = change.position.y - down.position.y
-                if (deltaX * deltaX + deltaY * deltaY > slop * slop) slopCrossed = true
-                driver.onMove(change.position.x, change.position.y, slop)
-                change.consume()
+                val change = event.changes.firstOrNull { it.id == pointerId } ?: break
+                // Multi-touch and a parent/overlay taking ownership cancel; neither is a release.
+                if (change.isConsumed || event.changes.any { it.id != pointerId && it.pressed }) break
+                upPosition = change.position
+                lastUptime = change.uptimeMillis
+                // Do not feed lift-off jitter into the page-turn or bookmark commit decision.
+                if (!change.pressed) {
+                    released = true
+                    if (bookmarkGesture?.ownsGesture == true) change.consume()
+                    break
+                }
+                if (change.positionChanged()) {
+                    if (selecting) {
+                        selection?.drag(change.position)
+                        change.consume()
+                        continue
+                    }
+                    val deltaX = change.position.x - down.position.x
+                    val deltaY = change.position.y - down.position.y
+                    if (deltaX * deltaX + deltaY * deltaY > slop * slop) slopCrossed = true
+                    bookmarkGesture?.move(deltaX, deltaY)
+                    if (bookmarkGesture?.ownsGesture == true) {
+                        onBookmarkPull?.invoke(bookmarkGesture.progress)
+                    } else {
+                        driver.onMove(change.position.x, change.position.y, slop)
+                    }
+                    change.consume()
+                }
             }
-        }
-        if (selecting) {
-            selection?.end()
-            driver.onUp()
-            return@awaitEachGesture
-        }
-        val suppressTap = hadSelection || longPressFired
-        when (driver.onUp()) {
-            PageTurnDriver.UpResult.TAP -> if (!suppressTap) onTap(upPosition, false)
-            PageTurnDriver.UpResult.ABORT_TAP -> if (!suppressTap) onTap(upPosition, true)
-            else -> Unit
+            if (!released) return@awaitEachGesture
+            if (selecting) {
+                selection?.end()
+                driver.onUp()
+                return@awaitEachGesture
+            }
+            if (bookmarkGesture?.ownsGesture == true) {
+                driver.cancelActiveTurn()
+                if (bookmarkGesture.shouldAddOnRelease()) onAddBookmark?.invoke()
+                return@awaitEachGesture
+            }
+            val suppressTap = hadSelection || longPressFired
+            when (driver.onUp()) {
+                PageTurnDriver.UpResult.TAP -> if (!suppressTap) onTap(upPosition, false)
+                PageTurnDriver.UpResult.ABORT_TAP -> if (!suppressTap) onTap(upPosition, true)
+                else -> Unit
+            }
+        } finally {
+            onBookmarkPull?.invoke(0f)
+            if (!released) {
+                driver.cancelActiveTurn()
+                if (selecting) selection?.end()
+            }
         }
     }
 }

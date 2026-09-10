@@ -1,5 +1,6 @@
 package com.mozhi.reader.feature.reader.engine.epub
 
+import com.mozhi.reader.core.epub.style.EpubLayoutCapability
 import com.mozhi.reader.core.epub.style.EpubStyle
 import com.mozhi.reader.feature.reader.engine.TextChapter
 import com.mozhi.reader.feature.reader.engine.TextPage
@@ -17,11 +18,13 @@ internal class EpubPageBuilder(private val ctx: EpubLayoutContext) {
         chapterIndex: Int,
         title: String,
         bodyStyle: EpubStyle?,
-        hideHeaderFirstPage: Boolean
+        hideHeaderFirstPage: Boolean,
+        layoutCapability: EpubLayoutCapability? = null,
+        fullPageArtwork: Boolean = false
     ): TextChapter {
         val lines = output.lines
         if (lines.isEmpty()) {
-            return TextChapter(chapterIndex, title, listOf(emptyPage()), ctx.body.length)
+            return TextChapter(chapterIndex, title, listOf(emptyPage()), ctx.body.length, layoutCapability)
         }
         val cuts = computeCuts(output)
         val pages = ArrayList<TextPage>(cuts.size)
@@ -52,11 +55,12 @@ internal class EpubPageBuilder(private val ctx: EpubLayoutContext) {
                 backgroundImagePath = pageBackgroundImage,
                 backgroundOpacity = bodyStyle?.opacity ?: 1f,
                 immersive = ctx.immersivePage,
+                fullPageArtwork = fullPageArtwork,
                 hideHeader = pageIndex == 0 && hideHeaderFirstPage,
                 trailingGap = nextStart?.let { (it - lastBottomAbsolute).coerceAtLeast(0f) } ?: 0f
             )
         }
-        return TextChapter(chapterIndex, title, pages, ctx.body.length)
+        return TextChapter(chapterIndex, title, pages, ctx.body.length, layoutCapability)
     }
 
     private fun emptyPage() = TextPage(

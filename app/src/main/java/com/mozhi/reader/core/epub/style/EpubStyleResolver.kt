@@ -69,6 +69,8 @@ data class EpubStyle(
     val italic: Boolean = false,
     val underline: Boolean = false,
     val strikethrough: Boolean = false,
+    /** 书写模式随文档继承；引擎目前只有横排轴，竖排由能力判定记录并按横排流出。 */
+    val writingMode: EpubWritingMode = EpubWritingMode.HORIZONTAL_TB,
     val letterSpacingPx: Float = 0f,
     val colorArgb: Int,
     val lineHeight: Float? = null,
@@ -258,7 +260,11 @@ class EpubStyleResolver(
             breakInsideAvoid = (specified["break-inside"] ?: specified["page-break-inside"]) == CssValue.Keyword("avoid"),
             breakAfterAvoid = (specified["break-after"] ?: specified["page-break-after"]) == CssValue.Keyword("avoid"),
             orphans = number(specified["orphans"]) ?: parent?.orphans ?: 2,
-            widows = number(specified["widows"]) ?: parent?.widows ?: 2
+            widows = number(specified["widows"]) ?: parent?.widows ?: 2,
+            writingMode = (inherited("writing-mode") as? CssValue.Keyword)?.name
+                ?.let(EpubWritingMode::parse)
+                ?: parent?.writingMode
+                ?: EpubWritingMode.HORIZONTAL_TB
         )
         val children = view.childViews.map { child -> resolveNode(child, style, rootSize) }
         return StyledDomNode(view.node, style, children)
@@ -494,7 +500,8 @@ class EpubStyleResolver(
         val CORNERS = listOf("top-left", "top-right", "bottom-right", "bottom-left")
         val INHERITED_PROPERTIES = setOf(
             "color", "font-family", "font-size", "font-weight", "font-style", "line-height",
-            "letter-spacing", "text-align", "text-indent", "white-space", "visibility", "orphans", "widows"
+            "letter-spacing", "text-align", "text-indent", "white-space", "visibility", "orphans", "widows",
+            "writing-mode"
         )
         val FONT_SIZE_KEYWORDS = mapOf(
             "xx-small" to 0.6f, "x-small" to 0.75f, "small" to 0.875f, "medium" to 1f,
@@ -508,7 +515,7 @@ class EpubStyleResolver(
             "break-before", "break-after", "break-inside", "page-break-before", "page-break-after",
             "page-break-inside", "orphans", "widows", "border-collapse", "flex-direction",
             "grid-template-columns", "column-gap", "row-gap", "gap", "align-items", "justify-content",
-            "list-style-type", "list-style-position"
+            "list-style-type", "list-style-position", "writing-mode"
         )
         const val UA_STYLES = """
             html, body, div, p, section, article, aside, blockquote, figure, figcaption, h1, h2, h3, h4, h5, h6, ol, ul, hr, pre, dl, dd, dt { display:block; }

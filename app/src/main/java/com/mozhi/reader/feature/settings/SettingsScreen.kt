@@ -379,6 +379,27 @@ fun DataSettingsScreen(
                         title = "书籍存储",
                         subtitle = state.bookStorageBytes?.let { "已占用 ${formatBytes(it)}" } ?: "统计中…"
                     )
+                    // 分项说明体积去了哪里：导入精排 EPUB 会保留原书副本、抽出插图并生成精排数据，
+                    // 落盘体积高于 EPUB 本身是预期行为，不是统计口径出了错。
+                    state.bookStorageBreakdown?.let { breakdown ->
+                        MoReadRowDivider()
+                        MoReadRow(
+                            icon = Icons.Outlined.Storage,
+                            title = "其中",
+                            subtitle = listOf(
+                                "原书文件 ${formatBytes(breakdown.originalFilesBytes)}",
+                                "正文 ${formatBytes(breakdown.textBytes)}",
+                                "插图 ${formatBytes(breakdown.mediaBytes)}",
+                                "精排数据与字体 ${formatBytes(breakdown.layoutBytes)}"
+                            ).joinToString(" · ")
+                        )
+                    }
+                    MoReadRowDivider()
+                    MoReadRow(
+                        icon = Icons.Outlined.Image,
+                        title = "AI 插图",
+                        subtitle = state.aiIllustrationBytes?.let { "已占用 ${formatBytes(it)}" } ?: "统计中…"
+                    )
                     MoReadRowDivider()
                     MoReadRow(
                         icon = Icons.Outlined.Image,

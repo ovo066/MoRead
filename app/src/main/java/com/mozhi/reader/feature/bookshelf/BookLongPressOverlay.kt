@@ -9,6 +9,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -39,17 +43,28 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
+import com.mozhi.reader.R
+import com.mozhi.reader.ui.MoReadLayoutPolicy
+import com.mozhi.reader.ui.rememberMoReadWindowWidth
+import com.mozhi.reader.ui.theme.MoReadSpacing
+import com.mozhi.reader.ui.components.safeTopInset
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.BookReadState
 import com.mozhi.reader.core.database.entity.isPinned
@@ -68,14 +83,15 @@ internal data class BookLongPressTarget(
 
 /**
  * 长按书籍的悬浮操作层：压暗（书架内容那侧同时虚化）、被按的书原地浮起，菜单按书在
- * 屏幕上的位置自适应落在下方或上方。整层由 [BookshelfScreen] 叠在内容之上，自身不受
- * contentPadding 约束，所以坐标一律用根坐标系。
+ * 屏幕上的位置自适应选择四个方向，必要时覆盖部分封面。坐标相对书架内容容器，
+ * 菜单始终避开系统栏，优先避让导航舱，空间不足时由顶层窗口覆盖它；短屏可滚动。
  */
 @Composable
 internal fun BookLongPressOverlay(
     target: BookLongPressTarget,
     readSpan: BookReadSpan?,
     rootSize: IntSize,
+    contentPadding: PaddingValues,
     onDismiss: () -> Unit,
     onSetReadState: (BookReadState?) -> Unit,
     onEditDetails: () -> Unit,
@@ -97,152 +113,169 @@ internal fun BookLongPressOverlay(
         }
     }
 
-    val previewWidthPx = with(density) { PREVIEW_WIDTH.toPx() }
-    val menuWidthPx = with(density) { MENU_WIDTH.toPx() }
-    val marginPx = with(density) { 16.dp.toPx() }
-    val gapPx = with(density) { 12.dp.toPx() }
-
-    // 横向：两块都对齐被按项的中心，贴着原位置长出来；越界才往里收。
-    fun clampLeft(width: Float): Float =
-        (target.bounds.center.x - width / 2f)
-            .coerceIn(marginPx, (rootSize.width - width - marginPx).coerceAtLeast(marginPx))
-
-    // 纵向：优先「书在原位、菜单在下方」；下方放不下就翻到上方；都放不下才整组上移。
-    val maxBottom = rootSize.height - marginPx
-    var previewTop = target.bounds.top
-    var menuTop = previewTop + previewHeight + gapPx
-    if (menuTop + menuHeight > maxBottom) {
-        val above = previewTop - gapPx - menuHeight
-        if (above >= marginPx) {
-            menuTop = above
-        } else {
-            val group = previewHeight + gapPx + menuHeight
-            previewTop = (maxBottom - group).coerceAtLeast(marginPx)
-            menuTop = previewTop + previewHeight + gapPx
-        }
+    if (rootSize.width <= 0 || rootSize.height <= 0) return
+    val layoutDirection = LocalLayoutDirection.current
+    val bottomReserve = MoReadLayoutPolicy.rootBottomPaddingDp(rememberMoReadWindowWidth()).dp
+    val topInset = maxOf(contentPadding.calculateTopPadding(), safeTopInset())
+    val systemSafeBounds = with(density) {
+        val left = (contentPadding.calculateLeftPadding(layoutDirection) + MoReadSpacing.l).toPx()
+        val top = (topInset + MoReadSpacing.l).toPx()
+        Rect(
+            left, top,
+            maxOf(left + 1f, rootSize.width - (contentPadding.calculateRightPadding(layoutDirection) + MoReadSpacing.l).toPx()),
+            maxOf(top + 1f, rootSize.height - (contentPadding.calculateBottomPadding() + MoReadSpacing.l).toPx())
+        )
     }
-    previewTop = previewTop.coerceIn(
-        marginPx,
-        (maxBottom - previewHeight).coerceAtLeast(marginPx)
+    val dockSafeBounds = systemSafeBounds.copy(bottom = maxOf(
+        systemSafeBounds.top + 1f,
+        rootSize.height - with(density) { (contentPadding.calculateBottomPadding() + bottomReserve).toPx() }
+    ))
+    val gapPx = with(density) { MoReadSpacing.m.toPx() }
+    val menuWidthPx = minOf(with(density) { MENU_WIDTH.toPx() }, systemSafeBounds.width)
+    val previewWidthPx = with(density) {
+        (systemSafeBounds.width - menuWidthPx - gapPx)
+            .coerceIn(MIN_PREVIEW_WIDTH.toPx(), PREVIEW_WIDTH.toPx())
+            .coerceAtMost(systemSafeBounds.width)
+    }
+    val previewWidth = with(density) { previewWidthPx.toDp() }
+    val menuWidth = with(density) { menuWidthPx.toDp() }
+    val maxHeight = with(density) { systemSafeBounds.height.toDp() }
+    // Prefer leaving the dock visible. If that makes the group cramped, the popup may cover it.
+    val placementBounds = if (previewHeight + menuHeight + gapPx <= dockSafeBounds.height) {
+        dockSafeBounds
+    } else systemSafeBounds
+    val placement = placeBookMenu(
+        target.bounds, placementBounds,
+        Size(previewWidthPx, previewHeight.toFloat()),
+        Size(menuWidthPx, menuHeight.toFloat()), gapPx
     )
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = SCRIM_ALPHA * enter.value))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onDismiss
-            )
+    // A separate popup window sits above the app-root dock; local zIndex cannot cross that layer.
+    Popup(
+        alignment = Alignment.TopStart,
+        onDismissRequest = onDismiss,
+        properties = PopupProperties(focusable = true, clippingEnabled = false)
     ) {
-        BookLongPressPreview(
-            book = book,
-            state = state,
-            readSpan = readSpan,
+        Box(
             modifier = Modifier
-                .width(PREVIEW_WIDTH)
-                .offset { IntOffset(clampLeft(previewWidthPx).toInt(), previewTop.toInt()) }
-                .onSizeChanged { previewHeight = it.height }
-                .graphicsLayer {
-                    alpha = enter.value
-                    // 从书原本的大小长起来，落点就是它自己的位置。
-                    val scale = 0.9f + 0.1f * enter.value
-                    scaleX = scale
-                    scaleY = scale
-                }
-        )
-
-        FrostedSurface(
-            modifier = Modifier
-                .width(MENU_WIDTH)
-                .offset { IntOffset(clampLeft(menuWidthPx).toInt(), menuTop.toInt()) }
-                .onSizeChanged { menuHeight = it.height }
-                .graphicsLayer {
-                    alpha = enter.value
-                    val scale = 0.9f + 0.1f * enter.value
-                    scaleX = scale
-                    scaleY = scale
-                    // 菜单从贴近书的那条边展开，方向感跟着位置走。
-                    transformOrigin = TransformOrigin(
-                        0.5f,
-                        if (menuTop >= previewTop) 0f else 1f
-                    )
-                },
-            shape = RoundedCornerShape(22.dp),
-            shadowElevation = 18.dp
-        ) {
-            Column(modifier = Modifier.padding(vertical = 5.dp)) {
-                BookActionRow(
-                    text = if (state == BookReadState.FINISHED) "取消已读完" else "标为已读完",
-                    icon = Icons.Outlined.TaskAlt,
-                    onClick = {
-                        onDismiss()
-                        onSetReadState(
-                            if (state == BookReadState.FINISHED) null else BookReadState.FINISHED
-                        )
-                    }
+                .size(with(density) { rootSize.width.toDp() }, with(density) { rootSize.height.toDp() })
+                .background(Color.Black.copy(alpha = SCRIM_ALPHA * enter.value))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onDismiss
                 )
-                if (state != BookReadState.UNREAD) {
+        ) {
+            BookLongPressPreview(
+                book = book,
+                state = state,
+                readSpan = readSpan,
+                modifier = Modifier
+                    .width(previewWidth)
+                    .heightIn(max = maxHeight)
+                    .offset { IntOffset(placement.preview.left.toInt(), placement.preview.top.toInt()) }
+                    .onSizeChanged { previewHeight = it.height }
+                    .graphicsLayer {
+                        alpha = enter.value
+                        // 从书原本的大小长起来，落点就是它自己的位置。
+                        val scale = 0.9f + 0.1f * enter.value
+                        scaleX = scale
+                        scaleY = scale
+                    }
+            )
+
+            FrostedSurface(
+                modifier = Modifier
+                    .width(menuWidth)
+                    .heightIn(max = maxHeight)
+                    .offset { IntOffset(placement.menu.left.toInt(), placement.menu.top.toInt()) }
+                    .onSizeChanged { menuHeight = it.height }
+                    .graphicsLayer {
+                        alpha = enter.value
+                        val scale = 0.9f + 0.1f * enter.value
+                        scaleX = scale
+                        scaleY = scale
+                        // 菜单从贴近书的那条边展开，方向感跟着位置走。
+                        transformOrigin = TransformOrigin(
+                            ((placement.preview.center.x - placement.menu.left) / menuWidthPx).coerceIn(0f, 1f),
+                            ((placement.preview.center.y - placement.menu.top) / menuHeight.coerceAtLeast(1)).coerceIn(0f, 1f)
+                        )
+                    },
+                shape = RoundedCornerShape(22.dp),
+                shadowElevation = 18.dp
+            ) {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState()).padding(vertical = MoReadSpacing.xs)) {
                     BookActionRow(
-                        text = "标为未读",
-                        icon = Icons.Outlined.RadioButtonUnchecked,
+                        text = stringResource(if (state == BookReadState.FINISHED) R.string.book_action_unfinish else R.string.book_action_finish),
+                        icon = Icons.Outlined.TaskAlt,
                         onClick = {
                             onDismiss()
-                            onSetReadState(BookReadState.UNREAD)
+                            onSetReadState(
+                                if (state == BookReadState.FINISHED) null else BookReadState.FINISHED
+                            )
+                        }
+                    )
+                    if (state != BookReadState.UNREAD) {
+                        BookActionRow(
+                            text = stringResource(R.string.book_action_unread),
+                            icon = Icons.Outlined.RadioButtonUnchecked,
+                            onClick = {
+                                onDismiss()
+                                onSetReadState(BookReadState.UNREAD)
+                            }
+                        )
+                    }
+                    BookActionRow(
+                        text = stringResource(if (state == BookReadState.SHELVED) R.string.book_action_unshelve else R.string.book_action_shelve),
+                        icon = Icons.Outlined.Schedule,
+                        onClick = {
+                            onDismiss()
+                            onSetReadState(
+                                if (state == BookReadState.SHELVED) null else BookReadState.SHELVED
+                            )
+                        }
+                    )
+                    MoReadMenuDivider()
+                    BookActionRow(
+                        text = stringResource(R.string.book_action_edit),
+                        icon = Icons.Outlined.Edit,
+                        onClick = {
+                            onDismiss()
+                            onEditDetails()
+                        }
+                    )
+                    BookActionRow(
+                        text = stringResource(R.string.book_action_cover),
+                        icon = Icons.Outlined.Image,
+                        onClick = {
+                            onDismiss()
+                            onChangeCover()
+                        }
+                    )
+                    BookActionRow(
+                        text = stringResource(if (book.isPinned) R.string.book_action_unpin else R.string.book_action_pin),
+                        icon = Icons.Outlined.PushPin,
+                        onClick = {
+                            onDismiss()
+                            onTogglePinned()
+                        }
+                    )
+                    BookActionRow(
+                        text = stringResource(R.string.book_action_select),
+                        icon = Icons.Outlined.Checklist,
+                        onClick = onStartSelection
+                    )
+                    MoReadMenuDivider()
+                    BookActionRow(
+                        text = stringResource(R.string.book_action_remove),
+                        icon = Icons.Outlined.Delete,
+                        destructive = true,
+                        onClick = {
+                            onDismiss()
+                            onDelete()
                         }
                     )
                 }
-                BookActionRow(
-                    text = if (state == BookReadState.SHELVED) "取消搁置" else "标为搁置",
-                    icon = Icons.Outlined.Schedule,
-                    onClick = {
-                        onDismiss()
-                        onSetReadState(
-                            if (state == BookReadState.SHELVED) null else BookReadState.SHELVED
-                        )
-                    }
-                )
-                MoReadMenuDivider()
-                BookActionRow(
-                    text = "编辑详情",
-                    icon = Icons.Outlined.Edit,
-                    onClick = {
-                        onDismiss()
-                        onEditDetails()
-                    }
-                )
-                BookActionRow(
-                    text = "修改封面",
-                    icon = Icons.Outlined.Image,
-                    onClick = {
-                        onDismiss()
-                        onChangeCover()
-                    }
-                )
-                BookActionRow(
-                    text = if (book.isPinned) "取消置顶" else "置顶书架",
-                    icon = Icons.Outlined.PushPin,
-                    onClick = {
-                        onDismiss()
-                        onTogglePinned()
-                    }
-                )
-                BookActionRow(
-                    text = "多选…",
-                    icon = Icons.Outlined.Checklist,
-                    onClick = onStartSelection
-                )
-                MoReadMenuDivider()
-                BookActionRow(
-                    text = "移除书架",
-                    icon = Icons.Outlined.Delete,
-                    destructive = true,
-                    onClick = {
-                        onDismiss()
-                        onDelete()
-                    }
-                )
             }
         }
     }
@@ -262,9 +295,9 @@ private fun BookLongPressPreview(
         shadowElevation = 20.dp
     ) {
         Column(
-            modifier = Modifier.padding(10.dp),
+            modifier = Modifier.padding(MoReadSpacing.s),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(MoReadSpacing.s)
         ) {
             CompactBookArtwork(
                 book = book,
@@ -304,8 +337,9 @@ private fun BookActionRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .heightIn(min = 44.dp)
             .clickable(onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 12.dp),
+            .padding(horizontal = MoReadSpacing.l, vertical = MoReadSpacing.m),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
@@ -323,21 +357,24 @@ private fun BookActionRow(
     }
 }
 
+@Composable
 internal fun BookReadState.caption(book: BookEntity, readSpan: BookReadSpan?): String = when (this) {
-    BookReadState.UNREAD -> "未读 · ${book.totalChapters} 章"
-    BookReadState.READING -> "在读 · ${readPercent(readFraction(book, readSpan))}%"
-    BookReadState.FINISHED -> "已读完"
-    BookReadState.SHELVED -> "已搁置"
+    BookReadState.UNREAD -> pluralStringResource(R.plurals.book_state_unread_chapters, book.totalChapters, book.totalChapters)
+    BookReadState.READING -> stringResource(R.string.book_state_reading_progress, readPercent(readFraction(book, readSpan)))
+    BookReadState.FINISHED -> stringResource(R.string.book_state_finished)
+    BookReadState.SHELVED -> stringResource(R.string.book_state_shelved)
 }
 
-internal fun BookReadState.label(): String = when (this) {
-    BookReadState.UNREAD -> "未读"
-    BookReadState.READING -> "在读"
-    BookReadState.FINISHED -> "已读完"
-    BookReadState.SHELVED -> "搁置"
-}
+@Composable
+internal fun BookReadState.label(): String = stringResource(when (this) {
+    BookReadState.UNREAD -> R.string.book_state_unread
+    BookReadState.READING -> R.string.book_state_reading
+    BookReadState.FINISHED -> R.string.book_state_finished
+    BookReadState.SHELVED -> R.string.book_state_shelved
+})
 
 /** 浮层压暗强度；虚化不可用（API < 31）时加重，靠对比度托住浮层。 */
 internal val SCRIM_ALPHA = if (android.os.Build.VERSION.SDK_INT >= 31) 0.26f else 0.44f
+private val MIN_PREVIEW_WIDTH = 96.dp
 private val PREVIEW_WIDTH = 142.dp
 private val MENU_WIDTH = 218.dp

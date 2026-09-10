@@ -61,6 +61,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -415,19 +416,23 @@ private fun toolIcon(icon: CompanionToolIcon): ImageVector = when (icon) {
 /**
  * 场景分隔：iMessage 日期分隔的形制——两侧渐隐细线夹一行淡字。
  * 它是「你们现在聊的是这一章」的提示，不是一张需要被读的卡片。
+ *
+ * 章节题异步到达前文案为空：此时仍占同样高度、只是不可见。它是列表第一项，若从 0 高度
+ * 长出来，内容不满一屏的短会话会整体被顶下一截——进页时那一下「抽动」就是这么来的。
  */
 @Composable
 internal fun ChatSceneDivider(text: String, palette: ReaderPalette) {
-    if (text.isBlank()) return
+    val pending = text.isBlank()
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 2.dp),
+            .padding(vertical = 2.dp)
+            .alpha(if (pending) 0f else 1f),
         verticalAlignment = Alignment.CenterVertically
     ) {
         FadingRule(palette, fadeToStart = true, modifier = Modifier.weight(1f))
         Text(
-            text = text,
+            text = if (pending) " " else text,
             style = MaterialTheme.typography.labelSmall,
             color = palette.muted,
             maxLines = 1,

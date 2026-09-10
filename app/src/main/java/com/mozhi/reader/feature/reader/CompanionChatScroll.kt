@@ -1,5 +1,7 @@
 package com.mozhi.reader.feature.reader
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
@@ -176,6 +178,9 @@ internal fun rememberCompanionChatScrollState(
     return state
 }
 
+/** 首次贴底后列表淡入的时长；与二级页 shared-axis 转场同期完成，不做第二段可感知的动画。 */
+private const val CHAT_REVEAL_FADE_MS = 160
+
 private data class ChatFollowSnapshot(
     val ready: Boolean,
     val entryCount: Int,
@@ -194,12 +199,19 @@ internal fun CompanionChatMessageList(
     modifier: Modifier = Modifier,
     content: @Composable (ChatEntry) -> Unit
 ) {
+    // 首次定位完成后短淡入，而不是硬切出现：页面还在转场滑动时整屏列表突然「弹」出来，
+    // 就是用户感知到的「闪」。已可见后不再隐藏，此后的高度变化只由跟随逻辑处理。
+    val revealAlpha by animateFloatAsState(
+        targetValue = if (scrollState.initiallyPositioned) 1f else 0f,
+        animationSpec = tween(durationMillis = if (scrollState.initiallyPositioned) CHAT_REVEAL_FADE_MS else 0),
+        label = "chatReveal"
+    )
     LazyColumn(
         state = scrollState.listState,
         userScrollEnabled = scrollState.initiallyPositioned,
         modifier = modifier
             .nestedScroll(scrollState.nestedScrollConnection)
-            .graphicsLayer { alpha = if (scrollState.initiallyPositioned) 1f else 0f },
+            .graphicsLayer { alpha = revealAlpha },
         contentPadding = PaddingValues(top = 8.dp, bottom = 14.dp)
     ) {
         itemsIndexed(

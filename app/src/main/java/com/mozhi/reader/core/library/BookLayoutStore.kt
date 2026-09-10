@@ -13,6 +13,8 @@ import java.util.zip.ZipFile
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -46,6 +48,8 @@ class BookLayoutStore @Inject constructor(
         try {
             val chapterDirectory = File(staging, CHAPTER_DIRECTORY).apply { mkdirs() }
             val legacyDirectory = File(staging, LEGACY_CHAPTER_DIRECTORY).apply { mkdirs() }
+            // 没有任何样式表的书，排版器不会走 DOM 引擎，旧引擎仍需要完整块列表。
+            val keepLegacyBlocks = layoutPackage.stylesheets.isEmpty()
             val refs = sortedChapters.map { input ->
                 val dom = requireNotNull(input.dom) { "EPUB v10 DOM 缺失：${input.chapterIndex}" }
                 require(dom.schemaVersion == EpubLayoutPackage.CURRENT_SCHEMA_VERSION) {
@@ -55,16 +59,22 @@ class BookLayoutStore @Inject constructor(
                     "EPUB 章节布局长度无效：${input.chapterIndex}"
                 }
                 val fileName = "ch-${input.chapterIndex.toString().padStart(5, '0')}.json"
-                File(chapterDirectory, fileName).writeText(
+                // DOM JSON gzip 落盘：一本精排书的章节 DOM 常有几 MB，压后约八分之一；读取按魔数识别。
+                val domFileName = "$fileName.gz"
+                GzipTextFiles.writeGzip(
+                    File(chapterDirectory, domFileName),
                     json.encodeToString(dom.copy(chapterIndex = input.chapterIndex, href = input.href))
                 )
-                // Temporary P2 bridge. P3 reads DOM directly; P4 removes these compatibility files.
-                File(legacyDirectory, fileName).writeText(json.encodeToString(input.document))
+                // 旧引擎的块列表只在两种情况下还会被读：没有 DOM 的老库，以及整本没有样式表、
+                // 排版器因此仍走旧引擎的书。其余情况它是同一章的第二份、且比 DOM 大三倍多的 JSON
+                // （一本 14 MB 的精排书曾为此多写 19 MB），这里只保留章级元信息。
+                val legacyDocument = if (keepLegacyBlocks) input.document else input.document.copy(blocks = emptyList())
+                File(legacyDirectory, fileName).writeText(json.encodeToString(legacyDocument))
                 EpubLayoutChapterRef(
                     chapterIndex = input.chapterIndex,
                     href = input.href,
                     textLength = input.document.textLength,
-                    fileName = "$CHAPTER_DIRECTORY/$fileName"
+                    fileName = "$CHAPTER_DIRECTORY/$domFileName"
                 )
             }
             val storedPackage = layoutPackage.copy(chapters = refs)
@@ -74,6 +84,7 @@ class BookLayoutStore @Inject constructor(
                 targetRoot = File(staging, RESOURCE_DIRECTORY)
             )
             File(staging, INDEX_FILE).writeText(json.encodeToString(storedPackage))
+            File(staging, COMPACT_MARKER).writeText("v2")
             root.deleteRecursively()
             if (!staging.renameTo(root)) {
                 root.mkdirs()
@@ -100,14 +111,15 @@ class BookLayoutStore @Inject constructor(
             if (!chapterFile.isFile) return@withContext null
             val (chapter, dom) = if (layoutPackage.schemaVersion >= 10) {
                 val parsedDom = runCatching {
-                    json.decodeFromString(EpubDomChapter.serializer(), chapterFile.readText())
+                    json.decodeFromString(EpubDomChapter.serializer(), GzipTextFiles.readText(chapterFile))
                 }.getOrNull() ?: return@withContext null
                 if (parsedDom.schemaVersion != EpubLayoutPackage.CURRENT_SCHEMA_VERSION ||
                     parsedDom.chapterIndex != chapterIndex || parsedDom.textLength != reference.textLength
                 ) return@withContext null
-                val legacyFile = safeChild(root, "$LEGACY_CHAPTER_DIRECTORY/${chapterFile.name}")
+                // 旧安装写的是 chapters/ch-N.json 与 legacy-v9/ch-N.json；新安装是 .json.gz 与 legacy 里的 .json。
+                val legacyFile = safeChild(root, "$LEGACY_CHAPTER_DIRECTORY/${chapterFile.name.removeSuffix(".gz")}")
                 val legacy = legacyFile?.takeIf(File::isFile)?.let { file ->
-                    runCatching { json.decodeFromString(EpubLayoutChapter.serializer(), file.readText()) }.getOrNull()
+                    runCatching { json.decodeFromString(EpubLayoutChapter.serializer(), GzipTextFiles.readText(file)) }.getOrNull()
                 } ?: EpubLayoutChapter(
                     chapterIndex = chapterIndex,
                     href = parsedDom.href,
@@ -116,7 +128,7 @@ class BookLayoutStore @Inject constructor(
                 legacy to parsedDom
             } else {
                 val legacy = runCatching {
-                    json.decodeFromString(EpubLayoutChapter.serializer(), chapterFile.readText())
+                    json.decodeFromString(EpubLayoutChapter.serializer(), GzipTextFiles.readText(chapterFile))
                 }.getOrNull() ?: return@withContext null
                 if (legacy.chapterIndex != chapterIndex || legacy.textLength != reference.textLength) {
                     return@withContext null
@@ -184,6 +196,54 @@ class BookLayoutStore @Inject constructor(
                 chapterFile.isFile && chapterFile.length() > 0L
             }
         }
+
+    /**
+     * Compress in place with an atomic file replacement, preserving every indexed path. Readers
+     * can use either version by gzip magic; interruption never exposes a missing chapter/index.
+     * Write the completion marker only after every chapter and legacy sidecar has succeeded.
+     */
+    suspend fun compact(bookId: Long): Boolean = withContext(Dispatchers.IO) {
+        val root = directory(bookId)
+        val marker = File(root, COMPACT_MARKER)
+        if (!root.isDirectory || marker.isFile) return@withContext false
+        val layoutPackage = readPackage(bookId) ?: return@withContext false
+        if (layoutPackage.schemaVersion != EpubLayoutPackage.CURRENT_SCHEMA_VERSION) return@withContext false
+        val keepLegacyBlocks = layoutPackage.stylesheets.isEmpty()
+        var changed = false
+        var complete = true
+        for (ref in layoutPackage.chapters) {
+            currentCoroutineContext().ensureActive()
+            val chapterFile = safeChild(root, ref.fileName)?.takeIf(File::isFile)
+            if (chapterFile == null) {
+                complete = false
+                continue
+            }
+            val result = runCatching {
+                val chapterText = GzipTextFiles.readText(chapterFile)
+                val dom = json.decodeFromString(EpubDomChapter.serializer(), chapterText)
+                require(dom.schemaVersion == EpubLayoutPackage.CURRENT_SCHEMA_VERSION &&
+                    dom.chapterIndex == ref.chapterIndex && dom.textLength == ref.textLength) {
+                    "EPUB DOM 与布局索引不一致：${ref.chapterIndex}"
+                }
+                if (!GzipTextFiles.isGzip(chapterFile)) {
+                    GzipTextFiles.replaceWithGzip(chapterFile, chapterText)
+                    changed = true
+                }
+                val plainName = chapterFile.name.removeSuffix(".gz")
+                val legacyFile = safeChild(root, "$LEGACY_CHAPTER_DIRECTORY/$plainName")
+                if (!keepLegacyBlocks && legacyFile?.isFile == true) {
+                    val legacy = json.decodeFromString(EpubLayoutChapter.serializer(), GzipTextFiles.readText(legacyFile))
+                    if (legacy.blocks.isNotEmpty()) {
+                        GzipTextFiles.replaceWithGzip(legacyFile, json.encodeToString(legacy.copy(blocks = emptyList())))
+                        changed = true
+                    }
+                }
+            }
+            if (result.isFailure) complete = false
+        }
+        if (complete) marker.writeText("v2")
+        changed
+    }
 
     fun delete(bookId: Long) {
         directory(bookId).deleteRecursively()
@@ -270,6 +330,8 @@ class BookLayoutStore @Inject constructor(
 
     companion object {
         const val ROOT_DIRECTORY = "book-layout"
+        /** 压实完成标记；存在即跳过，避免每次启动都重读全部章节文件。 */
+        const val COMPACT_MARKER = ".compacted-v2"
         const val INDEX_FILE = "index.json"
         const val CHAPTER_DIRECTORY = "chapters"
         const val LEGACY_CHAPTER_DIRECTORY = "legacy-v9"

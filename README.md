@@ -1,92 +1,99 @@
 <p align="center">
-  <img src="docs/images/icon.png" width="112" alt="墨知 MoRead 图标" />
+  <img src="docs/images/icon.png" width="112" alt="MoRead icon" />
 </p>
 
-<h1 align="center">墨知 MoRead</h1>
+<h1 align="center">MoRead · 墨知</h1>
 
-<p align="center">极简的原生 Android 本地小说阅读器，内建可深度定制的 AI 伴读。</p>
+<p align="center"><b>English</b> · <a href="README.zh-CN.md">简体中文</a></p>
+
+<p align="center">A minimal, native Android reader for local books, with a customizable AI reading companion.</p>
 
 <p align="center">
-  <a href="https://github.com/ovo066/MoRead/releases"><img src="https://img.shields.io/github/v/release/ovo066/MoRead?label=%E4%B8%8B%E8%BD%BD&color=0a0a0a" alt="Release" /></a>
+  <a href="https://github.com/ovo066/MoRead/releases"><img src="https://img.shields.io/github/v/release/ovo066/MoRead?label=Download&color=0a0a0a" alt="Latest release" /></a>
   <img src="https://img.shields.io/badge/Android-8.0%2B-0a0a0a" alt="Android 8.0+" />
   <img src="https://img.shields.io/badge/License-GPL--3.0-0a0a0a" alt="License GPL-3.0" />
 </p>
 
-墨知是一款纯本地、无账号、无数据采集的阅读应用：书籍由你自己导入，AI 功能使用你自己的 API Key（BYOK）直连服务商，不经任何中转服务器。没有网络、没有 Key 时，它就是一个完整可用的本地阅读器。
+MoRead is a local-first reading app with no account requirement or analytics. Import your own books and, optionally, connect directly to an AI provider using your own API key (BYOK)—there is no MoRead proxy server. Without a network connection or API key, it remains a fully usable offline reader.
 
+> **App language:** the interface is currently primarily Chinese. An Android string-resource foundation and partial English translations are available; a complete English UI is not yet included. See the [localization guide](docs/LOCALIZATION.md) to help translate.
 
-## 界面预览
+## Screenshots
 
-以下为 **1080 × 2280 手机竖屏**下的应用直接截图（Android 模拟器）。书籍为原创示例内容；聊天与段评为预设演示数据，**不是在线模型实测结果**。
+These are direct app screenshots from an Android emulator at **1080 × 2280, portrait**. The books contain original sample text. Chats and annotations are preset demo data, **not results from live model testing**.
 
 <table>
   <tr>
-    <td align="center" width="50%"><img src="docs/images/screenshot-bookshelf.png" width="360" alt="手机书架：续读卡片、书籍网格和底部导航" /><br /><b>书架</b> · 续读、分组与书籍管理</td>
-    <td align="center" width="50%"><img src="docs/images/screenshot-reader.png" width="360" alt="手机阅读页：沉浸阅读与荧光、波浪线、直线三种段评样式" /><br /><b>阅读</b> · 留白排版与三种段评划线</td>
+    <td align="center" width="50%"><img src="docs/images/screenshot-bookshelf.png" width="360" alt="Bookshelf with a continue-reading card, book grid, and bottom navigation" /><br /><b>Bookshelf</b> · Continue reading and organize books</td>
+    <td align="center" width="50%"><img src="docs/images/screenshot-reader.png" width="360" alt="Reader with highlights, wavy underlines, and straight underlines" /><br /><b>Reader</b> · Spacious typography and three annotation styles</td>
   </tr>
   <tr>
-    <td align="center" width="50%"><img src="docs/images/screenshot-companion.png" width="360" alt="手机 AI 伴读页：角色阿翎围绕当前章节的示例对话" /><br /><b>AI 伴读</b> · 和角色一起聊正在读的书</td>
-    <td align="center" width="50%"><img src="docs/images/screenshot-annotation.png" width="360" alt="手机段落讨论页：从正文批注展开角色评论和回复入口" /><br /><b>段落讨论</b> · 从一句话展开交流</td>
+    <td align="center" width="50%"><img src="docs/images/screenshot-companion.png" width="360" alt="AI companion showing a sample conversation about the current chapter" /><br /><b>AI companion</b> · Discuss your book with a character</td>
+    <td align="center" width="50%"><img src="docs/images/screenshot-annotation.png" width="360" alt="Paragraph discussion with character comments and a reply entry" /><br /><b>Paragraph discussion</b> · Start a conversation from a passage</td>
   </tr>
 </table>
 
-## 特性
+## Features
 
-### 阅读
+This list describes the current source tree. For features in a packaged release, check its release notes.
 
-- TXT / EPUB 导入：编码自动探测，正则分章（Legado 同源规则集），导入前可预览并自定义分章规则
-- 自绘排版引擎：仿真 / 覆盖 / 滑动三种翻页；原生 EPUB 精细解析 CSS、块级/行内、浮动、表格、背景与图片；支持选词拖柄、段落批注与评论、书签、书内关键词搜索
-- 排版自由：字号、行距、页边距、明暗主题、自定义三色阅读主题；无封面书籍自动生成直排文字封面
-- 连续听书：系统 TTS 或云端 AI TTS 逐句朗读，自动翻页与跨章续播，通知栏播放控制，当前句正文高亮
-- 书架管理：分组与合集、拖拽排序、置顶与阅读状态；支持繁简转换并保持阅读定位
-- 大屏适配：自适应书架网格与侧边导航，可选双页阅读、阅读与伴读并排显示
-- 阅读统计：阅读时长热力图、笔记与 AI 对话计量；笔记可导出 Markdown
+### Reading
 
-### AI 伴读（自带 API Key）
+- **TXT and EPUB import:** automatic encoding detection, regex-based chapter splitting using Legado’s rule set, and a preview with customizable chapter rules.
+- **Native rendering:** page-curl, cover, and slide animations; EPUB parsing and layout for supported CSS, block/inline content, floats, tables, backgrounds, and images. Includes text-selection handles, paragraph annotations and comments, bookmarks, and in-book search.
+- **Quick bookmarks:** in paginated mode, pull down until the release cue appears, then release to add a bookmark. Repeating the gesture never removes an existing bookmark. It is disabled in continuous vertical scrolling mode.
+- **Typography and themes:** font size, line spacing, margins, light/dark themes, custom three-color reading palettes, and generated vertical-text covers for books without artwork.
+- **Continuous read-aloud:** system TTS or cloud AI TTS, sentence highlighting, automatic page/chapter advancement, and notification playback controls.
+- **Library organization:** groups, collections, drag-to-reorder, pinning, and reading states. Collection targets stay in place while a book is dragged into them; long-press menus adapt to available space and appear above the bottom navigation. Simplified/Traditional Chinese conversion preserves reading position.
+- **Large-screen support:** adaptive bookshelf grids and side navigation, optional two-page spreads, and side-by-side reading and companion chat.
+- **Reading statistics:** reading-time heatmaps, note and AI-chat counts, and Markdown note export.
 
-- 四协议客户端自实现：OpenAI 兼容 / OpenAI Responses / Claude / Gemini，全部流式输出；同一服务商可混配对话、向量、语音、生图模型；Base URL 支持 HTTPS 与可信局域网 HTTP
-- 角色卡：兼容 SillyTavern PNG / JSON 卡导入，支持世界书与自定义头像
-- 陪读 Agent：理解当前章与全书进度，可按卷部目录精确定位章节，检索原文（向量 + 词法双路），并读回已有划线、笔记与剧情梗概
-- 伴读创作：可添加批注、写入或更新笔记、滚动维护单份剧情梗概、生成插图与朗读文本；角色的写入能力在独立二级页用开关管理
-- 防剧透硬约束：喂给 AI 的书籍内容永远不超过你当前的阅读进度
-- 随读段评：在已读范围内按角色生成批注，支持荧光 / 波浪线 / 直线；全局与单书额度可控，后台任务串行、去重并支持取消
-- 角色互动提醒：可选快速模型，把段评完成提示变成角色口吻的短句；关闭时仍使用免费、无模型调用的数量提示
-- 对话体验：流式输出、会话历史、手动滚动和中止回复；打开已有会话时稳定定位，返回阅读页复用排版缓存
-- 长期记忆：对话自动总结固化为向量记忆，在所属书籍、角色及用户面具的边界内跨会话召回
-- 选词即问：翻译、解析、提问；AI 建议回复；一键剧情梗概
-- 媒体生成：生图支持 OpenAI images 端点 / chat 端点出图 / NovelAI，语音支持系统引擎 / MiniMax / OpenAI 兼容端点，均可独立于模型分配单独配置
+### AI companion · bring your own API key
 
-### 隐私
+- **Four streaming protocols:** OpenAI-compatible, OpenAI Responses, Claude, and Gemini. Assign chat, embedding, speech, and image models independently, including from the same provider. Base URLs support HTTPS and trusted local-network HTTP.
+- **Character cards:** import SillyTavern PNG/JSON cards, world books, and custom avatars.
+- **Reading agent:** understands the current chapter and reading progress, locates chapters through the volume/part table of contents, retrieves source text using vector and lexical search, and reads back existing highlights, notes, and the plot summary.
+- **Companion actions:** annotate passages, create or update notes, maintain a single rolling plot summary, generate illustrations, and read text aloud. Separate settings control the character’s write permissions.
+- **Spoiler boundaries:** book content supplied to the AI is limited to your current reading progress.
+- **Proactive paragraph annotations:** character-voiced comments within the read portion of the book, with highlights, wavy underlines, or straight underlines. Global and per-book quotas, serialized background jobs, deduplication, and cancellation keep generation bounded.
+- **Character reactions:** free, built-in count notices by default; optionally use a fast model for a short in-character reaction, or turn notices off entirely.
+- **Chat experience:** streaming responses, conversation history, manual scrolling, stop controls, stable positioning when opening history, and reuse of layout caches when returning to the reader.
+- **Long-term memory:** conversations are summarized into retrievable memories, scoped to the book, character, and user persona.
+- **Ask about a selection:** translation, explanations, questions, suggested replies, and one-tap plot summaries.
+- **Media generation:** OpenAI image endpoints, image output through chat endpoints, and NovelAI; speech through system engines, MiniMax, and OpenAI-compatible endpoints. Speech and image generation can also be configured independently of model assignments.
 
-- 书籍、批注、笔记、对话全部保存在本机，应用不含任何自有后台服务
-- WebDAV 支持手动完整备份、轻量自动备份、上传/下载进度与恢复前校验，恢复准备在后台完成后再安全重启
-- API Key 存于 Android EncryptedSharedPreferences，仅在你主动使用 AI 功能时直连你配置的服务商
-- 不申请存储全盘权限，书籍经系统文件选择器导入
+### Privacy
 
-## 下载
+- Books, annotations, notes, and chats are stored on your device. MoRead has no proprietary backend service.
+- Optional WebDAV offers full manual backups, lightweight automatic backups, transfer progress, and validation before restore. Restore preparation runs in the background before a safe restart.
+- API keys are stored in Android EncryptedSharedPreferences. Enabled AI features connect directly to the providers you configure.
+- Books are imported through the system file picker; the app does not request all-files storage access.
 
-前往 [Releases](https://github.com/ovo066/MoRead/releases) 下载最新正式签名 APK。系统要求 Android 8.0（API 26）及以上。
+## Download
 
-## 快速上手
+Get the latest officially signed APK from [Releases](https://github.com/ovo066/MoRead/releases). Requires **Android 8.0 (API 26) or later**.
 
-1. 书架页导入书籍，或在文件管理器中对 TXT / EPUB 使用「其他应用打开」→ 墨知
-2. （可选）设置 → AI 服务商：添加服务商与 API Key，为对话 / 向量 / 语音 / 生图分配模型；语音朗读与生图也可在各自二级页独立配置
-3. 阅读页长按选词即可翻译、解析、提问；底部工具栏可打开目录、听书与伴读
+## Getting started
 
-## 参与开发
+1. Import a book from the bookshelf, or use **Open with → MoRead** on a TXT/EPUB file in your file manager.
+2. Optionally open **Settings → AI providers**, add a provider and API key, and assign chat, embedding, speech, and image models. Speech and image generation also have their own configuration pages.
+3. Long-press text in the reader to translate, explain, or ask a question. The reader toolbar opens the table of contents, read-aloud controls, and companion chat.
 
-阅读 [代码地图](docs/CODE_MAP.md)，了解模块边界、主要调用链和回归测试入口。
+## Contributing
 
-## 从源码构建
+Start with the [code map](docs/CODE_MAP.md) (Chinese) for module boundaries, call paths, and regression-test entry points. Translation contributions are welcome; see [Localization](docs/LOCALIZATION.md) for the current scope and resource conventions.
 
-- 要求 JDK 17 与 Android SDK 37；克隆后用 Android Studio 打开，或命令行执行 `./gradlew :app:assembleDebug`
-- Windows 下若仓库位于含中文的路径，可使用 `powershell -ExecutionPolicy Bypass -File scripts/gradle.ps1 <任务>` 规避路径问题
-- 正式签名：仓库不包含签名密钥。在根目录放置 `keystore.properties`（`storeFile` / `storePassword` / `keyAlias` / `keyPassword` 四项）后执行 `assembleRelease` 即自动签名；未提供时输出未签名包
+## Build from source
 
-## 免责声明
+- Requires **JDK 17** and **Android SDK 37**. Open the project in Android Studio or run `./gradlew :app:assembleDebug`.
+- On Windows, if the checkout path contains Chinese characters, use `powershell -ExecutionPolicy Bypass -File scripts/gradle.ps1 <tasks>` to avoid path issues.
+- Run regression and packaging checks with `./gradlew :app:testDebugUnitTest :app:assembleRelease :app:assemblePerformance`.
+- **Release signing:** no signing keys are included. Place a local `keystore.properties` file at the repository root with `storeFile`, `storePassword`, `keyAlias`, and `keyPassword`, then run `:app:assembleRelease`. Without a signing configuration, the release APK is unsigned. Never commit keys or signing passwords.
 
-墨知不提供、不内置、不推送任何书籍内容，也没有任何在线书源功能；全部阅读内容由用户自行导入本地文件，因此产生的版权责任由使用者自行承担。AI 功能的输出由用户自行配置的第三方模型生成，不代表本项目立场。
+## Disclaimer
 
-## 许可
+MoRead does not provide, bundle, recommend, or distribute book content, and has no online book-source feature. All reading content comes from local files imported by the user, who is responsible for complying with applicable copyright requirements. AI output is generated by user-configured third-party models and does not represent this project’s views.
 
-本项目以 [GPL-3.0](LICENSE) 许可开源。项目复用了 Legado（GPL-3.0）的章节切分规则集并参考了其阅读器渲染设计，完整第三方清单见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+## License
+
+Licensed under [GPL-3.0](LICENSE). MoRead reuses Legado’s GPL-3.0 chapter-splitting rules and draws on its reader-rendering design. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the complete third-party notices.

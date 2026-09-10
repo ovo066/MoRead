@@ -87,6 +87,38 @@ class ShelfCollectionDragTest {
     }
 
     @Test
+    fun collectionEdgesAcceptBooksWithoutDodgingInGridAndList() {
+        val collection = ShelfDropTarget("collection:7", bookId = null, collectionId = 7)
+        val region = ShelfDropRegion(collection, Rect(100f, 100f, 200f, 300f))
+        listOf(true, false).forEach { horizontal ->
+            listOf(Offset(101f, 101f), Offset(199f, 299f), region.bounds.center).forEach { pointer ->
+                assertEquals(
+                    ShelfDrop(collection, ShelfDropPlacement.MERGE),
+                    findShelfDrop(pointer, 1, listOf(region), horizontal, allowMerge = true)
+                )
+            }
+        }
+        assertEquals(
+            ShelfDrop(collection, ShelfDropPlacement.BEFORE),
+            findShelfDrop(Offset(101f, 101f), 1, listOf(region), true, allowMerge = false)
+        )
+    }
+
+    @Test
+    fun gapBesideCollectionStillAllowsReorderingOnRelease() {
+        val book = ShelfDropTarget("book:2", bookId = 2, collectionId = null)
+        val collection = ShelfDropTarget("collection:7", bookId = null, collectionId = 7)
+        val regions = listOf(
+            ShelfDropRegion(book, Rect(0f, 0f, 100f, 100f)),
+            ShelfDropRegion(collection, Rect(120f, 0f, 220f, 100f))
+        )
+        assertEquals(
+            ShelfDrop(collection, ShelfDropPlacement.BEFORE),
+            findShelfDrop(Offset(119f, 50f), 1, regions, true, allowMerge = true)
+        )
+    }
+
+    @Test
     fun dividesGridAndListTargetsIntoExactDropZones() {
         val target = ShelfDropTarget("book:2", bookId = 2, collectionId = null)
         val region = ShelfDropRegion(target, Rect(100f, 100f, 200f, 300f))

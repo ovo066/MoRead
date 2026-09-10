@@ -118,6 +118,8 @@ fun findShelfDrop(
         }
         !allowMerge && fraction < 0.5f -> ShelfDropPlacement.BEFORE
         !allowMerge -> ShelfDropPlacement.AFTER
+        // A collection is a drop container, not a moving reorder handle.
+        region.target.collectionId != null -> ShelfDropPlacement.MERGE
         fraction < 0.25f -> ShelfDropPlacement.BEFORE
         fraction > 0.75f -> ShelfDropPlacement.AFTER
         else -> ShelfDropPlacement.MERGE

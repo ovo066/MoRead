@@ -59,7 +59,13 @@ class BookTextMaterializeWorker(
             val needsRepair = book.textVersion < LibraryRepository.CURRENT_TEXT_VERSION ||
                 book.sourceType == BookSourceType.EPUB &&
                 !layoutStore.hasCurrentLayout(book.id, chapterLengths)
-            if (needsRepair) pending += book
+            if (needsRepair) {
+                pending += book
+            } else if (book.sourceType == BookSourceType.EPUB) {
+                // 已完整的精排数据就地压实（明文 DOM JSON → gzip、清空多余的旧引擎块列表）。
+                // 纯 I/O、幂等、带完成标记；失败只影响这一本，下次启动再试。
+                runCatching { layoutStore.compact(book.id) }
+            }
         }
         if (pending.isEmpty()) return successResult()
 

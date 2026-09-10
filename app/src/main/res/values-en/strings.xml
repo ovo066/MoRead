@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">MoRead</string>
+    <string name="book_action_unfinish">Unmark as finished</string>
+    <string name="book_action_finish">Mark as finished</string>
+    <string name="book_action_unread">Mark as unread</string>
+    <string name="book_action_unshelve">Resume reading</string>
+    <string name="book_action_shelve">Set aside</string>
+    <string name="book_action_edit">Edit details</string>
+    <string name="book_action_cover">Change cover</string>
+    <string name="book_action_unpin">Unpin</string>
+    <string name="book_action_pin">Pin to top</string>
+    <string name="book_action_select">Select books…</string>
+    <string name="book_action_remove">Remove from shelf</string>
+    <string name="book_state_unread">Unread</string>
+    <string name="book_state_reading">Reading</string>
+    <string name="book_state_finished">Finished</string>
+    <string name="book_state_shelved">Set aside</string>
+    <string name="book_state_reading_progress">Reading · %1$d%%</string>
+    <string name="shelf_collection_drop_hint">Release to add</string>
+    <string name="shelf_collection_actions">Collection actions</string>
+    <string name="shelf_pinned_boundary">Pinned books stay at the top. Reorder within the same section.</string>
+    <string name="reader_bookmark_pull">Pull down to bookmark</string>
+    <string name="reader_bookmark_release">Release to bookmark</string>
+    <string name="reader_bookmark_added">Bookmark added</string>
+    <string name="reader_bookmark_removed">Bookmark removed</string>
+    <string name="reader_bookmark_exists">Already bookmarked</string>
+    <string name="reader_bookmark_failed">Could not save the bookmark. Please try again.</string>
+    <string name="import_preparing">Preparing books</string>
+    <string name="import_preparing_detail">Detecting the format and chapters. Please wait…</string>
+    <string name="import_generating_epub">Generating EPUB</string>
+    <string name="import_validating_epub">Validating EPUB</string>
+    <string name="import_writing_library">Adding to the library</string>
+    <string name="import_writing_text">Saving book text</string>
+    <plurals name="book_state_unread_chapters">
+        <item quantity="one">Unread · %1$d chapter</item>
+        <item quantity="other">Unread · %1$d chapters</item>
+    </plurals>
+    <plurals name="shelf_collection_book_count">
+        <item quantity="one">%1$d book</item>
+        <item quantity="other">%1$d books</item>
+    </plurals>
+</resources>

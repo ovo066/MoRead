@@ -13,6 +13,25 @@ class BookCollectionModelsTest {
     private val collection = BookCollectionEntity(7, "长篇系列", 100)
 
     @Test
+    fun previewKeepsCollectionStationaryEvenWhenApproachingItsEdge() {
+        val entries = listOf(
+            ShelfEntry.Book(book(1)), ShelfEntry.Book(book(2)),
+            ShelfEntry.Collection(collection, listOf(book(3, collectionId = 7)))
+        )
+        ShelfDropPlacement.entries.forEach { placement ->
+            val drop = ShelfDrop(entries.last().dropTarget(), placement)
+            assertEquals(entries, previewShelfEntries(entries, 1, drop))
+        }
+        val drop = ShelfDrop(entries[1].dropTarget(), ShelfDropPlacement.AFTER)
+        assertEquals(
+            listOf("book:2", "book:1", "collection:7"),
+            previewShelfEntries(entries, 1, drop).map(ShelfEntry::key)
+        )
+        assertEquals(entries, previewShelfEntries(entries, null, drop))
+        assertEquals(entries, previewShelfEntries(entries, 1, null))
+    }
+
+    @Test
     fun collectionUsesOneSlotAtItsFirstVisibleMember() {
         val first = book(1, collectionId = 7, order = 1)
         val middle = book(2)

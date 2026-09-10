@@ -9,6 +9,18 @@ class CssParserTest {
     private fun declarations(css: String) = CssParser("OEBPS/Styles/main.css").parseDeclarations(css)
 
     @Test
+    fun `writing mode vendor prefixes normalize to the standard property`() {
+        val values = declarations(
+            "-epub-writing-mode: vertical-rl; -webkit-writing-mode: vertical-rl; writing-mode: horizontal-tb; text-orientation: upright"
+        )
+        assertEquals(listOf("writing-mode", "writing-mode", "writing-mode", "text-orientation"), values.map { it.property })
+        assertEquals(CssValue.Keyword("vertical-rl"), values[0].value)
+        assertEquals(CssValue.Keyword("horizontal-tb"), values[2].value)
+        assertEquals(CssValue.Keyword("upright"), values[3].value)
+        assertTrue(CssParser("OEBPS/Styles/main.css").parse("body { -epub-writing-mode: vertical-rl }").unsupportedProperties.isEmpty())
+    }
+
+    @Test
     fun `margin padding and border shorthands expand without losing negative percentages`() {
         val values = declarations("margin: auto -10%; padding: 1px 2em 3% 4pt; border: 1px solid #123456")
             .associateBy { it.property }

@@ -1,4 +1,41 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">墨知</string>
+    <string name="book_action_unfinish">取消已读完</string>
+    <string name="book_action_finish">标为已读完</string>
+    <string name="book_action_unread">标为未读</string>
+    <string name="book_action_unshelve">取消搁置</string>
+    <string name="book_action_shelve">标为搁置</string>
+    <string name="book_action_edit">编辑详情</string>
+    <string name="book_action_cover">修改封面</string>
+    <string name="book_action_unpin">取消置顶</string>
+    <string name="book_action_pin">置顶书架</string>
+    <string name="book_action_select">多选…</string>
+    <string name="book_action_remove">移除书架</string>
+    <string name="book_state_unread">未读</string>
+    <string name="book_state_reading">在读</string>
+    <string name="book_state_finished">已读完</string>
+    <string name="book_state_shelved">已搁置</string>
+    <string name="book_state_reading_progress">在读 · %1$d%%</string>
+    <string name="shelf_collection_drop_hint">松手加入合集</string>
+    <string name="shelf_collection_actions">合集操作</string>
+    <string name="shelf_pinned_boundary">置顶书籍保持在前，请在同一区域内调整顺序</string>
+    <string name="reader_bookmark_pull">下拉添加书签</string>
+    <string name="reader_bookmark_release">松手添加书签</string>
+    <string name="reader_bookmark_added">已添加书签</string>
+    <string name="reader_bookmark_removed">已取消书签</string>
+    <string name="reader_bookmark_exists">此处已有书签</string>
+    <string name="reader_bookmark_failed">书签保存失败，请重试</string>
+    <string name="import_preparing">正在整理书籍</string>
+    <string name="import_preparing_detail">识别格式与章节，请稍候…</string>
+    <string name="import_generating_epub">正在生成 EPUB</string>
+    <string name="import_validating_epub">正在校验 EPUB</string>
+    <string name="import_writing_library">正在写入书架</string>
+    <string name="import_writing_text">正在写入文本</string>
+    <plurals name="book_state_unread_chapters">
+        <item quantity="other">未读 · %1$d 章</item>
+    </plurals>
+    <plurals name="shelf_collection_book_count">
+        <item quantity="other">%1$d 本书</item>
+    </plurals>
 </resources>

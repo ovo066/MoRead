@@ -120,6 +120,7 @@ internal fun ReaderPane(
     enabled: Boolean,
     registerContentHook: (((Int) -> Unit)?) -> Unit,
     onCenterTap: () -> Unit,
+    onAddBookmark: () -> Unit,
     onBoundary: (PageTurnDirection) -> Unit,
     onNotice: (String) -> Unit,
     annotations: List<ReaderAnnotationMark>,
@@ -142,6 +143,8 @@ internal fun ReaderPane(
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
+    val bookmarkFeedback = remember { BookmarkPullFeedback() }
+    val addBookmark by androidx.compose.runtime.rememberUpdatedState(onAddBookmark)
     val clipboard = LocalClipboardManager.current
     val safeInsets = readerSafeInsets()
     val statusBarPx = safeInsets.topPx
@@ -393,7 +396,14 @@ internal fun ReaderPane(
                 .readerPageTouch(
                     enabled = enabled,
                     driver = driver,
-                    selection = selection
+                    selection = selection,
+                    onBookmarkPull = { progress ->
+                        if (progress >= 1f && bookmarkFeedback.progress < 1f) {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        }
+                        bookmarkFeedback.progress = progress
+                    },
+                    onAddBookmark = { addBookmark() }
                 ) { position, fromAbort ->
                     val illustrationIds = holder.illustrationIdsAt(position)
                     if (illustrationIds.isNotEmpty()) {
@@ -460,6 +470,14 @@ internal fun ReaderPane(
                         selection.drawHighlight(this, palette)
                     }
                 }
+        )
+
+        BookmarkPullIndicator(
+            feedback = bookmarkFeedback,
+            palette = palette,
+            modifier = Modifier.align(Alignment.TopCenter).padding(
+                top = with(density) { statusBarPx.toDp() } + com.mozhi.reader.ui.theme.MoReadSpacing.xl
+            )
         )
 
         selection.active?.takeIf { !it.dragging }?.let { active ->

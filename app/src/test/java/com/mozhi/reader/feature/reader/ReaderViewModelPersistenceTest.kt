@@ -13,6 +13,7 @@ import com.mozhi.reader.core.database.entity.ChapterEntity
 import com.mozhi.reader.core.database.entity.IllustrationEntity
 import com.mozhi.reader.core.datastore.ChineseConversionMode
 import com.mozhi.reader.core.datastore.ReaderSettings
+import com.mozhi.reader.core.datastore.PageMode
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
 import com.mozhi.reader.core.library.AnnotationRepository
 import com.mozhi.reader.core.library.BookLayoutStore
@@ -177,6 +178,46 @@ class ReaderViewModelPersistenceTest {
     }
 
     @Test
+    fun repeatedPullAddsOnlyOneBookmarkAndKeepsSourceCoordinates() = withReader(source) { reader ->
+        val displayStart = reader.viewModel.contentController.chapterBody(0)!!.indexOf("主板")
+        reader.viewModel.goToPosition(0, displayStart)
+        reader.viewModel.addBookmarkFromPull()
+        reader.viewModel.addBookmarkFromPull()
+        val bookmark = reader.bookmarks.receive()
+        assertEquals(source.indexOf("主機板"), bookmark.charOffset)
+        assertEquals(com.mozhi.reader.R.string.reader_bookmark_added,
+            (reader.viewModel.events.first() as ReaderEvent.ShowLocalizedMessage).resourceId)
+        assertEquals(com.mozhi.reader.R.string.reader_bookmark_exists,
+            (reader.viewModel.events.first() as ReaderEvent.ShowLocalizedMessage).resourceId)
+        assertTrue(reader.bookmarks.tryReceive().isFailure)
+        reader.viewModel.uiState.first { it.bookmarks.size == 1 }
+        assertTrue(reader.viewModel.isCurrentPositionBookmarked())
+        reader.viewModel.toggleBookmark()
+        assertEquals(com.mozhi.reader.R.string.reader_bookmark_removed,
+            (reader.viewModel.events.first() as ReaderEvent.ShowLocalizedMessage).resourceId)
+        reader.viewModel.uiState.first { it.bookmarks.isEmpty() }
+    }
+
+    @Test
+    fun continuousScrollIgnoresPullBookmarkButKeepsTheNormalBookmarkAction() =
+        withReader(source, pageMode = PageMode.SCROLL) { reader ->
+            reader.viewModel.addBookmarkFromPull()
+            assertTrue(reader.bookmarks.tryReceive().isFailure)
+            reader.viewModel.toggleBookmark()
+            assertEquals(0, reader.bookmarks.receive().charOffset)
+        }
+
+    @Test
+    fun pullCapturesItsOriginalPageBeforeNavigationOrConversionChanges() = withReader(source) { reader ->
+        val displayStart = reader.viewModel.contentController.chapterBody(0)!!.indexOf("主板")
+        reader.viewModel.goToPosition(0, displayStart)
+        reader.viewModel.addBookmarkFromPull()
+        reader.viewModel.goToPosition(0, 0)
+        reader.changeMode(ChineseConversionMode.OFF)
+        assertEquals(source.indexOf("主機板"), reader.bookmarks.receive().charOffset)
+    }
+
+    @Test
     fun emptyConvertedChapterStillPersistsProgress() = withReader("") { reader ->
         reader.viewModel.flushProgress()
         assertEquals(0, reader.progress.receive().offset)
@@ -267,9 +308,9 @@ class ReaderViewModelPersistenceTest {
         }
     }
 
-    private fun withReader(body: String, test: suspend (ReaderFixture) -> Unit) = runTest {
+    private fun withReader(body: String, pageMode: PageMode = PageMode.PAGINATED, test: suspend (ReaderFixture) -> Unit) = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
-        val reader = ReaderFixture(body)
+        val reader = ReaderFixture(body, pageMode)
         try {
             reader.viewModel.uiState.first { it.isContentReady }
             while (reader.progress.tryReceive().isSuccess) { /* Discard progress from opening the fixture. */ }
@@ -283,7 +324,7 @@ class ReaderViewModelPersistenceTest {
     private data class SavedProgress(val locator: String, val offset: Int)
 
     /** Real ViewModel/controller/presenter/repositories; only storage and unrelated services are doubled. */
-    private class ReaderFixture(body: String) {
+    private class ReaderFixture(body: String, pageMode: PageMode = PageMode.PAGINATED) {
         val annotations = Channel<AnnotationEntity>(Channel.UNLIMITED)
         val bookmarks = Channel<BookmarkEntity>(Channel.UNLIMITED)
         val progress = Channel<SavedProgress>(Channel.UNLIMITED)
@@ -309,6 +350,10 @@ class ReaderViewModelPersistenceTest {
                 every { observeBook(1) } returns flowOf(book)
                 coEvery { getChapters(1) } returns listOf(chapter)
                 every { observeBookmarks(1) } returns storedBookmarks
+                coEvery { getBookmarks(1) } answers { storedBookmarks.value }
+                coEvery { deleteBookmark(any()) } answers {
+                    storedBookmarks.value = storedBookmarks.value.filterNot { it.id == firstArg<Long>() }
+                }
                 every { observeTocEntries(1) } returns flowOf(emptyList())
                 every { observeReadingDays(1) } returns flowOf(emptyList())
                 coEvery { insertBookmark(any()) } coAnswers {
@@ -338,7 +383,7 @@ class ReaderViewModelPersistenceTest {
             val layoutStore = mockk<BookLayoutStore> {
                 coEvery { readChapter(1, 0) } returns null
             }
-            val settings = ReaderSettings(bookChineseConversions = mapOf(1L to ChineseConversionMode.TW2SP))
+            val settings = ReaderSettings(pageMode = pageMode, bookChineseConversions = mapOf(1L to ChineseConversionMode.TW2SP))
             val settingsRepository = mockk<ReaderSettingsRepository> {
                 every { cachedSettings } returns MutableStateFlow(settings)
                 every { this@mockk.settings } returns flowOf(settings)

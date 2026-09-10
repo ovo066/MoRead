@@ -47,6 +47,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.CoroutineScope
@@ -237,7 +238,13 @@ class ReaderCompanionViewModel @Inject constructor(
         .filterNotNull()
         .flatMapLatest(embeddingProgressTracker::observeBook)
 
-    /** 独立全屏聊天页用：书名 + 当前进度章节题（作为 sceneQuote）。 */
+    /**
+     * 独立全屏聊天页用：书名 + 当前进度章节题（作为 sceneQuote）。
+     *
+     * 常驻而非按订阅启停：只有聊天页订阅它，若每次进页才开始观察，章节题总是晚半拍到达，
+     * 列表顶部的场景分隔与顶栏书名就会在页面落定后再变一次。阅读页绑定书籍后它就热着，
+     * 从侧栏/悬浮球推进聊天页时首帧即完整。
+     */
     val chatContext = bookId
         .filterNotNull()
         .flatMapLatest { id ->
@@ -256,7 +263,7 @@ class ReaderCompanionViewModel @Inject constructor(
         }
         .stateIn(
             scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5_000),
+            started = SharingStarted.Eagerly,
             initialValue = CompanionChatContext()
         )
 
@@ -900,6 +907,9 @@ class ReaderCompanionViewModel @Inject constructor(
     private fun observeMessages(conversationId: Long) {
         messagesJob?.cancel()
         messagesJob = viewModelScope.launch {
+            // 首次揭示：历史里的引用胶囊定位完再一起亮相（有上限），否则列表刚贴底就因胶囊
+            // 长出来再抽一次。后续增量仍先显消息、再补胶囊——那是尾部生长，由跟随逻辑接住。
+            var initialReveal = session.value.isLoadingMessages
             chatRepository.observeMessages(conversationId).collectLatest { messages ->
                 if (session.value.conversationId != conversationId) return@collectLatest
                 // 保留隐藏 tool 管道，界面会把它重建为可折叠执行时间线；system 仍不展示。
@@ -909,26 +919,37 @@ class ReaderCompanionViewModel @Inject constructor(
                 val retainedCitations = session.value.locatedCitations.filterKeys { id ->
                     currentMessages[id]?.content == previousMessages[id]?.content && id in currentMessages
                 }
+                val pending = visibleMessages.filterNot { it.id in retainedCitations }
+                val preLocated = if (initialReveal) {
+                    withTimeoutOrNull(INITIAL_CITATION_LOCATE_MS) { locateCitationsQuietly(pending) }
+                } else {
+                    null
+                }
+                if (session.value.conversationId != conversationId) return@collectLatest
+                initialReveal = false
                 session.value = session.value.copy(
                     messages = visibleMessages,
                     isLoadingMessages = false,
-                    locatedCitations = retainedCitations
+                    locatedCitations = retainedCitations + preLocated.orEmpty()
                 )
+                if (preLocated != null) return@collectLatest
                 // Existing chips keep their height while only new/edited rows are resolved.
-                val located = try {
-                    withContext(Dispatchers.IO) {
-                        locateMessageCitations(visibleMessages.filterNot { it.id in retainedCitations })
-                    }
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (_: Exception) {
-                    emptyMap()
-                }
+                val located = locateCitationsQuietly(pending)
                 if (session.value.conversationId == conversationId && session.value.messages == visibleMessages) {
                     session.value = session.value.copy(locatedCitations = retainedCitations + located)
                 }
             }
         }
+    }
+
+    private suspend fun locateCitationsQuietly(
+        messages: List<MessageEntity>
+    ): Map<Long, List<LocatedCompanionCitation>> = try {
+        withContext(Dispatchers.IO) { locateMessageCitations(messages) }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        emptyMap()
     }
 
     private suspend fun locateMessageCitations(
@@ -1211,5 +1232,7 @@ class ReaderCompanionViewModel @Inject constructor(
         const val MAX_LOCATE_CHARS = 600_000
         /** 手动朗读单条气泡的字数上限：再长就不是「听一句」了。 */
         const val MAX_SPEAK_CHARS = 2_000
+        /** 首次揭示前等待引用定位的上限：超时就先显消息，胶囊随后补上。 */
+        const val INITIAL_CITATION_LOCATE_MS = 600L
     }
 }

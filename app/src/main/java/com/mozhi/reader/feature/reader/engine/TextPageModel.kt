@@ -1,6 +1,7 @@
 package com.mozhi.reader.feature.reader.engine
 
 import com.mozhi.reader.core.datastore.ReaderSyntaxFont
+import com.mozhi.reader.core.epub.style.EpubLayoutCapability
 
 /**
  * Layout entities for the self-drawn text engine, ported from Legado's
@@ -185,7 +186,9 @@ class TextPage(
      * 本页最后一行之后已经应用、但被页切吞掉的纵向间隙（段距，或空行贡献的更大间隙）。
      * 滚动模式拼接条带时必须补回来，否则接缝会比页内段距紧。排版器写入，绘制不读。
      */
-    val trailingGap: Float = 0f
+    val trailingGap: Float = 0f,
+    /** Only large single artwork may be refitted to the viewport; preserve small CSS image boxes. */
+    val fullPageArtwork: Boolean = false
 )
 
 /** A fully laid out chapter. Layout is atomic: once published, all pages exist. */
@@ -193,7 +196,12 @@ class TextChapter(
     val chapterIndex: Int,
     val title: String,
     val pages: List<TextPage>,
-    val bodyLength: Int
+    val bodyLength: Int,
+    /**
+     * EPUB 精排的能力判定结果；纯文本章节与旧引擎为 null。`supported == false` 时页面仍然完整，
+     * 只是没有按出版样式的书写模式排（例如竖排书按横排流出），原因随结果一起给出。
+     */
+    val layoutCapability: EpubLayoutCapability? = null
 ) {
     val pageCount: Int get() = pages.size
 

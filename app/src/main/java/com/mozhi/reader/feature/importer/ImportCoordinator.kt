@@ -1,6 +1,7 @@
 package com.mozhi.reader.feature.importer
 
 import android.content.Context
+import com.mozhi.reader.R
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
@@ -29,6 +30,7 @@ import java.io.File
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.readium.r2.shared.publication.Href
@@ -203,19 +205,19 @@ class ImportCoordinator @Inject constructor(
 
         val output = File(booksDirectory(), "${UUID.randomUUID()}.epub")
         try {
-            onProgress(ImportProgress("正在生成 EPUB", total = session.splitResult.chapters.size))
+            onProgress(ImportProgress(context.getString(R.string.import_generating_epub), total = session.splitResult.chapters.size))
             val generated = epubGenerator.generate(
                 outputFile = output,
                 title = title.trim(),
                 author = author.trim(),
                 chapters = session.splitResult.chapters
             ) { completed, total ->
-                onProgress(ImportProgress("正在生成 EPUB", completed, total))
+                onProgress(ImportProgress(context.getString(R.string.import_generating_epub), completed, total))
             }
 
             onProgress(
                 ImportProgress(
-                    message = "正在校验 EPUB",
+                    message = context.getString(R.string.import_validating_epub),
                     completed = generated.chapters.size,
                     total = generated.chapters.size
                 )
@@ -229,7 +231,7 @@ class ImportCoordinator @Inject constructor(
 
             onProgress(
                 ImportProgress(
-                    message = "正在写入书架",
+                    message = context.getString(R.string.import_writing_library),
                     completed = generated.chapters.size,
                     total = generated.chapters.size
                 )
@@ -249,7 +251,7 @@ class ImportCoordinator @Inject constructor(
 
             onProgress(
                 ImportProgress(
-                    message = "正在写入文本",
+                    message = context.getString(R.string.import_writing_text),
                     completed = generated.chapters.size,
                     total = generated.chapters.size
                 )
@@ -466,7 +468,9 @@ class ImportCoordinator @Inject constructor(
             ?: layoutPackage?.spine
                 ?.mapNotNull { it.href }
                 ?.takeIf { it.size == publication.readingOrder.size }
+        EpubArchiveImageReader(epubFile, layoutPackage).use { archiveImages ->
         publication.readingOrder.forEachIndexed { index, link ->
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
             val bytes = publication.get(link)?.use { resource -> resource.read().getOrNull() }
             val readiumHref = link.href.toString()
             val chapterHref = EpubResourcePath.matchKnown(readiumHref, knownSpineHrefs)
@@ -512,7 +516,7 @@ class ImportCoordinator @Inject constructor(
                 val imageBytes = if (resourceCache.containsKey(reference.href)) {
                     resourceCache[reference.href]
                 } else {
-                    readImageResource(publication, reference.href, layoutPackage, epubFile)
+                    readImageResource(publication, reference.href, layoutPackage, archiveImages)
                         ?.takeIf { it.size <= MAX_INLINE_IMAGE_BYTES }
                         .also { resourceCache[reference.href] = it }
                 }
@@ -531,6 +535,7 @@ class ImportCoordinator @Inject constructor(
                 layouts += EpubLayoutChapterInput(index, chapterHref, parsed.document, parsed.dom)
             }
         }
+        }
         return ExtractedSpine(chapters, images, layouts)
     }
 
@@ -542,7 +547,7 @@ class ImportCoordinator @Inject constructor(
         publication: Publication,
         href: String,
         layoutPackage: EpubLayoutPackage?,
-        epubFile: File? = null
+        archiveImages: EpubArchiveImageReader
     ): ByteArray? {
         if (href.startsWith("data:", ignoreCase = true)) {
             val comma = href.indexOf(',')
@@ -573,39 +578,7 @@ class ImportCoordinator @Inject constructor(
         }
         // Readium 对少数非规范包根 href、URL 编码路径或未列入 manifest 的图片会返回空。
         // 最后直接按规范化 archive path 从 EPUB 读取，仍受当前书包与大小上限约束。
-        if (epubFile?.isFile == true) {
-            return runCatching {
-                java.util.zip.ZipFile(epubFile).use { zip ->
-                    val normalizedHref = EpubResourcePath.normalize(href)?.lowercase()
-                    val manifestResource = layoutPackage?.resources?.firstOrNull { resource ->
-                        EpubResourcePath.packageAliases(resource.href, layoutPackage.packageDocumentPath)
-                            .any { it.equals(normalizedHref, true) } ||
-                            EpubResourcePath.packageAliases(resource.archivePath, layoutPackage.packageDocumentPath)
-                                .any { it.equals(normalizedHref, true) }
-                    }
-                    val wanted = manifestResource?.archivePath?.lowercase() ?: normalizedHref
-                    val entry = zip.entries().asSequence().firstOrNull { entry ->
-                        !entry.isDirectory && entry.name.replace('\\', '/').removePrefix("./")
-                            .equals(wanted, true)
-                    } ?: return@use null
-                    if (entry.size > MAX_INLINE_IMAGE_BYTES) return@use null
-                    zip.getInputStream(entry).use { input ->
-                        val output = java.io.ByteArrayOutputStream()
-                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                        var total = 0
-                        while (true) {
-                            val count = input.read(buffer)
-                            if (count < 0) break
-                            total += count
-                            if (total > MAX_INLINE_IMAGE_BYTES) return@use null
-                            output.write(buffer, 0, count)
-                        }
-                        output.toByteArray()
-                    }
-                }
-            }.getOrNull()
-        }
-        return null
+        return archiveImages.read(href, MAX_INLINE_IMAGE_BYTES)
     }
 
     private data class ExtractedSpine(

@@ -107,6 +107,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.text.font.FontWeight
@@ -120,6 +121,7 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.mozhi.reader.core.database.entity.BookCollectionEntity
+import com.mozhi.reader.R
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.BookReadState
 import com.mozhi.reader.core.database.entity.label
@@ -282,18 +284,11 @@ fun BookshelfScreen(
         collectionDragState.sourceBook?.id,
         collectionDragState.activeDrop
     ) {
-        val sourceId = collectionDragState.sourceBook?.id
-        val drop = collectionDragState.activeDrop
-        if (sourceId == null || drop == null || drop.placement == ShelfDropPlacement.MERGE) {
-            shelfEntries
-        } else {
-            reorderShelfEntries(
-                shelfEntries,
-                sourceBookId = sourceId,
-                targetKey = drop.target.entryKey,
-                after = drop.placement == ShelfDropPlacement.AFTER
-            )
-        }
+        previewShelfEntries(
+            shelfEntries,
+            collectionDragState.sourceBook?.id,
+            collectionDragState.activeDrop
+        )
     }
     val visibleBookIds = shelfEntries.flatMapTo(linkedSetOf()) { it.visibleBookIds }
     val onBookEntryClick: (ShelfEntry.Book) -> Unit = { entry ->
@@ -311,7 +306,7 @@ fun BookshelfScreen(
             )
         ) {
             scope.launch {
-                snackbarHostState.showSnackbar("置顶书籍保持在前，请在同一区域内调整顺序")
+                snackbarHostState.showSnackbar(context.getString(R.string.shelf_pinned_boundary))
             }
             return@dropBook
         }
@@ -448,6 +443,7 @@ fun BookshelfScreen(
                 target = target.copy(bounds = shelfBoundsInContainer(target.bounds, rootOrigin)),
                 readSpan = state.readSpans[target.book.id],
                 rootSize = rootSize,
+                contentPadding = contentPadding,
                 onDismiss = { longPressTarget = null },
                 onSetReadState = { viewModel.setReadState(target.book, it) },
                 onEditDetails = { onOpenBookDetail(target.book.id, "edit") },
@@ -2055,9 +2051,9 @@ private fun ImportProgressOverlay() {
             ) {
                 CircularProgressIndicator(modifier = Modifier.size(25.dp), strokeWidth = 3.dp)
                 Column {
-                    Text("正在整理书籍", style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(R.string.import_preparing), style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "识别格式与章节，请稍候…",
+                        stringResource(R.string.import_preparing_detail),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 2.dp)

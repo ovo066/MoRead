@@ -122,6 +122,9 @@ class CssParser(
         "background" -> expandBackground(raw, important)
         "font" -> expandFont(raw, important)
         "list-style" -> expandListStyle(raw, important)
+        // 厂商前缀别名归一到标准属性：级联与样式解析只认 writing-mode 一个名字。
+        "-webkit-writing-mode", "-epub-writing-mode" ->
+            parsePropertyValue("writing-mode", raw)?.let { listOf(CssDeclaration("writing-mode", it, important)) }
         else -> parsePropertyValue(property, raw)?.let { listOf(CssDeclaration(property, it, important)) }
     }
 
@@ -807,7 +810,8 @@ class CssParser(
             "repeat-y", "no-repeat", "space", "round", "inside", "outside", "disc", "circle", "square", "decimal",
             "always", "avoid", "avoid-page", "page", "visible", "hidden", "collapse", "separate", "border-box",
             "content-box", "nowrap", "pre", "pre-wrap", "break-spaces", "row", "column", "solid", "dashed", "dotted",
-            "double", "groove", "ridge", "inset", "outset", "thin", "medium", "thick", "landscape", "portrait"
+            "double", "groove", "ridge", "inset", "outset", "thin", "medium", "thick", "landscape", "portrait",
+            "horizontal-tb", "vertical-rl", "vertical-lr", "tb-rl", "tb-lr", "mixed", "upright", "sideways"
         )
         val COLOR_PROPERTIES = setOf(
             "color", "background-color", "border-color", "border-top-color", "border-right-color", "border-bottom-color",
@@ -834,7 +838,8 @@ class CssParser(
             "break-before", "break-after", "break-inside", "page-break-before", "page-break-after", "page-break-inside",
             "orphans", "widows", "list-style-type", "list-style-position", "list-style-image", "border-collapse",
             "ruby-align", "duokan-text-indent", "duokan-bleed", "align-items", "justify-content", "flex-direction",
-            "grid-template-columns", "column-gap", "row-gap", "gap"
+            "grid-template-columns", "column-gap", "row-gap", "gap",
+            "writing-mode", "-webkit-writing-mode", "-epub-writing-mode", "text-orientation"
         )
     }
 }

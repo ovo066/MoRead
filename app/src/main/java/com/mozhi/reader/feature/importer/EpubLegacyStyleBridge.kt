@@ -17,40 +17,19 @@ internal data class EpubStylesheetSource(
 )
 
 internal class EpubLegacyStyleBridge private constructor(
-    private val rules: List<CssRule>,
+    private val ruleIndex: CssRuleIndex,
     val fontFaces: List<EpubFontFace>,
     val unsupportedProperties: Set<String>
 ) {
     private val styleCache = IdentityHashMap<Element, EpubComputedStyle>()
-    private val rulesById = HashMap<String, MutableList<CssRule>>()
-    private val rulesByClass = HashMap<String, MutableList<CssRule>>()
-    private val rulesByTag = HashMap<String, MutableList<CssRule>>()
-    private val universalRules = ArrayList<CssRule>()
-
-    init {
-        // Browser engines do not test every selector against every DOM node. Index each rule by
-        // its right-most simple selector; fine-layout EPUBs often have thousands of CSS rules and
-        // this turns the import hot path from nodes × all-rules into nodes × plausible-rules.
-        rules.forEach { rule ->
-            val target = rule.selector.parts.last()
-            when {
-                target.id != null -> rulesById.getOrPut(target.id) { ArrayList() } += rule
-                target.classes.isNotEmpty() -> {
-                    rulesByClass.getOrPut(target.classes.first()) { ArrayList() } += rule
-                }
-                target.tag != null -> rulesByTag.getOrPut(target.tag) { ArrayList() } += rule
-                else -> universalRules += rule
-            }
-        }
-    }
-
+    // Share the immutable selector index, never the element cache, across spine documents.
     fun newDocumentScope(): EpubLegacyStyleBridge =
-        EpubLegacyStyleBridge(rules, fontFaces, unsupportedProperties)
+        EpubLegacyStyleBridge(ruleIndex, fontFaces, unsupportedProperties)
 
     fun styleFor(element: Element): EpubComputedStyle = styleCache[element] ?: run {
         val inherited = element.parent()?.let(::styleFor) ?: EpubComputedStyle()
         val winners = LinkedHashMap<String, CascadeValue>()
-        candidateRules(element).forEach { rule ->
+        ruleIndex.candidates(element).forEach { rule ->
             if (!rule.selector.matches(element)) return@forEach
             rule.declarations.forEach { (property, declaration) ->
                 val candidate = CascadeValue(
@@ -78,13 +57,6 @@ internal class EpubLegacyStyleBridge private constructor(
         val resolved = resolveStyle(element, inherited, winners)
         styleCache[element] = resolved
         resolved
-    }
-
-    private fun candidateRules(element: Element): Sequence<CssRule> = sequence {
-        element.id().takeIf(String::isNotEmpty)?.let { id -> rulesById[id]?.let { yieldAll(it) } }
-        element.classNames().forEach { name -> rulesByClass[name]?.let { yieldAll(it) } }
-        rulesByTag[element.normalName()]?.let { yieldAll(it) }
-        yieldAll(universalRules)
     }
 
     private fun resolveStyle(
@@ -276,7 +248,7 @@ internal class EpubLegacyStyleBridge private constructor(
                     }
                 }
             }
-            return EpubLegacyStyleBridge(rules, fonts.distinct(), unsupported)
+            return EpubLegacyStyleBridge(CssRuleIndex(rules), fonts.distinct(), unsupported)
         }
 
         private const val INLINE_SPECIFICITY = 1_000
@@ -306,6 +278,33 @@ internal class EpubLegacyStyleBridge private constructor(
         private val BORDER_SIDES = listOf("top", "right", "bottom", "left")
         private val FORCE_BREAK_VALUES = setOf("always", "page", "left", "right")
         private val BLOCK_DISPLAY_VALUES = setOf("block", "flow-root", "list-item", "table")
+    }
+}
+
+/** Built once for a stylesheet set; document scopes only allocate their own style cache. */
+private class CssRuleIndex(rules: List<CssRule>) {
+    private val rulesById = HashMap<String, MutableList<CssRule>>()
+    private val rulesByClass = HashMap<String, MutableList<CssRule>>()
+    private val rulesByTag = HashMap<String, MutableList<CssRule>>()
+    private val universalRules = ArrayList<CssRule>()
+
+    init {
+        rules.forEach { rule ->
+            val target = rule.selector.parts.last()
+            when {
+                target.id != null -> rulesById.getOrPut(target.id) { ArrayList() } += rule
+                target.classes.isNotEmpty() -> rulesByClass.getOrPut(target.classes.first()) { ArrayList() } += rule
+                target.tag != null -> rulesByTag.getOrPut(target.tag) { ArrayList() } += rule
+                else -> universalRules += rule
+            }
+        }
+    }
+
+    fun candidates(element: Element): Sequence<CssRule> = sequence {
+        element.id().takeIf(String::isNotEmpty)?.let { id -> rulesById[id]?.let { yieldAll(it) } }
+        element.classNames().forEach { name -> rulesByClass[name]?.let { yieldAll(it) } }
+        rulesByTag[element.normalName()]?.let { yieldAll(it) }
+        yieldAll(universalRules)
     }
 }
 

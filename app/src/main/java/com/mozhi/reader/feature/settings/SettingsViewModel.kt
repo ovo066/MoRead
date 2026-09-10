@@ -56,8 +56,27 @@ data class SettingsUiState(
     val isWorking: Boolean = false,
     /** 封面缓存占用字节数；null = 还没统计。 */
     val coverCacheBytes: Long? = null,
-    val bookStorageBytes: Long? = null
+    /** 书籍数据总占用（原书文件 + 正文 + 插图 + 精排数据）；null = 还没统计。 */
+    val bookStorageBytes: Long? = null,
+    /** 书籍数据分项，给「存储与数据」页解释体积去了哪里。 */
+    val bookStorageBreakdown: BookStorageBreakdown? = null,
+    /** AI 生成的插图；它不是书的一部分，单独列出而不混进「书籍存储」。 */
+    val aiIllustrationBytes: Long? = null
 )
+
+/** 书籍数据分项字节数，与 filesDir 下的目录一一对应。 */
+data class BookStorageBreakdown(
+    /** books/：导入时保留的原始 EPUB 副本，供重建精排、补封面与备份使用。 */
+    val originalFilesBytes: Long,
+    /** book-text/：统一正文 text.mz。 */
+    val textBytes: Long,
+    /** book-media/：从 EPUB 抽出的插图原文件。 */
+    val mediaBytes: Long,
+    /** book-layout/：精排 DOM、样式索引与内嵌字体。 */
+    val layoutBytes: Long
+) {
+    val total: Long get() = originalFilesBytes + textBytes + mediaBytes + layoutBytes
+}
 
 sealed interface SettingsEvent {
     data class ShowMessage(val message: String) : SettingsEvent
@@ -143,7 +162,9 @@ class SettingsViewModel @Inject constructor(
             autonomy = prefs.autonomy,
             isWorking = isWorking,
             coverCacheBytes = usage?.coverBytes,
-            bookStorageBytes = usage?.bookBytes
+            bookStorageBytes = usage?.breakdown?.total,
+            bookStorageBreakdown = usage?.breakdown,
+            aiIllustrationBytes = usage?.aiIllustrationBytes
         )
     }.stateIn(
         scope = viewModelScope,
@@ -264,12 +285,18 @@ class SettingsViewModel @Inject constructor(
     }
 
     private suspend fun scanStorageUsage(): StorageUsage = withContext(Dispatchers.IO) {
+        // 以前漏算 book-layout（精排 DOM 与内嵌字体），却把 AI 生成的插图算进「书籍」：
+        // 用户看到的数字既比真实占用小，又解释不了导入一本精排书后应用体积为什么涨了三倍。
+        val breakdown = BookStorageBreakdown(
+            originalFilesBytes = File(context.filesDir, "books").directorySize(),
+            textBytes = File(context.filesDir, "book-text").directorySize(),
+            mediaBytes = File(context.filesDir, "book-media").directorySize(),
+            layoutBytes = File(context.filesDir, "book-layout").directorySize()
+        )
         StorageUsage(
             coverBytes = coversDirectory().directorySize(),
-            bookBytes = File(context.filesDir, "books").directorySize() +
-                File(context.filesDir, "book-text").directorySize() +
-                File(context.filesDir, "book-media").directorySize() +
-                File(context.filesDir, "illustrations").directorySize()
+            breakdown = breakdown,
+            aiIllustrationBytes = File(context.filesDir, "illustrations").directorySize()
         )
     }
 
@@ -304,7 +331,11 @@ class SettingsViewModel @Inject constructor(
 
     private fun coversDirectory(): File = File(context.filesDir, "covers")
 
-    private data class StorageUsage(val coverBytes: Long, val bookBytes: Long)
+    private data class StorageUsage(
+        val coverBytes: Long,
+        val breakdown: BookStorageBreakdown,
+        val aiIllustrationBytes: Long
+    )
 
     private companion object {
         /** 与 ImportCoordinator 里的 marker 同名，清理后补齐任务才会重跑。 */

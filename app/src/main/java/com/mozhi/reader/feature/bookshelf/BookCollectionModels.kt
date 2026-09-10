@@ -79,6 +79,21 @@ internal fun List<BookEntity>.orderedForShelf(
     return pinned + newlyRead + unpinned.filterNot { it.id in newlyReadIds }
 }
 
+/** Keep collection targets stationary while a book approaches, including the gap beside them. */
+internal fun previewShelfEntries(
+    entries: List<ShelfEntry>,
+    sourceBookId: Long?,
+    drop: ShelfDrop?
+): List<ShelfEntry> {
+    if (sourceBookId == null || drop == null ||
+        drop.placement == ShelfDropPlacement.MERGE || drop.target.collectionId != null
+    ) return entries
+    return reorderShelfEntries(
+        entries, sourceBookId, drop.target.entryKey,
+        after = drop.placement == ShelfDropPlacement.AFTER
+    )
+}
+
 internal fun reorderShelfEntries(
     entries: List<ShelfEntry>,
     sourceBookId: Long,

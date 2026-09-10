@@ -1,6 +1,6 @@
 # MoRead 代码地图
 
-本文面向源码阅读者和贡献者，介绍当前仓库的模块边界、主要调用链和回归测试入口。功能介绍与构建前提见 [README](../README.md)，依赖许可见 [THIRD_PARTY_NOTICES](../THIRD_PARTY_NOTICES.md)。
+本文面向源码阅读者和贡献者，介绍当前仓库的模块边界、主要调用链和回归测试入口。功能介绍与构建前提见 [README（English）](../README.md) / [中文版](../README.zh-CN.md)，依赖许可见 [THIRD_PARTY_NOTICES](../THIRD_PARTY_NOTICES.md)。
 
 下文 Kotlin 路径默认以 `app/src/main/java/com/mozhi/reader/` 为根。文件名是定位入口，不代表该功能只需要修改这一个文件；调整调用链时，请同时检查对应的持久化、UI 和测试。
 
@@ -9,6 +9,7 @@
 | 路径 | 职责 |
 | --- | --- |
 | [`app/src/main`](../app/src/main) | Android 应用、资源与清单 |
+| [`app/src/main/res`](../app/src/main/res) | 默认中文与英文字符串资源；迁移约定见 [本地化指南](LOCALIZATION.md) |
 | [`app/src/test`](../app/src/test) | JVM 单元测试：解析、检索、排版、坐标映射和状态转换等 |
 | [`app/src/androidTest`](../app/src/androidTest) | Android 数据库迁移、恢复和 Compose 交互测试 |
 | [`app/schemas`](../app/schemas) | Room 导出的各版本数据库结构 |
@@ -39,7 +40,7 @@
 | [`core/security/ApiKeyStore.kt`](../app/src/main/java/com/mozhi/reader/core/security/ApiKeyStore.kt) | API Key 的加密存储入口；不要把凭据写入普通设置或测试样例 |
 | [`core/library/BookReadProgress.kt`](../app/src/main/java/com/mozhi/reader/core/library/BookReadProgress.kt) | 统一的阅读进度计算，避免各页面自行换算百分比 |
 
-Room 结构、迁移、备份版本校验和实际数据文件要保持一致。向量模型的修改还需检查 ObjectBox 模型文件及索引恢复行为。
+Room 结构、迁移、备份版本校验和实际数据文件要保持一致。向量模型的修改还需检查 ObjectBox 模型文件及索引恢复行为。`SettingsViewModel` / `SettingsScreen` 的存储统计区分原书、正文、内嵌插图与精排数据（含字体），AI 生成插图单独计量，避免遗漏布局数据或重复归类。
 
 ## 4. 导入、书架与合集
 
@@ -49,14 +50,16 @@ Room 结构、迁移、备份版本校验和实际数据文件要保持一致。
 
 - TXT：`TextEncodingDetector` → `TxtChapterSplitter` / `TxtTocRuleLoader` → 正文存储；`AiChapterRuleAgent` 提供可选的 AI 分章规则辅助。
 - EPUB：`EpubPackageInspector`、`EpubMetadataResolver`、`EpubTextExtractor`、`EpubTocMapper` 与 `EpubLayoutDocumentParser` 分别处理包、元信息、文本、目录与布局文档。
-- 正文与资源：`core/library/BookTextStore`、`BookTextWriter`、`BookLayoutStore`、`BookMediaStore`。
+- EPUB 导入复用：`EpubLegacyStyleBridge.newDocumentScope` 在章节间共享不可变 CSS 规则索引，但元素样式缓存按文档隔离；`EpubArchiveImageReader` 仅在 Readium 资源读取未命中时延迟打开 ZIP，同一导入复用归档索引与资源别名映射，结束时关闭，不逐图重新扫描 ZIP。
+- 正文与资源：`core/library/BookTextStore`、`BookTextWriter`、`BookLayoutStore`、`BookMediaStore`。`GzipTextFiles` 按文件头兼容明文与 gzip；新 DOM 直接压缩落盘，旧数据压缩保持索引路径不变并原子替换，失败可重试。只有 DOM 校验通过且存在样式表时才移除重复的旧布局块；无样式表的兼容回退数据必须保留。
 - 局域网传书：`core/importer/lan/` 的 HTTP 服务、请求解析与上传命名，页面入口为 `feature/importer/LanTransferScreen`。
 
 ### 书架与合集
 
 - [`feature/bookshelf/BookshelfViewModel.kt`](../app/src/main/java/com/mozhi/reader/feature/bookshelf/BookshelfViewModel.kt)：书籍观察、筛选、选择及书架操作。
 - [`feature/bookshelf/BookCollectionModels.kt`](../app/src/main/java/com/mozhi/reader/feature/bookshelf/BookCollectionModels.kt)：书籍/合集展示模型、可见成员与全体成员、排序合并规则。
-- [`feature/bookshelf/ShelfCollectionDrag.kt`](../app/src/main/java/com/mozhi/reader/feature/bookshelf/ShelfCollectionDrag.kt)：拖拽目标与状态转换；`BookCollectionComponents.kt` 和 `BookshelfScreen.kt` 负责 UI 接线。
+- [`feature/bookshelf/ShelfCollectionDrag.kt`](../app/src/main/java/com/mozhi/reader/feature/bookshelf/ShelfCollectionDrag.kt)：拖拽目标与状态转换；书籍进入合集卡片任意位置时优先加入合集，卡片间隙仍可排序。`previewShelfEntries` 不对合集目标做实时换位预览，避免目标躲开触点；`BookCollectionComponents.kt` 和 `BookshelfScreen.kt` 负责 UI 接线。
+- [`feature/bookshelf/BookLongPressOverlay.kt`](../app/src/main/java/com/mozhi/reader/feature/bookshelf/BookLongPressOverlay.kt)：独立 Popup 窗口显示在根导航之上，而不是依赖局部 `zIndex`。`BookMenuPlacement.kt` 计算上下左右布局及有限重叠回退；短窗口允许覆盖部分封面和 dock，菜单限高可滚动，但仍避让系统安全区并保持触达尺寸。
 - [`core/library/ShelfOrganizationRepository.kt`](../app/src/main/java/com/mozhi/reader/core/library/ShelfOrganizationRepository.kt) 与 `core/database/dao/ShelfOrganizationDao.kt`：合集、分组、标签和成员顺序的持久化。
 
 **修改重点：**筛选后的全选、删除和拖拽应使用正确的可见成员集合；不能把隐藏书籍误算为用户已选择。拖拽结束时应按最新列表提交顺序，并保持置顶边界及未显示成员的相对顺序。合集与书架分组是不同的数据概念。
@@ -69,8 +72,10 @@ Room 结构、迁移、备份版本校验和实际数据文件要保持一致。
 
 - [`feature/reader/engine/`](../app/src/main/java/com/mozhi/reader/feature/reader/engine)：文本测量、分页、选区、批注几何与正文控制。
 - [`core/epub/`](../app/src/main/java/com/mozhi/reader/core/epub)：CSS 解析、级联、DOM 适配与样式解析。
-- `engine/EpubBoxLayoutBackend` 与 `engine/epub/`：EPUB 盒树、行内/块布局、分页和排版后端。
+- `engine/EpubBoxLayoutBackend` 与 `engine/epub/`：EPUB 盒树、行内/块布局、分页和排版后端。`EpubLayoutCapability` 记录不支持的布局能力并选择回退（识别竖排不等于已实现竖排）；`EpubDomFragmentLocator` 用 DOM fragment id 定位目录锚点。
+- `TextPage.fullPageArtwork`、`ImmersiveArtworkFit` 与 `PageBitmapRenderer`：大幅独立插画的整页展示与背景绘制。明确限定尺寸的小图不能被放大全屏；背景、分页和绘制缓存必须一致。
 - `PageTurnDriver`、`PageTurnCompositor`、`PageFoldGeometry`、`PageBitmapWindow`：翻页驱动、合成、折页几何与位图窗口。
+- `PullBookmarkGesture` / `BookmarkPullIndicator`：方向锁定、阈值与松手提示；只在 `ReaderPane` 的翻页触摸链路启用，不接入 `ReaderScrollPane`。反向回拉、多指、选区拖动与取消事件不能添加书签；`ReaderViewModel` 先捕获当前页，再在互斥区内映射到原文坐标并检查重复，普通书签按钮仍可取消书签。
 - `ReaderChrome`、`ReaderTypography*`、`ReaderNavigationSheets`：阅读工具栏、排版设置与导航弹层。
 - `ReaderTableOfContents`、`BookTextSearch`、`ReaderSearchViewModel`：目录与书内搜索。
 
@@ -130,20 +135,27 @@ Room 结构、迁移、备份版本校验和实际数据文件要保持一致。
 | 修改领域 | 优先检查的测试 |
 | --- | --- |
 | 合集、筛选与拖拽 | `BookCollectionModelsTest`、`ShelfCollectionDragTest`、`ShelfFilterTest`；Android 下的 `ShelfCollectionDaoTest`、`ShelfCollectionDragComposeTest`、`LibraryRepositoryDeleteBookTest` |
+| 长按菜单与书签手势 | `BookMenuPlacementTest`、`BookLongPressOverlayTest`、`PullBookmarkGestureTest`、`ReaderPageTouchTest`、`ReaderViewModelPersistenceTest` |
+| 本地化资源 | `LocalizationResourcesTest`：英文、默认回退、格式参数与复数 |
 | 繁简转换与定位 | `ChineseTextConverterTest`、`ReaderTextAnchorTest`、`ChineseChapterPresenterTest`，特别是词组伸缩与重复文本 |
 | 数据结构与恢复 | Android 下的 `MigrationTest`、`BackupArchiveManagerTest`；JVM 下的 `BackupArchivePathsTest` |
 | 阅读进度与 AI 检索 | `ReadingScopeTest`、`RetrievalPipelineTest` 及对应 Agent 工具测试 |
-| 排版与导入 | `feature/reader/engine/`、`core/epub/` 和 `feature/importer/` 对应的单元测试；真实样书与设备阅读回归 |
+| 排版与导入 | `EpubLegacyStyleBridgeTest`、`EpubArchiveImageReaderTest`、`EpubDomFragmentLocatorTest`、`EpubLayoutCapabilityTest`、`ImmersiveArtworkFitTest` 与对应引擎测试；真实样书与设备阅读回归 |
+| 布局压缩兼容 | `BookLayoutStoreTest`、`GzipTextFilesTest`：旧索引、明文/gzip 混合、缺失或损坏文件、重试及新导入 |
 
 提交改动时，请同步更新失效的地图入口；不要把本地路径、凭据、维护工作笔记或未公开的功能计划放入公共文档。
 
-## 伴读稳定性与宽屏阅读边界
+## 9. 本地化
+
+`res/values/strings.xml` 保留默认中文，`res/values-en/strings.xml` 提供增量英文翻译。当前范围是书籍长按菜单与阅读状态、部分合集提示、书签反馈和导入进度，尚未提供完整英文界面或应用内语言选择器。Compose 使用 `stringResource` / `pluralStringResource`，瞬态阅读消息在 UI 层解析 `ReaderEvent.ShowLocalizedMessage`；不要将本地化字符串作为数据库值。资源命名、占位符、复数和验证约定见 [Localization](LOCALIZATION.md)。
+
+## 10. 伴读稳定性与宽屏阅读边界
 
 - `ui/WindowLayout.kt` 按真实窗口约束区分布局。窗口达到 840dp 使用侧边导航；`ShelfGridLayout.kt` 让书架和合集按可用宽度选择列数，拖拽坐标始终在同一坐标系中换算。
 - `ReaderCompanionLayout.kt` 保持正文的组合位置稳定，按需在右侧嵌入同一个阅读页 ViewModel 的 `CompanionChatPane`。窗口缩窄时隐藏侧栏，但保留用户偏好和聊天会话。
 - `ReaderPaneHolder` 和 `ScrollPaneHolder` 由阅读页 ViewModel 持有；进入全屏聊天只解绑 UI 回调，返回时复用分页三页位图或滚动章节条带、字体与排版。字体、视口、安全区或阅读模式变化必须重新校验排版环境，主题、批注和背景变化必须使绘制缓存失效。
 - `ReaderSafeInsets` 在分页与滚动阅读中共用稳定系统栏和显示切口安全区；沉浸模式只隐藏状态栏，不清零顶部留白，显示/隐藏动画不触发无意义重排。
-- `CompanionChatScroll` 在历史消息首次测量前锚定最后一条的底部；异步历史与会话切换先校验书籍和角色归属，避免空会话、旧列表和最新消息来回闪现，手动翻阅历史仍优先于自动跟随。
+- `CompanionChatScroll` 在历史消息首次测量前锚定最后一条的底部；`ReaderCompanionViewModel` 缓存聊天标题上下文，首次展示前有界预定位引用。异步历史与会话切换在挂起前后校验会话归属，避免空会话、旧列表和最新消息来回闪现，手动翻阅历史仍优先于自动跟随。
 - `PageSpread.kt`、`SpreadGeometry.kt`、`SpreadLeafGeometry.kt` 统一章内页对、触点映射和书脊翻页。逻辑页码、聚焦的正文锚点与双页左页索引互不替代；章末空白页不是加载占位页，也不写入阅读进度。
 - 段评引起的重排只影响实际改变的章节；替换布局就绪前保留旧布局。翻页提交校验布局代次，加载失败不能当作空章继续翻动。
 - `AgentLoop.RoundStarted` 和 `MessageEntity.clientRoundId` 在持久化之前确定气泡身份；`CompanionStreamingReducer` 的状态由 Main 线程串行管理，Room 与流事件的到达顺序不应改变列表 key。
@@ -152,6 +164,7 @@ Room 结构、迁移、备份版本校验和实际数据文件要保持一致。
 - `ProactiveAnnotationParagraphs` 在本地选择段落，生成请求只接收截至目标段落的正文前缀。`AnnotationVisibility` 在正文、详情、聊天工具和完成提示共用来源范围检查；预生成不能拓宽阅读水位。
 - 随读段评的 `style` 按内容语义选择：荧光对应金句/精彩段落，波浪线对应已读前缀中的线索/呼应，直线对应知识点/典故。生成、保存和绘制都保留三种样式；不随机分配，也不批量改写已有段评。
 - `ProactiveAnnotationNoticeComposer` 默认使用不调用 API 的内置条数提示；显式选择快速模型时，`ModelRole.CHEAP` 仅接收有长度上限的角色名、性格与说话风格，生成一句角色口吻的共读弹幕，不传正文、段评、历史、记忆或条数。超时、失败和不合规输出回落互动短句，不回落统计通知；胶囊不抢焦点，未读结果不提供跳转入口。
+- 回退诊断只记录超时、错误类型和输出长度，不记录模型原文、角色资料或异常消息里的连接信息。
 - 随读段评设置复用父页面的 `SettingsViewModel`，冷启动先显示稳定页面框架，真实设置加载前不渲染临时默认开关和滑块。
 
 对应回归测试位于 `feature/reader/*Spread*Test`、`engine/ReaderContentControllerTest`、`CompanionChat*Test`、`ReaderPaneRetentionTest`、`settings/ProactiveAnnotationSettingsScreenTest`、`core/retrieval/AnnotationVisibilityTest`、`ai/companion/`、`ui/WindowLayoutTest` 和数据库迁移/可见水位的 Android 测试中。

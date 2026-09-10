@@ -240,7 +240,11 @@ class CompanionContextBuilder @Inject constructor(
             return render()
         }
 
-        private fun personaBlock(persona: PersonaEntity?, loreTrigger: String): String {
+        /**
+         * 角色身份块：人设、说话风格、示例对话与命中的设定集。聊天、随读段评与其他要「以这个
+         * 角色的口吻开口」的路径都从这里取，保证同一个角色在不同入口说话是同一个人。
+         */
+        internal fun personaBlock(persona: PersonaEntity?, loreTrigger: String): String {
             if (persona == null) {
                 return "你是「墨知」阅读器的伴读助手，陪伴用户阅读并帮助他理解已读内容。"
             }

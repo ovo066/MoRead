@@ -18,6 +18,7 @@ import android.text.TextPaint
 import com.caverock.androidsvg.SVG
 import com.mozhi.reader.core.datastore.ReaderSyntaxFont
 import com.mozhi.reader.feature.reader.engine.BackgroundSizeMode
+import com.mozhi.reader.feature.reader.engine.ImmersiveArtworkFit
 import com.mozhi.reader.feature.reader.engine.TransientHighlightSpan
 import com.mozhi.reader.feature.reader.engine.ReaderAnnotationMark
 import com.mozhi.reader.feature.reader.engine.ReaderIllustrationMark
@@ -226,29 +227,6 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         illustrations: List<ReaderIllustrationMark>,
         transientHighlight: TransientHighlightSpan?
     ) {
-        val artwork = page.page.lines.singleOrNull()?.inlineImage
-        if (page.page.immersive && artwork != null) {
-            val availableWidth = pageStyle.viewWidth.toFloat()
-            val availableHeight = pageStyle.immersiveContentBottom
-            val scale = kotlin.math.min(
-                availableWidth / artwork.width.coerceAtLeast(1f),
-                availableHeight / artwork.height.coerceAtLeast(1f)
-            )
-            val width = artwork.width * scale
-            val height = artwork.height * scale
-            drawInlineImage(
-                canvas = canvas,
-                path = artwork.imagePath,
-                altText = artwork.altText,
-                destination = RectF(
-                    (availableWidth - width) / 2f,
-                    (availableHeight - height) / 2f,
-                    (availableWidth + width) / 2f,
-                    (availableHeight + height) / 2f
-                )
-            )
-            return
-        }
         val immersiveBackground = page.page.immersive &&
             (page.page.backgroundImagePath != null || page.page.backgroundColorArgb != null)
         if (immersiveBackground) {
@@ -266,6 +244,33 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
             page.page.backgroundImagePath?.let { path ->
                 drawCoverImage(canvas, path, viewport, page.page.backgroundOpacity)
             }
+        }
+        // 封面/整页插画：不管来自旧引擎的 inlineImage 还是盒模型引擎的定位图片，都整屏居中落位。
+        // 以前只认前者，精排书（走盒模型引擎）的封面因此按正文插图贴左上角、按宽度铺开。
+        val mayRefit = page.page.fullPageArtwork || page.page.lines.singleOrNull()?.inlineImage != null
+        val artwork = if (page.page.immersive && mayRefit) {
+            ImmersiveArtworkFit.singleArtwork(page.page.lines)
+        } else null
+        if (artwork != null) {
+            val fitted = ImmersiveArtworkFit.fit(
+                imageWidth = artwork.width,
+                imageHeight = artwork.height,
+                availableWidth = pageStyle.viewWidth.toFloat(),
+                availableHeight = pageStyle.immersiveContentBottom
+            )
+            drawInlineImage(
+                canvas = canvas,
+                path = artwork.imagePath,
+                altText = artwork.altText,
+                destination = RectF(
+                    fitted.left,
+                    fitted.top,
+                    fitted.left + fitted.width,
+                    fitted.top + fitted.height
+                ),
+                roundCorners = false
+            )
+            return
         }
         canvas.save()
         canvas.translate(
@@ -959,19 +964,22 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         canvas: Canvas,
         path: String,
         altText: String,
-        destination: RectF
+        destination: RectF,
+        roundCorners: Boolean = true
     ) {
         val bitmap = loadImage(path, destination.width().toInt(), destination.height().toInt())
         if (bitmap != null) {
             canvas.save()
-            canvas.clipPath(Path().apply {
-                addRoundRect(
-                    destination,
-                    IMAGE_CORNER_RADIUS,
-                    IMAGE_CORNER_RADIUS,
-                    Path.Direction.CW
-                )
-            })
+            if (roundCorners) {
+                canvas.clipPath(Path().apply {
+                    addRoundRect(
+                        destination,
+                        IMAGE_CORNER_RADIUS,
+                        IMAGE_CORNER_RADIUS,
+                        Path.Direction.CW
+                    )
+                })
+            }
             canvas.drawBitmap(bitmap, null, destination, imagePaint)
             canvas.restore()
             return

@@ -3,13 +3,16 @@ package com.mozhi.reader.feature.reader.engine.epub
 import com.mozhi.reader.core.epub.css.CssParser
 import com.mozhi.reader.core.epub.css.CssRule
 import com.mozhi.reader.core.epub.dom.EpubDomNode
+import com.mozhi.reader.core.epub.style.EpubLayoutCapabilityAnalyzer
 import com.mozhi.reader.core.epub.style.EpubStyleResolver
 import com.mozhi.reader.core.epub.style.StyledDomNode
 import com.mozhi.reader.core.library.EpubLayoutChapterBundle
 import com.mozhi.reader.core.library.EpubStylesheetText
+import com.mozhi.reader.feature.reader.engine.ImmersiveArtworkFit
 import com.mozhi.reader.feature.reader.engine.InlineImageSource
 import com.mozhi.reader.feature.reader.engine.InlineMarkerReservation
 import com.mozhi.reader.feature.reader.engine.TextChapter
+import com.mozhi.reader.feature.reader.engine.TextLine
 import com.mozhi.reader.feature.reader.engine.TextMeasure
 import com.mozhi.reader.feature.reader.engine.TypesetSpec
 
@@ -63,9 +66,12 @@ internal class EpubTypesetterV2(
             dominantBodyFamily = dominantBodyFamily(styledRoot)
         )
         ctx.imageSources = inlineImages.associateBy(InlineImageSource::charOffset)
+        // 布局前先做能力判定：竖排等尚不支持的书写模式按结构化原因降级到横排，而不是排到一半才发现。
+        val capability = EpubLayoutCapabilityAnalyzer.analyze(styledRoot)
         val boxTree = EpubBoxTreeBuilder.build(styledRoot)
         val output = EpubBlockLayout(ctx).layout(boxTree)
         markCanvasDecorations(output)
+        val fullPageArtwork = fitImmersiveArtwork(ctx, output)
         val hideHeader = firstPageHidesReaderHeader(dom.bodyNode)
         val builder = EpubPageBuilder(ctx)
         builder.firstPageExtraTop = hideHeader
@@ -74,8 +80,56 @@ internal class EpubTypesetterV2(
             chapterIndex = chapterIndex,
             title = title,
             bodyStyle = styledRoot.style,
-            hideHeaderFirstPage = hideHeader
+            hideHeaderFirstPage = hideHeader,
+            layoutCapability = capability,
+            fullPageArtwork = fullPageArtwork
         )
+    }
+
+    /**
+     * 封面/整页插画（immersivePage 且全章只有一张图）：按整个沉浸页可用区居中容纳，而不是沿用
+     * 正文插图「贴内容框左上、按宽度铺开」的落位。翻页模式的绘制层会再按屏幕整屏落位；这里保证
+     * 滚动条带与坐标层（点击、选区）看到的是同一张居中的图。滚动条带不裁边，只容纳。
+     */
+    private fun fitImmersiveArtwork(ctx: EpubLayoutContext, output: FlowOutput): Boolean {
+        if (!ctx.immersivePage) return false
+        val only = output.lines.singleOrNull() ?: return false
+        val line = only.line
+        val artwork = ImmersiveArtworkFit.singleArtwork(listOf(line)) ?: return false
+        val positioned = (line.inlineImages + line.inlineGlyphImages).singleOrNull() ?: return false
+        val availableWidth = spec.visibleWidth
+        val availableHeight = spec.visibleHeight + spec.immersiveExtraTopPx + spec.immersiveExtraBottomPx
+        if (!ImmersiveArtworkFit.fillsContentAxis(artwork, availableWidth, availableHeight)) return false
+        val fitted = ImmersiveArtworkFit.fit(
+            imageWidth = artwork.width,
+            imageHeight = artwork.height,
+            availableWidth = availableWidth,
+            availableHeight = availableHeight,
+            allowFill = false
+        )
+        only.line = TextLine(
+            text = line.text,
+            columns = line.columns,
+            lineTop = 0f,
+            lineBase = availableHeight,
+            lineBottom = availableHeight,
+            startX = fitted.left,
+            isTitle = false,
+            isParagraphEnd = true,
+            chapterPosition = line.chapterPosition,
+            charLength = line.charLength,
+            inlineImages = listOf(
+                positioned.copy(
+                    left = fitted.left,
+                    topOffset = fitted.top,
+                    width = fitted.width,
+                    height = fitted.height
+                )
+            )
+        )
+        output.keepRanges.clear()
+        output.keepRanges += 0f..availableHeight
+        return true
     }
 
     /**

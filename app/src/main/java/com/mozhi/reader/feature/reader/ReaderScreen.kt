@@ -569,6 +569,7 @@ fun ReaderScreen(
         viewModel.events.collect { event ->
             when (event) {
                 is ReaderEvent.ShowMessage -> snackbarHostState.showSnackbar(event.message)
+                is ReaderEvent.ShowLocalizedMessage -> snackbarHostState.showSnackbar(context.getString(event.resourceId))
                 is ReaderEvent.ConfirmFontImport -> {
                     pendingFont = event.pending
                     pendingFontName = event.pending.detectedName
@@ -896,6 +897,7 @@ fun ReaderScreen(
                         onImageAction = paneImageAction,
                         onEditText = paneEditText,
                         pageTurnRequest = hardwarePageTurnRequest,
+                        onAddBookmark = viewModel::addBookmarkFromPull,
                         onSpreadModeChanged = { spreadActive = it },
                         onVisiblePagesDrawn = { snapshot ->
                             if (contentVisible && readerStarted) viewModel.markVisiblePageRead(snapshot)

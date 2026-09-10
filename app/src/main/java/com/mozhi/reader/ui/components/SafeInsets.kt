@@ -1,9 +1,10 @@
 package com.mozhi.reader.ui.components
 
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.statusBarsIgnoringVisibility
 import androidx.compose.foundation.layout.union
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -26,10 +27,13 @@ fun Modifier.safeTopPadding(minimum: Dp = DEFAULT_MINIMUM_TOP): Modifier = compo
 }
 
 /** 需要把数值用在别处（如 contentPadding）时取它。 */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun safeTopInset(minimum: Dp = DEFAULT_MINIMUM_TOP): Dp {
     val density = LocalDensity.current
-    val insets = WindowInsets.statusBars.union(WindowInsets.displayCutout)
+    // 状态栏按「忽略可见性」的稳定值计算：从沉浸阅读推进聊天页时，阅读页在转场结束才恢复
+    // 状态栏；若这里跟着可见性变化，整页会在落定后再被顶下一截，聊天列表随之重新贴底抽动。
+    val insets = WindowInsets.statusBarsIgnoringVisibility.union(WindowInsets.displayCutout)
     val top = with(density) { insets.getTop(density).toDp() }
     return maxOf(top, minimum)
 }

@@ -2,11 +2,64 @@ package com.mozhi.reader.feature.importer
 
 import org.jsoup.Jsoup
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class EpubLegacyStyleBridgeTest {
+
+    @Test
+    fun `new document scopes share immutable rules but not element caches`() {
+        val styles = EpubLegacyStyleBridge.parse(listOf(EpubStylesheetSource(
+            "OPS/style.css", "p { color: #123456; }"
+        )))
+        val element = Jsoup.parse("<p>Chapter</p>").selectFirst("p")!!
+        val firstScope = styles.newDocumentScope()
+        assertEquals(0xFF123456.toInt(), firstScope.styleFor(element).colorArgb)
+        element.attr("style", "color: #abcdef")
+        val nextScope = styles.newDocumentScope()
+        assertEquals(0xFFABCDEF.toInt(), nextScope.styleFor(element).colorArgb)
+        assertEquals(0xFF123456.toInt(), firstScope.styleFor(element).colorArgb)
+        assertNotSame(firstScope, nextScope)
+        assertSame(styles.fontFaces, nextScope.fontFaces)
+        assertSame(styles.unsupportedProperties, nextScope.unsupportedProperties)
+        val index = EpubLegacyStyleBridge::class.java.getDeclaredField("ruleIndex")
+            .apply { isAccessible = true }
+        assertSame(index.get(styles), index.get(firstScope))
+        assertSame(index.get(styles), index.get(nextScope))
+    }
+
+    @Test
+    fun `shared selector index preserves cascade and chapter inheritance`() {
+        val styles = EpubLegacyStyleBridge.parse(listOf(EpubStylesheetSource(
+            "OPS/style.css", """
+                * { color: #010203; }
+                p { font-weight: 400; }
+                .note { font-weight: 600; }
+                #target { font-weight: 700; }
+                section > p.note { color: #112233 !important; }
+                p + p { margin-top: 2em; }
+            """.trimIndent()
+        )))
+        val chapter = Jsoup.parse("""
+            <section style='font-size: 2em'>
+              <p>First</p><p class='note' id='target' style='color: #ffffff'>Second</p>
+            </section>
+        """.trimIndent())
+        val target = chapter.getElementById("target")!!
+        val actual = styles.newDocumentScope().styleFor(target)
+        assertEquals(styles.styleFor(target), actual)
+        assertEquals(700, actual.fontWeight)
+        assertEquals(0xFF112233.toInt(), actual.colorArgb)
+        assertEquals(2f, actual.fontSizeEm!!, 0.0001f)
+        assertEquals(2f, actual.marginTopEm!!, 0.0001f)
+        val other = Jsoup.parse("<p class='note' id='target'>Other chapter</p>")
+        assertEquals(0xFF010203.toInt(), styles.newDocumentScope()
+            .styleFor(other.getElementById("target")!!).colorArgb)
+    }
+
 
     @Test
     fun `rgba backgrounds and asymmetric borders are resolved`() {

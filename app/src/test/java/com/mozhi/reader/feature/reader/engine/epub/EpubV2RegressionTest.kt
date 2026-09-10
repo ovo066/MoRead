@@ -1,11 +1,14 @@
 package com.mozhi.reader.feature.reader.engine.epub
 
 import com.mozhi.reader.core.datastore.PublisherStyleMode
+import com.mozhi.reader.core.epub.style.EpubLayoutFallbackReason
+import com.mozhi.reader.core.epub.style.EpubWritingMode
 import com.mozhi.reader.core.library.EpubLayoutChapterBundle
 import com.mozhi.reader.core.library.EpubStylesheetText
 import com.mozhi.reader.feature.importer.EpubLayoutDocumentParser
 import com.mozhi.reader.feature.reader.engine.ChapterTypesetter
 import com.mozhi.reader.feature.reader.engine.FakeMeasure
+import com.mozhi.reader.feature.reader.engine.ImmersiveArtworkFit
 import com.mozhi.reader.feature.reader.engine.InlineImageSource
 import com.mozhi.reader.feature.reader.engine.TypesetSpec
 import org.junit.Assert.assertEquals
@@ -139,6 +142,7 @@ class EpubV2RegressionTest {
         val line = chapter.pages.flatMap { it.lines }.single { it.inlineImages.isNotEmpty() }
         val image = line.inlineImages.single()
 
+        assertEquals(false, chapter.pages.single().fullPageArtwork)
         assertEquals(50f, line.startX, .01f)
         assertEquals(50f, image.left, .01f)
         assertEquals(100f, image.width, .01f)
@@ -282,6 +286,85 @@ class EpubV2RegressionTest {
             "气泡底边 ${bubble.bottom} 应在末行 ${lastLine.lineBottom} 之下",
             bubble.bottom >= lastLine.lineBottom - .01f
         )
+    }
+
+    @Test
+    fun `immersive cover page centers its only artwork inside the whole immersive viewport`() {
+        // 常见的 calibre/Sigil 封面页：div > svg > image，图片 2000x2800，页面语义上只有这一张图。
+        val css = "body { margin: 20px; }"
+        val parsed = EpubLayoutDocumentParser().parseWithText(
+            ("<html><body><div style=\"text-align: center; padding: 0pt; margin: 0pt;\">" +
+                "<svg xmlns=\"http://www.w3.org/2000/svg\" height=\"100%\" preserveAspectRatio=\"xMidYMid meet\" " +
+                "version=\"1.1\" viewBox=\"0 0 2000 2800\" width=\"100%\" xmlns:xlink=\"http://www.w3.org/1999/xlink\">" +
+                "<image width=\"2000\" height=\"2800\" xlink:href=\"../Images/cover.jpg\"/></svg></div></body></html>").toByteArray(),
+            0,
+            "OEBPS/Text/cover.xhtml",
+            mapOf("OEBPS/Styles/main.css" to css)
+        )
+        assertTrue(parsed.document.immersivePage)
+        val source = parsed.images.single()
+        val spec = testSpec().copy(
+            visibleWidth = 1000f,
+            visibleHeight = 2000f,
+            immersiveExtraTopPx = 120f,
+            immersiveExtraBottomPx = 80f
+        )
+        val chapter = ChapterTypesetter(spec, FakeMeasure()).typeset(
+            chapterIndex = 0,
+            title = "",
+            body = parsed.text,
+            inlineImages = listOf(InlineImageSource(source.charOffset, "cover.jpg", 2000, 2800, source.altText)),
+            epubLayout = EpubLayoutChapterBundle(
+                document = parsed.document,
+                resourcePaths = emptyMap(),
+                fontPaths = emptyMap(),
+                dom = parsed.dom,
+                stylesheets = listOf(EpubStylesheetText("OEBPS/Styles/main.css", css))
+            )
+        )
+        val page = chapter.pages.single()
+        val line = page.lines.single()
+        val image = line.inlineImages.single()
+
+        // 以前：贴内容框左上、按宽度铺开（left=20, top=0），下面留一大块空白，比例看起来也不对。
+        // 现在：在整个沉浸页可用区（1000 x 2200）里容纳并两轴居中。
+        assertTrue(page.immersive)
+        assertEquals(1000f, image.width, .01f)
+        assertEquals(1400f, image.height, .01f)
+        assertEquals(0f, image.left, .01f)
+        assertEquals(400f, line.lineTop + image.topOffset, .01f)
+        assertEquals(2200f, page.height, .01f)
+        assertEquals(image.width, ImmersiveArtworkFit.singleArtwork(page.lines)!!.width, .01f)
+        assertTrue(chapter.layoutCapability!!.supported)
+    }
+
+    @Test
+    fun `vertical writing mode is laid out horizontally but reported through the capability gate`() {
+        val css = "body { -epub-writing-mode: vertical-rl; writing-mode: vertical-rl; }"
+        val parsed = EpubLayoutDocumentParser().parseWithText(
+            "<html><body><p>竖排正文第一段。</p><p>竖排正文第二段。</p></body></html>".toByteArray(),
+            0,
+            "OEBPS/Text/ch.xhtml",
+            mapOf("OEBPS/Styles/main.css" to css)
+        )
+        val chapter = ChapterTypesetter(testSpec(), FakeMeasure()).typeset(
+            chapterIndex = 0,
+            title = "",
+            body = parsed.text,
+            epubLayout = EpubLayoutChapterBundle(
+                document = parsed.document,
+                resourcePaths = emptyMap(),
+                fontPaths = emptyMap(),
+                dom = parsed.dom,
+                stylesheets = listOf(EpubStylesheetText("OEBPS/Styles/main.css", css))
+            )
+        )
+        val capability = chapter.layoutCapability!!
+
+        assertTrue(chapter.pages.flatMap { it.lines }.any { it.text.isNotBlank() })
+        assertEquals(false, capability.supported)
+        assertEquals(EpubLayoutFallbackReason.VERTICAL_WRITING_MODE, capability.reason)
+        assertEquals(EpubWritingMode.VERTICAL_RL, capability.chapterWritingMode)
     }
 
     private fun testSpec() = TypesetSpec(

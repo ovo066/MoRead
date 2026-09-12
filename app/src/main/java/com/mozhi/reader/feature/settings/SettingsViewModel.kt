@@ -1,6 +1,5 @@
 package com.mozhi.reader.feature.settings
 
-import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mozhi.reader.ai.embedding.EmbeddingProgressTracker
@@ -15,16 +14,13 @@ import com.mozhi.reader.core.datastore.CompanionMemorySettings
 import com.mozhi.reader.core.datastore.ProactiveAnnotationLimits
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
 import com.mozhi.reader.core.datastore.ShelfLayout
-import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.ui.theme.AccentPreset
 import com.mozhi.reader.ui.theme.AppearanceSettings
 import com.mozhi.reader.ui.theme.ThemeMode
 import dagger.hilt.android.lifecycle.HiltViewModel
-import dagger.hilt.android.qualifiers.ApplicationContext
-import java.io.File
+import com.mozhi.reader.core.storage.StorageRepository
 import java.util.Locale
 import javax.inject.Inject
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,7 +30,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 data class SettingsUiState(
     val isLoaded: Boolean = false,
@@ -54,29 +49,9 @@ data class SettingsUiState(
     /** agent 主动调用开关矩阵；全部默认关。 */
     val autonomy: CompanionAutonomySettings = CompanionAutonomySettings(),
     val isWorking: Boolean = false,
-    /** 封面缓存占用字节数；null = 还没统计。 */
-    val coverCacheBytes: Long? = null,
-    /** 书籍数据总占用（原书文件 + 正文 + 插图 + 精排数据）；null = 还没统计。 */
-    val bookStorageBytes: Long? = null,
-    /** 书籍数据分项，给「存储与数据」页解释体积去了哪里。 */
-    val bookStorageBreakdown: BookStorageBreakdown? = null,
-    /** AI 生成的插图；它不是书的一部分，单独列出而不混进「书籍存储」。 */
-    val aiIllustrationBytes: Long? = null
+    /** All local data, using the same inventory as the data-management page. */
+    val localStorageBytes: Long? = null
 )
-
-/** 书籍数据分项字节数，与 filesDir 下的目录一一对应。 */
-data class BookStorageBreakdown(
-    /** books/：导入时保留的原始 EPUB 副本，供重建精排、补封面与备份使用。 */
-    val originalFilesBytes: Long,
-    /** book-text/：统一正文 text.mz。 */
-    val textBytes: Long,
-    /** book-media/：从 EPUB 抽出的插图原文件。 */
-    val mediaBytes: Long,
-    /** book-layout/：精排 DOM、样式索引与内嵌字体。 */
-    val layoutBytes: Long
-) {
-    val total: Long get() = originalFilesBytes + textBytes + mediaBytes + layoutBytes
-}
 
 sealed interface SettingsEvent {
     data class ShowMessage(val message: String) : SettingsEvent
@@ -85,14 +60,13 @@ sealed interface SettingsEvent {
 /** 设置主页：Provider 列表（编辑与模型管理在 provider/{id} 二级页）、模型分配、外观、应用。 */
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
-    @ApplicationContext private val context: Context,
     private val providerRepository: AiProviderRepository,
     private val readerSettingsRepository: ReaderSettingsRepository,
-    private val libraryRepository: LibraryRepository,
-    private val embeddingProgressTracker: EmbeddingProgressTracker
+    private val embeddingProgressTracker: EmbeddingProgressTracker,
+    private val storageRepository: StorageRepository
 ) : ViewModel() {
     private val working = MutableStateFlow(false)
-    private val storage = MutableStateFlow<StorageUsage?>(null)
+    private val storage = storageRepository.snapshot
     private val eventChannel = Channel<SettingsEvent>(Channel.BUFFERED)
     val events = eventChannel.receiveAsFlow()
 
@@ -161,10 +135,7 @@ class SettingsViewModel @Inject constructor(
             multiBubbleEnabled = prefs.multiBubbleEnabled,
             autonomy = prefs.autonomy,
             isWorking = isWorking,
-            coverCacheBytes = usage?.coverBytes,
-            bookStorageBytes = usage?.breakdown?.total,
-            bookStorageBreakdown = usage?.breakdown,
-            aiIllustrationBytes = usage?.aiIllustrationBytes
+            localStorageBytes = usage?.totalBytes
         )
     }.stateIn(
         scope = viewModelScope,
@@ -176,7 +147,7 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             // 先把设置页首帧交给 UI；目录统计不是首屏必需信息，稍后后台补齐。
             delay(STORAGE_SCAN_DEFER_MS)
-            storage.value = scanStorageUsage()
+            runCatching { storageRepository.refresh() }
         }
     }
 
@@ -280,74 +251,11 @@ class SettingsViewModel @Inject constructor(
 
     fun refreshStorageUsage() {
         viewModelScope.launch {
-            storage.value = scanStorageUsage()
+            runCatching { storageRepository.refresh() }
         }
     }
 
-    private suspend fun scanStorageUsage(): StorageUsage = withContext(Dispatchers.IO) {
-        // 以前漏算 book-layout（精排 DOM 与内嵌字体），却把 AI 生成的插图算进「书籍」：
-        // 用户看到的数字既比真实占用小，又解释不了导入一本精排书后应用体积为什么涨了三倍。
-        val breakdown = BookStorageBreakdown(
-            originalFilesBytes = File(context.filesDir, "books").directorySize(),
-            textBytes = File(context.filesDir, "book-text").directorySize(),
-            mediaBytes = File(context.filesDir, "book-media").directorySize(),
-            layoutBytes = File(context.filesDir, "book-layout").directorySize()
-        )
-        StorageUsage(
-            coverBytes = coversDirectory().directorySize(),
-            breakdown = breakdown,
-            aiIllustrationBytes = File(context.filesDir, "illustrations").directorySize()
-        )
-    }
-
-    /**
-     * 清理封面缓存。只删「可重建」的 EPUB 封面：删文件、置空 coverPath、并抹掉补齐任务的
-     * marker，这样下次启动 `backfillMissingCovers` 会从 EPUB 里重新抽取 —— 是真的缓存，
-     * 而不是永久删除。用户手选的封面和 TXT 书封面不在范围内。
-     */
-    fun clearCoverCache() {
-        viewModelScope.launch {
-            working.value = true
-            val freed = runCatching {
-                val bytes = libraryRepository.clearReExtractableCovers()
-                withContext(Dispatchers.IO) {
-                    File(coversDirectory(), COVER_BACKFILL_MARKER).delete()
-                }
-                bytes
-            }.getOrDefault(0L)
-            refreshStorageUsage()
-            working.value = false
-            eventChannel.send(
-                SettingsEvent.ShowMessage(
-                    if (freed > 0) {
-                        "已清理 ${formatBytes(freed)}，下次启动会自动重建"
-                    } else {
-                        "没有可清理的封面缓存"
-                    }
-                )
-            )
-        }
-    }
-
-    private fun coversDirectory(): File = File(context.filesDir, "covers")
-
-    private data class StorageUsage(
-        val coverBytes: Long,
-        val breakdown: BookStorageBreakdown,
-        val aiIllustrationBytes: Long
-    )
-
-    private companion object {
-        /** 与 ImportCoordinator 里的 marker 同名，清理后补齐任务才会重跑。 */
-        const val COVER_BACKFILL_MARKER = ".epub-cover-backfill-v1"
-        const val STORAGE_SCAN_DEFER_MS = 400L
-    }
-}
-
-private fun File.directorySize(): Long = when {
-    !exists() -> 0L
-    isFile -> length()
-    else -> walkBottomUp().filter(File::isFile).sumOf(File::length)
+    private companion object { const val STORAGE_SCAN_DEFER_MS = 400L }
 }
 
 internal fun formatBytes(bytes: Long): String = when {

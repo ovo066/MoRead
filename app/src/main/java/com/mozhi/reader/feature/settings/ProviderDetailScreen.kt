@@ -924,6 +924,7 @@ private fun defaultModelEndpoint(
 ): String = when (type) {
     AiModelType.CHAT -> ""
     AiModelType.EMBEDDING -> "/embeddings"
+    AiModelType.RERANK -> "/rerank"
     AiModelType.TTS -> if (adapter == AiProviderAdapter.MINIMAX) "/t2a_v2" else "/audio/speech"
     AiModelType.IMAGE -> if (adapter == AiProviderAdapter.OPENROUTER) {
         "/images"

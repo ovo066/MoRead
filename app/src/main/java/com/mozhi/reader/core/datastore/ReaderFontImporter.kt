@@ -77,7 +77,7 @@ class ReaderFontImporter @Inject constructor(
         }
     }
 
-    suspend fun confirm(pending: PendingReaderFont, customName: String): ReaderFontAsset =
+    suspend fun confirm(pending: PendingReaderFont, customName: String, selectForReading: Boolean = true): ReaderFontAsset =
         withContext(Dispatchers.IO) {
             val source = checkedPendingFile(pending)
             val displayName = customName.trim().take(48).ifBlank { pending.detectedName }
@@ -94,7 +94,7 @@ class ReaderFontImporter @Inject constructor(
                     originalFileName = pending.originalFileName,
                     importedAt = System.currentTimeMillis()
                 )
-                settingsRepository.addCustomFont(asset, select = true)
+                settingsRepository.addCustomFont(asset, select = selectForReading)
                 if (source.exists()) source.delete()
                 asset
             } catch (error: Throwable) {

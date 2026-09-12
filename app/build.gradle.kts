@@ -44,8 +44,8 @@ android {
         minSdk = 26
         targetSdk = 37
         // 测试期曾发过仓库外的高编号包，编号跳档保证覆盖安装不降级。
-        versionCode = 72
-        versionName = "1.0.9"
+        versionCode = 74
+        versionName = "1.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
 
@@ -116,9 +116,8 @@ android {
     }
 
     lint {
-        // AGP 9.3 lint 在当前强制 JDK 17 工具链中会误调用 Java 21 的
-        // java.util.List.removeLast()，分析任意 Kotlin 文件时直接 NoSuchMethodError。
-        // 仅关闭打包时自动执行的 lint-vital；常规编译与 JVM/仪器测试不受影响。
+        // AGP 9.3 lint 曾在 JDK 17 构建中调用 Java 21 的 List.removeLast() 而崩溃。
+        // 保留独立 lint 与打包的边界；构建/测试环境现使用 JDK 21，Android 目标仍为 17。
         checkReleaseBuilds = false
     }
 

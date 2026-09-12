@@ -35,6 +35,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -272,11 +273,13 @@ internal fun CompanionChatBubble(
     onDelete: () -> Unit = {},
     onReroll: () -> Unit = {},
     onBranch: () -> Unit = {},
-    onSpeak: (String) -> Unit = {},
+    onSpeak: ((String) -> Unit)? = null,
     voiceClip: VoiceClipState? = null,
     onPrepareVoice: () -> Unit = {},
     onRegenerateVoice: () -> Unit = {},
-    onPlayVoice: (String) -> Unit = {}
+    onPlayVoice: (String) -> Unit = {},
+    readOnlyActions: Boolean = false,
+    footer: (@Composable () -> Unit)? = null
 ) {
     val fromUser = entry.fromUser
     val message = entry.message
@@ -348,6 +351,7 @@ internal fun CompanionChatBubble(
                                     onRegenerateVoice = onRegenerateVoice,
                                     onPlayVoice = onPlayVoice
                                 )
+                                footer?.invoke()
                                 if (message?.editedAt != null && entry.isTail) {
                                     Text(
                                         "已编辑",
@@ -360,7 +364,15 @@ internal fun CompanionChatBubble(
                         }
                     }
                     AnimatedVisibility(visible = showActions, enter = fadeIn(), exit = fadeOut()) {
-                        BubbleActionBar(
+                        if (readOnlyActions) {
+                            Row {
+                                TextButton(onClick = {
+                                    clipboard.setText(AnnotatedString(entry.part.text))
+                                    showActions = false
+                                }) { Text("复制", color = palette.accent) }
+                                TextButton(onClick = { showActions = false }) { Text("收起", color = palette.muted) }
+                            }
+                        } else BubbleActionBar(
                             palette = palette,
                             fromUser = fromUser,
                             canReroll = entry.canReroll,
@@ -369,7 +381,7 @@ internal fun CompanionChatBubble(
                                 clipboard.setText(AnnotatedString(entry.part.text))
                                 Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
                             },
-                            onSpeak = { onSpeak(entry.part.text) },
+                            onSpeak = onSpeak?.let { speak -> { speak(entry.part.text) } },
                             onEdit = onEdit,
                             onReroll = onReroll,
                             onBranch = onBranch,
@@ -495,7 +507,7 @@ private fun BubbleActionBar(
     canReroll: Boolean,
     onDismiss: () -> Unit,
     onCopy: () -> Unit,
-    onSpeak: () -> Unit,
+    onSpeak: (() -> Unit)?,
     onEdit: () -> Unit,
     onReroll: () -> Unit,
     onBranch: () -> Unit,
@@ -517,7 +529,7 @@ private fun BubbleActionBar(
                 onCopy()
             }
             // 「朗读」是 AI 自主发语音之外的手动兜底：想听哪句，点哪句。
-            if (!fromUser) {
+            if (!fromUser && onSpeak != null) {
                 BubbleActionIcon(Icons.Outlined.VolumeUp, "朗读", palette) {
                     onDismiss()
                     onSpeak()

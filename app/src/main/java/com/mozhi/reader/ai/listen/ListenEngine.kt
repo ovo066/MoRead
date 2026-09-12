@@ -333,7 +333,7 @@ class ListenEngine @Inject constructor(
         startOffset: Int,
         playbackMode: ListenPlaybackMode
     ) {
-        val book = libraryRepository.getBook(bookId) ?: return
+        val book = libraryRepository.getBook(bookId)?.takeIf { it.removedAt == 0L } ?: return
         val chapters = libraryRepository.getChapters(bookId)
         if (chapters.isEmpty()) return
         var chapterIndex = startChapter.coerceIn(0, chapters.lastIndex)

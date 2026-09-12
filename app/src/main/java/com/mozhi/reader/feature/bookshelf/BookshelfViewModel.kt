@@ -79,6 +79,7 @@ sealed interface BookshelfEvent {
 @HiltViewModel
 class BookshelfViewModel @Inject constructor(
     private val libraryRepository: LibraryRepository,
+    private val bookRemoval: com.mozhi.reader.core.library.BookRemovalCoordinator,
     private val shelfRepository: ShelfOrganizationRepository,
     private val settingsRepository: ReaderSettingsRepository,
     private val importGateway: BookImportGateway,
@@ -216,13 +217,13 @@ class BookshelfViewModel @Inject constructor(
         }
     }
 
-    fun deleteBook(book: BookEntity) {
+    fun deleteBook(book: BookEntity, deleteRecords: Boolean = false) {
         viewModelScope.launch {
             runCatching {
-                libraryRepository.deleteBook(book)
+                bookRemoval.remove(book, deleteRecords)
             }
                 .onFailure {
-                    eventChannel.send(BookshelfEvent.ShowMessage("删除失败，请稍后重试"))
+                    eventChannel.send(BookshelfEvent.ShowMessage(it.message ?: "删除失败，请稍后重试"))
                 }
         }
     }
@@ -365,14 +366,19 @@ class BookshelfViewModel @Inject constructor(
         }
     }
 
-    fun deleteSelected() {
+    fun deleteSelected(deleteRecords: Boolean = false) {
         val ids = selectedBookIds.value
         if (ids.isEmpty()) return
         viewModelScope.launch {
-            ids.mapNotNull { libraryRepository.getBook(it) }
-                .forEach { libraryRepository.deleteBook(it) }
-            eventChannel.send(BookshelfEvent.ShowMessage("已移除 ${ids.size} 本书"))
-            exitSelection()
+            runCatching {
+                // Validate the entire batch before any deletion; do not silently skip a busy book.
+                ids.forEach { bookRemoval.requireIdle(it) }
+                ids.mapNotNull { libraryRepository.getBook(it) }
+                    .forEach { bookRemoval.remove(it, deleteRecords) }
+            }.onSuccess {
+                eventChannel.send(BookshelfEvent.ShowMessage("已移除 ${ids.size} 本书"))
+                exitSelection()
+            }.onFailure { eventChannel.send(BookshelfEvent.ShowMessage(it.message ?: "部分书籍未能移除，请检查后重试")) }
         }
     }
 

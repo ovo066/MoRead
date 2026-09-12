@@ -81,7 +81,9 @@ class ChapterTypesetter(
     ): TextChapter {
         cancellationCheck()
         if (epubLayout != null && epubLayout.document.textLength == body.length) {
-            val hasDomPath = epubLayout.dom != null && epubLayout.stylesheets.isNotEmpty()
+            val hasDomPath = epubLayout.dom != null &&
+                (epubLayout.stylesheets.isNotEmpty() || epubLayout.dom.embeddedStylesheets.isNotEmpty() ||
+                    epubLayout.dom.bodyNode.hasInlineStyles())
             val hasLegacyBlocks = epubLayout.document.blocks.any { it.kind != EpubLayoutBlockKind.CONTAINER }
             if (hasDomPath) {
                 return EpubTypesetterV2(spec, measure, cancellationCheck).typeset(

@@ -53,7 +53,7 @@ class ReaderPageTouchTest {
         mount()
         compose.onNodeWithTag("page").performTouchInput {
             down(Offset(150f, 50f))
-            moveTo(Offset(152f, 180f), delayMillis = 100)
+            moveTo(Offset(152f, 220f), delayMillis = 260)
         }
         compose.runOnIdle {
             assertEquals(0, bookmarks)
@@ -67,6 +67,20 @@ class ReaderPageTouchTest {
             assertEquals(0, taps)
             assertEquals(0f, progress.last(), 0f)
             assertFalse(driver.isRunning)
+        }
+    }
+
+    @Test fun aFastLongDownwardFlingDoesNotAddABookmark() {
+        mount()
+        compose.onNodeWithTag("page").performTouchInput {
+            down(Offset(150f, 50f))
+            moveTo(Offset(150f, 250f), delayMillis = 50)
+            up()
+        }
+        compose.runOnIdle {
+            assertEquals(0, bookmarks)
+            assertEquals(0, turns)
+            assertEquals(0, taps)
         }
     }
 

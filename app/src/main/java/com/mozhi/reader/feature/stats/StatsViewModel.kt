@@ -7,6 +7,8 @@ import com.mozhi.reader.core.database.dao.ChatDao
 import com.mozhi.reader.core.database.dao.NoteDao
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.ReadingDailyEntity
+import com.mozhi.reader.core.database.entity.BookReadState
+import com.mozhi.reader.core.database.entity.readState
 import com.mozhi.reader.core.library.LibraryRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.LocalDate
@@ -78,7 +80,7 @@ class StatsViewModel @Inject constructor(
 
     val uiState = combine(
         libraryRepository.observeAllReadingDays(),
-        libraryRepository.observeBooks(),
+        libraryRepository.observeBooksIncludingRemoved(),
         chatDao.observeUserMessageCount(),
         noteCount,
         selection
@@ -166,11 +168,7 @@ internal fun buildStatsState(
         }
         .take(5)
 
-    val finished = books.count { book ->
-        book.totalChapters > 0 &&
-            book.lastReadAt > 0 &&
-            book.lastReadChapterIndex >= book.totalChapters - 1
-    }
+    val finished = books.count { it.readState() == BookReadState.FINISHED }
     val currentRangeStart = statsPeriodRange(selection.period, today).startEpochDay
 
     return StatsUiState(

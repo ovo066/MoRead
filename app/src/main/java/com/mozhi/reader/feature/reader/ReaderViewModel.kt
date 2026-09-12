@@ -320,8 +320,8 @@ class ReaderViewModel @Inject constructor(
             val imagesAsync = async { runCatching { loadInlineImages() }.getOrDefault(emptyMap()) }
 
             val book = bookAsync.await()
-            if (book == null) {
-                mutableState.update { it.copy(isLoading = false, errorMessage = "书籍不存在") }
+            if (book == null || book.removedAt > 0L) {
+                mutableState.update { it.copy(isLoading = false, errorMessage = if (book == null) "书籍不存在" else "本书正文已移除，保留的记录可在存储管理中查看") }
                 return@launch
             }
             val settings = settingsAsync.await()
@@ -1637,6 +1637,10 @@ class ReaderViewModel @Inject constructor(
         viewModelScope.launch { settingsRepository.setPageMode(value) }
     }
 
+    suspend fun configureAutoRead(value: com.mozhi.reader.core.datastore.AutoReadSettings) {
+        settingsRepository.setAutoReadSettings(value)
+    }
+
     fun setKeepScreenOn(value: Boolean) {
         viewModelScope.launch { settingsRepository.setKeepScreenOn(value) }
     }
@@ -1656,7 +1660,8 @@ class ReaderViewModel @Inject constructor(
     fun importBackgroundImage(uri: Uri, slot: ReaderThemeSlot = ReaderThemeSlot.DAY) {
         viewModelScope.launch {
             // 先只入库，再按槽选中——importer 只认全局背景，日夜两套得由这里指定去处。
-            runCatching { imageImporter.importImage(uri, selectAsBackground = false) }
+            runCatching { imageImporter.importImage(uri, selectAsBackground = false,
+                purpose = com.mozhi.reader.core.datastore.ReaderImagePurpose.BACKGROUND) }
                 .onSuccess { asset ->
                     settingsRepository.selectBackgroundImage(asset.id, slot)
                     eventChannel.send(ReaderEvent.ShowMessage("已加入图片库并设为阅读背景"))

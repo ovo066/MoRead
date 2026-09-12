@@ -896,8 +896,17 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         val intrinsicH = bitmap.height.toFloat().coerceAtLeast(1f)
         val (drawW, drawH) = when (decoration.backgroundSizeMode) {
             BackgroundSizeMode.STRETCH -> destination.width() to destination.height()
-            BackgroundSizeMode.EXPLICIT ->
-                decoration.backgroundSizeWidth.coerceAtLeast(1f) to decoration.backgroundSizeHeight.coerceAtLeast(1f)
+            BackgroundSizeMode.EXPLICIT -> {
+                val width = decoration.backgroundSizeWidth
+                val height = decoration.backgroundSizeHeight
+                when {
+                    width == 0f || height == 0f -> return
+                    width > 0f && height > 0f -> width to height
+                    width > 0f -> width to width * intrinsicH / intrinsicW
+                    height > 0f -> height * intrinsicW / intrinsicH to height
+                    else -> intrinsicW to intrinsicH
+                }
+            }
             BackgroundSizeMode.CONTAIN -> {
                 val scale = minOf(destination.width() / intrinsicW, destination.height() / intrinsicH)
                 intrinsicW * scale to intrinsicH * scale

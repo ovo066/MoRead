@@ -5,6 +5,11 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 
 @Serializable
+enum class ReaderImagePurpose(val label: String) {
+    BACKGROUND("背景图"), COVER("封面图"), GENERAL("未分类")
+}
+
+@Serializable
 data class ReaderImageAsset(
     val id: String,
     val displayName: String,
@@ -12,7 +17,8 @@ data class ReaderImageAsset(
     val originalFileName: String = "",
     val width: Int = 0,
     val height: Int = 0,
-    val importedAt: Long = 0L
+    val importedAt: Long = 0L,
+    val purpose: ReaderImagePurpose = ReaderImagePurpose.GENERAL
 )
 
 object ReaderImageLibraryCodec {
@@ -39,7 +45,8 @@ object ReaderImageLibraryCodec {
         return images + ReaderImageAsset(
             id = legacyId(path),
             displayName = "原有阅读背景",
-            filePath = path
+            filePath = path,
+            purpose = ReaderImagePurpose.BACKGROUND
         )
     }
 

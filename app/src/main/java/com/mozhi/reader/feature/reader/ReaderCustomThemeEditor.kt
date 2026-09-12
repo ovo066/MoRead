@@ -309,26 +309,29 @@ internal fun CustomThemeEditorDialog(
                 }
 
                 Text("字体", style = MaterialTheme.typography.labelMedium)
-                Row(
-                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(7.dp)
                 ) {
-                    ReaderFont.entries.filter { it != ReaderFont.CUSTOM }.forEach { font ->
+                    items(ReaderFont.entries.filter { it != ReaderFont.CUSTOM }, key = { "builtin-${it.name}" }) { font ->
                         SegChip(
                             text = font.shortLabel(),
                             selected = selectedFont == font,
                             palette = palette
                         ) { selectedFont = font }
                     }
-                    settings.fontLibrary.forEach { font ->
-                        SegChip(
-                            text = font.displayName,
+                    items(settings.fontLibrary, key = { it.id }) { font ->
+                        com.mozhi.reader.ui.components.FontPreviewChoice(
+                            font = font,
                             selected = selectedFont == ReaderFont.CUSTOM && selectedCustomFontId == font.id,
-                            palette = palette
-                        ) {
-                            selectedFont = ReaderFont.CUSTOM
-                            selectedCustomFontId = font.id
-                        }
+                            onClick = {
+                                selectedFont = ReaderFont.CUSTOM
+                                selectedCustomFontId = font.id
+                            },
+                            background = palette.background, foreground = palette.onBackground,
+                            accent = palette.accent, outline = palette.glassBorder
+                        )
                     }
                 }
                 TextButton(onClick = onImportFont) {

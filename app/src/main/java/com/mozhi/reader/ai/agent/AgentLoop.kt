@@ -94,8 +94,10 @@ class AgentLoop @Inject constructor(
         conversationId: Long,
         tools: List<AgentTool>,
         systemPrompt: String? = null,
-        modelRole: ModelRole = ModelRole.CHAT
-    ): Flow<AgentEvent> = runWith(conversationId, tools, systemPrompt) {
+        modelRole: ModelRole = ModelRole.CHAT,
+        maxRounds: Int = MAX_ROUNDS,
+        validateContext: suspend () -> Unit = {}
+    ): Flow<AgentEvent> = runWith(conversationId, tools, systemPrompt, maxRounds, validateContext) {
         val resolved = clientFactory.get().forRole(modelRole)
         Streamer { messages, specs ->
             resolved.client.chatStream(messages, specs, resolved.options)
@@ -198,6 +200,8 @@ class AgentLoop @Inject constructor(
         conversationId: Long,
         tools: List<AgentTool>,
         systemPrompt: String? = null,
+        maxRounds: Int = MAX_ROUNDS,
+        validateContext: suspend () -> Unit = {},
         resolve: suspend () -> Streamer
     ): Flow<AgentEvent> = flow {
         val entities = chatDao.getMessages(conversationId)
@@ -233,7 +237,10 @@ class AgentLoop @Inject constructor(
         val byName = tools.associateBy { it.spec.name }
         var producedText = false
 
-        repeat(MAX_ROUNDS) { round ->
+        val roundLimit = maxRounds.coerceIn(1, MAX_ROUNDS)
+        repeat(roundLimit) { round ->
+            // Multi-book conversations must recheck frozen consent before sending ANY history.
+            validateContext()
             val roundId = UUID.randomUUID().toString()
             emit(AgentEvent.RoundStarted(roundId))
             val text = StringBuilder()
@@ -253,6 +260,8 @@ class AgentLoop @Inject constructor(
                     is ChatDelta.ToolCalls -> requested = delta.calls
                 }
             }
+
+            validateContext()
 
             if (requested.isEmpty()) {
                 val reply = text.toString()
@@ -331,7 +340,7 @@ class AgentLoop @Inject constructor(
                 history.add(ChatMessage(ChatRole.TOOL, result, toolCallId = call.id))
             }
 
-            if (round == MAX_ROUNDS - 1) {
+            if (round == roundLimit - 1) {
                 val notice = "（已达到单轮工具调用上限，回复基于目前掌握的信息）"
                 val noticeRoundId = UUID.randomUUID().toString()
                 emit(AgentEvent.RoundStarted(noticeRoundId))
@@ -444,7 +453,7 @@ private fun ToolCall.argumentsObject(): JsonObject =
     runCatching { AiJson.parseToJsonElement(arguments).jsonObject }.getOrNull()
         ?: JsonObject(emptyMap())
 
-private fun String.isToolSuccess(): Boolean {
+internal fun String.isToolSuccess(): Boolean {
     val normalized = trimStart()
     return !normalized.startsWith("工具执行失败") &&
         !normalized.startsWith("未知工具") &&

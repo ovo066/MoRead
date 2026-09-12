@@ -23,11 +23,16 @@ import org.junit.Test
 class EpubV2RealBookTest {
     @Test
     fun `real book lays out every chapter with monotonic coordinates`() {
-        val fixturePath = System.getenv("MOREAD_EPUB_FIXTURE").orEmpty()
-        assumeTrue("Set MOREAD_EPUB_FIXTURE to run the real-book regression", fixturePath.isNotBlank())
-        val epubFile = File(fixturePath)
-        assumeTrue("Configured EPUB fixture does not exist", epubFile.isFile)
+        val paths = System.getenv("MOREAD_EPUB_FIXTURES") ?: System.getenv("MOREAD_EPUB_FIXTURE").orEmpty()
+        assumeTrue("Set MOREAD_EPUB_FIXTURE to run the real-book regression", paths.isNotBlank())
+        paths.split(File.pathSeparator).filter(String::isNotBlank).forEach { path ->
+            val epubFile = File(path)
+            assertTrue("Configured EPUB fixture does not exist", epubFile.isFile)
+            verifyBook(epubFile)
+        }
+    }
 
+    private fun verifyBook(epubFile: File) {
         val inspector = EpubPackageInspector()
         val layoutPackage = inspector.inspect(epubFile)
         val stylesheets = inspector.readStylesheets(epubFile, layoutPackage)
@@ -56,7 +61,7 @@ class EpubV2RealBookTest {
                     }
                     val bundle = EpubLayoutChapterBundle(
                         document = parsed.document,
-                        resourcePaths = emptyMap(),
+                        resourcePaths = layoutPackage.resources.associate { it.href to "mem://${it.href}" },
                         fontPaths = emptyMap(),
                         dom = parsed.dom,
                         stylesheets = layoutPackage.stylesheets.ifEmpty {

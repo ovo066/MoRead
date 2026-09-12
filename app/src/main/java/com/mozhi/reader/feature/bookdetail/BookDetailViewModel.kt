@@ -190,6 +190,7 @@ class BookDetailViewModel @Inject constructor(
     )
 
     private val bookDescription = libraryRepository.observeChapters(bookId).mapLatest { chapters ->
+        if (libraryRepository.getBook(bookId)?.removedAt != 0L) return@mapLatest ""
         BookDescriptionExtractor.extract(
             chapters.take(DESCRIPTION_CHAPTER_LIMIT).map { chapter ->
                 chapter.title to libraryRepository.readChapterText(bookId, chapter)
@@ -288,6 +289,10 @@ class BookDetailViewModel @Inject constructor(
     }
 
     fun retryBookIndex() {
+        if (uiState.value.book?.removedAt != 0L) {
+            viewModelScope.launch { eventChannel.send(BookDetailEvent.ShowMessage("正文已移除，不能建立索引")) }
+            return
+        }
         embeddingProgressTracker.retry(bookId)
     }
 
@@ -548,7 +553,8 @@ class BookDetailViewModel @Inject constructor(
             runCatching {
                 val cropped = imageImporter.cropCover(pending, focusY)
                 mutablePendingCover.value = cropped
-                imageImporter.confirm(cropped, "${uiState.value.book?.title.orEmpty()}封面")
+                imageImporter.confirm(cropped, "${uiState.value.book?.title.orEmpty()}封面",
+                    purpose = com.mozhi.reader.core.datastore.ReaderImagePurpose.COVER)
             }.onSuccess { saved ->
                 mutablePendingCover.value = null
                 libraryRepository.replaceBookCover(bookId, saved.filePath)

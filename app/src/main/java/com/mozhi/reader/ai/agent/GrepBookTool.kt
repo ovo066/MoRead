@@ -33,7 +33,8 @@ internal class GrepBookTool(
             "用于出现几次、定位原文、列出匹配；不做错字/同义/语义匹配，情节描述或错名请用 search_book。" +
             "完整扫描计数不受 max_samples 限制；partial 只提供下界，只有 complete 且 count=0 才表示该字面串未出现。" +
             "零命中不证明事件不存在，字面次数不等于人物出场/事件数量。source_ref 配合原始 matched_text 可用于 add_annotation。" +
-            "游标固定内容版本和范围；继续时保留 pattern/normalize/context_chars，范围增长不扩大旧查询，缩小或内容变化则失效。",
+            "可用 from_chapter/to_chapter 限定章节；计数只针对返回的实际范围，不能当作全书次数。" +
+            "游标固定内容版本和范围；继续时保留 pattern/normalize/context_chars，章节参数保留原值或省略，范围增长不扩大旧查询，缩小或内容变化则失效。",
         parameters = buildJsonObject {
             put("type", "object")
             putJsonObject("properties") {
@@ -45,6 +46,8 @@ internal class GrepBookTool(
                 }
                 putJsonObject("context_chars") { put("type", "integer"); put("description", "每侧上下文 UTF-16 长度，默认 80，上限 300") }
                 putJsonObject("max_samples") { put("type", "integer"); put("description", "单页样本上限，默认 20，1-50；另有输出体积上限，不限制总计数") }
+                putJsonObject("from_chapter") { put("type", "integer"); put("description", "起始章节号（从 1 开始），默认第 1 章") }
+                putJsonObject("to_chapter") { put("type", "integer"); put("description", "结束章节号（包含），默认可读末章；只查某一章时两端填写同一章号") }
                 putJsonObject("cursor") { put("type", "string"); put("description", "上页返回的 next_cursor；过期/进程重启后请重新查询") }
             }
             putJsonArray("required") { add("pattern") }
@@ -83,13 +86,20 @@ internal class GrepBookTool(
         val normalize = primitive("normalize")?.booleanOrNull ?: true
         val contextChars = (primitive("context_chars")?.intOrNull ?: 80).coerceIn(0, 300)
         val maxSamples = (primitive("max_samples")?.intOrNull ?: 20).coerceIn(1, 50)
+        val bounds = try { parseChapterSearchBounds(args) }
+            catch (error: IllegalArgumentException) { return errorResult("INVALID_ARGUMENT", error.message.orEmpty()) }
         val cursor = primitive("cursor")?.content
         val page = cursor?.let { registry.page(it) }
         if (cursor != null && page == null) return errorResult("CURSOR_INVALID", "游标无效或已过期，请重新查询")
         if (page != null && (page.bookId != bookId || page.pattern != pattern || page.normalize != normalize || page.contextChars != contextChars)) {
             return errorResult("CURSOR_INVALID", "游标不属于当前书籍或匹配配置，请重新查询")
         }
+        if (page != null && (bounds.fromChapter?.let { it != page.firstChapterIndex + 1 } == true ||
+                bounds.toChapter?.let { it != page.scope.maxChapterIndex + 1 && it != page.requestedToChapter } == true)) {
+            return errorResult("CURSOR_INVALID", "游标绑定的章节范围不能更改，请重新查询")
+        }
         val book = getBook() ?: return errorResult("SOURCE_MISSING", "未找到当前书籍")
+        if (book.removedAt > 0L) return errorResult("SOURCE_MISSING", "本书正文已移除，当前仅保留个人记录")
         if (book.totalChapters <= 0) return errorResult("SOURCE_MISSING", "当前书籍尚无规范章节正文")
         val allowed = readingScope.intersect(currentScope())
         if (page != null && !allowed.contains(page.scope)) {
@@ -99,9 +109,12 @@ internal class GrepBookTool(
         if (page != null && page.revision != revision) {
             return errorResult("CURSOR_INVALID", "书籍正文版本发生变化，请重新查询")
         }
-        val last = page?.scope?.maxChapterIndex ?: allowed.clampLastChapter(book.totalChapters)
-        var snapshot = page?.scope ?: ReadingScope.upto(last,
-            if (last == allowed.maxChapterIndex) allowed.maxCharOffset else Int.MAX_VALUE)
+        val range = if (page != null) ChapterSearchRange(page.firstChapterIndex, page.scope) else try {
+            bounds.resolve(book.totalChapters, allowed)
+        } catch (error: IllegalArgumentException) { return errorResult("INVALID_ARGUMENT", error.message.orEmpty()) }
+        val first = range.firstIndex
+        val last = range.lastIndex
+        var snapshot = range.scope
         suspend fun source(index: Int): GrepSource {
             if (index == snapshot.maxChapterIndex && snapshot.maxCharOffset == 0) return GrepSource(index, "")
             return try {
@@ -116,7 +129,7 @@ internal class GrepBookTool(
         val boundary = source(last)
         if (page == null && boundary.body != null) snapshot = ReadingScope.upto(last, boundary.body.length)
         val result = BookGrep.scan(
-            pattern, (0..last).take(limits.maxChapters.coerceAtMost(20_000) + 1), { if (it == last) boundary else source(it) },
+            pattern, (first..last).take(limits.maxChapters.coerceAtMost(20_000) + 1), { if (it == last) boundary else source(it) },
             GrepOptions(normalize, contextChars, maxSamples, page?.skip ?: 0), limits
         )
         if (getRevision() != revision) {
@@ -129,12 +142,14 @@ internal class GrepBookTool(
             return errorResult(if (page == null) "SCOPE_CHANGED" else "CURSOR_INVALID", "允许范围已缩小，请重新查询")
         }
         val nextCursor = result.nextSkip?.let { skip -> registry.issueCursor(BookSourceRegistry.Page(
-            bookId, revision, snapshot, pattern, normalize, contextChars, skip, result.coverageSignature
+            bookId, revision, snapshot, pattern, normalize, contextChars, skip, result.coverageSignature,
+            firstChapterIndex = first, requestedToChapter = if (page != null) page.requestedToChapter else bounds.toChapter
         )) }
         return buildJsonObject {
             put("status", if (result.countIsExact) "complete" else "partial")
             putJsonObject("scope") {
                 put("book_revision", revision)
+                put("from_chapter", first + 1)
                 put("to_chapter", snapshot.maxChapterIndex + 1)
                 put("end_char", if (snapshot.maxCharOffset == Int.MAX_VALUE) JsonNull else JsonPrimitive(snapshot.maxCharOffset))
             }

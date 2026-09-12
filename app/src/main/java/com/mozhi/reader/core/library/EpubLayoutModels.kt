@@ -14,10 +14,13 @@ data class EpubLayoutPackage(
     val fontFaces: List<EpubFontFace> = emptyList(),
     val stylesheets: List<EpubStylesheetText> = emptyList(),
     val chapters: List<EpubLayoutChapterRef> = emptyList(),
-    val diagnostics: List<EpubLayoutDiagnostic> = emptyList()
+    val diagnostics: List<EpubLayoutDiagnostic> = emptyList(),
+    /** Missing in older sidecars, which must be rebuilt to recover embedded CSS. */
+    val parserRevision: Int = 0
 ) {
     companion object {
         const val CURRENT_SCHEMA_VERSION = 10
+        const val CURRENT_PARSER_REVISION = 1
     }
 }
 

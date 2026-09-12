@@ -11,6 +11,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProviderProtocolPolicyTest {
+    @Test fun rerankUsesDedicatedCustomEndpointIndependentOfChatDialect() {
+        assertEquals(ModelProtocolRoute.Rerank, ProviderProtocolPolicy.route(provider(AiProviderAdapter.CUSTOM, ApiDialect.CLAUDE), model(AiModelType.RERANK)))
+        assertTrue(ProviderProtocolPolicy.route(provider(AiProviderAdapter.OPENAI, ApiDialect.OPENAI), model(AiModelType.RERANK)) is ModelProtocolRoute.Unsupported)
+    }
     @Test
     fun `openRouter Claude default affects chat but embedding stays OpenAI compatible`() {
         val provider = provider(AiProviderAdapter.OPENROUTER, ApiDialect.CLAUDE)

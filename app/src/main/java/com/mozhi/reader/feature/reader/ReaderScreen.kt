@@ -158,6 +158,7 @@ internal data class TextEditDraft(
 )
 
 private enum class ReaderSheet {
+    AUTO_READ,
     CONTENTS,
     BOOKMARKS,
     SETTINGS,
@@ -197,6 +198,7 @@ fun ReaderScreen(
     }
     val snackbarHostState = remember { SnackbarHostState() }
     var activeSheet by remember { mutableStateOf<ReaderSheet?>(null) }
+    val autoRead = remember(bookId) { AutoReadSession() }
     // 排版细调走屏幕中央的悬浮卡片，不是弹层里的又一张二级页：那一类设置每改一格都要看重排，
     // 半屏弹层会把正文下半屏压掉。
     var typographyCardVisible by remember { mutableStateOf(false) }
@@ -459,6 +461,21 @@ fun ReaderScreen(
         locateHighlight = null
     }
     val contentVisible = readerReady && state.isContentReady
+    val speechActive = listenState?.isPlaying == true || selectionMediaState.isPlaying || selectionMediaState.isWorking
+    val autoReadBlockedByUi = chromeVisible || activeSheet != null || detailsVisible || aiRequest != null ||
+        inkFloater != null || annotationThread != null || linkPreview != null || ttsDraft != null ||
+        textEditDraft != null || textRuleDraft != null || typographyCardVisible || companionPaneVisible ||
+        pendingFont != null || aiTextRuleDialogVisible || listenTimerVisible || selectionMediaState.imagePath != null
+    LaunchedEffect(autoRead.phase, autoReadBlockedByUi, speechActive, readerStarted, contentVisible, state.settings.pageMode, state.errorMessage) {
+        when {
+            !readerStarted -> autoRead.pause(AutoReadPauseReason.BACKGROUND)
+            speechActive -> autoRead.pause(AutoReadPauseReason.SPEECH)
+            autoReadBlockedByUi -> autoRead.pause(AutoReadPauseReason.MENU)
+            state.errorMessage != null -> autoRead.pause(AutoReadPauseReason.ERROR)
+            autoRead.running && state.settings.pageMode != autoRead.settings.mode -> autoRead.pause(AutoReadPauseReason.NAVIGATION)
+            contentVisible -> autoRead.onReady(state.settings.pageMode)
+        }
+    }
     val canTurnWithVolume by rememberUpdatedState(
         contentVisible && activeSheet == null && !detailsVisible && aiRequest == null &&
             inkFloater == null && annotationThread == null && linkPreview == null && ttsDraft == null &&
@@ -469,6 +486,7 @@ fun ReaderScreen(
         if (state.settings.volumeKeysPageTurn) {
             host?.setVolumeKeyPageTurnHandler { previous ->
                 if (canTurnWithVolume) {
+                    autoRead.pause(AutoReadPauseReason.TOUCH)
                     hardwarePageTurnRequest = ReaderPageTurnRequest(
                         sequence = (hardwarePageTurnRequest?.sequence ?: 0) + 1,
                         direction = if (previous) {
@@ -585,12 +603,13 @@ fun ReaderScreen(
             }
         }
     }
-    DisposableEffect(activity, state.settings.keepScreenOn) {
-        if (state.settings.keepScreenOn) {
+    val keepScreenOn = state.settings.keepScreenOn || autoRead.running
+    DisposableEffect(activity, keepScreenOn) {
+        if (keepScreenOn) {
             activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
         onDispose {
-            if (state.settings.keepScreenOn) {
+            if (keepScreenOn) {
                 activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             }
         }
@@ -641,7 +660,10 @@ fun ReaderScreen(
                 Lifecycle.Event.ON_RESUME -> {
                     viewModel.setReaderVisible(true)
                 }
-                Lifecycle.Event.ON_PAUSE -> viewModel.setReaderVisible(false)
+                Lifecycle.Event.ON_PAUSE -> {
+                    autoRead.pause(AutoReadPauseReason.BACKGROUND)
+                    viewModel.setReaderVisible(false)
+                }
                 Lifecycle.Event.ON_STOP -> {
                     readerStarted = false
                     viewModel.flushProgress()
@@ -651,6 +673,7 @@ fun ReaderScreen(
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
+            autoRead.stop()
             lifecycleOwner.lifecycle.removeObserver(observer)
             viewModel.setReaderVisible(false)
             viewModel.onReaderPaused()
@@ -676,6 +699,8 @@ fun ReaderScreen(
     }
 
     BackHandler(enabled = typographyCardVisible) { typographyCardVisible = false }
+
+    BackHandler(enabled = autoRead.engaged) { autoRead.pause(AutoReadPauseReason.TOUCH) }
 
     // 半屏弹层与悬浮排版卡片共用同一份回调，所以提到两者之上装配一次。
     val typographyActions = ReaderTypographyActions(
@@ -736,7 +761,7 @@ fun ReaderScreen(
     }
     ReaderCompanionLayout(
         companionVisible = companionPaneVisible,
-        modifier = Modifier.fillMaxSize().background(palette.background),
+        modifier = Modifier.fillMaxSize().background(palette.background).pauseAutoReadOnTouch(autoRead),
         companion = {
             CompanionChatPane(
                 bookId = bookId,
@@ -874,6 +899,7 @@ fun ReaderScreen(
                         onImageAction = paneImageAction,
                         onEditText = paneEditText,
                         pageTurnRequest = hardwarePageTurnRequest,
+                        autoRead = autoRead,
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
@@ -897,6 +923,7 @@ fun ReaderScreen(
                         onImageAction = paneImageAction,
                         onEditText = paneEditText,
                         pageTurnRequest = hardwarePageTurnRequest,
+                        autoRead = autoRead,
                         onAddBookmark = viewModel::addBookmarkFromPull,
                         onSpreadModeChanged = { spreadActive = it },
                         onVisiblePagesDrawn = { snapshot ->
@@ -930,6 +957,7 @@ fun ReaderScreen(
         }
 
         if (!detailsVisible) {
+            if (autoRead.running && scrollMode && autoRead.settings.showGuide) AutoReadGuide(palette)
             ReaderChrome(
                 // 排版悬浮卡片浮出时收起上下工具栏：这一类设置就是要看正文，栏子占着两头没意义。
                 visible = chromeVisible && !typographyCardVisible,
@@ -978,8 +1006,21 @@ fun ReaderScreen(
                 },
                 onCompanion = openCompanion,
                 onSearch = { activeSheet = ReaderSheet.SEARCH },
+                onAutoRead = { activeSheet = ReaderSheet.AUTO_READ },
                 onReidentifyChapters = { activeSheet = ReaderSheet.REIDENTIFY_CHAPTERS },
                 onTextReplacementRules = { activeSheet = ReaderSheet.TEXT_REPLACEMENT_RULES }
+            )
+        }
+
+        if (autoRead.phase != AutoReadPhase.OFF && !chromeVisible && !detailsVisible && activeSheet == null) {
+            AutoReadControls(
+                session = autoRead,
+                palette = palette,
+                onConfigure = {
+                    autoRead.pause(AutoReadPauseReason.MENU)
+                    activeSheet = ReaderSheet.AUTO_READ
+                },
+                modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(horizontal = 20.dp, vertical = 18.dp)
             )
         }
 
@@ -1184,21 +1225,50 @@ fun ReaderScreen(
     }
 
     when (activeSheet) {
-        ReaderSheet.CONTENTS -> ModalBottomSheet(
+        ReaderSheet.AUTO_READ -> ReaderAutoReadSheet(
+            initial = if (autoRead.phase == AutoReadPhase.OFF) state.settings.autoRead else autoRead.settings,
+            speechActive = speechActive,
+            companionPaneVisible = companionPaneVisible,
+            palette = palette,
+            onDismiss = { activeSheet = null },
+            onStart = { settings ->
+                activeSheet = null
+                chromeVisible = false
+                autoRead.start(settings)
+                coroutineScope.launch {
+                    try {
+                        viewModel.configureAutoRead(settings)
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        autoRead.pause(AutoReadPauseReason.ERROR)
+                        snackbarHostState.showSnackbar("无法保存自动阅读设置")
+                    }
+                }
+            },
+            onStop = { autoRead.stop(); activeSheet = null }
+        )
+        ReaderSheet.CONTENTS -> com.mozhi.reader.ui.components.NavigationSheet(
             onDismissRequest = { activeSheet = null },
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
             containerColor = palette.glassStrong,
             contentColor = palette.onBackground,
             scrimColor = palette.scrim
         ) {
-            ContentsSheet(
+            ReaderKnowledgeContentsSheet(
+                bookId = bookId,
+                contentRevision = state.contentRevision,
                 chapters = state.chapters,
                 tocEntries = state.tocEntries,
                 currentChapterIndex = state.currentChapterIndex,
                 palette = palette,
+                onDismiss = { activeSheet = null },
                 onChapterClick = { index, href ->
                     activeSheet = null
                     viewModel.goToTocEntry(index, href)
+                },
+                onLocate = { index, offset ->
+                    activeSheet = null
+                    viewModel.goToPosition(index, offset)
                 }
             )
         }

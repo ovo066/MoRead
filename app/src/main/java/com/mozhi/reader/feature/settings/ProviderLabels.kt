@@ -23,6 +23,7 @@ internal fun AiProviderType.label(): String = when (this) {
 internal fun AiModelType.label(): String = when (this) {
     AiModelType.CHAT -> "对话"
     AiModelType.EMBEDDING -> "向量"
+    AiModelType.RERANK -> "重排"
     AiModelType.TTS -> "语音"
     AiModelType.IMAGE -> "生图"
 }

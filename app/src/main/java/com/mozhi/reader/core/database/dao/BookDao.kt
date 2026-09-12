@@ -27,7 +27,7 @@ data class BookReadSpanRow(
 interface BookDao {
     @Query(
         """
-        SELECT * FROM books
+        SELECT * FROM books WHERE removedAt = 0
         ORDER BY CASE WHEN lastReadAt = 0 THEN importedAt ELSE lastReadAt END DESC
         """
     )
@@ -58,8 +58,17 @@ interface BookDao {
     )
     fun observeBookReadSpan(bookId: Long): Flow<BookReadSpanRow?>
 
-    @Query("SELECT * FROM books ORDER BY importedAt ASC")
+    @Query("SELECT * FROM books WHERE removedAt = 0 ORDER BY importedAt ASC")
     suspend fun getBooks(): List<BookEntity>
+
+    @Query("SELECT * FROM books ORDER BY importedAt ASC")
+    suspend fun getAllBooks(): List<BookEntity>
+
+    @Query("SELECT * FROM books ORDER BY lastReadAt DESC")
+    fun observeAllBooks(): Flow<List<BookEntity>>
+
+    @Query("UPDATE books SET removedAt = :removedAt, collectionId = NULL, collectionOrder = 0, groupId = NULL, pinnedAt = 0 WHERE id = :bookId")
+    suspend fun markRemoved(bookId: Long, removedAt: Long)
 
     @Query("SELECT * FROM books WHERE id = :bookId")
     fun observeBook(bookId: Long): Flow<BookEntity?>
@@ -76,7 +85,7 @@ interface BookDao {
     @Query(
         """
         SELECT * FROM books
-        WHERE sourceType = :sourceType
+        WHERE sourceType = :sourceType AND removedAt = 0
           AND (coverPath IS NULL OR coverPath = '')
         """
     )
@@ -85,7 +94,7 @@ interface BookDao {
     @Query(
         """
         SELECT * FROM books
-        WHERE sourceType = :sourceType
+        WHERE sourceType = :sourceType AND removedAt = 0
           AND NOT EXISTS (
               SELECT 1 FROM book_toc_entries WHERE book_toc_entries.bookId = books.id
           )
@@ -100,7 +109,7 @@ interface BookDao {
     @Query(
         """
         SELECT * FROM books
-        WHERE sourceType = 'EPUB'
+        WHERE sourceType = 'EPUB' AND removedAt = 0
           AND metadataEdited = 0
           AND coverPath IS NOT NULL
           AND coverPath != ''
@@ -195,7 +204,7 @@ interface BookDao {
     )
     suspend fun markVisibleReadEnd(bookId: Long, chapterIndex: Int, charOffset: Int)
 
-    @Query("SELECT * FROM books WHERE textVersion < :version")
+    @Query("SELECT * FROM books WHERE textVersion < :version AND removedAt = 0")
     suspend fun getBooksBelowTextVersion(version: Int): List<BookEntity>
 
     @Query("UPDATE books SET textVersion = :version WHERE id = :bookId")
@@ -273,7 +282,7 @@ interface BookDao {
     @Query("UPDATE chapters SET title = :title WHERE bookId = :bookId AND chapterIndex = :chapterIndex")
     suspend fun updateChapterTitle(bookId: Long, chapterIndex: Int, title: String)
 
-    @Query("SELECT * FROM books WHERE sourceType = :sourceType")
+    @Query("SELECT * FROM books WHERE sourceType = :sourceType AND removedAt = 0")
     suspend fun getBooksBySource(sourceType: BookSourceType): List<BookEntity>
 
     @Query("SELECT * FROM chapters WHERE bookId = :bookId ORDER BY chapterIndex")

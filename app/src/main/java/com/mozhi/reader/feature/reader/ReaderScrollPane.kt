@@ -111,6 +111,7 @@ internal fun ReaderScrollPane(
     onImageAction: (selection: String, context: String, range: IntRange) -> Unit,
     onEditText: ((selection: String, range: IntRange) -> Unit)?,
     pageTurnRequest: ReaderPageTurnRequest? = null,
+    autoRead: AutoReadSession? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -174,6 +175,56 @@ internal fun ReaderScrollPane(
         animateScrollBy(
             if (request.direction == PageTurnDirection.PREVIOUS) -distance else distance
         )
+    }
+
+    LaunchedEffect(autoRead?.running, autoRead?.generation, enabled) {
+        val session = autoRead?.takeIf { it.running && enabled } ?: return@LaunchedEffect
+        val token = session.generation
+        val navigation = controller.navigationGeneration
+        val source = controller.sourceGeneration
+        val environment = controller.environmentGeneration
+        val clock = AutoReadFrameClock()
+        var lastSync = 0L
+        var stalledSince: Long? = null
+        holder.interruptScroll()
+        selection.clear()
+        holder.autoScrolling = true
+        try {
+            while (session.owns(token)) {
+                androidx.compose.runtime.withFrameNanos { now ->
+                    val delta = clock.distanceDp(now, session.settings.scrollDpPerSecond) * density.density
+                    if (!session.owns(token)) return@withFrameNanos
+                    if (navigation != controller.navigationGeneration || source != controller.sourceGeneration ||
+                        environment != controller.environmentGeneration) {
+                        session.pause(AutoReadPauseReason.NAVIGATION)
+                        return@withFrameNanos
+                    }
+                    val beforeChapter = controller.chapterIndex
+                    val beforeY = holder.anchorY
+                    if (!controller.isReady) {
+                        val stalled = stalledSince ?: now.also { stalledSince = it }
+                        if (now - stalled >= 30_000_000_000L) session.pause(AutoReadPauseReason.ERROR)
+                        return@withFrameNanos
+                    }
+                    val boundary = holder.applyScroll(delta)
+                    if (delta > 0f && beforeChapter == controller.chapterIndex && beforeY == holder.anchorY) {
+                        val stalled = stalledSince ?: now.also { stalledSince = it }
+                        if (now - stalled >= 30_000_000_000L) session.pause(AutoReadPauseReason.ERROR)
+                    } else stalledSince = null
+                    if (now - lastSync >= 500_000_000L) {
+                        holder.syncPosition()
+                        lastSync = now
+                    }
+                    invalidate()
+                    if (boundary == PageTurnDirection.NEXT) session.pause(AutoReadPauseReason.END)
+                }
+            }
+        } finally {
+            holder.autoScrolling = false
+            if (navigation == controller.navigationGeneration && source == controller.sourceGeneration &&
+                environment == controller.environmentGeneration) holder.syncPosition()
+            invalidate()
+        }
     }
 
     fun startFling(velocity: Float) {
@@ -538,6 +589,7 @@ internal class ScrollPaneHolder(private val controller: ReaderContentController)
 
     var dragging = false
     var flinging = false
+    var autoScrolling = false
     var scrollJob: Job? = null
 
     private var lastSyncedChapter = -1
@@ -596,9 +648,10 @@ internal class ScrollPaneHolder(private val controller: ReaderContentController)
     }
 
     fun detach() {
-        if (dragging || flinging) syncPosition()
+        if (dragging || flinging || autoScrolling) syncPosition()
         interruptScroll()
         dragging = false
+        autoScrolling = false
         backgroundReadyCallback = null
     }
 
@@ -713,7 +766,7 @@ internal class ScrollPaneHolder(private val controller: ReaderContentController)
     fun onContentRefreshed() {
         val positionWasSyncedHere = controller.chapterIndex == lastSyncedChapter &&
             controller.charOffset == lastSyncedOffset
-        if (dragging || flinging || positionWasSyncedHere) {
+        if (dragging || flinging || autoScrolling || positionWasSyncedHere) {
             clampAnchor()
         } else {
             reanchorToPosition()

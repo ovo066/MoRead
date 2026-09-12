@@ -11,7 +11,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.Velocity
 
 /**
- * ModalBottomSheet 内嵌可滚动内容的手势防抖（CLAUDE.md「UI 手感」条目）：
+ * ModalBottomSheet 内嵌可滚动内容的手势防抖：
  * 弹层的嵌套滚动会把列表消费不掉的滚动量（列表到顶后的下拉、内容不满一屏时的
  * 任何下拉、到底后的上推）拿去拖动整个弹层，松手再弹回——列表一滑整层上下弹跳。
  * 这里把剩余滚动量全部吃掉：内容区手势只滚列表，关闭弹层走返回/蒙层/拖把手。

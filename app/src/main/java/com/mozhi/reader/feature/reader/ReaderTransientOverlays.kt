@@ -2,6 +2,8 @@ package com.mozhi.reader.feature.reader
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -152,7 +154,7 @@ internal fun ReaderGeneratedImageDialog(
         onDismissRequest = onDismiss,
         title = { Text("选段插图") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 AsyncImage(
                     model = imagePath,
                     contentDescription = "根据选段生成的插图",
@@ -208,6 +210,7 @@ internal fun ReaderGeneratedImageDialog(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                com.mozhi.reader.ui.components.ImageExportActions(imagePath)
             }
         },
         confirmButton = {

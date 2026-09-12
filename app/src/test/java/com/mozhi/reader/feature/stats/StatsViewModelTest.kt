@@ -8,6 +8,19 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class StatsViewModelTest {
+    @Test fun finishedCountUsesActualCompletionAndIncludesRetainedHistory() {
+        val book = com.mozhi.reader.core.database.entity.BookEntity(id = 1, title = "书", author = "", coverPath = null,
+            epubPath = "/book", sourceType = com.mozhi.reader.core.database.entity.BookSourceType.EPUB,
+            importedAt = 1, totalChapters = 3, lastReadAt = 1, lastReadChapterIndex = 2)
+        val books = listOf(book, book.copy(id = 2, reachedEnd = true, removedAt = 1),
+            book.copy(id = 3, manualReadState = "FINISHED"), book.copy(id = 4, reachedEnd = true, manualReadState = "UNREAD"))
+        val date = LocalDate.of(2026, 9, 11)
+        val state = buildStatsState(listOf(ReadingDailyEntity(2, date.toEpochDay(), 60_000, 1)), books,
+            0, 0, StatsSelection(StatsPeriod.DAY, date), date)
+        assertEquals(2, state.finishedBooks)
+        assertEquals(60_000L, state.periodDurationMs)
+        assertEquals(2L, state.topBooks.single().book.id)
+    }
     @Test
     fun `ranges use exact day week month and year boundaries`() {
         val leapDay = LocalDate.of(2024, 2, 29)

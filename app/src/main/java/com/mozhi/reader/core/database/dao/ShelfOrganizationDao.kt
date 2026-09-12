@@ -16,6 +16,12 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ShelfOrganizationDao {
+    @Query("SELECT t.* FROM book_tags t JOIN book_tag_refs r ON r.tagId=t.id WHERE r.bookId=:bookId ORDER BY t.id")
+    suspend fun getTagsForBook(bookId: Long): List<BookTagEntity>
+
+    @Query("SELECT * FROM shelf_groups WHERE id=:id")
+    suspend fun getGroup(id: Long): ShelfGroupEntity?
+
     @Query("SELECT * FROM book_collections ORDER BY createdAt DESC, id DESC")
     fun observeCollections(): Flow<List<BookCollectionEntity>>
 
@@ -132,14 +138,14 @@ interface ShelfOrganizationDao {
     @Query("UPDATE books SET groupId = :toGroupId WHERE groupId IS NULL")
     suspend fun moveUngroupedBooks(toGroupId: Long?)
 
-    @Query("SELECT groupId, COUNT(*) AS bookCount FROM books GROUP BY groupId")
+    @Query("SELECT groupId, COUNT(*) AS bookCount FROM books WHERE removedAt = 0 GROUP BY groupId")
     fun observeGroupCounts(): Flow<List<ShelfGroupCount>>
 
     @Query("SELECT * FROM book_tags ORDER BY groupName, sortOrder, createdAt, id")
     fun observeTags(): Flow<List<BookTagEntity>>
 
     @Query(
-        "SELECT tagId, COUNT(*) AS bookCount FROM book_tag_refs GROUP BY tagId"
+        "SELECT tagId, COUNT(*) AS bookCount FROM book_tag_refs WHERE bookId IN (SELECT id FROM books WHERE removedAt = 0) GROUP BY tagId"
     )
     fun observeTagCounts(): Flow<List<BookTagCount>>
 

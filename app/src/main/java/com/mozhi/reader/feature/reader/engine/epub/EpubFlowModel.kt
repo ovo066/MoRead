@@ -25,9 +25,15 @@ import com.mozhi.reader.feature.reader.engine.TypesetSpec
 import kotlin.math.max
 import kotlin.math.min
 
-/** Horizontal containing block in absolute content coordinates. */
-internal data class ContainingBlock(val left: Float, val right: Float) {
+/** A definite height is required to resolve CSS percentage heights; auto remains indefinite. */
+internal data class ContainingBlock(val left: Float, val right: Float, val height: Float? = null) {
     val width: Float get() = (right - left).coerceAtLeast(1f)
+}
+
+internal fun ResolvedLength.resolveHeight(containingHeight: Float?): Float? = when (this) {
+    is ResolvedLength.Px -> value
+    is ResolvedLength.Percent -> containingHeight?.let { it * value / 100f }
+    ResolvedLength.Auto -> null
 }
 
 /** One float currently occupying part of the block formatting context. */
@@ -110,8 +116,6 @@ internal class FlowLine(
 
 internal class FlowDecoration(
     var decoration: TextBlockDecoration,
-    /** Chapter-canvas decorations yield to a user-selected paper. */
-    var isCanvas: Boolean,
     /** Insertion order doubles as z-order: parents were reserved before children. */
     val zIndex: Int
 )
@@ -157,7 +161,7 @@ internal class FlowOutput {
             )
         }
         other.decorations.forEach { entry ->
-            decorations += FlowDecoration(entry.decoration, entry.isCanvas, entry.zIndex + zOffset)
+            decorations += FlowDecoration(entry.decoration, entry.zIndex + zOffset)
         }
         forcedBreaks += other.forcedBreaks
         keepRanges += other.keepRanges
@@ -406,11 +410,14 @@ internal class EpubLayoutContext(
     ): TextBlockDecoration {
         val mappedBg = mappedBackground(style.background.colorArgb)
         val boxWidth = (right - left).coerceAtLeast(1f)
-        val explicitW = style.background.size.getOrNull(0)?.resolve(boxWidth) ?: 0f
-        val explicitH = (style.background.size.getOrNull(1) ?: style.background.size.getOrNull(0))
-            ?.resolve(bottom - top) ?: 0f
+        // A missing second component is auto, not a copy of the first component. Preserve auto
+        // as -1 until the renderer knows the image's intrinsic aspect ratio; zero remains zero.
+        val automaticSize = if (style.background.sizeMode == "explicit") -1f else 0f
+        val explicitW = style.background.size.getOrNull(0)?.resolve(boxWidth) ?: automaticSize
+        val explicitH = style.background.size.getOrNull(1)?.resolve(bottom - top) ?: automaticSize
         val stretch = style.background.sizeMode == "explicit" &&
-            style.background.size.all { it is ResolvedLength.Percent && it.value >= 99.9f }
+            style.background.size.size == 2 &&
+            style.background.size.all { it is ResolvedLength.Percent && it.value == 100f }
         return TextBlockDecoration(
             left = left,
             top = top,

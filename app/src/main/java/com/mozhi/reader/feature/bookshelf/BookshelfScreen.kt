@@ -477,21 +477,12 @@ fun BookshelfScreen(
     }
 
     deleteTarget?.let { book ->
-        AlertDialog(
-            onDismissRequest = { deleteTarget = null },
-            icon = { Icon(Icons.Outlined.Delete, contentDescription = null) },
-            title = { Text("删除 ${book.title}？") },
-            text = { Text("书籍文件、阅读进度、目录与书签都会从本机删除。") },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        deleteTarget = null
-                        viewModel.deleteBook(book)
-                    }
-                ) { Text("删除") }
-            },
-            dismissButton = {
-                TextButton(onClick = { deleteTarget = null }) { Text("取消") }
+        com.mozhi.reader.ui.components.RemoveBookDialog(
+            title = "移除《${book.title}》？",
+            onDismiss = { deleteTarget = null },
+            onConfirm = { deleteRecords ->
+                deleteTarget = null
+                viewModel.deleteBook(book, deleteRecords)
             }
         )
     }
@@ -612,17 +603,10 @@ fun BookshelfScreen(
     }
 
     if (deleteSelected) {
-        AlertDialog(
-            onDismissRequest = { deleteSelected = false },
-            icon = { Icon(Icons.Outlined.Delete, contentDescription = null) },
-            title = { Text("移除 ${state.selectedCount} 本书？") },
-            text = { Text("这些书及其笔记、批注、进度将一并删除。") },
-            confirmButton = {
-                TextButton(onClick = { deleteSelected = false; viewModel.deleteSelected() }) {
-                    Text("移除")
-                }
-            },
-            dismissButton = { TextButton(onClick = { deleteSelected = false }) { Text("取消") } }
+        com.mozhi.reader.ui.components.RemoveBookDialog(
+            title = "移除 ${state.selectedCount} 本书？",
+            onDismiss = { deleteSelected = false },
+            onConfirm = { deleteRecords -> deleteSelected = false; viewModel.deleteSelected(deleteRecords) }
         )
     }
 }

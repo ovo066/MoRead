@@ -280,7 +280,9 @@ fun MoReadApp(
                             onEditPersona = { personaId ->
                                 navController.navigate("persona/$personaId")
                             },
-                            onCreatePersona = { navController.navigate("persona/0") }
+                            onCreatePersona = { navController.navigate("persona/0") },
+                            onOpenLibraryChat = { navController.navigate("library-companion") },
+                            onOpenStats = { navController.navigate("companion-stats") }
                         )
                     }
                 }
@@ -346,13 +348,13 @@ fun MoReadApp(
                     )
                 }
                 pushComposable("settings-data") { entry ->
-                    val settingsEntry = remember(entry) {
-                        navController.getBackStackEntry(RootDestination.Settings.route)
-                    }
                     DataSettingsScreen(
                         onBack = navController::popBackStack,
                         onOpenBackup = { navController.navigate("backup-settings") },
-                        viewModel = hiltViewModel<SettingsViewModel>(settingsEntry)
+                        onOpenSpeechCache = { navController.navigate("speech-cache") },
+                        onOpenImages = { navController.navigate("image-library") },
+                        onOpenFonts = { navController.navigate("font-library") },
+                        onOpenBook = { navController.navigate("book/$it") }
                     )
                 }
                 pushComposable("settings-about") {
@@ -617,6 +619,24 @@ fun MoReadApp(
                             navController.popBackStack()
                         }
                     )
+                }
+                pushComposable("library-companion") {
+                    com.mozhi.reader.feature.companion.LibraryCompanionScreen(
+                        onBack = navController::popBackStack,
+                        onOpenStats = { navController.navigate("companion-stats") },
+                        onLocate = { location ->
+                            navController.navigate("reader/${location.bookId}")
+                            navController.currentBackStackEntry?.savedStateHandle?.let { handle ->
+                                handle[LOCATE_START_KEY] = location.start
+                                handle[LOCATE_END_KEY] = location.end
+                                handle[LOCATE_ANCHOR_KEY] = location.sourceAnchorJson
+                                handle[LOCATE_CHAPTER_KEY] = location.chapterIndex
+                            }
+                        }
+                    )
+                }
+                pushComposable("companion-stats") {
+                    com.mozhi.reader.feature.companion.CompanionStatsScreen(onBack = navController::popBackStack)
                 }
                 pushComposable("persona/{personaId}") {
                     PersonaEditorScreen(

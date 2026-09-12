@@ -70,6 +70,7 @@ class AiClientFactory @Inject constructor(
             is ModelProtocolRoute.Chat -> route.dialect
             is ModelProtocolRoute.Embedding -> route.dialect
             is ModelProtocolRoute.Unsupported -> throw AiClientException.Unsupported(route.reason)
+            ModelProtocolRoute.Rerank -> throw AiClientException.Unsupported("重排模型请通过专用客户端调用")
             ModelProtocolRoute.Media -> throw AiClientException.Unsupported(
                 "媒体模型请通过专用客户端调用"
             )
@@ -134,6 +135,21 @@ class AiClientFactory @Inject constructor(
             provider = provider,
             model = model
         )
+    }
+
+    /** No fallback to a chat model: reranking is enabled only by an explicit assignment. */
+    suspend fun rerankerOrNull(): RerankApiClient? {
+        if (providerDao.getAssignment(ModelRole.RERANK)?.modelId == null) return null
+        val (provider, model) = resolve(ModelRole.RERANK)
+        when (val route = ProviderProtocolPolicy.route(provider, model)) {
+            ModelProtocolRoute.Rerank -> Unit
+            is ModelProtocolRoute.Unsupported -> throw AiClientException.Unsupported(route.reason)
+            else -> throw AiClientException.Unsupported("模型能力不是重排类型")
+        }
+        val key = providerRepository.apiKeyFor(provider)?.takeIf(String::isNotBlank)
+            ?: throw AiClientException.MissingKey(provider.name)
+        return RerankApiClient(provider.baseUrl, key, model.modelName, httpClient,
+            model.endpointPath, mergeExtraJson(provider.extraJson, model.extraJson))
     }
 
     /** 生图出口：独立生图配置优先（含 NovelAI），否则回落到「模型分配」的生图模型。 */
@@ -253,6 +269,7 @@ class AiClientFactory @Inject constructor(
     private fun ModelRole.requiredType(): AiModelType = when (this) {
         ModelRole.CHAT, ModelRole.CHEAP, ModelRole.SUGGESTION -> AiModelType.CHAT
         ModelRole.EMBEDDING -> AiModelType.EMBEDDING
+        ModelRole.RERANK -> AiModelType.RERANK
         ModelRole.TTS -> AiModelType.TTS
         ModelRole.IMAGE -> AiModelType.IMAGE
     }
@@ -262,6 +279,7 @@ class AiClientFactory @Inject constructor(
         ModelRole.CHEAP -> "廉价批量模型"
         ModelRole.SUGGESTION -> "建议回复模型"
         ModelRole.EMBEDDING -> "Embedding 模型"
+        ModelRole.RERANK -> "重排模型"
         ModelRole.TTS -> "TTS 模型"
         ModelRole.IMAGE -> "生图模型"
     }

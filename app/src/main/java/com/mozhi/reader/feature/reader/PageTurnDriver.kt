@@ -338,7 +338,7 @@ fun Modifier.readerPageTouch(
     if (!enabled) return@pointerInput
     val slop = viewConfiguration.touchSlop
     val handleGrabRadius = 24.dp.toPx()
-    val bookmarkDistance = 88.dp.toPx()
+    val bookmarkDistance = 144.dp.toPx()
     awaitEachGesture {
         val down = awaitFirstDown()
         driver.setViewport(size.width.toFloat(), size.height.toFloat())
@@ -350,7 +350,7 @@ fun Modifier.readerPageTouch(
         }
         driver.onDown(down.position.x, down.position.y)
         var bookmarkGesture = if (!hadSelection && onAddBookmark != null) {
-            PullBookmarkGesture(slop, bookmarkDistance)
+            PullBookmarkGesture(slop, bookmarkDistance, minimumDurationMs = BOOKMARK_PULL_MIN_DURATION_MS)
         } else null
         val pointerId = down.id
         var upPosition = down.position
@@ -360,13 +360,24 @@ fun Modifier.readerPageTouch(
         var released = false
         try {
             while (true) {
-                val event = if (selection != null && !longPressFired && !slopCrossed && !hadSelection) {
+                val holdRemaining = bookmarkGesture?.remainingHoldMs ?: 0L
+                val event = if (holdRemaining > 0L) {
+                    withTimeoutOrNull(holdRemaining) { awaitPointerEvent() }
+                } else if (selection != null && !longPressFired && !slopCrossed && !hadSelection) {
                     val remaining = LONG_PRESS_TIMEOUT_MS - (lastUptime - down.uptimeMillis)
                     withTimeoutOrNull(remaining.coerceAtLeast(1L)) { awaitPointerEvent() }
                 } else {
                     awaitPointerEvent()
                 }
                 if (event == null) {
+                    if (holdRemaining > 0L) {
+                        // A deliberate pull may pause at the end. Arm without lift-off jitter.
+                        lastUptime += holdRemaining
+                        bookmarkGesture?.move(upPosition.x - down.position.x, upPosition.y - down.position.y,
+                            lastUptime - down.uptimeMillis)
+                        onBookmarkPull?.invoke(bookmarkGesture?.progress ?: 0f)
+                        continue
+                    }
                     longPressFired = true
                     bookmarkGesture = null
                     selecting = selection?.begin(upPosition) == true
@@ -392,7 +403,7 @@ fun Modifier.readerPageTouch(
                     val deltaX = change.position.x - down.position.x
                     val deltaY = change.position.y - down.position.y
                     if (deltaX * deltaX + deltaY * deltaY > slop * slop) slopCrossed = true
-                    bookmarkGesture?.move(deltaX, deltaY)
+                    bookmarkGesture?.move(deltaX, deltaY, lastUptime - down.uptimeMillis)
                     if (bookmarkGesture?.ownsGesture == true) {
                         onBookmarkPull?.invoke(bookmarkGesture.progress)
                     } else {
@@ -429,6 +440,7 @@ fun Modifier.readerPageTouch(
 }
 
 private const val LONG_PRESS_TIMEOUT_MS = 600L
+private const val BOOKMARK_PULL_MIN_DURATION_MS = 220L
 
 /** Hinge callers supply leaf width; slide/cover callers supply full spread width. */
 internal fun flatPageTurnTargetX(

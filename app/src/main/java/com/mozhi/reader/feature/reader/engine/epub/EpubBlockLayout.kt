@@ -26,7 +26,10 @@ internal class EpubBlockLayout(private val ctx: EpubLayoutContext) {
         val output = FlowOutput()
         val bfc = BfcState()
         val cursor = FlowCursor(0f)
-        val cb = contentBox(root.style, ContainingBlock(0f, ctx.spec.visibleWidth)).contentCb
+        val viewportHeight = ctx.spec.visibleHeight + if (ctx.immersivePage) {
+            ctx.spec.immersiveExtraTopPx + ctx.spec.immersiveExtraBottomPx
+        } else 0f
+        val cb = contentBox(root.style, ContainingBlock(0f, ctx.spec.visibleWidth, viewportHeight)).contentCb
         val background = ctx.mappedBackground(root.style.background.colorArgb)
             ?.let { com.mozhi.reader.feature.reader.engine.EpubThemeColors.composite(it, ctx.spec.themeBackgroundArgb) }
             ?: ctx.spec.themeBackgroundArgb
@@ -89,7 +92,7 @@ internal class EpubBlockLayout(private val ctx: EpubLayoutContext) {
 
         val hasTopEdge = geometry.borderTop + geometry.paddingTop > 0f
         val decorated = style.hasDecoration()
-        val explicitHeight = (style.height as? ResolvedLength.Px)?.value
+        val explicitHeight = style.height.resolveHeight(cb.height)
         if (hasTopEdge || decorated || explicitHeight != null) cursor.commit()
         val borderBoxTop = cursor.y
         cursor.y += geometry.borderTop + geometry.paddingTop
@@ -140,7 +143,7 @@ internal class EpubBlockLayout(private val ctx: EpubLayoutContext) {
                 cursor.y = contentBottom
             }
         }
-        val minHeight = (style.minHeight as? ResolvedLength.Px)?.value
+        val minHeight = style.minHeight.resolveHeight(cb.height)
         if (minHeight != null) {
             val target = borderBoxTop + geometry.borderTop + geometry.paddingTop + minHeight
             if (target > contentBottom) {
@@ -158,6 +161,22 @@ internal class EpubBlockLayout(private val ctx: EpubLayoutContext) {
                 top = borderBoxTop,
                 right = geometry.borderBoxRight,
                 bottom = borderBoxBottom
+            )
+        }
+        // An empty CSS box can be the only illustration on a page. Give its geometry a
+        // zero-length flow anchor so pagination and scroll layout do not discard its paint.
+        if (output.lines.size == lineStartIndex && borderBoxBottom > borderBoxTop) {
+            val anchor = box.node?.node?.textStart?.takeIf { it >= 0 }
+                ?: output.lines.lastOrNull()?.line?.let { it.chapterPosition + it.charLength } ?: 0
+            output.lines += FlowLine(
+                line = TextLine(
+                    text = "", columns = emptyList(), lineTop = borderBoxTop,
+                    lineBase = borderBoxBottom, lineBottom = borderBoxBottom,
+                    startX = geometry.borderBoxLeft, isTitle = false, isParagraphEnd = true,
+                    chapterPosition = anchor, charLength = 0
+                ),
+                paragraphId = output.nextParagraphId++, orphans = 1, widows = 1,
+                indexInParagraph = 0, paragraphLineCount = 1, keepWithNext = false
             )
         }
         if (style.breakInsideAvoid && borderBoxBottom > borderBoxTop) {
@@ -249,7 +268,6 @@ internal class EpubBlockLayout(private val ctx: EpubLayoutContext) {
                     right = borderBoxLeft + borderBoxWidth,
                     bottom = borderBoxBottom
                 ),
-                isCanvas = false,
                 zIndex = output.nextZIndex++
             )
         }
@@ -668,7 +686,6 @@ internal class EpubBlockLayout(private val ctx: EpubLayoutContext) {
                             right = cellLeft + columnWidth,
                             bottom = rowTop + rowHeight
                         ),
-                        isCanvas = false,
                         zIndex = output.nextZIndex++
                     )
                 }
@@ -766,7 +783,15 @@ internal class EpubBlockLayout(private val ctx: EpubLayoutContext) {
         return BoxGeometry(
             borderBoxLeft = borderBoxLeft,
             borderBoxRight = borderBoxRight,
-            contentCb = ContainingBlock(borderBoxLeft + borderLeft + paddingLeft, borderBoxRight - borderRight - paddingRight),
+            contentCb = ContainingBlock(
+                borderBoxLeft + borderLeft + paddingLeft,
+                borderBoxRight - borderRight - paddingRight,
+                style.height.resolveHeight(cb.height)?.let { height ->
+                    if (style.boxSizingBorderBox) {
+                        (height - paddingTop - paddingBottom - style.borderWidths[0] - style.borderWidths[2]).coerceAtLeast(0f)
+                    } else height.coerceAtLeast(0f)
+                }
+            ),
             borderTop = style.borderWidths[0],
             borderBottom = style.borderWidths[2],
             paddingTop = paddingTop,
@@ -777,7 +802,6 @@ internal class EpubBlockLayout(private val ctx: EpubLayoutContext) {
     private fun reserveDecoration(output: FlowOutput): Int {
         output.decorations += FlowDecoration(
             decoration = com.mozhi.reader.feature.reader.engine.TextBlockDecoration(0f, 0f, 0f, 0f),
-            isCanvas = false,
             zIndex = output.nextZIndex++
         )
         return output.decorations.lastIndex

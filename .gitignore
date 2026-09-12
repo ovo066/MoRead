@@ -45,3 +45,6 @@ dist/
 keys/
 keystore.properties
 .gradle-build/
+
+# Windows cache created from an unexpanded environment-variable path
+/%SystemDrive%/

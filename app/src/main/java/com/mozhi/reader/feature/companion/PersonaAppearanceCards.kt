@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -138,20 +140,23 @@ internal fun AppearanceCard(
                 }
 
                 AppearanceField(label = "聊天字体") {
-                    Row(
-                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
+                        item(key = "follow-app") {
                         FilterChip(
                             selected = appearance.fontId == null,
                             onClick = { onChange { it.copy(fontId = null) } },
                             label = { Text("跟随应用") }
                         )
-                        fonts.forEach { font ->
-                            FilterChip(
+                        }
+                        items(fonts, key = { it.id }) { font ->
+                            com.mozhi.reader.ui.components.FontPreviewChoice(
+                                font = font,
                                 selected = appearance.fontId == font.id,
-                                onClick = { onChange { it.copy(fontId = font.id) } },
-                                label = { Text(font.displayName) }
+                                onClick = { onChange { it.copy(fontId = font.id) } }
                             )
                         }
                     }
@@ -316,4 +321,3 @@ private fun PreviewBubble(
         }
     }
 }
-

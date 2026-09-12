@@ -260,6 +260,7 @@ fun ReaderChrome(
     onSearch: () -> Unit,
     onReidentifyChapters: () -> Unit,
     onTextReplacementRules: () -> Unit,
+    onAutoRead: () -> Unit = {},
     pageLabel: String? = null
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
@@ -278,6 +279,7 @@ fun ReaderChrome(
                 isCurrentPositionBookmarked = isCurrentPositionBookmarked,
                 onToggleBookmark = onToggleBookmark,
                 onSearch = onSearch,
+                onAutoRead = onAutoRead,
                 onReidentifyChapters = onReidentifyChapters,
                 onTextReplacementRules = onTextReplacementRules
             )
@@ -319,6 +321,7 @@ private fun ReaderTopBar(
     isCurrentPositionBookmarked: Boolean,
     onToggleBookmark: () -> Unit,
     onSearch: () -> Unit,
+    onAutoRead: () -> Unit,
     onReidentifyChapters: () -> Unit,
     onTextReplacementRules: () -> Unit
 ) {
@@ -403,6 +406,14 @@ private fun ReaderTopBar(
                     onClick = {
                         menuExpanded = false
                         onToggleBookmark()
+                    }
+                )
+                MoReadMenuItem(
+                    text = "自动阅读",
+                    icon = Icons.AutoMirrored.Outlined.MenuBook,
+                    onClick = {
+                        menuExpanded = false
+                        onAutoRead()
                     }
                 )
                 MoReadMenuItem(

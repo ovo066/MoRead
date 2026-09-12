@@ -2,6 +2,7 @@ package com.mozhi.reader.ai.chat
 
 import androidx.room.withTransaction
 import com.mozhi.reader.ai.client.ChatRole
+import com.mozhi.reader.ai.companion.LibraryBookScopes
 import com.mozhi.reader.core.database.MoReadDatabase
 import com.mozhi.reader.core.database.dao.ChatDao
 import com.mozhi.reader.core.database.entity.ConversationEntity
@@ -9,6 +10,7 @@ import com.mozhi.reader.core.database.entity.MessageEntity
 import com.mozhi.reader.core.library.AttachmentStore
 import com.mozhi.reader.core.vector.VectorQueries
 import io.objectbox.BoxStore
+import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
@@ -41,7 +43,8 @@ class AiChatRepository @Inject constructor(
         firstUserMessage: String?,
         personaId: Long? = null,
         parentConversationId: Long? = null,
-        branchedFromMessageId: Long? = null
+        branchedFromMessageId: Long? = null,
+        bookScopesJson: String = "[]"
     ): Long {
         val now = System.currentTimeMillis()
         return database.withTransaction {
@@ -51,6 +54,7 @@ class AiChatRepository @Inject constructor(
                     personaId = personaId,
                     title = title.take(MAX_TITLE_CHARS),
                     type = type,
+                    bookScopesJson = bookScopesJson,
                     parentConversationId = parentConversationId,
                     branchedFromMessageId = branchedFromMessageId,
                     createdAt = now,
@@ -71,6 +75,7 @@ class AiChatRepository @Inject constructor(
                         conversationId = conversationId,
                         role = ChatRole.USER.wire,
                         content = it,
+                        clientRoundId = UUID.randomUUID().toString(),
                         createdAt = now + 1
                     )
                 )
@@ -93,6 +98,14 @@ class AiChatRepository @Inject constructor(
 
     suspend fun getConversation(conversationId: Long): ConversationEntity? =
         chatDao.getConversation(conversationId)
+
+    suspend fun updateLibraryContext(conversationId: Long, userRoundId: String, scopes: String, bookIds: String) {
+        database.withTransaction {
+            require(chatDao.getConversation(conversationId)?.type == com.mozhi.reader.ai.companion.LibraryBookScopes.CONVERSATION_TYPE) { "话题已被删除" }
+            chatDao.updateLibraryScopes(conversationId, scopes)
+            chatDao.updateLibraryTurnBooks(conversationId, userRoundId, bookIds)
+        }
+    }
 
     /** 该书 + 该角色最近一次伴读会话；没有则 null（首次发送时才建）。 */
     suspend fun findLatestConversation(
@@ -128,7 +141,7 @@ class AiChatRepository @Inject constructor(
                     maskId = maskId,
                     sourceScopeChapterIndex = sourceScopeChapterIndex,
                     sourceScopeCharOffset = sourceScopeCharOffset,
-                    clientRoundId = clientRoundId
+                    clientRoundId = clientRoundId?.takeIf(String::isNotBlank) ?: UUID.randomUUID().toString()
                 )
             )
             val conversation = chatDao.getConversation(conversationId)
@@ -189,6 +202,7 @@ class AiChatRepository @Inject constructor(
                 chatDao.deleteMessagesAfter(message.conversationId, message.id)
             }
             chatDao.resetMemoryConsolidationWatermark(message.conversationId, now)
+            chatDao.clearRollingSummary(message.conversationId)
         }
         invalidateConsolidatedMemory(message.conversationId)
         return MessageEditResult(
@@ -217,6 +231,7 @@ class AiChatRepository @Inject constructor(
                 chatDao.deleteMessage(message.id)
             }
             chatDao.resetMemoryConsolidationWatermark(message.conversationId, now)
+            chatDao.clearRollingSummary(message.conversationId)
         }
         invalidateConsolidatedMemory(message.conversationId)
     }
@@ -228,13 +243,28 @@ class AiChatRepository @Inject constructor(
         val precedingUser = chatDao.getMessages(target.conversationId)
             .lastOrNull { it.id < target.id && it.role == ChatRole.USER.wire }
             ?: error("找不到这条回复对应的用户消息")
+        return prepareRetry(precedingUser.id)
+    }
+
+    /** A failed/stopped turn can be retried without appending the user question twice. */
+    suspend fun prepareRetry(userMessageId: Long): Long {
+        val user = chatDao.getMessage(userMessageId) ?: error("消息不存在")
+        require(user.role == ChatRole.USER.wire) { "找不到需要回复的用户消息" }
         val now = System.currentTimeMillis()
         database.withTransaction {
-            chatDao.deleteMessagesAfter(target.conversationId, precedingUser.id)
-            chatDao.resetMemoryConsolidationWatermark(target.conversationId, now)
+            chatDao.deleteMessagesAfter(user.conversationId, user.id)
+            chatDao.resetMemoryConsolidationWatermark(user.conversationId, now)
+            chatDao.clearRollingSummary(user.conversationId)
         }
-        invalidateConsolidatedMemory(target.conversationId)
-        return target.conversationId
+        invalidateConsolidatedMemory(user.conversationId)
+        return user.conversationId
+    }
+
+    suspend fun ensureUserRoundId(messageId: Long): String = database.withTransaction {
+        val message = chatDao.getMessage(messageId) ?: error("消息不存在")
+        require(message.role == ChatRole.USER.wire)
+        message.clientRoundId?.takeIf(String::isNotBlank)
+            ?: UUID.randomUUID().toString().also { chatDao.updateUserRoundId(messageId, it) }
     }
 
     /** 复制从 system 到 [throughMessageId] 的完整管道，生成可独立继续的新会话。 */
@@ -243,9 +273,13 @@ class AiChatRepository @Inject constructor(
         throughMessageId: Long
     ): Long {
         val source = chatDao.getConversation(conversationId) ?: error("会话不存在")
-        val sourceMessages = chatDao.getMessages(conversationId)
-            .takeWhile { it.id <= throughMessageId }
-        require(sourceMessages.isNotEmpty()) { "分支位置无效" }
+        val allMessages = chatDao.getMessages(conversationId)
+        val targetIndex = allMessages.indexOfFirst { it.id == throughMessageId && it.role in setOf("user", "assistant") }
+        require(targetIndex >= 0) { "分支位置无效" }
+        // Keep any tool results belonging to the selected assistant, without copying a later reply.
+        val sourceMessages = allMessages.take(targetIndex + 1) +
+            if (allMessages[targetIndex].role == "assistant") allMessages.drop(targetIndex + 1).takeWhile { it.role == "tool" }
+            else emptyList()
         val now = System.currentTimeMillis()
         return database.withTransaction {
             val branchId = chatDao.insertConversation(
@@ -255,6 +289,11 @@ class AiChatRepository @Inject constructor(
                     parentConversationId = source.id,
                     branchedFromMessageId = throughMessageId,
                     memoryConsolidatedThroughMessageId = 0,
+                    rollingSummary = "",
+                    summarizedThroughMessageId = 0,
+                    bookScopesJson = if (source.type == LibraryBookScopes.CONVERSATION_TYPE) LibraryBookScopes.encode(
+                        LibraryBookScopes.retainedForHistory(source.bookScopesJson, sourceMessages.filter { it.role == "user" }.map { it.sourceBookIdsJson })
+                    ) else source.bookScopesJson,
                     createdAt = now,
                     updatedAt = now
                 )

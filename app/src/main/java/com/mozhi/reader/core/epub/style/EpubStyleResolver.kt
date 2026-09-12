@@ -108,8 +108,8 @@ data class EpubStyle(
     val breakAfter: Boolean = false,
     val breakInsideAvoid: Boolean = false,
     val breakAfterAvoid: Boolean = false,
-    val orphans: Int = 2,
-    val widows: Int = 2
+    val orphans: Int = 1,
+    val widows: Int = 1
 ) {
     fun hasBorder(): Boolean = borderWidths.any { it > 0f }
 
@@ -259,8 +259,10 @@ class EpubStyleResolver(
             breakAfter = breakAlways(specified["break-after"] ?: specified["page-break-after"]),
             breakInsideAvoid = (specified["break-inside"] ?: specified["page-break-inside"]) == CssValue.Keyword("avoid"),
             breakAfterAvoid = (specified["break-after"] ?: specified["page-break-after"]) == CssValue.Keyword("avoid"),
-            orphans = number(specified["orphans"]) ?: parent?.orphans ?: 2,
-            widows = number(specified["widows"]) ?: parent?.widows ?: 2,
+            // Reflowable reading defaults to filling the page, as the TXT/legacy engines do.
+            // Explicit publisher constraints still inherit and participate in pagination.
+            orphans = number(specified["orphans"]) ?: parent?.orphans ?: 1,
+            widows = number(specified["widows"]) ?: parent?.widows ?: 1,
             writingMode = (inherited("writing-mode") as? CssValue.Keyword)?.name
                 ?.let(EpubWritingMode::parse)
                 ?: parent?.writingMode
@@ -275,8 +277,8 @@ class EpubStyleResolver(
         val image = (values["background-image"] as? CssValue.Url)?.href
         val sizeValue = values["background-size"]
         val size = when (sizeValue) {
-            is CssValue.Tuple -> sizeValue.items.map { resolved(it, fontSize, root, false) }
-            is CssValue.Length -> listOf(resolved(sizeValue, fontSize, root, false))
+            is CssValue.Tuple -> sizeValue.items.map { resolved(it, fontSize, root) }
+            is CssValue.Length -> listOf(resolved(sizeValue, fontSize, root))
             else -> emptyList()
         }
         val sizeMode = (sizeValue as? CssValue.Keyword)?.name ?: if (size.isNotEmpty()) "explicit" else "auto"
@@ -515,7 +517,9 @@ class EpubStyleResolver(
             "break-before", "break-after", "break-inside", "page-break-before", "page-break-after",
             "page-break-inside", "orphans", "widows", "border-collapse", "flex-direction",
             "grid-template-columns", "column-gap", "row-gap", "gap", "align-items", "justify-content",
-            "list-style-type", "list-style-position", "writing-mode"
+            "list-style-type", "list-style-position", "writing-mode",
+            // An illustration remains book content when encoded as a CSS background.
+            "background-image", "background-size", "background-position", "background-repeat"
         )
         const val UA_STYLES = """
             html, body, div, p, section, article, aside, blockquote, figure, figcaption, h1, h2, h3, h4, h5, h6, ol, ul, hr, pre, dl, dd, dt { display:block; }

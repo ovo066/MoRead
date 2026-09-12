@@ -87,6 +87,8 @@ fun MoReadTheme(
     appearance: AppearanceSettings = AppearanceSettings(),
     content: @Composable () -> Unit
 ) {
+    val appFont = rememberAppFontFamily(appearance.appFont?.filePath)
+    val typography = remember(appFont) { MoReadTypography.withAppFont(appFont) }
     val systemDark = isSystemInDarkTheme()
     val darkTheme = when (appearance.themeMode) {
         ThemeMode.SYSTEM -> systemDark
@@ -133,7 +135,7 @@ fun MoReadTheme(
     CompositionLocalProvider(LocalMoReadColors provides moReadColors) {
         MaterialTheme(
             colorScheme = colorScheme,
-            typography = MoReadTypography,
+            typography = typography,
             shapes = MoReadShapes,
             content = content
         )

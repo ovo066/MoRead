@@ -36,6 +36,7 @@ enum class AiProviderAdapter {
 enum class AiModelType {
     CHAT,
     EMBEDDING,
+    RERANK,
     TTS,
     IMAGE
 }
@@ -46,6 +47,8 @@ enum class ModelRole {
     /** 伴读输入区的 AI 建议回复；未分配时回落 CHEAP → CHAT。 */
     SUGGESTION,
     EMBEDDING,
+    /** Optional dedicated rerank endpoint; leaving it unassigned keeps local fusion ordering. */
+    RERANK,
     TTS,
     IMAGE
 }
@@ -94,7 +97,10 @@ data class BookEntity(
     @ColumnInfo(defaultValue = "NULL")
     val collectionId: Long? = null,
     @ColumnInfo(defaultValue = "0")
-    val collectionOrder: Int = 0
+    val collectionOrder: Int = 0,
+    /** Nonzero: local book content removed, personal records retained outside the bookshelf. */
+    @ColumnInfo(defaultValue = "0")
+    val removedAt: Long = 0L
 )
 
 /** 书架阅读状态。搁置只能手动设，自动推导永远不会得到它。 */
@@ -299,8 +305,11 @@ data class ConversationEntity(
     val bookId: Long?,
     val personaId: Long? = null,
     val title: String,
-    /** SELECTION | CHAT | COMPANION. */
+    /** SELECTION | CHAT | COMPANION | LIBRARY_COMPANION. */
     val type: String,
+    /** Source identity and independent spoiler boundaries for books accessed by a library chat. */
+    @ColumnInfo(defaultValue = "'[]'")
+    val bookScopesJson: String = "[]",
     /** 分支来源；不设 FK，删除母会话不应连带删除用户保留的分支。 */
     val parentConversationId: Long? = null,
     val branchedFromMessageId: Long? = null,
@@ -365,7 +374,9 @@ data class MessageEntity(
     @ColumnInfo(defaultValue = "-1")
     val sourceScopeCharOffset: Int = -1,
     /** Stable identity shared with the streaming entry before Room publishes the row. */
-    val clientRoundId: String? = null
+    val clientRoundId: String? = null,
+    /** Books associated with this user turn. Null = legacy unknown; [] = explicitly no books. */
+    val sourceBookIdsJson: String? = null
 )
 
 /** RikkaHub-style assignment: a role points at one concrete model, not a whole provider. */

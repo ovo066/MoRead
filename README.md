@@ -39,6 +39,10 @@ This list describes the current source tree. For features in a packaged release,
 
 ### Reading
 
+- **Automatic reading:** adjustable continuous scrolling or timed page turns, with a compact reader control sheet and explicit pause behavior.
+- **Chapter outlines:** open **Contents → Outline** to save coherent chapter recaps with expandable source evidence. Chapters generate independently, with up to two model requests at a time; the navigation panel keeps its position while scrolling or switching tabs.
+- **Whole-book characters:** the adjacent **Characters** tab can scan the entire book, including unread chapters, after confirmation. Stop and resume extraction, search saved character cards, and open their source passages.
+
 - **TXT and EPUB import:** automatic encoding detection, regex-based chapter splitting using Legado’s rule set, and a preview with customizable chapter rules.
 - **Native rendering:** page-curl, cover, and slide animations; EPUB parsing and layout for supported CSS, block/inline content, floats, tables, backgrounds, and images. Includes text-selection handles, paragraph annotations and comments, bookmarks, and in-book search.
 - **Quick bookmarks:** in paginated mode, pull down until the release cue appears, then release to add a bookmark. Repeating the gesture never removes an existing bookmark. It is disabled in continuous vertical scrolling mode.
@@ -50,11 +54,14 @@ This list describes the current source tree. For features in a packaged release,
 
 ### AI companion · bring your own API key
 
+- **Library companion:** talk without picking a book first, search across local books on demand, and verify citations in the original text. Edit messages, branch a conversation, regenerate a reply, or retry an interrupted turn. Bookshelf organization proposals require confirmation.
+- **Optional reranking:** assign a dedicated rerank model to reorder retrieved evidence. Input size and time are bounded, unread text is excluded, and failures keep the original retrieval order. Leaving it unassigned makes no rerank requests.
+
 - **Four streaming protocols:** OpenAI-compatible, OpenAI Responses, Claude, and Gemini. Assign chat, embedding, speech, and image models independently, including from the same provider. Base URLs support HTTPS and trusted local-network HTTP.
 - **Character cards:** import SillyTavern PNG/JSON cards, world books, and custom avatars.
 - **Reading agent:** understands the current chapter and reading progress, locates chapters through the volume/part table of contents, retrieves source text using vector and lexical search, and reads back existing highlights, notes, and the plot summary.
 - **Companion actions:** annotate passages, create or update notes, maintain a single rolling plot summary, generate illustrations, and read text aloud. Separate settings control the character’s write permissions.
-- **Spoiler boundaries:** book content supplied to the AI is limited to your current reading progress.
+- **Spoiler boundaries:** companion conversations and chapter outlines respect your reading progress. Whole-book character extraction has a separate confirmation and can include later plot details.
 - **Proactive paragraph annotations:** character-voiced comments within the read portion of the book, with highlights, wavy underlines, or straight underlines. Global and per-book quotas, serialized background jobs, deduplication, and cancellation keep generation bounded.
 - **Character reactions:** free, built-in count notices by default; optionally use a fast model for a short in-character reaction, or turn notices off entirely.
 - **Chat experience:** streaming responses, conversation history, manual scrolling, stop controls, stable positioning when opening history, and reuse of layout caches when returning to the reader.
@@ -63,6 +70,8 @@ This list describes the current source tree. For features in a packaged release,
 - **Media generation:** OpenAI image endpoints, image output through chat endpoints, and NovelAI; speech through system engines, MiniMax, and OpenAI-compatible endpoints. Speech and image generation can also be configured independently of model assignments.
 
 ### Privacy
+
+- A dedicated storage page manages book data, indexes, speech, and retained records. Removing a book can preserve personal records; permanent removal is a separate choice. Image categories, image export, and an independent app font help manage local resources.
 
 - Books, annotations, notes, and chats are stored on your device. MoRead has no proprietary backend service.
 - Optional WebDAV offers full manual backups, lightweight automatic backups, transfer progress, and validation before restore. Restore preparation runs in the background before a safe restart.
@@ -85,7 +94,7 @@ Start with the [code map](docs/CODE_MAP.md) (Chinese) for module boundaries, cal
 
 ## Build from source
 
-- Requires **JDK 17** and **Android SDK 37**. Open the project in Android Studio or run `./gradlew :app:assembleDebug`.
+- Requires **JDK 21** and **Android SDK 37**. Open the project in Android Studio or run `./gradlew :app:assembleDebug`. Android bytecode still targets Java 17; JVM UI tests load the Markdown renderer's Java 21 classes.
 - On Windows, if the checkout path contains Chinese characters, use `powershell -ExecutionPolicy Bypass -File scripts/gradle.ps1 <tasks>` to avoid path issues.
 - Run regression and packaging checks with `./gradlew :app:testDebugUnitTest :app:assembleRelease :app:assemblePerformance`.
 - **Release signing:** no signing keys are included. Place a local `keystore.properties` file at the repository root with `storeFile`, `storePassword`, `keyAlias`, and `keyPassword`, then run `:app:assembleRelease`. Without a signing configuration, the release APK is unsigned. Never commit keys or signing passwords.

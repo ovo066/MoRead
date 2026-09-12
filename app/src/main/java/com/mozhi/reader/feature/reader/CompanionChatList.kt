@@ -205,7 +205,7 @@ internal fun buildCompanionChatEntries(
  * 时间戳还要再降一次噪：与上一枚**已显示**的时间戳相隔不到 [TIMESTAMP_GAP_MS] 就不再显示。
  * 一来一回的连续对话里每组都盖一个「14:03」纯属噪声，只有真的隔了一段时间才值得标出来。
  */
-private fun List<ChatEntry>.withBubbleGrouping(): List<ChatEntry> {
+internal fun List<ChatEntry>.withBubbleGrouping(): List<ChatEntry> {
     val result = toMutableList()
     var index = 0
     var lastShownTimestamp: Long? = null

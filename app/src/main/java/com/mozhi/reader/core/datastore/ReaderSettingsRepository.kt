@@ -126,6 +126,7 @@ data class ReaderSettings(
     val showFooter: Boolean = true,
     val theme: ReaderTheme = ReaderTheme.SYSTEM,
     val pageMode: PageMode = PageMode.PAGINATED,
+    val autoRead: AutoReadSettings = AutoReadSettings(),
     val widePageLayout: WidePageLayout = WidePageLayout.SINGLE,
     val companionSidePaneEnabled: Boolean = false,
     val pageTurnAnimation: PageTurnAnimation = PageTurnAnimation.SIMULATION,
@@ -253,6 +254,12 @@ class ReaderSettingsRepository @Inject constructor(
             pageMode = preferences[Keys.PageMode]
                 ?.let { runCatching { PageMode.valueOf(it) }.getOrNull() }
                 ?: PageMode.PAGINATED,
+            autoRead = AutoReadSettings(
+                mode = preferences[Keys.AutoReadMode]?.let { runCatching { PageMode.valueOf(it) }.getOrNull() } ?: PageMode.SCROLL,
+                scrollDpPerSecond = preferences[Keys.AutoReadSpeed] ?: 24f,
+                pageIntervalSeconds = preferences[Keys.AutoReadInterval] ?: 15,
+                showGuide = preferences[Keys.AutoReadGuide] ?: false
+            ).normalized(),
             pageTurnAnimation = preferences[Keys.PageTurnAnimation]
                 ?.let { runCatching { PageTurnAnimation.valueOf(it) }.getOrNull() }
                 ?: PageTurnAnimation.SIMULATION,
@@ -318,7 +325,8 @@ class ReaderSettingsRepository @Inject constructor(
             accent = preferences[Keys.AccentPreset]
                 ?.let { runCatching { AccentPreset.valueOf(it) }.getOrNull() }
                 ?: AccentPreset.Default,
-            customAccentArgb = preferences[Keys.AccentCustomArgb]
+            customAccentArgb = preferences[Keys.AccentCustomArgb],
+            appFont = fontLibraryFrom(preferences).firstOrNull { it.id == preferences[Keys.AppFontId] }
         )
     }
 
@@ -340,6 +348,17 @@ class ReaderSettingsRepository @Inject constructor(
 
     suspend fun setFontScale(value: Float) {
         dataStore.edit { it[Keys.FontScale] = value.coerceIn(0.75f, 2f) }
+    }
+
+    /** 应用字体只影响 Compose 界面，不改变阅读排版设置。 */
+    suspend fun selectAppFont(id: String?) {
+        dataStore.edit { preferences ->
+            if (id == null) preferences.remove(Keys.AppFontId)
+            else {
+                require(fontLibraryFrom(preferences).any { it.id == id }) { "字体不存在或已删除" }
+                preferences[Keys.AppFontId] = id
+            }
+        }
     }
 
     suspend fun setFont(value: ReaderFont) {
@@ -385,6 +404,7 @@ class ReaderSettingsRepository @Inject constructor(
 
     suspend fun removeCustomFont(id: String) {
         dataStore.edit { preferences ->
+            if (preferences[Keys.AppFontId] == id) preferences.remove(Keys.AppFontId)
             val remaining = fontLibraryFrom(preferences).filterNot { it.id == id }
             preferences[Keys.FontLibrary] = ReaderFontLibraryCodec.encode(remaining)
             preferences.remove(Keys.CustomFontPath)
@@ -775,6 +795,17 @@ class ReaderSettingsRepository @Inject constructor(
         dataStore.edit { it[Keys.PageMode] = value.name }
     }
 
+    suspend fun setAutoReadSettings(value: AutoReadSettings) {
+        val safe = value.normalized()
+        dataStore.edit {
+            it[Keys.PageMode] = safe.mode.name
+            it[Keys.AutoReadMode] = safe.mode.name
+            it[Keys.AutoReadSpeed] = safe.scrollDpPerSecond
+            it[Keys.AutoReadInterval] = safe.pageIntervalSeconds
+            it[Keys.AutoReadGuide] = safe.showGuide
+        }
+    }
+
     suspend fun setPageTurnAnimation(value: PageTurnAnimation) {
         dataStore.edit { it[Keys.PageTurnAnimation] = value.name }
     }
@@ -871,6 +902,16 @@ class ReaderSettingsRepository @Inject constructor(
                 if (activeId != null) preferences[backgroundImageKey(slot)] = activeId
             }
             preferences.remove(Keys.BackgroundImagePath)
+        }
+    }
+
+    suspend fun setReaderImagePurpose(id: String, purpose: ReaderImagePurpose) {
+        dataStore.edit { preferences ->
+            val images = imageLibraryFrom(preferences)
+            require(images.any { it.id == id }) { "图片不存在或已删除" }
+            preferences[Keys.ImageLibrary] = ReaderImageLibraryCodec.encode(
+                images.map { if (it.id == id) it.copy(purpose = purpose) else it }
+            )
         }
     }
 
@@ -1144,6 +1185,18 @@ class ReaderSettingsRepository @Inject constructor(
         }
     }
 
+    /** Called only for explicit permanent deletion; retaining records retains their preferences. */
+    suspend fun removeBookOverrides(bookId: Long) {
+        dataStore.edit { preferences ->
+            preferences[Keys.BookThemes] = BookReaderThemeCodec.encode(
+                BookReaderThemeCodec.decode(preferences[Keys.BookThemes]).filterKeys { it != bookId })
+            preferences[Keys.BookChineseConversions] = BookChineseConversionCodec.encode(
+                BookChineseConversionCodec.decode(preferences[Keys.BookChineseConversions]).filterKeys { it != bookId })
+            preferences[Keys.CompanionAnnotationLimitsByBook] = ProactiveAnnotationLimitsCodec.encodeBooks(
+                ProactiveAnnotationLimitsCodec.decodeBooks(preferences[Keys.CompanionAnnotationLimitsByBook]).filterKeys { it != bookId })
+        }
+    }
+
     private object Keys {
         val CompanionAnnotationLimits = stringPreferencesKey("companion_annotation_limits")
         val CompanionAnnotationLimitsByBook =
@@ -1178,6 +1231,10 @@ class ReaderSettingsRepository @Inject constructor(
         val CompanionSidePaneEnabled = booleanPreferencesKey("reader_companion_side_pane")
         val CompanionAnnotationNotice = stringPreferencesKey("companion_annotation_notice")
         val PageMode = stringPreferencesKey("reader_page_mode")
+        val AutoReadMode = stringPreferencesKey("auto_read_mode")
+        val AutoReadSpeed = floatPreferencesKey("auto_read_speed")
+        val AutoReadInterval = intPreferencesKey("auto_read_interval")
+        val AutoReadGuide = booleanPreferencesKey("auto_read_guide")
         val PageTurnAnimation = stringPreferencesKey("reader_page_turn_animation")
         val ShelfLayout = stringPreferencesKey("shelf_layout")
         val ShelfBookOrder = stringPreferencesKey("shelf_book_order")
@@ -1195,6 +1252,7 @@ class ReaderSettingsRepository @Inject constructor(
         val SyntaxHighlightRules = stringPreferencesKey("reader_syntax_highlight_rules")
         val TextReplacementRules = stringPreferencesKey("reader_text_replacement_rules")
         val ThemeMode = stringPreferencesKey("app_theme_mode")
+        val AppFontId = stringPreferencesKey("app_font_id")
         val AccentPreset = stringPreferencesKey("accent_preset")
         val AccentCustomArgb = intPreferencesKey("accent_custom_argb")
         val ActivePersonaId = longPreferencesKey("active_persona_id")

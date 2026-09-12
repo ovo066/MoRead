@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -26,6 +27,7 @@ import androidx.compose.material.icons.outlined.UploadFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -53,6 +55,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.mozhi.reader.core.datastore.PendingReaderImage
 import com.mozhi.reader.core.datastore.ReaderImageAsset
+import com.mozhi.reader.core.datastore.ReaderImagePurpose
 import com.mozhi.reader.ui.components.FrostedSurface
 import com.mozhi.reader.ui.components.MoReadBackdrop
 import java.io.File
@@ -69,6 +72,10 @@ fun ImageLibraryScreen(
     var renameTarget by remember { mutableStateOf<ReaderImageAsset?>(null) }
     var renameText by remember { mutableStateOf("") }
     var deleteTarget by remember { mutableStateOf<ReaderImageAsset?>(null) }
+    var category by remember { mutableStateOf<ReaderImagePurpose?>(null) }
+    var importPurpose by remember { mutableStateOf(ReaderImagePurpose.BACKGROUND) }
+    var classifyTarget by remember { mutableStateOf<ReaderImageAsset?>(null) }
+    val visibleImages = state.images.filter { category == null || it.purpose == category }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let(viewModel::prepareImport)
     }
@@ -79,6 +86,7 @@ fun ImageLibraryScreen(
                 is ImageLibraryEvent.ConfirmImport -> {
                     pendingImport = event.pending
                     importName = event.pending.detectedName
+                    importPurpose = category ?: ReaderImagePurpose.BACKGROUND
                 }
                 is ImageLibraryEvent.Message -> snackbar.showSnackbar(event.text)
             }
@@ -98,7 +106,7 @@ fun ImageLibraryScreen(
                     Column(Modifier.weight(1f)) {
                         Text("图片库", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Medium)
                         Text(
-                            "${state.images.size} 张图片 · 可用于阅读背景与书籍封面",
+                            "${state.images.size} 张图片 · 分类管理，保留使用中的引用",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -109,12 +117,20 @@ fun ImageLibraryScreen(
                     }
                 }
 
+                FlowRow(Modifier.padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = category == null, onClick = { category = null }, label = { Text("全部") })
+                    ReaderImagePurpose.entries.forEach { purpose ->
+                        FilterChip(selected = category == purpose, onClick = { category = purpose }, label = {
+                            Text("${purpose.label} ${state.images.count { it.purpose == purpose }}")
+                        })
+                    }
+                }
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(20.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    if (state.images.isEmpty()) {
+                    if (visibleImages.isEmpty()) {
                         item {
                             FrostedSurface(
                                 modifier = Modifier.fillMaxWidth(),
@@ -127,9 +143,9 @@ fun ImageLibraryScreen(
                                     verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     Icon(Icons.Outlined.PhotoLibrary, contentDescription = null, modifier = Modifier.size(36.dp))
-                                    Text("图片库还是空的", style = MaterialTheme.typography.titleMedium)
+                                    Text("此分类暂无图片", style = MaterialTheme.typography.titleMedium)
                                     Text(
-                                        "导入后的图片可在不同书籍封面与阅读背景间复用。",
+                                        "导入时选择用途；旧图片可在“未分类”中重新归类，不会改变正在使用的背景或封面。",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -137,11 +153,12 @@ fun ImageLibraryScreen(
                             }
                         }
                     }
-                    items(state.images, key = ReaderImageAsset::id) { image ->
+                    items(visibleImages, key = ReaderImageAsset::id) { image ->
                         ImageLibraryRow(
                             image = image,
                             selected = state.selectedBackgroundImageId == image.id,
                             onSelect = { viewModel.selectForBackground(image.id) },
+                            onClassify = { classifyTarget = image },
                             onRename = {
                                 renameTarget = image
                                 renameText = image.displayName
@@ -173,6 +190,11 @@ fun ImageLibraryScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("${pending.originalFileName} · ${pending.width} × ${pending.height}")
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ReaderImagePurpose.entries.forEach { purpose ->
+                            FilterChip(selected = importPurpose == purpose, onClick = { importPurpose = purpose }, label = { Text(purpose.label) })
+                        }
+                    }
                     OutlinedTextField(
                         value = importName,
                         onValueChange = { importName = it.take(48) },
@@ -186,7 +208,7 @@ fun ImageLibraryScreen(
                 TextButton(
                     enabled = importName.isNotBlank(),
                     onClick = {
-                        viewModel.confirmImport(pending, importName)
+                        viewModel.confirmImport(pending, importName, importPurpose)
                         pendingImport = null
                     }
                 ) { Text("加入图片库") }
@@ -197,6 +219,24 @@ fun ImageLibraryScreen(
                     pendingImport = null
                 }) { Text("取消") }
             }
+        )
+    }
+
+    classifyTarget?.let { image ->
+        AlertDialog(
+            onDismissRequest = { classifyTarget = null },
+            title = { Text("图片用途") },
+            text = {
+                Column {
+                    Text("分类不改变当前背景和封面的引用，也不会复制图片文件。")
+                    ReaderImagePurpose.entries.forEach { purpose ->
+                        TextButton(onClick = { viewModel.classify(image.id, purpose); classifyTarget = null }) {
+                            Text(purpose.label + if (purpose == image.purpose) " · 当前" else "")
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { classifyTarget = null }) { Text("取消") } }
         )
     }
 
@@ -246,6 +286,7 @@ private fun ImageLibraryRow(
     image: ReaderImageAsset,
     selected: Boolean,
     onSelect: () -> Unit,
+    onClassify: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -285,8 +326,12 @@ private fun ImageLibraryRow(
                     Icon(Icons.Outlined.Check, contentDescription = "当前阅读背景", tint = MaterialTheme.colorScheme.primary)
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                OutlinedButton(onClick = onSelect, enabled = !selected) {
+            if (image.purpose == ReaderImagePurpose.COVER) {
+                Text(if (selected) "封面素材 · 当前也用于阅读背景" else "可在书籍详情的“更换封面”中选用", style = MaterialTheme.typography.bodySmall)
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                TextButton(onClick = onClassify) { Text(image.purpose.label) }
+                if (image.purpose != ReaderImagePurpose.COVER) OutlinedButton(onClick = onSelect, enabled = !selected) {
                     Text(if (selected) "背景使用中" else "设为背景")
                 }
                 TextButton(onClick = onRename) { Text("重命名") }

@@ -44,11 +44,13 @@ internal suspend fun loadReadableCorpus(
     totalChapters: Int,
     scope: ReadingScope,
     loadChapter: suspend (Int) -> ChapterDocument?,
-    loadChaptersThrough: suspend (Int) -> List<ChapterDocument>
+    loadChaptersThrough: suspend (Int) -> List<ChapterDocument>,
+    firstChapterIndex: Int = 0
 ): ReadableCorpus {
     val last = scope.clampLastChapter(totalChapters)
     val bulk = try {
-        loadChaptersThrough(last).associateBy { it.chapterIndex }
+        // A prefix-only bulk loader would read chapters outside an explicitly narrowed query.
+        if (firstChapterIndex > 0) emptyMap() else loadChaptersThrough(last).associateBy { it.chapterIndex }
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (_: Exception) {
@@ -61,10 +63,11 @@ internal suspend fun loadReadableCorpus(
     var failureCount = 0
     var chars = 0
     var limited = false
-    val indexes = if (totalChapters > 0) 0..last else IntRange.EMPTY
+    val first = firstChapterIndex.coerceAtLeast(0)
+    val indexes = if (totalChapters > 0) first..last else IntRange.EMPTY
     for (index in indexes) {
         currentCoroutineContext().ensureActive()
-        if (index >= MAX_LEXICAL_CHAPTERS) { limited = true; break }
+        if (index - first >= MAX_LEXICAL_CHAPTERS) { limited = true; break }
         // A zero-length allowed prefix requires no body and must not create a false missing chapter.
         if (index == scope.maxChapterIndex && scope.maxCharOffset == 0) continue
         val document = bulk[index] ?: try {

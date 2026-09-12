@@ -146,6 +146,12 @@ fun AiServiceScreen(
                     )
                 }
                 item {
+                    Text("重排可不配置。启用后，每次检索最多发送 24 段已读候选、共 12000 字，按供应商计费；超时或失败自动使用原排序。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 4.dp))
+                }
+                item {
                     EmbeddingLibraryStatusCard(
                         progress = state.embeddingProgress,
                         onRetry = viewModel::retryEmbedding,
@@ -441,6 +447,7 @@ internal fun ModelRole.label(): String = when (this) {
     ModelRole.CHEAP -> "批量任务"
     ModelRole.SUGGESTION -> "建议回复"
     ModelRole.EMBEDDING -> "Embedding"
+    ModelRole.RERANK -> "Rerank（可选）"
     ModelRole.TTS -> "语音朗读"
     ModelRole.IMAGE -> "生图"
 }
@@ -450,6 +457,7 @@ private fun ModelRole.purpose(): String = when (this) {
     ModelRole.CHEAP -> "摘要、索引等后台任务"
     ModelRole.SUGGESTION -> "输入框上方的快捷回复，不选就用批量任务模型"
     ModelRole.EMBEDDING -> "全文与想法检索"
+    ModelRole.RERANK -> "书内检索候选重排"
     ModelRole.TTS -> "听书语音合成"
     ModelRole.IMAGE -> "角色头像与插图"
 }
@@ -457,6 +465,7 @@ private fun ModelRole.purpose(): String = when (this) {
 private fun ModelRole.requiredModelType(): AiModelType = when (this) {
     ModelRole.CHAT, ModelRole.CHEAP, ModelRole.SUGGESTION -> AiModelType.CHAT
     ModelRole.EMBEDDING -> AiModelType.EMBEDDING
+    ModelRole.RERANK -> AiModelType.RERANK
     ModelRole.TTS -> AiModelType.TTS
     ModelRole.IMAGE -> AiModelType.IMAGE
 }

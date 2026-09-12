@@ -29,6 +29,17 @@ class AgentLoopTest {
         val messages = seed.toMutableList()
         private var nextId = seed.size + 1L
         var onInsert: (MessageEntity) -> Unit = {}
+        override suspend fun getStorageOwners(): List<com.mozhi.reader.core.database.dao.ConversationStorageOwner> = emptyList()
+        override suspend fun getConversationIdsForBook(bookId: Long): List<Long> = emptyList()
+        override suspend fun getAllConversationIds(): List<Long> = messages.map { it.conversationId }.distinct()
+        override fun observeLibraryConversations(): Flow<List<ConversationEntity>> = flowOf(emptyList())
+        override suspend fun getLibraryConversations(): List<ConversationEntity> = emptyList()
+        override fun observeCompletedCompanionRounds(): Flow<List<com.mozhi.reader.core.database.dao.CompletedCompanionRound>> = flowOf(emptyList())
+        override fun observeCompanionUsage(): Flow<List<com.mozhi.reader.core.database.dao.CompanionUsageRow>> = flowOf(emptyList())
+        override fun observeCompanionWords(): Flow<List<com.mozhi.reader.core.database.dao.CompanionWordsRow>> = flowOf(emptyList())
+        override suspend fun updateLibraryScopes(conversationId: Long, scopes: String) = Unit
+        override suspend fun updateLibraryTurnBooks(conversationId: Long, userRoundId: String, bookIds: String) = Unit
+        override suspend fun updateUserRoundId(messageId: Long, roundId: String) = Unit
 
         override suspend fun insertConversation(conversation: ConversationEntity): Long = 1
         override suspend fun getConversation(conversationId: Long): ConversationEntity? = null
@@ -118,6 +129,32 @@ class AgentLoopTest {
             }
         }
         assertTrue(committed)
+    }
+
+    @Test fun `frozen scope is checked before network and again before persistence`() = runTest {
+        val dao = FakeChatDao(seed(ChatRole.USER to "比较两本书"))
+        var checks = 0
+        var calls = 0
+        val result = runCatching {
+            loop(dao).runWith(1L, emptyList(), validateContext = {
+                checks++
+                check(checks < 2) { "source changed" }
+            }) {
+                AgentLoop.Streamer { _, _ -> calls++; flowOf(ChatDelta.Text("本次回复")) }
+            }.toList()
+        }
+        assertTrue(result.isFailure)
+        assertEquals(1, calls)
+        assertEquals(2, checks)
+        assertTrue(dao.messages.none { it.role == "assistant" })
+
+        val blocked = runCatching {
+            loop(dao).runWith(1L, emptyList(), validateContext = { error("scope narrowed") }) {
+                AgentLoop.Streamer { _, _ -> calls++; flowOf(ChatDelta.Text("must not send")) }
+            }.toList()
+        }
+        assertTrue(blocked.isFailure)
+        assertEquals(1, calls)
     }
 
     private class EchoTool(private val reply: String) : AgentTool {

@@ -135,6 +135,7 @@ internal fun ReaderPane(
     onImageAction: (selection: String, context: String, range: IntRange) -> Unit,
     onEditText: ((selection: String, range: IntRange) -> Unit)?,
     pageTurnRequest: ReaderPageTurnRequest? = null,
+    autoRead: AutoReadSession? = null,
     onSpreadModeChanged: (Boolean) -> Unit = {},
     onVisiblePagesDrawn: (ReaderVisibleReadSnapshot) -> Unit = {},
     modifier: Modifier = Modifier
@@ -196,7 +197,7 @@ internal fun ReaderPane(
                 override fun onBoundaryHit(direction: PageTurnDirection) = onBoundary(direction)
 
                 override fun onTurnCommitted() {
-                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    if (holder.followRequest?.automatic != true) haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                 }
 
                 override fun onTurnStarted(direction: PageTurnDirection) {
@@ -241,7 +242,7 @@ internal fun ReaderPane(
         val request = pageTurnRequest ?: return@LaunchedEffect
         if (enabled) {
             driver.finishActiveTurn()
-            holder.followRequest = request.takeIf { it.focusTarget != null }
+            holder.followRequest = request.takeIf { it.focusTarget != null || it.onFinished != null }
             if (holder.followWasSuperseded()) {
                 holder.finishFollowTurn()
             } else if (request.focusTarget?.let { controller.isDisplaying(it.first, it.second) } == true) {
@@ -251,6 +252,50 @@ internal fun ReaderPane(
                 if (!driver.isRunning) holder.finishFollowTurn()
             }
         } else request.onFinished?.invoke(ReaderTurnResult.CANCELLED)
+    }
+
+    LaunchedEffect(autoRead?.running, autoRead?.generation, enabled) {
+        val session = autoRead?.takeIf { it.running && enabled } ?: return@LaunchedEffect
+        val token = session.generation
+        val navigation = controller.navigationGeneration
+        val source = controller.sourceGeneration
+        val environment = controller.environmentGeneration
+        fun stillCurrent(): Boolean {
+            if (navigation != controller.navigationGeneration || source != controller.sourceGeneration ||
+                environment != controller.environmentGeneration) session.pause(AutoReadPauseReason.NAVIGATION)
+            return session.owns(token)
+        }
+        selection.clear()
+        try {
+            runAutoReadPaging(
+                session,
+                isReady = { stillCurrent() && controller.isReady && !driver.isRunning },
+                hasNext = controller::hasNextPage,
+                nextIsReady = { stillCurrent() && controller.turnPages(1).firstOrNull() is RenderPage.Laid },
+                turn = {
+                    val result = kotlinx.coroutines.CompletableDeferred<ReaderTurnResult>()
+                    holder.followRequest = ReaderPageTurnRequest(
+                        sequence = token,
+                        direction = PageTurnDirection.NEXT,
+                        navigationGeneration = controller.navigationGeneration,
+                        sourceGeneration = controller.sourceGeneration,
+                        onFinished = { result.complete(it) },
+                        automatic = true,
+                        isValid = { stillCurrent() }
+                    )
+                    driver.turnByTap(PageTurnDirection.NEXT)
+                    if (!driver.isRunning) holder.finishFollowTurn()
+                    result.await()
+                }
+            )
+        } finally {
+            if (holder.followRequest?.automatic == true) {
+                driver.cancelActiveTurn()
+                holder.finishFollowTurn()
+                holder.refresh(0)
+                frameTick++
+            }
+        }
     }
 
     // Environment: relayout when the typography inputs change; repaint when only colors change.
@@ -475,8 +520,8 @@ internal fun ReaderPane(
         BookmarkPullIndicator(
             feedback = bookmarkFeedback,
             palette = palette,
-            modifier = Modifier.align(Alignment.TopCenter).padding(
-                top = with(density) { statusBarPx.toDp() } + com.mozhi.reader.ui.theme.MoReadSpacing.xl
+            modifier = Modifier.align(Alignment.TopEnd).padding(
+                top = with(density) { statusBarPx.toDp() }, end = 20.dp
             )
         )
 
@@ -632,7 +677,9 @@ data class ReaderPageTurnRequest(
     val focusTarget: Pair<Int, Int>? = null,
     val navigationGeneration: Int? = null,
     val sourceGeneration: Int? = null,
-    val onFinished: ((ReaderTurnResult) -> Unit)? = null
+    val onFinished: ((ReaderTurnResult) -> Unit)? = null,
+    val automatic: Boolean = false,
+    val isValid: (() -> Boolean)? = null
 )
 
 /** Only inputs that affect typography/ink participate in the retained render cache. */
@@ -1029,7 +1076,9 @@ internal class ReaderPaneHolder(private val controller: ReaderContentController)
     private var backwardTurn: com.mozhi.reader.feature.reader.engine.ReaderTurnSnapshot? = null
     var followRequest: ReaderPageTurnRequest? = null
 
-    private fun followResult(request: ReaderPageTurnRequest, committed: Boolean) = readerFollowTurnResult(
+    private fun followResult(request: ReaderPageTurnRequest, committed: Boolean) = if (request.isValid?.invoke() == false) {
+        ReaderTurnResult.CANCELLED
+    } else readerFollowTurnResult(
         committed, request.navigationGeneration, controller.navigationGeneration,
         request.sourceGeneration, controller.sourceGeneration
     )
@@ -1300,7 +1349,8 @@ internal class ReaderPaneHolder(private val controller: ReaderContentController)
 
     private fun frozenTurn(direction: PageTurnDirection) = if (direction == PageTurnDirection.NEXT) forwardTurn else backwardTurn
 
-    fun commitTurn(direction: PageTurnDirection): Boolean = frozenTurn(direction)?.let(controller::commitTurn) == true
+    fun commitTurn(direction: PageTurnDirection): Boolean =
+        followRequest?.isValid?.invoke() != false && frozenTurn(direction)?.let(controller::commitTurn) == true
 
     fun prepareTurn(direction: PageTurnDirection) {
         preparedTurn = direction

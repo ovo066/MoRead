@@ -44,7 +44,9 @@ data class RetrievalRequest(
     val literalReserve: Int = 2,
     /** 词法救回下限：BM25 分数不到本轮最高分的这个比例，就不能靠词法绕过向量距离闸。 */
     val minLexicalRescueRatio: Double = 0.35,
-    val sort: RetrievalSort = RetrievalSort.CHAPTER
+    val sort: RetrievalSort = RetrievalSort.CHAPTER,
+    /** User-selected chapter lower bound, independent of the spoiler upper boundary. */
+    val firstChapterIndex: Int = 0
 )
 
 /**
@@ -108,6 +110,7 @@ class RetrievalPipeline(
         val rawVector = vectorResult.getOrDefault(emptyList())
         val rawLexical = lexicalResult.getOrDefault(emptyList())
         fun allowed(candidate: RetrievalCandidate) = candidate.bookId == request.bookId &&
+            candidate.chapterIndex >= request.firstChapterIndex.coerceAtLeast(0) &&
             request.scope.allowsChapter(candidate.chapterIndex) && request.scope.allowsChunk(
                 candidate.chapterIndex, candidate.startCharOffset, candidate.endCharOffset)
         val vector = rawVector.filter(::allowed)
@@ -154,7 +157,13 @@ class RetrievalPipeline(
             inScope
         } else {
             try {
-                reranker.rerank(request.query, inScope)
+                val originals = inScope.associateBy(RetrievalCandidate::key)
+                val reordered = reranker.rerank(request.query, inScope)
+                require(reordered.size == inScope.size && reordered.map { it.key }.toSet() == originals.keys) {
+                    "重排必须保留全部原始候选"
+                }
+                // A ranker cannot alter evidence, offsets or scope through its returned objects.
+                reordered.map { originals.getValue(it.key) }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {
@@ -179,7 +188,7 @@ class RetrievalPipeline(
             selected,
             request.neighborRadius.coerceAtLeast(0),
             request.scope
-        ).filter { request.scope.allowsChunk(it.chapterIndex, it.startCharOffset, it.endCharOffset) }
+        ).filter(::allowed)
             .distinctBy(RetrievalCandidate::key)
             .sortedWith(if (request.sort == RetrievalSort.RELEVANCE) {
                 compareBy<RetrievalCandidate> { it.anchors.minOfOrNull(RetrievalAnchor::relevanceRank) ?: Int.MAX_VALUE }

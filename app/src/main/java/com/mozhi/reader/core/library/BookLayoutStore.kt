@@ -4,6 +4,7 @@ import android.content.Context
 import com.mozhi.reader.core.epub.css.CssTokenType
 import com.mozhi.reader.core.epub.css.CssTokenizer
 import com.mozhi.reader.core.epub.dom.EpubDomChapter
+import com.mozhi.reader.core.epub.dom.EpubDomNode
 import com.mozhi.reader.core.epub.dom.EpubV9DomAdapter
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
@@ -77,11 +78,25 @@ class BookLayoutStore @Inject constructor(
                     fileName = "$CHAPTER_DIRECTORY/$domFileName"
                 )
             }
-            val storedPackage = layoutPackage.copy(chapters = refs)
+            val storedPackage = layoutPackage.copy(
+                chapters = refs,
+                parserRevision = EpubLayoutPackage.CURRENT_PARSER_REVISION
+            )
             extractResources(
                 epubFile = epubFile,
                 layoutPackage = storedPackage,
-                targetRoot = File(staging, RESOURCE_DIRECTORY)
+                targetRoot = File(staging, RESOURCE_DIRECTORY),
+                chapterStyles = sortedChapters.flatMap { input ->
+                    val dom = input.dom ?: return@flatMap emptyList()
+                    buildList {
+                        addAll(dom.embeddedStylesheets)
+                        fun collect(node: EpubDomNode) {
+                            node.attributes["style"]?.let { add(EpubStylesheetText(input.href, it)) }
+                            node.children.forEach(::collect)
+                        }
+                        collect(dom.bodyNode)
+                    }
+                }
             )
             File(staging, INDEX_FILE).writeText(json.encodeToString(storedPackage))
             File(staging, COMPACT_MARKER).writeText("v2")
@@ -137,7 +152,10 @@ class BookLayoutStore @Inject constructor(
             }
             val paths = buildMap {
                 layoutPackage.resources.forEach { resource ->
-                val file = safeChild(root, "$RESOURCE_DIRECTORY/${resource.archivePath}")
+                    val resourceRoot = File(root, RESOURCE_DIRECTORY)
+                    val portableFile = File(resourceRoot, resourceFileName(resource.archivePath))
+                    val file = portableFile.takeIf(File::isFile)
+                        ?: runCatching { safeChild(resourceRoot, resource.archivePath) }.getOrNull()
                     if (file?.isFile != true) return@forEach
                     EpubResourcePath.packageAliases(resource.href, layoutPackage.packageDocumentPath)
                         .forEach { alias -> putIfAbsent(alias, file.absolutePath) }
@@ -178,6 +196,7 @@ class BookLayoutStore @Inject constructor(
             val index = runCatching { readPackage(bookId) }.getOrNull()
                 ?: return@withContext false
             if (index.schemaVersion != EpubLayoutPackage.CURRENT_SCHEMA_VERSION ||
+                index.parserRevision != EpubLayoutPackage.CURRENT_PARSER_REVISION ||
                 index.chapters.size != expectedTextLengths.size
             ) {
                 return@withContext false
@@ -263,11 +282,12 @@ class BookLayoutStore @Inject constructor(
     private fun extractResources(
         epubFile: File,
         layoutPackage: EpubLayoutPackage,
-        targetRoot: File
+        targetRoot: File,
+        chapterStyles: List<EpubStylesheetText>
     ) {
         targetRoot.mkdirs()
         val referencedBackgrounds = buildSet {
-            layoutPackage.stylesheets.forEach { stylesheet ->
+            (layoutPackage.stylesheets + chapterStyles).forEach { stylesheet ->
                 CssTokenizer.tokenize(stylesheet.css)
                     .filter { it.type == CssTokenType.URL }
                     .mapNotNull { token -> EpubResourcePath.normalize(token.text, stylesheet.href) }
@@ -293,7 +313,9 @@ class BookLayoutStore @Inject constructor(
                 .forEach { resource ->
                     val entry = entries[resource.archivePath.lowercase()] ?: return@forEach
                     if (entry.size > MAX_EXTRACTED_RESOURCE_BYTES) return@forEach
-                    val output = safeChild(targetRoot, resource.archivePath) ?: return@forEach
+                    // ZIP names are URLs, not platform filenames. A stable local name also
+                    // supports reserved characters and very long names without duplicating data.
+                    val output = File(targetRoot, resourceFileName(resource.archivePath))
                     output.parentFile?.mkdirs()
                     val digest = resource.sha256?.let { MessageDigest.getInstance("SHA-256") }
                     var copied = 0L
@@ -327,6 +349,14 @@ class BookLayoutStore @Inject constructor(
     }
 
     private fun normalizeArchivePath(path: String): String = path.replace('\\', '/').removePrefix("./")
+
+    private fun resourceFileName(archivePath: String): String {
+        val hash = MessageDigest.getInstance("SHA-256").digest(archivePath.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+        val extension = archivePath.substringAfterLast('.', "")
+            .lowercase().takeIf { it.length in 1..10 && it.all(Char::isLetterOrDigit) } ?: "bin"
+        return "$hash.$extension"
+    }
 
     companion object {
         const val ROOT_DIRECTORY = "book-layout"

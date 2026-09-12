@@ -7,8 +7,71 @@ import com.mozhi.reader.core.database.entity.ConversationEntity
 import com.mozhi.reader.core.database.entity.MessageEntity
 import kotlinx.coroutines.flow.Flow
 
+data class ConversationStorageOwner(val id: Long, val bookId: Long?)
+
 @Dao
 interface ChatDao {
+    @Query("""
+        SELECT u.id, u.conversationId, u.createdAt, c.bookId, c.type, c.bookScopesJson,
+               r.clientRoundId AS replyRoundId, u.sourceBookIdsJson
+        FROM messages u JOIN conversations c ON c.id = u.conversationId
+        JOIN messages r ON r.id = (
+            SELECT MIN(a.id) FROM messages a
+            WHERE a.conversationId = u.conversationId AND a.role = 'assistant' AND a.id > u.id
+              AND length(trim(a.content)) > 0 AND COALESCE(a.toolCallsJson, '') IN ('', '[]')
+              AND a.content NOT IN ('（已达到单轮工具调用上限，回复基于目前掌握的信息）', '（已达到工具调用上限，回复基于目前掌握的信息）')
+              AND a.id < COALESCE((SELECT MIN(n.id) FROM messages n
+                WHERE n.conversationId = u.conversationId AND n.role = 'user' AND n.id > u.id), 9223372036854775807)
+        )
+        WHERE u.role = 'user' AND c.type IN ('COMPANION', 'LIBRARY_COMPANION')
+        ORDER BY u.createdAt, u.id
+    """)
+    fun observeCompletedCompanionRounds(): Flow<List<CompletedCompanionRound>>
+
+    @Query("""
+        SELECT m.id, m.clientRoundId AS roundId, m.createdAt, c.type, m.tokenUsage AS tokens
+        FROM messages m JOIN conversations c ON c.id = m.conversationId
+        WHERE m.role = 'assistant' AND c.type IN ('COMPANION', 'LIBRARY_COMPANION')
+        ORDER BY m.createdAt, m.id
+    """)
+    fun observeCompanionUsage(): Flow<List<CompanionUsageRow>>
+
+    @Query("""
+        SELECT m.id, COALESCE(NULLIF(m.clientRoundId, ''), CASE WHEN m.role = 'user' THEN (
+            SELECT NULLIF(a.clientRoundId, '') FROM messages a
+            WHERE a.conversationId = m.conversationId AND a.role = 'assistant' AND a.id > m.id
+              AND a.id < COALESCE((SELECT MIN(n.id) FROM messages n
+                WHERE n.conversationId = m.conversationId AND n.role = 'user' AND n.id > m.id), 9223372036854775807)
+            ORDER BY a.id LIMIT 1
+        ) END) AS roundId, m.createdAt, c.type, m.role,
+            length(replace(replace(replace(replace(m.content, ' ', ''), char(9), ''), char(10), ''), char(13), '')) AS characters
+        FROM messages m JOIN conversations c ON c.id = m.conversationId
+        WHERE m.role IN ('user', 'assistant') AND c.type IN ('COMPANION', 'LIBRARY_COMPANION')
+          AND (m.role = 'user' OR m.content NOT IN ('（已达到单轮工具调用上限，回复基于目前掌握的信息）', '（已达到工具调用上限，回复基于目前掌握的信息）'))
+        ORDER BY m.createdAt, m.id
+    """)
+    fun observeCompanionWords(): Flow<List<CompanionWordsRow>>
+
+    @Query("UPDATE conversations SET bookScopesJson = :scopes WHERE id = :conversationId AND type = 'LIBRARY_COMPANION'")
+    suspend fun updateLibraryScopes(conversationId: Long, scopes: String)
+
+    @Query("UPDATE messages SET sourceBookIdsJson = :bookIds WHERE conversationId = :conversationId AND clientRoundId = :userRoundId AND role = 'user'")
+    suspend fun updateLibraryTurnBooks(conversationId: Long, userRoundId: String, bookIds: String)
+
+    @Query("SELECT id, bookId FROM conversations")
+    suspend fun getStorageOwners(): List<ConversationStorageOwner>
+    @Query("SELECT id FROM conversations WHERE bookId = :bookId")
+    suspend fun getConversationIdsForBook(bookId: Long): List<Long>
+
+    @Query("SELECT id FROM conversations")
+    suspend fun getAllConversationIds(): List<Long>
+
+    @Query("SELECT * FROM conversations WHERE bookId IS NULL AND type = 'LIBRARY_COMPANION' ORDER BY updatedAt DESC, id DESC")
+    fun observeLibraryConversations(): Flow<List<ConversationEntity>>
+
+    @Query("SELECT * FROM conversations WHERE bookId IS NULL AND type = 'LIBRARY_COMPANION'")
+    suspend fun getLibraryConversations(): List<ConversationEntity>
+
     @Insert
     suspend fun insertConversation(conversation: ConversationEntity): Long
 
@@ -65,6 +128,9 @@ interface ChatDao {
 
     @Query("UPDATE messages SET content = :content, editedAt = :editedAt WHERE id = :messageId")
     suspend fun updateMessageContent(messageId: Long, content: String, editedAt: Long)
+
+    @Query("UPDATE messages SET clientRoundId = :roundId WHERE id = :messageId AND role = 'user'")
+    suspend fun updateUserRoundId(messageId: Long, roundId: String)
 
     @Query("DELETE FROM messages WHERE id = :messageId")
     suspend fun deleteMessage(messageId: Long)

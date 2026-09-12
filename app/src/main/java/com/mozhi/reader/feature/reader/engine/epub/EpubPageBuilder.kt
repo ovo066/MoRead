@@ -24,11 +24,20 @@ internal class EpubPageBuilder(private val ctx: EpubLayoutContext) {
     ): TextChapter {
         val lines = output.lines
         if (lines.isEmpty()) {
-            return TextChapter(chapterIndex, title, listOf(emptyPage()), ctx.body.length, layoutCapability)
+            val backgroundImage = pageBackgroundImage(bodyStyle)
+            val decorations = pageDecorations(output, 0f, capacity(0), null, null)
+            val height = if (backgroundImage != null) capacity(0) else decorations.maxOfOrNull { it.bottom } ?: 0f
+            val page = TextPage(
+                index = 0, lines = emptyList(), chapterPosition = 0, charLength = 0,
+                height = height, decorations = decorations,
+                backgroundColorArgb = pageBackgroundColor(bodyStyle),
+                backgroundImagePath = backgroundImage, backgroundOpacity = bodyStyle?.opacity ?: 1f,
+                immersive = ctx.immersivePage, hideHeader = hideHeaderFirstPage
+            )
+            return TextChapter(chapterIndex, title, listOf(page), ctx.body.length, layoutCapability)
         }
         val cuts = computeCuts(output)
         val pages = ArrayList<TextPage>(cuts.size)
-        val forced = output.forcedBreaks.sorted()
 
         val pageBackground = pageBackgroundColor(bodyStyle)
         val pageBackgroundImage = pageBackgroundImage(bodyStyle)
@@ -62,15 +71,6 @@ internal class EpubPageBuilder(private val ctx: EpubLayoutContext) {
         }
         return TextChapter(chapterIndex, title, pages, ctx.body.length, layoutCapability)
     }
-
-    private fun emptyPage() = TextPage(
-        index = 0,
-        lines = emptyList(),
-        chapterPosition = 0,
-        charLength = 0,
-        height = 0f,
-        immersive = ctx.immersivePage
-    )
 
     private class PageCut(val startIndex: Int, val endIndex: Int, val startY: Float)
 
@@ -183,7 +183,6 @@ internal class EpubPageBuilder(private val ctx: EpubLayoutContext) {
         shift: BottomAlignShift?
     ) = output.decorations.mapNotNull { entry ->
         ctx.cancellationCheck()
-        if (entry.isCanvas && ctx.spec.preferReaderBackground) return@mapNotNull null
         val decoration = entry.decoration
         if (decoration.right <= decoration.left || decoration.bottom <= decoration.top) return@mapNotNull null
         val pageEndY = nextStartY ?: Float.MAX_VALUE
@@ -200,8 +199,7 @@ internal class EpubPageBuilder(private val ctx: EpubLayoutContext) {
 
     private fun pageBackgroundColor(bodyStyle: EpubStyle?): Int? {
         val color = bodyStyle?.background?.colorArgb ?: return null
-        // 用户自定义纸张 > 出版物根画布：仅在用户未选自定义纸张时铺出版底色。
-        if (ctx.spec.preferReaderBackground) return null
+        // Ordinary paper was removed before layout; remaining color belongs to artwork.
         return ctx.mappedBackground(color)
     }
 

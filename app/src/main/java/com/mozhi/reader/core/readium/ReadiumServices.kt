@@ -7,6 +7,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import org.readium.r2.shared.publication.Publication
 import org.readium.r2.shared.util.asset.AssetRetriever
+import org.readium.r2.shared.util.asset.ContainerAsset
 import org.readium.r2.shared.util.getOrElse
 import org.readium.r2.shared.util.http.DefaultHttpClient
 import org.readium.r2.shared.util.toUrl
@@ -33,9 +34,22 @@ class ReadiumServices @Inject constructor(
             .retrieve(file.absoluteFile.toUrl(isDirectory = false))
             .getOrElse { error -> throw ReadiumOpenException(error.toString()) }
 
-        return publicationOpener
-            .open(asset, allowUserInteraction = allowUserInteraction)
-            .getOrElse { error -> throw ReadiumOpenException(error.toString()) }
+        val compatibleAsset = try {
+            if (asset is ContainerAsset && file.extension.equals("epub", ignoreCase = true)) {
+                ContainerAsset(asset.format, EpubUriContainer.wrap(asset.container, file))
+            } else asset
+        } catch (error: Throwable) {
+            asset.close()
+            throw error
+        }
+        return try {
+            publicationOpener
+                .open(compatibleAsset, allowUserInteraction = allowUserInteraction)
+                .getOrElse { error -> throw ReadiumOpenException(error.toString()) }
+        } catch (error: Throwable) {
+            compatibleAsset.close()
+            throw error
+        }
     }
 }
 

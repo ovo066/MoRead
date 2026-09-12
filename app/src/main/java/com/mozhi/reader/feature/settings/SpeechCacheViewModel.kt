@@ -31,7 +31,9 @@ sealed interface SpeechCacheEvent {
 class SpeechCacheViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val store: SpeechCacheStore,
-    private val sync: SpeechCacheSync
+    private val sync: SpeechCacheSync,
+    private val removal: com.mozhi.reader.core.library.BookRemovalCoordinator,
+    private val library: com.mozhi.reader.core.library.LibraryRepository
 ) : ViewModel() {
 
     private val mutableState = MutableStateFlow(SpeechCacheUiState())
@@ -94,10 +96,17 @@ class SpeechCacheViewModel @Inject constructor(
     }
 
     fun clear() {
+        if (mutableState.value.syncing) return
+        mutableState.update { it.copy(syncing = true) }
         viewModelScope.launch {
-            store.clear()
-            refresh()
-            eventChannel.send(SpeechCacheEvent.Message("已清空语音缓存"))
+            try {
+                library.getBooksIncludingRemoved().forEach { removal.requireIdle(it.id) }
+                store.clear()
+                refresh()
+                eventChannel.send(SpeechCacheEvent.Message("已清空语音缓存"))
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (error: Exception) { eventChannel.send(SpeechCacheEvent.Message(error.message ?: "清理未完成")) }
+            finally { mutableState.update { it.copy(syncing = false) } }
         }
     }
 }

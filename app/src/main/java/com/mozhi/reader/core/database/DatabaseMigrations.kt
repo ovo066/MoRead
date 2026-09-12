@@ -761,6 +761,63 @@ object DatabaseMigrations {
         }
     }
 
+    val Migration25To26 = object : Migration(25, 26) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `books` ADD COLUMN `removedAt` INTEGER NOT NULL DEFAULT 0")
+        }
+    }
+
+    val Migration26To27 = object : Migration(26, 27) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `conversations` ADD COLUMN `bookScopesJson` TEXT NOT NULL DEFAULT '[]'")
+            db.execSQL("ALTER TABLE `messages` ADD COLUMN `sourceBookIdsJson` TEXT")
+        }
+    }
+
+    val Migration27To28 = object : Migration(27, 28) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("""
+                CREATE TABLE IF NOT EXISTS `chapter_knowledge` (
+                    `bookId` INTEGER NOT NULL,
+                    `chapterIndex` INTEGER NOT NULL,
+                    `sourceRevision` TEXT NOT NULL,
+                    `sourceEnd` INTEGER NOT NULL,
+                    `sourceHash` TEXT NOT NULL,
+                    `modelKey` TEXT NOT NULL,
+                    `modelLabel` TEXT NOT NULL,
+                    `promptVersion` INTEGER NOT NULL,
+                    `contentJson` TEXT NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`bookId`, `chapterIndex`),
+                    FOREIGN KEY(`bookId`) REFERENCES `books`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+            """.trimIndent())
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_chapter_knowledge_bookId` ON `chapter_knowledge` (`bookId`)")
+        }
+    }
+
+    val Migration28To29 = object : Migration(28, 29) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("""
+                CREATE TABLE IF NOT EXISTS `book_character_guides` (
+                    `bookId` INTEGER NOT NULL, `generationId` TEXT NOT NULL, `sourceRevision` TEXT NOT NULL,
+                    `modelKey` TEXT NOT NULL, `modelLabel` TEXT NOT NULL, `promptVersion` INTEGER NOT NULL,
+                    `contentJson` TEXT NOT NULL, `createdAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`bookId`), FOREIGN KEY(`bookId`) REFERENCES `books`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+            """.trimIndent())
+            db.execSQL("""
+                CREATE TABLE IF NOT EXISTS `book_character_parts` (
+                    `bookId` INTEGER NOT NULL, `chapterIndex` INTEGER NOT NULL, `start` INTEGER NOT NULL, `end` INTEGER NOT NULL,
+                    `generationId` TEXT NOT NULL, `sourceRevision` TEXT NOT NULL, `sourceHash` TEXT NOT NULL,
+                    `modelKey` TEXT NOT NULL, `promptVersion` INTEGER NOT NULL, `contentJson` TEXT NOT NULL, `createdAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`bookId`, `chapterIndex`, `start`), FOREIGN KEY(`bookId`) REFERENCES `books`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+            """.trimIndent())
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_book_character_parts_bookId` ON `book_character_parts` (`bookId`)")
+        }
+    }
+
     val Migration24To25 = object : Migration(24, 25) {
         override fun migrate(db: SupportSQLiteDatabase) {
             db.execSQL("ALTER TABLE `messages` ADD COLUMN `clientRoundId` TEXT")

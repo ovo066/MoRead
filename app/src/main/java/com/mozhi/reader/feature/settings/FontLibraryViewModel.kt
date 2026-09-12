@@ -20,6 +20,7 @@ import kotlinx.coroutines.launch
 data class FontLibraryUiState(
     val fonts: List<ReaderFontAsset> = emptyList(),
     val selectedBodyFontId: String? = null,
+    val selectedAppFontId: String? = null,
     val isWorking: Boolean = false
 )
 
@@ -37,13 +38,14 @@ class FontLibraryViewModel @Inject constructor(
     private val eventChannel = Channel<FontLibraryEvent>(Channel.BUFFERED)
     val events = eventChannel.receiveAsFlow()
 
-    val uiState = combine(settingsRepository.settings, working) { settings, isWorking ->
+    val uiState = combine(settingsRepository.settings, settingsRepository.appearance, working) { settings, appearance, isWorking ->
         FontLibraryUiState(
             fonts = settings.fontLibrary.sortedWith(
                 compareByDescending<ReaderFontAsset> { it.importedAt }.thenBy { it.displayName }
             ),
             selectedBodyFontId = settings.selectedCustomFontId
                 .takeIf { settings.font == com.mozhi.reader.core.datastore.ReaderFont.CUSTOM },
+            selectedAppFontId = appearance.appFont?.id,
             isWorking = isWorking
         )
     }.stateIn(viewModelScope, SharingStarted.Lazily, FontLibraryUiState())
@@ -53,8 +55,8 @@ class FontLibraryViewModel @Inject constructor(
     }
 
     fun confirmImport(pending: PendingReaderFont, displayName: String) = launchWorking {
-        val asset = fontImporter.confirm(pending, displayName)
-        eventChannel.send(FontLibraryEvent.Message("${asset.displayName} 已加入字体库并设为正文"))
+        val asset = fontImporter.confirm(pending, displayName, selectForReading = false)
+        eventChannel.send(FontLibraryEvent.Message("${asset.displayName} 已加入字体库，请选择应用或阅读用途"))
     }
 
     fun cancelImport(pending: PendingReaderFont) {
@@ -64,6 +66,11 @@ class FontLibraryViewModel @Inject constructor(
     fun selectForBody(fontId: String) = launchWorking {
         settingsRepository.selectCustomFont(fontId)
         eventChannel.send(FontLibraryEvent.Message("正文默认字体已更新"))
+    }
+
+    fun selectForApp(fontId: String?) = launchWorking {
+        settingsRepository.selectAppFont(fontId)
+        eventChannel.send(FontLibraryEvent.Message(if (fontId == null) "应用字体已恢复默认" else "应用字体已更新，不影响阅读字体"))
     }
 
     fun rename(fontId: String, displayName: String) = launchWorking {

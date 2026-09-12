@@ -19,7 +19,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -30,6 +32,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -50,6 +54,8 @@ fun CompanionScreen(
     contentPadding: PaddingValues,
     onEditPersona: (Long) -> Unit,
     onCreatePersona: () -> Unit,
+    onOpenLibraryChat: () -> Unit = {},
+    onOpenStats: () -> Unit = {},
     viewModel: CompanionViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -65,21 +71,22 @@ fun CompanionScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             item {
-                Row(verticalAlignment = Alignment.Bottom) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("伴读", style = MaterialTheme.typography.headlineLarge)
                     Text(
                         text = "${state.personas.size} 位角色",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(start = 10.dp, bottom = 6.dp)
+                        modifier = Modifier.weight(1f).padding(start = 10.dp)
                     )
+                    IconButton(onClick = onOpenStats) { Icon(Icons.Outlined.CalendarMonth, "陪伴足迹") }
+                    IconButton(onClick = onCreatePersona) { Icon(Icons.Outlined.Add, "新建角色") }
                 }
             }
             if (!state.longTermMemoryEnabled && state.personas.isNotEmpty()) {
                 item {
                     Text(
-                        text = "长期记忆已在设置里全局关闭：下面的记忆条数只是历史存档，" +
-                            "当前不会被回忆，也不会新增。",
+                        text = "长期记忆已暂停",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -98,7 +105,7 @@ fun CompanionScreen(
             if (state.loaded && state.personas.isEmpty()) {
                 item {
                     Text(
-                        text = "还没有角色。新建一个，或在编辑页导入 SillyTavern 角色卡。",
+                        text = "创建一位伴读，或直接开始聊天。",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 4.dp)
@@ -107,17 +114,18 @@ fun CompanionScreen(
             }
         }
 
-        FloatingActionButton(
-            onClick = onCreatePersona,
+        ExtendedFloatingActionButton(
+            onClick = onOpenLibraryChat,
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = 20.dp, bottom = 96.dp),
-            shape = CircleShape,
+                .padding(end = 20.dp, bottom = 96.dp)
+                .semantics { contentDescription = "书库伴读" },
+            shape = RoundedCornerShape(22.dp),
             containerColor = MaterialTheme.colorScheme.primary,
-            contentColor = MaterialTheme.colorScheme.onPrimary
-        ) {
-            Icon(Icons.Outlined.Add, contentDescription = "新建角色")
-        }
+            contentColor = MaterialTheme.colorScheme.onPrimary,
+            icon = { Icon(Icons.Outlined.AutoAwesome, null) },
+            text = { Text("书库伴读") }
+        )
     }
 }
 

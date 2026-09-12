@@ -146,7 +146,8 @@ class ReaderImageImporter @Inject constructor(
     suspend fun confirm(
         pending: PendingReaderImage,
         customName: String,
-        selectAsBackground: Boolean = false
+        selectAsBackground: Boolean = false,
+        purpose: ReaderImagePurpose = if (selectAsBackground) ReaderImagePurpose.BACKGROUND else ReaderImagePurpose.GENERAL
     ): ReaderImageAsset = withContext(Dispatchers.IO) {
         val source = checkedPendingFile(pending)
         val displayName = customName.trim().take(48).ifBlank { pending.detectedName }
@@ -162,7 +163,8 @@ class ReaderImageImporter @Inject constructor(
                 originalFileName = pending.originalFileName,
                 width = pending.width,
                 height = pending.height,
-                importedAt = System.currentTimeMillis()
+                importedAt = System.currentTimeMillis(),
+                purpose = purpose
             )
             settingsRepository.addReaderImage(asset, selectAsBackground)
             if (source.exists()) source.delete()
@@ -175,11 +177,12 @@ class ReaderImageImporter @Inject constructor(
 
     suspend fun importImage(
         uri: Uri,
-        selectAsBackground: Boolean = false
+        selectAsBackground: Boolean = false,
+        purpose: ReaderImagePurpose = if (selectAsBackground) ReaderImagePurpose.BACKGROUND else ReaderImagePurpose.GENERAL
     ): ReaderImageAsset {
         val pending = prepare(uri)
         return try {
-            confirm(pending, pending.detectedName, selectAsBackground)
+            confirm(pending, pending.detectedName, selectAsBackground, purpose)
         } catch (error: Throwable) {
             discard(pending)
             throw error

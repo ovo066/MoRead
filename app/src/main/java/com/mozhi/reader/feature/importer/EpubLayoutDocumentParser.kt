@@ -11,6 +11,7 @@ import com.mozhi.reader.core.library.EpubLayoutDiagnostic
 import com.mozhi.reader.core.library.EpubLayoutDiagnosticSeverity
 import com.mozhi.reader.core.library.EpubLayoutSpan
 import com.mozhi.reader.core.library.EpubResourcePath
+import com.mozhi.reader.core.library.EpubStylesheetText
 import java.util.IdentityHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -66,6 +67,7 @@ class EpubLayoutDocumentParser @Inject constructor() {
         val documentTitle = document.title().trim().takeIf(String::isNotEmpty)
         val linkedStylesheets = ArrayList<String>()
         val stylesheetSources = ArrayList<EpubStylesheetSource>()
+        val embeddedStylesheets = ArrayList<EpubStylesheetText>()
         val stylesheetsByPath = stylesheets.entries.associate { it.key.lowercase() to it.value }
         document.head()?.children()?.forEach { element ->
             when (element.normalName()) {
@@ -78,7 +80,12 @@ class EpubLayoutDocumentParser @Inject constructor() {
                         }
                     }
                 }
-                "style" -> stylesheetSources += EpubStylesheetSource(href, element.data())
+                "style" -> {
+                    val sourceHref = "$href#style-${embeddedStylesheets.size}"
+                    linkedStylesheets += sourceHref
+                    embeddedStylesheets += EpubStylesheetText(sourceHref, element.data())
+                    stylesheetSources += EpubStylesheetSource(sourceHref, element.data())
+                }
             }
         }
         val css = stylesheetSet(stylesheetSources)
@@ -314,7 +321,8 @@ class EpubLayoutDocumentParser @Inject constructor() {
                 documentTitle = documentTitle,
                 bodyNode = body.toDomNode(rubyText, nodeAnchors, 0, 0),
                 textLength = extractedText.length,
-                diagnostics = chapterDiagnostics
+                diagnostics = chapterDiagnostics,
+                embeddedStylesheets = embeddedStylesheets
             )
         )
     }

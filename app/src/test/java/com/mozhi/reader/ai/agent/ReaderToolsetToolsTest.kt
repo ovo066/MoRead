@@ -48,7 +48,8 @@ class ReaderToolsetToolsTest {
             buildJsonObject { put("query", "张小敬在哪里") }
         )
 
-        assertTrue(result.contains("用户阅读进度水位（第 1 至 4 章）"))
+        assertTrue(result.contains("本次检索范围：第 1 至 4 章"))
+        assertTrue(result.contains("不超过当前阅读水位"))
         assertTrue(result.contains("西市追查狼卫"))
         assertFalse(result.contains("花萼楼"))
         assertTrue(result, result.contains("【第 3 章「章题2」】"))
@@ -94,6 +95,22 @@ class ReaderToolsetToolsTest {
         val result = searchTool(lastReadChapterIndex = 3)
             .execute(buildJsonObject { })
         assertEquals("缺少检索词 query", result)
+    }
+
+    @Test
+    fun librarySearchUsesLocalFallbackWithoutImplicitEmbeddingOrIndexConstruction() = runTest {
+        var requested = 0
+        var embedded = 0
+        val tool = SearchBookTool(
+            bookId = 1, getBook = { book(lastReadChapterIndex = 3) }, chapterTitle = { "章题$it" },
+            embedQuery = { embedded++; vector(1f, 0f) }, store = { store }, readingScope = ReadingScope.upto(3, 50),
+            loadChapter = { fixtureChapter(it) }, requestIndex = { requested++ }, canRequestIndex = false
+        )
+        val result = tool.execute(buildJsonObject { put("query", "线索") })
+        assertEquals(0, requested)
+        assertEquals(0, embedded)
+        assertFalse(result, result.contains("正在后台建立"))
+        assertTrue(result, result.contains("BM25"))
     }
 
     @Test
@@ -151,7 +168,8 @@ class ReaderToolsetToolsTest {
             chapterTitle = { null },
             embedQuery = { error("未配置 Embedding 模型") },
             store = { store },
-            readingScope = ReadingScope.upto(3, Int.MAX_VALUE)
+            readingScope = ReadingScope.upto(3, Int.MAX_VALUE),
+            loadChapter = { fixtureChapter(it) }
         )
         val result = tool.execute(buildJsonObject { put("query", "任意") })
         assertTrue(result.startsWith("查询向量生成失败"))
@@ -168,7 +186,7 @@ class ReaderToolsetToolsTest {
             store = { store },
             readingScope = ReadingScope.upto(3, Int.MAX_VALUE),
             loadChapter = { fixtureChapter(it) },
-            searchChunks = { _, _, _ -> error("HNSW 索引损坏") }
+            searchChunks = { _, _, _, _ -> error("HNSW 索引损坏") }
         )
 
         val result = tool.execute(buildJsonObject { put("query", "西市狼卫") })

@@ -1184,6 +1184,54 @@ class MigrationTest {
         }
     }
 
+    @Test
+    fun migrate26To27KeepsSingleBookHistoryAndAddsEmptyLibraryScope() {
+        helper.createDatabase(DB_NAME, 26).use { db ->
+            db.execSQL("INSERT INTO conversations (id, bookId, title, type, createdAt, updatedAt) VALUES (1, NULL, '已有伴读', 'COMPANION', 1, 2)")
+            db.execSQL("INSERT INTO messages (id, conversationId, role, content, createdAt, clientRoundId) VALUES (1, 1, 'assistant', '已有回复', 2, 'existing-round')")
+        }
+        helper.runMigrationsAndValidate(DB_NAME, 27, true, DatabaseMigrations.Migration26To27).use { db ->
+            db.query("SELECT title, type, bookScopesJson FROM conversations WHERE id=1").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("已有伴读", cursor.getString(0))
+                assertEquals("COMPANION", cursor.getString(1))
+                assertEquals("[]", cursor.getString(2))
+            }
+            db.query("SELECT content, clientRoundId, sourceBookIdsJson FROM messages WHERE id=1").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("已有回复", cursor.getString(0))
+                assertEquals("existing-round", cursor.getString(1))
+                assertTrue(cursor.isNull(2))
+            }
+            db.execSQL("INSERT INTO conversations (id, bookId, title, type, bookScopesJson, createdAt) VALUES (2, NULL, '跨书话题', 'LIBRARY_COMPANION', '[]', 3)")
+            db.execSQL("INSERT INTO messages (id, conversationId, role, content, createdAt, sourceBookIdsJson) VALUES (2, 2, 'user', '闲聊', 3, '[]')")
+            db.query("SELECT sourceBookIdsJson FROM messages WHERE id=2").use { cursor ->
+                assertTrue(cursor.moveToFirst()); assertEquals("[]", cursor.getString(0))
+            }
+        }
+    }
+
+    @Test fun migrate27To28AddsKnowledgeWithoutChangingLibraryHistory() {
+        helper.createDatabase(DB_NAME, 27).use { db ->
+            db.execSQL("INSERT INTO conversations (id, bookId, title, type, createdAt, updatedAt, bookScopesJson) VALUES (1, NULL, '书库历史', 'LIBRARY_COMPANION', 1, 2, '[]')")
+            db.execSQL("INSERT INTO messages (id, conversationId, role, content, createdAt, sourceBookIdsJson) VALUES (1, 1, 'user', '保留提问', 1, '[7]')")
+        }
+        helper.runMigrationsAndValidate(DB_NAME, 28, true, DatabaseMigrations.Migration27To28).use { db ->
+            db.query("SELECT content, sourceBookIdsJson FROM messages WHERE id=1").use { cursor ->
+                assertTrue(cursor.moveToFirst()); assertEquals("保留提问", cursor.getString(0)); assertEquals("[7]", cursor.getString(1))
+            }
+            db.query("SELECT COUNT(*) FROM chapter_knowledge").use { cursor -> assertTrue(cursor.moveToFirst()); assertEquals(0, cursor.getInt(0)) }
+        }
+    }
+
+    @Test fun migrate28To29AddsWholeBookGuidesAndResumableParts() {
+        helper.createDatabase(DB_NAME, 28).close()
+        helper.runMigrationsAndValidate(DB_NAME, 29, true, DatabaseMigrations.Migration28To29).use { db ->
+            db.query("SELECT COUNT(*) FROM book_character_guides").use { cursor -> assertTrue(cursor.moveToFirst()); assertEquals(0, cursor.getInt(0)) }
+            db.query("SELECT COUNT(*) FROM book_character_parts").use { cursor -> assertTrue(cursor.moveToFirst()); assertEquals(0, cursor.getInt(0)) }
+        }
+    }
+
     private companion object {
         const val DB_NAME = "migration-test.db"
     }

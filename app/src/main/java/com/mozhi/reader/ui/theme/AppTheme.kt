@@ -37,7 +37,8 @@ enum class AccentPreset(
 data class AppearanceSettings(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val accent: AccentPreset = AccentPreset.Default,
-    val customAccentArgb: Int? = null
+    val customAccentArgb: Int? = null,
+    val appFont: com.mozhi.reader.core.datastore.ReaderFontAsset? = null
 )
 
 /** 纯函数，便于单测：自定义色优先，否则取预设的日/夜值。 */

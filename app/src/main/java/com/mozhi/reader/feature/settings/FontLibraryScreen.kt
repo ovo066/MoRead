@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -93,7 +94,7 @@ fun FontLibraryScreen(
                     Column(Modifier.weight(1f)) {
                         Text("字体库", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Medium)
                         Text(
-                            "${state.fonts.size} 个字体 · 正文与高亮规则可独立选择",
+                            "${state.fonts.size} 个字体 · 应用界面与阅读正文独立选择",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -112,6 +113,14 @@ fun FontLibraryScreen(
                     contentPadding = PaddingValues(20.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
+                    item {
+                        Column {
+                            Text("应用字体用于书架、设置和伴读界面；不会改变书籍的正文字体。", style = MaterialTheme.typography.bodySmall)
+                            TextButton(onClick = { viewModel.selectForApp(null) }, enabled = state.selectedAppFontId != null && !state.isWorking) {
+                                Text(if (state.selectedAppFontId == null) "应用正在使用默认字体" else "应用字体恢复默认")
+                            }
+                        }
+                    }
                     if (state.fonts.isEmpty()) {
                         item {
                             FrostedSurface(
@@ -139,7 +148,9 @@ fun FontLibraryScreen(
                         FontLibraryRow(
                             font = font,
                             selected = state.selectedBodyFontId == font.id,
+                            appSelected = state.selectedAppFontId == font.id,
                             onSelect = { viewModel.selectForBody(font.id) },
+                            onSelectApp = { viewModel.selectForApp(font.id) },
                             onRename = {
                                 renameTarget = font
                                 renameText = font.displayName
@@ -222,7 +233,7 @@ fun FontLibraryScreen(
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
             title = { Text("删除字体？") },
-            text = { Text("将删除“${font.displayName}”的本地文件；引用它的高亮规则会改为跟随正文。") },
+            text = { Text("将删除“${font.displayName}”的本地文件；使用它的应用/正文字体恢复默认，高亮规则改为跟随正文。") },
             confirmButton = {
                 TextButton(onClick = {
                     viewModel.delete(font)
@@ -238,10 +249,13 @@ fun FontLibraryScreen(
 private fun FontLibraryRow(
     font: ReaderFontAsset,
     selected: Boolean,
+    appSelected: Boolean,
     onSelect: () -> Unit,
+    onSelectApp: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit
 ) {
+    val previewFont = com.mozhi.reader.ui.theme.rememberAppFontFamily(font.filePath)
     FrostedSurface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(22.dp),
@@ -273,7 +287,11 @@ private fun FontLibraryRow(
                     Icon(Icons.Outlined.Check, contentDescription = "当前正文字体", tint = MaterialTheme.colorScheme.primary)
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("墨知 MoRead · 阅读让世界更辽阔 Aa 123", fontFamily = previewFont, style = MaterialTheme.typography.bodyMedium)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedButton(onClick = onSelectApp, enabled = !appSelected) {
+                    Text(if (appSelected) "应用使用中" else "设为应用字体")
+                }
                 OutlinedButton(onClick = onSelect, enabled = !selected) {
                     Text(if (selected) "正文使用中" else "设为正文")
                 }

@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.mozhi.reader.core.datastore.PendingReaderImage
 import com.mozhi.reader.core.datastore.ReaderImageAsset
 import com.mozhi.reader.core.datastore.ReaderImageImporter
+import com.mozhi.reader.core.datastore.ReaderImagePurpose
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
 import com.mozhi.reader.core.library.LibraryRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -54,8 +55,8 @@ class ImageLibraryViewModel @Inject constructor(
         eventChannel.send(ImageLibraryEvent.ConfirmImport(imageImporter.prepare(uri)))
     }
 
-    fun confirmImport(pending: PendingReaderImage, displayName: String) = launchWorking {
-        val asset = imageImporter.confirm(pending, displayName)
+    fun confirmImport(pending: PendingReaderImage, displayName: String, purpose: ReaderImagePurpose) = launchWorking {
+        val asset = imageImporter.confirm(pending, displayName, purpose = purpose)
         eventChannel.send(ImageLibraryEvent.Message("${asset.displayName} 已加入图片库"))
     }
 
@@ -73,13 +74,18 @@ class ImageLibraryViewModel @Inject constructor(
         eventChannel.send(ImageLibraryEvent.Message("图片名称已更新"))
     }
 
+    fun classify(imageId: String, purpose: ReaderImagePurpose) = launchWorking {
+        settingsRepository.setReaderImagePurpose(imageId, purpose)
+        eventChannel.send(ImageLibraryEvent.Message("已归类为${purpose.label}，现有引用不变"))
+    }
+
     fun delete(image: ReaderImageAsset) = launchWorking {
         val settings = settingsRepository.settings.first()
         // 日、夜两套配色各有背景图，任一套在用都不能删。
         val usedAsBackground = settings.backgroundImagePath == image.filePath ||
             settings.selectedBackgroundImageId == image.id ||
             settings.nightSelectedBackgroundImageId == image.id
-        val coverCount = libraryRepository.getBooks().count { it.coverPath == image.filePath }
+        val coverCount = libraryRepository.getBooksIncludingRemoved().count { it.coverPath == image.filePath }
         require(!usedAsBackground && coverCount == 0) {
             buildString {
                 append("图片正在用作")

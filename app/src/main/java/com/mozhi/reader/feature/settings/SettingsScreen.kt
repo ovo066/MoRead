@@ -153,7 +153,7 @@ fun SettingsScreen(
                 MoReadRow(
                     icon = Icons.Outlined.Storage,
                     title = "存储与缓存",
-                    subtitle = state.bookStorageBytes?.let { "书籍已占用 ${formatBytes(it)}" }
+                    subtitle = state.localStorageBytes?.let { "本地数据 ${formatBytes(it)}" }
                         ?: "查看书籍与封面缓存",
                     onClick = onOpenData
                 )
@@ -337,7 +337,7 @@ fun ReadingAppearanceSettingsScreen(
                     onCustomAccent = viewModel::setCustomAccent
                 )
                 MoReadRowDivider()
-                MoReadRow(icon = Icons.Outlined.FontDownload, title = "字体库", subtitle = "阅读字体与语法样式字体", onClick = onOpenFontLibrary)
+                MoReadRow(icon = Icons.Outlined.FontDownload, title = "字体库", subtitle = "应用字体、阅读字体与语法样式", onClick = onOpenFontLibrary)
                 MoReadRowDivider()
                 MoReadRow(icon = Icons.Outlined.PhotoLibrary, title = "图片库", subtitle = "阅读背景与书籍封面素材", onClick = onOpenImageLibrary)
             }
@@ -354,72 +354,6 @@ fun ReadingAppearanceSettingsScreen(
                 }
             }
         }
-    }
-}
-
-@Composable
-fun DataSettingsScreen(
-    onBack: () -> Unit,
-    onOpenBackup: () -> Unit,
-    viewModel: SettingsViewModel = hiltViewModel()
-) {
-    val state by viewModel.uiState.collectAsStateWithLifecycle()
-    val snackbarHostState = remember { SnackbarHostState() }
-    LaunchedEffect(viewModel) {
-        viewModel.events.collect { event ->
-            if (event is SettingsEvent.ShowMessage) snackbarHostState.showSnackbar(event.message)
-        }
-    }
-    Box(Modifier.fillMaxSize()) {
-        MoReadSecondaryPage(title = "存储与数据", onBack = onBack) {
-            item {
-                MoReadSection(title = "本地存储", icon = Icons.Outlined.Storage) {
-                    MoReadRow(
-                        icon = Icons.AutoMirrored.Outlined.MenuBook,
-                        title = "书籍存储",
-                        subtitle = state.bookStorageBytes?.let { "已占用 ${formatBytes(it)}" } ?: "统计中…"
-                    )
-                    // 分项说明体积去了哪里：导入精排 EPUB 会保留原书副本、抽出插图并生成精排数据，
-                    // 落盘体积高于 EPUB 本身是预期行为，不是统计口径出了错。
-                    state.bookStorageBreakdown?.let { breakdown ->
-                        MoReadRowDivider()
-                        MoReadRow(
-                            icon = Icons.Outlined.Storage,
-                            title = "其中",
-                            subtitle = listOf(
-                                "原书文件 ${formatBytes(breakdown.originalFilesBytes)}",
-                                "正文 ${formatBytes(breakdown.textBytes)}",
-                                "插图 ${formatBytes(breakdown.mediaBytes)}",
-                                "精排数据与字体 ${formatBytes(breakdown.layoutBytes)}"
-                            ).joinToString(" · ")
-                        )
-                    }
-                    MoReadRowDivider()
-                    MoReadRow(
-                        icon = Icons.Outlined.Image,
-                        title = "AI 插图",
-                        subtitle = state.aiIllustrationBytes?.let { "已占用 ${formatBytes(it)}" } ?: "统计中…"
-                    )
-                    MoReadRowDivider()
-                    MoReadRow(
-                        icon = Icons.Outlined.Image,
-                        title = "封面缓存",
-                        subtitle = state.coverCacheBytes?.let { "已占用 ${formatBytes(it)}" } ?: "统计中…",
-                        trailing = {
-                            MoReadRowAction(
-                                text = "清理",
-                                onClick = viewModel::clearCoverCache,
-                                enabled = (state.coverCacheBytes ?: 0L) > 0L
-                            )
-                        }
-                    )
-                    MoReadRowDivider()
-                    MoReadRow(icon = Icons.Outlined.CloudSync, title = "数据备份", subtitle = "本地、WebDAV 与自动备份", onClick = onOpenBackup)
-                }
-            }
-        }
-        if (state.isWorking) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
-        SnackbarHost(snackbarHostState, Modifier.align(Alignment.BottomCenter).padding(20.dp))
     }
 }
 

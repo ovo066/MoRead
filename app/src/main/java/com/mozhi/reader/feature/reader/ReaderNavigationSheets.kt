@@ -59,10 +59,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -108,7 +110,8 @@ internal fun ContentsSheet(
     onChapterClick: (Int, String) -> Unit
 ) {
     val tocItems = remember(chapters, tocEntries) { buildReaderTocItems(chapters, tocEntries) }
-    var collapsedOrderIndices by remember { mutableStateOf(emptySet<Int>()) }
+    var collapsedOrders by rememberSaveable { mutableStateOf(emptyList<Int>()) }
+    val collapsedOrderIndices = collapsedOrders.toSet()
     val visibleItems = remember(tocItems, collapsedOrderIndices) {
         visibleReaderTocItems(tocItems, collapsedOrderIndices)
     }
@@ -196,7 +199,8 @@ internal fun ContentsSheet(
             modifier = Modifier
                 .weight(1f)
                 .navigationBarsPadding()
-                .blockSheetDrag(listState),
+                .blockSheetDrag(listState)
+                .testTag("contents-list"),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(
                 start = 10.dp,
                 end = 10.dp,
@@ -211,7 +215,7 @@ internal fun ContentsSheet(
                     onClick = {
                         when {
                             item.chapterIndex != null -> onChapterClick(item.chapterIndex, item.href)
-                            item.hasChildren -> collapsedOrderIndices = collapsedOrderIndices.toggle(item.orderIndex)
+                            item.hasChildren -> collapsedOrders = collapsedOrderIndices.toggle(item.orderIndex).toList()
                         }
                     },
                     shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
@@ -291,7 +295,7 @@ internal fun ContentsSheet(
                         if (item.hasChildren) {
                             IconButton(
                                 onClick = {
-                                    collapsedOrderIndices = collapsedOrderIndices.toggle(item.orderIndex)
+                                    collapsedOrders = collapsedOrderIndices.toggle(item.orderIndex).toList()
                                 },
                                 modifier = Modifier.size(32.dp)
                             ) {

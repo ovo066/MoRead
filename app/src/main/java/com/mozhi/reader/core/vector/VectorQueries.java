@@ -17,11 +17,14 @@ import io.objectbox.query.QueryCondition;
  *
  * ObjectBox 的近邻查询是「先找 N 个近邻、再套其他条件」：过滤条件（防剧透章节上限、
  * bookId、personaId）可能把候选集全部滤掉。这里自适应扩大候选数直到凑够 topK 或
- * 穷尽（上限 {@link #MAX_FETCH}），保证已读范围内的结果不会被后文挤出。
+ * 达到预算（上限 {@link #MAX_FETCH}）。小范围直接做精确余弦排序，避免章节筛选被全库近邻挤空；
+ * 大范围仍是有界近似召回，不承诺穷举。
  */
 public final class VectorQueries {
 
     private static final int MAX_FETCH = 4096;
+    /** At 1024 dimensions this bounds copied vector payloads to about 2 MiB per narrow search. */
+    private static final int MAX_EXACT_SCOPE_CHUNKS = 512;
 
     private VectorQueries() {
     }
@@ -37,14 +40,61 @@ public final class VectorQueries {
             int topK,
             int maxChapterIndex
     ) {
+        return searchChunks(store, bookId, queryVector, topK, 0, maxChapterIndex);
+    }
+
+    public static List<ObjectWithScore<BookChunk>> searchChunks(
+            BoxStore store, long bookId, float[] queryVector, int topK,
+            int minChapterIndex, int maxChapterIndex
+    ) {
+        if (minChapterIndex > maxChapterIndex || topK <= 0) return java.util.Collections.emptyList();
         Box<BookChunk> box = store.boxFor(BookChunk.class);
+        QueryCondition<BookChunk> scope = BookChunk_.bookId.equal(bookId)
+                .and(BookChunk_.chapterIndex.between(Math.max(0, minChapterIndex), maxChapterIndex));
+        Query<BookChunk> scoped = box.query(scope).build();
+        try {
+            if (scoped.count() <= MAX_EXACT_SCOPE_CHUNKS) {
+                return rankExactChunks(scoped.find(), queryVector, topK);
+            }
+        } finally {
+            scoped.close();
+        }
         return adaptiveSearch(box.count(), topK, fetchCount -> box
                 .query(
                         BookChunk_.embedding.nearestNeighbors(queryVector, fetchCount)
-                                .and(BookChunk_.bookId.equal(bookId))
-                                .and(BookChunk_.chapterIndex.lessOrEqual(maxChapterIndex))
+                                .and(scope)
                 )
                 .build());
+    }
+
+    private static List<ObjectWithScore<BookChunk>> rankExactChunks(List<BookChunk> chunks, float[] query, int topK) {
+        if (query == null || query.length != VectorDb.EMBEDDING_DIMENSIONS) {
+            throw new IllegalArgumentException("Invalid query embedding dimensions");
+        }
+        double queryNorm = 0;
+        for (float value : query) {
+            if (!Float.isFinite(value)) throw new IllegalArgumentException("Non-finite query embedding");
+            queryNorm += (double) value * value;
+        }
+        if (queryNorm == 0) throw new IllegalArgumentException("Zero query embedding");
+        List<ObjectWithScore<BookChunk>> result = new ArrayList<>();
+        for (BookChunk chunk : chunks) {
+            float[] vector = chunk.embedding;
+            if (vector == null || vector.length != query.length) continue;
+            double dot = 0, norm = 0;
+            for (int i = 0; i < query.length; i++) {
+                dot += (double) query[i] * vector[i];
+                norm += (double) vector[i] * vector[i];
+            }
+            if (norm <= 0 || !Double.isFinite(norm) || !Double.isFinite(dot)) continue;
+            double distance = Math.max(0.0, Math.min(2.0, 1.0 - dot / Math.sqrt(queryNorm * norm)));
+            result.add(new ObjectWithScore<>(chunk, distance));
+        }
+        result.sort(Comparator.comparingDouble((ObjectWithScore<BookChunk> hit) -> hit.getScore())
+                .thenComparingInt(hit -> hit.get().chapterIndex)
+                .thenComparingInt(hit -> hit.get().chunkIndex)
+                .thenComparingLong(hit -> hit.get().id));
+        return result.size() > topK ? new ArrayList<>(result.subList(0, topK)) : result;
     }
 
     /** 角色记忆检索，按 personaId 隔离。返回最多 topK 条。 */
@@ -223,6 +273,17 @@ public final class VectorQueries {
         Query<MemoryEntry> query = store.boxFor(MemoryEntry.class)
                 .query(MemoryEntry_.conversationId.equal(conversationId))
                 .build();
+        try {
+            query.remove();
+        } finally {
+            query.close();
+        }
+    }
+
+    /** Permanent book deletion must also remove book-scoped memories without a conversation. */
+    public static void removeMemoriesForBook(BoxStore store, long bookId) {
+        Query<MemoryEntry> query = store.boxFor(MemoryEntry.class)
+                .query(MemoryEntry_.bookId.equal(bookId)).build();
         try {
             query.remove();
         } finally {

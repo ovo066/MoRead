@@ -270,6 +270,7 @@ class EmbeddingProgressTracker @Inject constructor(
     }
 
     suspend fun enable(bookId: Long) {
+        require(libraryRepository.getBook(bookId)?.removedAt == 0L) { "正文已移除，不能为保留的记录建立索引" }
         settingsStore.setEnabled(bookId, true)
         retry(bookId)
     }
@@ -282,6 +283,7 @@ class EmbeddingProgressTracker @Inject constructor(
     }
 
     suspend fun rebuild(bookId: Long) {
+        require(libraryRepository.getBook(bookId)?.removedAt == 0L) { "正文已移除，不能重建索引" }
         settingsStore.setEnabled(bookId, true)
         // 清空只在这里做一次，不能交给 Worker：Worker 失败会重试，写在里面的清理会被
         // 重放成「建到一半就清零」的死循环。

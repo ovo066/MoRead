@@ -76,7 +76,8 @@ internal fun CompanionComposer(
     palette: ReaderPalette,
     onSend: () -> Unit,
     onStop: () -> Unit,
-    placeholder: String = "问角色，也可以聊你的感受…"
+    placeholder: String = "问角色，也可以聊你的感受…",
+    enabled: Boolean = true
 ) {
     var panelExpanded by remember { mutableStateOf(false) }
     val plusRotation by animateFloatAsState(
@@ -84,7 +85,7 @@ internal fun CompanionComposer(
         animationSpec = tween(180),
         label = "composer-plus"
     )
-    val canSend = input.isNotBlank() || attachments.isNotEmpty()
+    val canSend = enabled && (input.isNotBlank() || attachments.isNotEmpty())
 
     Column(
         modifier = Modifier

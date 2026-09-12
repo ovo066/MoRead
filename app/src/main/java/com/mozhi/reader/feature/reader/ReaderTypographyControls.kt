@@ -625,20 +625,20 @@ internal fun FontPage(
         }
     }
     if (settings.fontLibrary.isNotEmpty()) {
-        Text("已导入", style = MaterialTheme.typography.labelMedium, color = palette.muted)
-        @OptIn(ExperimentalLayoutApi::class)
-        FlowRow(
+        Text("已导入字体 · 滑动预览", style = MaterialTheme.typography.labelMedium, color = palette.muted)
+        LazyRow(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(7.dp),
-            verticalArrangement = Arrangement.spacedBy(7.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            settings.fontLibrary.forEach { font ->
-                SegChip(
-                    text = font.displayName,
+            items(settings.fontLibrary, key = { it.id }) { font ->
+                com.mozhi.reader.ui.components.FontPreviewChoice(
+                    font = font,
                     selected = settings.font == ReaderFont.CUSTOM &&
                         settings.selectedCustomFontId == font.id,
-                    palette = palette
-                ) { actions.onCustomFontSelect(font.id) }
+                    onClick = { actions.onCustomFontSelect(font.id) },
+                    background = palette.background, foreground = palette.onBackground,
+                    accent = palette.accent, outline = palette.glassBorder
+                )
             }
         }
     }
@@ -766,7 +766,8 @@ internal fun ThemePage(
                     onClick = { actions.onClearBackground(slot) }
                 )
             }
-            items(settings.imageLibrary, key = { it.id }) { image ->
+            items(settings.imageLibrary.filter { it.purpose != com.mozhi.reader.core.datastore.ReaderImagePurpose.COVER || it.id == backgroundId }
+                .sortedBy { if (it.purpose == com.mozhi.reader.core.datastore.ReaderImagePurpose.BACKGROUND) 0 else 1 }, key = { it.id }) { image ->
                 BackgroundChoice(
                     name = image.displayName,
                     imagePath = image.filePath,

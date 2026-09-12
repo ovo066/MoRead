@@ -339,11 +339,12 @@ internal fun SyntaxRuleEditorDialog(
                     )
                 }
                 Text("字体", style = MaterialTheme.typography.labelMedium)
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(7.dp)
                 ) {
-                    ReaderSyntaxFont.entries.filter { it != ReaderSyntaxFont.CUSTOM }.forEach { candidate ->
+                    items(ReaderSyntaxFont.entries.filter { it != ReaderSyntaxFont.CUSTOM }, key = { "builtin-${it.name}" }) { candidate ->
                         FilterChip(
                             selected = syntaxFont == candidate,
                             onClick = {
@@ -353,15 +354,15 @@ internal fun SyntaxRuleEditorDialog(
                             label = { Text(candidate.shortLabel()) }
                         )
                     }
-                    fontLibrary.forEach { font ->
-                        FilterChip(
+                    items(fontLibrary, key = { it.id }) { font ->
+                        com.mozhi.reader.ui.components.FontPreviewChoice(
+                            font = font,
                             selected = syntaxFont == ReaderSyntaxFont.CUSTOM &&
                                 syntaxFontAssetId == font.id,
                             onClick = {
                                 syntaxFont = ReaderSyntaxFont.CUSTOM
                                 syntaxFontAssetId = font.id
-                            },
-                            label = { Text(font.displayName) }
+                            }
                         )
                     }
                 }

@@ -18,6 +18,7 @@ class ProactiveAnnotationSchedulerWorkerTest {
     private class Ledger : ProactiveAnnotationJobDao {
         val rows = linkedMapOf<Long, ProactiveAnnotationJobEntity>()
         var dailyCount = 0
+        override suspend fun deleteForBook(bookId: Long) { rows.entries.removeAll { it.value.bookId == bookId } }
         override suspend fun find(bookId: Long, chapterIndex: Int, personaId: Long, revision: String) =
             rows.values.firstOrNull { it.bookId == bookId && it.chapterIndex == chapterIndex && it.personaId == personaId && it.sourceRevision == revision }
         override suspend fun insert(job: ProactiveAnnotationJobEntity): Long {

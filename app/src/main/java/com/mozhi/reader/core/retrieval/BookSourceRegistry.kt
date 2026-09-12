@@ -13,7 +13,9 @@ class BookSourceRegistry(private val maxCursors: Int = 64, private val maxSource
         val normalize: Boolean,
         val contextChars: Int,
         val skip: Int,
-        val coverageSignature: String
+        val coverageSignature: String,
+        val firstChapterIndex: Int = 0,
+        val requestedToChapter: Int? = null
     )
 
     data class Source(

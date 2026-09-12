@@ -1,9 +1,15 @@
 package com.mozhi.reader.feature.reader
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -19,6 +25,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -31,6 +38,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import coil3.compose.AsyncImage
 import com.mozhi.reader.core.database.entity.ConversationEntity
 import com.mozhi.reader.core.database.entity.MessageEntity
@@ -181,48 +189,52 @@ internal fun EditCompanionMessageDialog(
     onConfirm: (MessageEntity, String) -> Unit
 ) {
     message ?: return
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(if (message.role == "user") "编辑并重新发送" else "编辑 AI 消息") },
-        text = {
-            Column {
+    // A bounded editor avoids AlertDialog's intrinsic text measurement competing with a
+    // multiline text field. It also leaves a predictable scrollable area when the IME opens.
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth(0.9f), shape = MaterialTheme.shapes.extraLarge) {
+            Column(Modifier.heightIn(max = 560.dp).verticalScroll(rememberScrollState()).padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Text(if (message.role == "user") "编辑并重新发送" else "编辑 AI 消息", style = MaterialTheme.typography.headlineSmall)
                 OutlinedTextField(
                     value = text,
                     onValueChange = onTextChange,
-                    minLines = 3,
-                    maxLines = 10,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().height(180.dp)
                 )
                 if (message.role == "user") {
                     Text(
                         "保存后会从这条消息重新生成，当前分支中它后面的内容会移除。需要保留时请先开分支。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 8.dp)
                     )
                 }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) { Text("取消") }
+                    TextButton(onClick = { onConfirm(message, text) }, enabled = text.isNotBlank()) { Text("保存") }
+                }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = { onConfirm(message, text) }, enabled = text.isNotBlank()) {
-                Text("保存")
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
-    )
+        }
+    }
 }
 
 @Composable
 internal fun CompanionImagePreviewDialog(path: String?, onDismiss: () -> Unit) {
     path ?: return
     Dialog(onDismissRequest = onDismiss) {
+        androidx.compose.material3.Surface(shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp)) {
+        Column(Modifier.fillMaxWidth().heightIn(max = 720.dp)) {
         AsyncImage(
             model = File(path),
             contentDescription = "插图预览",
             contentScale = ContentScale.Fit,
             modifier = Modifier
+                .weight(1f, fill = false)
                 .fillMaxWidth()
                 .clickable(onClick = onDismiss)
         )
+        com.mozhi.reader.ui.components.ImageExportActions(path, Modifier.padding(horizontal = 12.dp))
+        TextButton(onClick = onDismiss) { Text("关闭") }
+        }
+        }
     }
 }

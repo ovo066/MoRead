@@ -266,12 +266,13 @@ internal class ListAnnotationsTool(
     private val annotations: AnnotationRepository,
     private val bookId: Long,
     private val currentPersonaId: Long?,
-    private val readingScope: ReadingScope
+    private val readingScope: ReadingScope,
+    private val strictSourceScope: Boolean = false
 ) : AgentTool {
     override val displayName: String = "查看划线批注"
     override val spec = ToolSpec(
         name = "list_annotations",
-        description = "读取用户和伴读角色已有的划线批注；讨论划线或新增批注前先调用，避免重复标注。",
+        description = "读取用户和 AI 伴读已有的划线批注；用户说‘我的划线’时 author=user，查看 AI 批注时 author=companion，不得把 AI 批注当作用户观点。讨论划线或新增批注前先调用，避免重复标注。",
         parameters = buildJsonObject {
             put("type", "object")
             putJsonObject("properties") {
@@ -298,6 +299,7 @@ internal class ListAnnotationsTool(
         val rows = annotations.getForChapterRange(bookId, from - 1, to - 1)
             .filter { row ->
                 com.mozhi.reader.core.retrieval.AnnotationVisibility.isVisible(row, readingScope)
+                    && (!strictSourceScope || readingScope.allowsChunk(row.chapterIndex, row.startCharOffset, row.endCharOffset))
             }
         val counts = annotations.getReplyCounts(rows.map { it.id })
         return formatAnnotationList(book.title, from, to, rows, counts, author, query, currentPersonaId)
@@ -344,7 +346,8 @@ internal class ListNotesTool(
     private val notes: NoteRepository,
     private val bookId: Long,
     private val currentPersonaId: Long?,
-    private val readingScope: ReadingScope
+    private val readingScope: ReadingScope,
+    private val strictSourceScope: Boolean = false
 ) : AgentTool {
     override val displayName: String = "查看笔记与梗概"
     override val spec = ToolSpec(
@@ -366,15 +369,28 @@ internal class ListNotesTool(
         if (noteId != null) {
             val note = notes.getNote(noteId) ?: return "未找到第 $noteId 条笔记"
             if (note.bookId != bookId) return "第 $noteId 条笔记不属于当前书籍"
-            if (!note.visibleIn(readingScope)) return "第 $noteId 条笔记产生于当前阅读水位之外，防剧透模式下不可读取。"
+            if (!note.visibleIn(readingScope) || (strictSourceScope && !note.withinLibraryScope(readingScope))) return "第 $noteId 条笔记产生于当前阅读水位之外，防剧透模式下不可读取。"
             val start = (arguments.int("start_char") ?: 0).coerceAtLeast(0)
             val maxChars = (arguments.int("max_chars") ?: DEFAULT_NOTE_READ_CHARS).coerceIn(1_000, MAX_NOTE_READ_CHARS)
             return formatNoteContent(note, start, maxChars, currentPersonaId)
         }
         val kind = arguments.text("kind").lowercase().ifBlank { "all" }
         if (kind !in setOf("note", "plot_summary", "all")) return "kind 只能是 note、plot_summary 或 all"
-        return formatNoteIndex(notes.getForBook(bookId).filter { it.visibleIn(readingScope) }, kind, currentPersonaId)
+        return formatNoteIndex(notes.getForBook(bookId).filter { it.visibleIn(readingScope) && (!strictSourceScope || it.withinLibraryScope(readingScope)) }, kind, currentPersonaId)
     }
+}
+
+internal fun NoteEntity.withinLibraryScope(scope: ReadingScope): Boolean {
+    if (sourceScopeChapterIndex != null || sourceScopeCharOffset != null) {
+        return sourceScopeChapterIndex != null && sourceScopeCharOffset != null &&
+            sourceScopeChapterIndex >= 0 && sourceScopeCharOffset >= 0 &&
+            scope.allowsPosition(sourceScopeChapterIndex, sourceScopeCharOffset)
+    }
+    // Unanchored handwritten notes are supplied by the user, never advertised as source evidence.
+    if (personaId == null) return relatedChapterIndex?.let {
+        it >= 0 && scope.allowsPosition(it, relatedCharOffset ?: Int.MAX_VALUE)
+    } ?: true
+    return false
 }
 
 

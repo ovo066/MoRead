@@ -4,7 +4,10 @@ import com.mozhi.reader.core.epub.css.CssParser
 import com.mozhi.reader.core.epub.css.CssRule
 import com.mozhi.reader.core.epub.dom.EpubDomNode
 import com.mozhi.reader.core.epub.style.EpubLayoutCapabilityAnalyzer
+import com.mozhi.reader.core.epub.style.EpubDisplay
+import com.mozhi.reader.core.epub.style.EpubFloatValue
 import com.mozhi.reader.core.epub.style.EpubStyleResolver
+import com.mozhi.reader.core.epub.style.ResolvedLength
 import com.mozhi.reader.core.epub.style.StyledDomNode
 import com.mozhi.reader.core.library.EpubLayoutChapterBundle
 import com.mozhi.reader.core.library.EpubStylesheetText
@@ -15,6 +18,7 @@ import com.mozhi.reader.feature.reader.engine.TextChapter
 import com.mozhi.reader.feature.reader.engine.TextLine
 import com.mozhi.reader.feature.reader.engine.TextMeasure
 import com.mozhi.reader.feature.reader.engine.TypesetSpec
+import java.util.IdentityHashMap
 
 /**
  * V2 entry point: raw CSS is cascaded against the persisted DOM at layout time, then a real box
@@ -38,13 +42,14 @@ internal class EpubTypesetterV2(
         cancellationCheck()
         // 样式表按本章 <link> 清单过滤：log.css 这类局部样式不得污染普通章节。
         val linked = bundle.document.stylesheetHrefs
+        val availableStylesheets = bundle.stylesheets + dom.embeddedStylesheets
         val stylesheets = if (linked.isEmpty()) {
-            bundle.stylesheets
+            availableStylesheets
         } else {
-            linked.mapNotNull { href -> bundle.stylesheets.firstOrNull { it.href.equals(href, true) } }
-                .ifEmpty { bundle.stylesheets }
+            linked.mapNotNull { href -> availableStylesheets.firstOrNull { it.href.equals(href, true) } }
+                .ifEmpty { availableStylesheets }
         }
-        val styledRoot = EpubStyleResolver(
+        val publisherRoot = EpubStyleResolver(
             stylesheets = stylesheets,
             viewportWidthPx = spec.visibleWidth,
             viewportHeightPx = spec.visibleHeight,
@@ -54,6 +59,8 @@ internal class EpubTypesetterV2(
             preParsedPublisherRules = cachedRules(stylesheets),
             documentHref = bundle.document.href
         ).resolve(dom.bodyNode)
+        val immersive = bundle.document.immersivePage || isBackgroundArtwork(publisherRoot)
+        val styledRoot = applyReaderPaper(publisherRoot, immersive)
         cancellationCheck()
         val ctx = EpubLayoutContext(
             spec = spec,
@@ -62,7 +69,7 @@ internal class EpubTypesetterV2(
             bundle = bundle,
             inlineMarkers = inlineMarkers,
             cancellationCheck = cancellationCheck,
-            immersivePage = bundle.document.immersivePage,
+            immersivePage = immersive,
             dominantBodyFamily = dominantBodyFamily(styledRoot)
         )
         ctx.imageSources = inlineImages.associateBy(InlineImageSource::charOffset)
@@ -70,7 +77,6 @@ internal class EpubTypesetterV2(
         val capability = EpubLayoutCapabilityAnalyzer.analyze(styledRoot)
         val boxTree = EpubBoxTreeBuilder.build(styledRoot)
         val output = EpubBlockLayout(ctx).layout(boxTree)
-        markCanvasDecorations(output)
         val fullPageArtwork = fitImmersiveArtwork(ctx, output)
         val hideHeader = firstPageHidesReaderHeader(dom.bodyNode)
         val builder = EpubPageBuilder(ctx)
@@ -84,6 +90,18 @@ internal class EpubTypesetterV2(
             layoutCapability = capability,
             fullPageArtwork = fullPageArtwork
         )
+    }
+
+    private fun isBackgroundArtwork(root: StyledDomNode): Boolean {
+        fun hasVisibleContent(node: StyledDomNode): Boolean {
+            if (node.style.display == EpubDisplay.NONE) return false
+            return node.node.children.any { it.tag == "#text" && it.textStart >= 0 && it.textEnd > it.textStart } ||
+                node.children.any(::hasVisibleContent)
+        }
+        fun hasBackgroundImage(node: StyledDomNode): Boolean =
+            node.style.display != EpubDisplay.NONE &&
+                (node.style.background.imageHref != null || node.children.any(::hasBackgroundImage))
+        return !hasVisibleContent(root) && hasBackgroundImage(root)
     }
 
     /**
@@ -132,20 +150,39 @@ internal class EpubTypesetterV2(
         return true
     }
 
-    /**
-     * A borderless decoration covering essentially the whole chapter is the publisher's canvas:
-     * it must yield to a user-selected paper (DECISIONS 2026-08-25).
-     */
-    private fun markCanvasDecorations(output: FlowOutput) {
-        val totalHeight = output.lines.maxOfOrNull { it.line.lineBottom } ?: return
-        output.decorations.forEach { entry ->
-            val decoration = entry.decoration
-            val fullWidth = decoration.right - decoration.left >= spec.visibleWidth * MIN_CANVAS_FRACTION
-            val fullHeight = decoration.bottom - decoration.top >= totalHeight * MIN_CANVAS_FRACTION
-            val borderless = decoration.borderTopWidth <= 0f && decoration.borderRightWidth <= 0f &&
-                decoration.borderBottomWidth <= 0f && decoration.borderLeftWidth <= 0f
-            if (fullWidth && fullHeight && borderless) entry.isCanvas = true
+    /** Remove page paper before layout, so text contrast uses the background actually painted. */
+    private fun applyReaderPaper(root: StyledDomNode, immersive: Boolean): StyledDomNode {
+        // Persisted element nodes have no own character range; only text/image leaves do.
+        val ranges = IdentityHashMap<EpubDomNode, IntRange?>()
+        fun indexRange(node: EpubDomNode): IntRange? {
+            var start = node.textStart.takeIf { it >= 0 && node.textEnd > it } ?: Int.MAX_VALUE
+            var end = node.textEnd.takeIf { start != Int.MAX_VALUE } ?: -1
+            node.children.forEach { child ->
+                indexRange(child)?.let { range ->
+                    start = minOf(start, range.first)
+                    end = maxOf(end, range.last + 1)
+                }
+            }
+            return (if (end > start) start until end else null).also { ranges[node] = it }
         }
+        val chapterRange = indexRange(root.node)
+        fun visit(node: StyledDomNode): StyledDomNode {
+            val style = node.style
+            val fullChapter = chapterRange != null && ranges[node.node] == chapterRange
+            val plainWrapper = node.node.tag in CANVAS_TAGS && fullChapter &&
+                node.children.any { it.style.display == EpubDisplay.BLOCK } &&
+                style.float == EpubFloatValue.NONE && !style.hasBorder() &&
+                style.borderRadii.all { it == ResolvedLength.Px(0f) } && style.boxShadows.isEmpty() &&
+                (style.width == ResolvedLength.Auto ||
+                    (style.width as? ResolvedLength.Percent)?.value?.let { it >= 90f } == true)
+            val paper = node === root || plainWrapper
+            val preserveArtwork = immersive || node !== root && style.background.imageHref != null
+            val background = if (paper && !preserveArtwork) {
+                style.background.copy(colorArgb = null)
+            } else style.background
+            return node.copy(style = style.copy(background = background), children = node.children.map(::visit))
+        }
+        return visit(root)
     }
 
     /** 正文自带明确的章标题（chapter/title/heading 标记）时首页隐藏阅读器页眉。 */
@@ -188,7 +225,7 @@ internal class EpubTypesetterV2(
     }
 
     private companion object {
-        const val MIN_CANVAS_FRACTION = 0.9f
+        val CANVAS_TAGS = setOf("div", "section", "main", "article")
         val HEADING_TAGS = setOf("h1", "h2", "h3", "h4", "h5", "h6")
 
         /** Parsed publisher stylesheets, keyed by content, shared across chapters and re-typesets. */

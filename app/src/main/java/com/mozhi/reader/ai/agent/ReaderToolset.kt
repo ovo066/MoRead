@@ -78,7 +78,8 @@ class ReaderToolset @Inject constructor(
     private val embeddingScheduler: BookEmbeddingScheduler,
     private val embeddingSettingsStore: BookEmbeddingSettingsStore,
     private val webSearchService: WebSearchService,
-    private val settingsRepository: ReaderSettingsRepository
+    private val settingsRepository: ReaderSettingsRepository,
+    private val reranker: ConfiguredChunkReranker
 ) {
     private val sourceRegistry = BookSourceRegistry()
 
@@ -88,7 +89,8 @@ class ReaderToolset @Inject constructor(
         conversationId: Long? = null,
         enabledTools: Collection<String>? = null,
         readingScope: ReadingScope,
-        memoryScope: MemoryScope = MemoryScope()
+        memoryScope: MemoryScope = MemoryScope(),
+        buildMissingIndex: Boolean = true
     ): List<AgentTool> {
         val embedQuery: suspend (String) -> FloatArray = { query ->
             val resolved = clientFactory.get().forRole(ModelRole.EMBEDDING)
@@ -138,7 +140,10 @@ class ReaderToolset @Inject constructor(
                     embedQuery = embedQuery,
                     store = { vectorStore.get() },
                     requestIndex = { embeddingScheduler.enqueueForBook(bookId) },
+                    canRequestIndex = buildMissingIndex,
                     indexingEnabled = { embeddingSettingsStore.isEnabled(bookId) },
+                    reranker = reranker,
+                    sourceRevision = getRevision,
                     readingScope = readingScope
                 )
             )
@@ -924,9 +929,12 @@ internal class SearchBookTool(
     private val loadChaptersThrough: suspend (Int) -> List<ChapterDocument> = { emptyList() },
     private val requestIndex: () -> Unit = {},
     private val indexingEnabled: suspend () -> Boolean = { true },
-    private val searchChunks: (FloatArray, Int, Int) -> List<ObjectWithScore<BookChunk>> =
-        { vector, recallDepth, maxChapterIndex ->
-            VectorQueries.searchChunks(store(), bookId, vector, recallDepth, maxChapterIndex)
+    private val canRequestIndex: Boolean = true,
+    private val reranker: com.mozhi.reader.core.retrieval.ChunkReranker? = null,
+    private val sourceRevision: (suspend () -> String)? = null,
+    private val searchChunks: (FloatArray, Int, Int, Int) -> List<ObjectWithScore<BookChunk>> =
+        { vector, recallDepth, minChapterIndex, maxChapterIndex ->
+            VectorQueries.searchChunks(store(), bookId, vector, recallDepth, minChapterIndex, maxChapterIndex)
         }
 ) : AgentTool {
     override val displayName: String = "检索书中原文"
@@ -935,12 +943,15 @@ internal class SearchBookTool(
         description = "在允许的阅读范围内用向量与 BM25 混合检索人物、场景、情节；支持自然语言、错名和同义改述，不要强制改用字面工具。" +
             "返回待核验的相关证据，不验证问题前提、不承诺穷举；BM25 是词项相关而非整串命中。" +
             "纯数字、已知引文的精确定位和字面计数优先用 grep_book；明确章节概括用 read_book_section。" +
+            "可用 from_chapter/to_chapter 限定章节；只查某一章时两端填同一章号，实际范围仍受阅读水位限制。" +
             "无候选不证明事实不存在，排名不是事实成立概率。不能凭 top-k 或关键词数量声称列全所有事件。",
         parameters = buildJsonObject {
             put("type", "object")
             putJsonObject("properties") {
                 putJsonObject("query") { put("type", "string"); put("description", "用自然语言描述人物、场景或情节，最多 512 字符") }
                 putJsonObject("top_k") { put("type", "integer"); put("description", "候选片段数，1-8，默认 5") }
+                putJsonObject("from_chapter") { put("type", "integer"); put("description", "起始章节号（从 1 开始），默认第 1 章") }
+                putJsonObject("to_chapter") { put("type", "integer"); put("description", "结束章节号（包含），默认可读末章；超出阅读进度会截断") }
                 putJsonObject("sort") {
                     put("type", "string")
                     putJsonArray("enum") { add(JsonPrimitive("chapter")); add(JsonPrimitive("relevance")) }
@@ -953,11 +964,11 @@ internal class SearchBookTool(
 
     override suspend fun execute(arguments: JsonObject): String = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
         kotlinx.coroutines.withTimeoutOrNull(15_000) { executeLocal(arguments) }
-            ?: "检索达到本地时间上限，正文覆盖未完成；请缩短查询后重试，不能据此断言没有匹配。"
+            ?: "检索达到本地时间上限，正文覆盖未完成；请缩小章节范围或缩短查询后重试，不能据此断言没有匹配。"
     }
 
     private suspend fun executeLocal(arguments: JsonObject): String {
-        val scope = readingScope.intersect(currentScope())
+        val allowed = readingScope.intersect(currentScope())
         val query = (arguments["query"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
         if (query.isEmpty()) return "缺少检索词 query"
         if (query.length > 512) return "检索词 query 过长，最多 512 字符"
@@ -968,8 +979,18 @@ internal class SearchBookTool(
             else -> return "sort 无效，只支持 chapter 或 relevance"
         }
         val book = getBook() ?: return "未找到当前书籍"
+        if (book.removedAt > 0L) return "本书正文已移除，当前仅保留个人记录，不能检索原文。"
+        val range = try { parseChapterSearchBounds(arguments).resolve(book.totalChapters, allowed) }
+            catch (error: IllegalArgumentException) { return error.message ?: "章节范围无效" }
+        val scope = range.scope
         val maxChapterIndex = scope.clampLastChapter(book.totalChapters)
-        val corpus = loadReadableCorpus(bookId, book.totalChapters, scope, loadChapter, loadChaptersThrough)
+        val revision = sourceRevision?.invoke()
+        val corpus = loadReadableCorpus(bookId, book.totalChapters, scope, loadChapter, loadChaptersThrough, range.firstIndex)
+        suspend fun validateSource() {
+            check(getBook()?.removedAt == 0L) { "书籍正文已移除，请重新检索" }
+            check(currentScope().contains(scope)) { "已读范围已变化，请重新检索" }
+            check(sourceRevision?.invoke() == revision) { "正文已变化，请重新检索" }
+        }
         var indexFailure: Throwable? = null
         val allowVectorIndex = try { indexingEnabled() }
         catch (cancelled: CancellationException) { throw cancelled }
@@ -982,23 +1003,23 @@ internal class SearchBookTool(
             indexFailure = VectorIndexQueryException(error)
             emptySet()
         }
-        val hasIndexInRange = indexedChapters.any { it <= maxChapterIndex }
+        val hasIndexInRange = indexedChapters.any { it in range.firstIndex..maxChapterIndex }
         var scheduleFailure = false
-        if (allowVectorIndex && indexFailure == null && !hasIndexInRange) {
+        if (allowVectorIndex && indexFailure == null && !hasIndexInRange && canRequestIndex) {
             try { requestIndex() } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { scheduleFailure = true }
         }
         val pipeline = RetrievalPipeline(
             vectorRecall = RetrievalRecall { request ->
                 indexFailure?.let { throw it }
-                if (!allowVectorIndex || !hasIndexInRange) return@RetrievalRecall emptyList()
+                if (!allowVectorIndex || !hasIndexInRange || corpus.candidates.isEmpty()) return@RetrievalRecall emptyList()
                 val vector = embedQuery(request.query)
                 var depth = request.recallDepth
                 var accepted: List<RetrievalCandidate>
                 // Bounded replenishment after the strict current-chapter offset gate; embed only once.
                 while (true) {
                     kotlinx.coroutines.currentCoroutineContext().ensureActive()
-                    val hits = try { searchChunks(vector, depth, maxChapterIndex) }
+                    val hits = try { searchChunks(vector, depth, range.firstIndex, maxChapterIndex) }
                     catch (cancelled: CancellationException) { throw cancelled }
                     catch (error: Exception) { throw VectorIndexQueryException(error) }
                     accepted = hits.mapNotNull { hit ->
@@ -1014,12 +1035,20 @@ internal class SearchBookTool(
                 val context = kotlinx.coroutines.currentCoroutineContext()
                 Bm25LexicalRecall.rank(corpus.candidates, request.query, request.recallDepth) { context.ensureActive() }
             },
+            reranker = reranker?.let { delegate -> com.mozhi.reader.core.retrieval.ChunkReranker { query, candidates ->
+                validateSource()
+                delegate.rerank(query, candidates).also { validateSource() }
+            } },
             expander = NeighborExpander { hits, radius, scope ->
                 expandNeighborWindows(hits, corpus.candidates, radius, scope, corpus.bodies)
             }
         )
         val result = pipeline.retrieve(RetrievalRequest(
-            bookId, query, scope, topK = topK, recallDepth = maxOf(topK * 8, 60), sort = sort
+            bookId, query, scope, topK = topK, recallDepth = maxOf(topK * 8, 60), sort = sort,
+            firstChapterIndex = range.firstIndex,
+            // A chapter-specific search should not lose results to a whole-book diversity quota.
+            maxChunksPerChapter = if (range.firstIndex == maxChapterIndex &&
+                ("from_chapter" in arguments || "to_chapter" in arguments)) topK else 2
         ))
         val notes = buildList {
             val vectorFailure = result.vectorFailure
@@ -1028,6 +1057,7 @@ internal class SearchBookTool(
                 !allowVectorIndex -> add("本书未启用 AI 索引，本次为本地 BM25 关键词检索")
                 vectorFailure is VectorIndexQueryException -> add("本地向量索引查询失败：${vectorFailure.readableMessage()}；已切换到本地 BM25 关键词检索")
                 vectorFailure != null -> add("查询向量生成失败：${vectorFailure.message ?: "embedding 失败"}；本地索引已保留，已自动切换到本地 BM25 关键词检索")
+                !hasIndexInRange && !canRequestIndex -> add("当前范围没有向量索引，本次使用本地 BM25 关键词检索；未新建索引")
                 !hasIndexInRange -> add(if (scheduleFailure) "向量索引任务未能启动；已自动尝试本地 BM25 关键词检索"
                     else "本书向量索引正在后台建立；已自动尝试本地 BM25 关键词检索")
             }
@@ -1045,6 +1075,7 @@ internal class SearchBookTool(
         }
         val degraded = result.vectorFailure != null || result.lexicalFailure != null || !corpus.complete
         if (!currentScope().contains(scope)) return "阅读范围已缩小，本轮检索结果已丢弃，请重新查询。"
+        if (getBook()?.removedAt != 0L || sourceRevision?.invoke() != revision) return "正文已变化或移除，本轮检索结果已丢弃，请重新查询。"
         return buildString {
             notes.forEach { append(it).append("。\n") }
             if (result.hits.isEmpty()) {
@@ -1054,8 +1085,8 @@ internal class SearchBookTool(
                 return@buildString
             }
             append(if (degraded) "降级检索返回候选。\n" else "正常检索返回候选。\n")
-            append(if (scope.isWholeBook) "以下片段来自整本书（第 1 至 ${maxChapterIndex + 1} 章）：\n"
-                else "以下片段全部来自用户阅读进度水位（第 1 至 ${maxChapterIndex + 1} 章）：\n")
+            append("本次检索范围：第 ${range.firstIndex + 1} 至 ${maxChapterIndex + 1} 章")
+            append(if (allowed.isWholeBook) "。\n" else "（不超过当前阅读水位，边界章节仅含已读正文）。\n")
             append("这些是待核验的证据，不代表问题前提成立；非穷举，排序分数不是事实概率。\n")
             val delivered = result.diagnostics.selectedCandidates
             append("请求 $topK 段，本轮选择 $delivered 个候选；相邻候选合并后展示 ${result.hits.size} 个窗口。")

@@ -152,6 +152,9 @@ internal fun ImageLibraryPickerDialog(
     onGenerate: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    val coverImages = images.filter {
+        it.purpose != com.mozhi.reader.core.datastore.ReaderImagePurpose.BACKGROUND || it.filePath == currentPath
+    }.sortedBy { if (it.purpose == com.mozhi.reader.core.datastore.ReaderImagePurpose.COVER) 0 else 1 }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("更换封面") },
@@ -174,18 +177,18 @@ internal fun ImageLibraryPickerDialog(
                     )
                 }
                 Text(
-                    "图片库",
+                    "封面图与未分类素材",
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                if (images.isEmpty()) {
-                    Text("图片库还是空的，可以导入、搜索或生成一张新封面。")
+                if (coverImages.isEmpty()) {
+                    Text("封面分类中还没有图片。可在图片库中调整分类，或导入、搜索、生成新封面。")
                 } else {
                     LazyColumn(
                         modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                    items(images, key = ReaderImageAsset::id) { image ->
+                    items(coverImages, key = ReaderImageAsset::id) { image ->
                         ListItem(
                             headlineContent = {
                                 Text(image.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis)

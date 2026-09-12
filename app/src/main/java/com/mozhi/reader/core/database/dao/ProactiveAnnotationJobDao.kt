@@ -9,6 +9,9 @@ import com.mozhi.reader.core.database.entity.ProactiveAnnotationJobEntity
 
 @Dao
 interface ProactiveAnnotationJobDao {
+    @Query("DELETE FROM proactive_annotation_jobs WHERE bookId = :bookId")
+    suspend fun deleteForBook(bookId: Long)
+
     @Query("SELECT * FROM proactive_annotation_jobs WHERE bookId = :bookId AND chapterIndex = :chapterIndex AND personaId = :personaId AND sourceRevision = :revision LIMIT 1")
     suspend fun find(bookId: Long, chapterIndex: Int, personaId: Long, revision: String): ProactiveAnnotationJobEntity?
 

@@ -204,6 +204,8 @@ internal suspend fun execute(client: OkHttpClient, request: Request): String =
     withContext(Dispatchers.IO) {
         val response = try {
             client.newCall(request).await()
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
         } catch (error: Throwable) {
             throw mapTransportError(error)
         }

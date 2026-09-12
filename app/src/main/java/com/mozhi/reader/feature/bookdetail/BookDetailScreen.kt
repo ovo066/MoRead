@@ -179,6 +179,7 @@ fun BookDetailScreen(
     var showNoteEditor by remember { mutableStateOf(false) }
     var editingNote by remember { mutableStateOf<NoteEntity?>(null) }
     var selectedIllustration by remember { mutableStateOf<IllustrationEntity?>(null) }
+    var deleteIllustrationTarget by remember { mutableStateOf<IllustrationEntity?>(null) }
 
     val context = androidx.compose.ui.platform.LocalContext.current
     LaunchedEffect(viewModel) {
@@ -619,7 +620,7 @@ fun BookDetailScreen(
                     .fillMaxHeight(0.86f)
                     .padding(horizontal = 20.dp)
             ) {
-                Text("段落批注与评论", style = MaterialTheme.typography.titleLarge)
+                Text("划线与批注", style = MaterialTheme.typography.titleLarge)
                 Text(
                     "阅读正文时点击划线或“评”标记可参与讨论。",
                     style = MaterialTheme.typography.bodySmall,
@@ -632,70 +633,12 @@ fun BookDetailScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(bottom = 8.dp))
                 }
-                // 作者筛选：全部 / 我的 / 各角色（学习向用户复习时常只看自己的划线）
-                var authorFilter by remember { mutableStateOf<Long?>(FILTER_ALL) }
-                val annotationAuthors = remember(state.annotations) {
-                    state.annotations.mapNotNull(AnnotationEntity::personaId).distinct()
-                }
-                androidx.compose.foundation.layout.Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(androidx.compose.foundation.rememberScrollState())
-                        .padding(bottom = 10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    FilterChip(
-                        selected = authorFilter == FILTER_ALL,
-                        onClick = { authorFilter = FILTER_ALL },
-                        label = { Text("全部") }
-                    )
-                    FilterChip(
-                        selected = authorFilter == null,
-                        onClick = { authorFilter = null },
-                        label = { Text("我的") }
-                    )
-                    annotationAuthors.forEach { personaId ->
-                        FilterChip(
-                            selected = authorFilter == personaId,
-                            onClick = { authorFilter = personaId },
-                            label = {
-                                Text(
-                                    state.personaNames[personaId] ?: "已删除角色",
-                                    maxLines = 1
-                                )
-                            }
-                        )
-                    }
-                }
-                val threads = remember(state.annotations, authorFilter) {
-                    state.annotations
-                        .filter { annotation ->
-                            authorFilter == FILTER_ALL || annotation.personaId == authorFilter
-                        }
-                        .groupBy {
-                            Triple(it.chapterIndex, it.startCharOffset, it.endCharOffset)
-                        }.values.sortedByDescending { group -> group.maxOf(AnnotationEntity::createdAt) }
-                }
-                if (threads.isEmpty()) {
-                    Text("还没有批注。阅读时长按原文即可添加，伴读 Agent 也能调用 add_annotation。")
-                } else {
-                    val annotationListState = androidx.compose.foundation.lazy.rememberLazyListState()
-                    LazyColumn(
-                        state = annotationListState,
-                        modifier = Modifier
-                            .weight(1f)
-                            .blockSheetDrag(annotationListState),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        items(threads, key = { group -> group.first().id }) { comments ->
-                            AnnotationReviewCard(
-                                comments = comments,
-                                personaNames = state.personaNames,
-                                onDelete = viewModel::deleteAnnotation
-                            )
-                        }
-                    }
-                }
+                AnnotationIndex(
+                    annotations = state.annotations,
+                    personaNames = state.personaNames,
+                    onDelete = viewModel::deleteAnnotation,
+                    modifier = Modifier.weight(1f)
+                )
             }
         }
     }
@@ -762,6 +705,7 @@ fun BookDetailScreen(
             title = { Text("书籍插图") },
             text = {
                 LazyColumn(modifier = Modifier.fillMaxHeight(0.72f)) {
+                    item { com.mozhi.reader.ui.components.ImageExportActions(illustration.imagePath) }
                     item {
                         AsyncImage(
                             model = File(illustration.imagePath),
@@ -783,10 +727,23 @@ fun BookDetailScreen(
             confirmButton = { TextButton(onClick = { selectedIllustration = null }) { Text("关闭") } },
             dismissButton = {
                 TextButton(onClick = {
-                    viewModel.deleteIllustration(illustration)
+                    deleteIllustrationTarget = illustration
                     selectedIllustration = null
                 }) { Text("删除", color = MaterialTheme.colorScheme.error) }
             }
+        )
+    }
+
+    deleteIllustrationTarget?.let { illustration ->
+        AlertDialog(
+            onDismissRequest = { deleteIllustrationTarget = null },
+            title = { Text("删除这张 AI 插图？") },
+            text = { Text("会删除应用内原图，不能撤销。建议先保存到相册或导出文件；已导出的副本不会删除。") },
+            confirmButton = { TextButton(onClick = {
+                viewModel.deleteIllustration(illustration)
+                deleteIllustrationTarget = null
+            }) { Text("删除", color = MaterialTheme.colorScheme.error) } },
+            dismissButton = { TextButton(onClick = { deleteIllustrationTarget = null; selectedIllustration = illustration }) { Text("返回插图") } }
         )
     }
 

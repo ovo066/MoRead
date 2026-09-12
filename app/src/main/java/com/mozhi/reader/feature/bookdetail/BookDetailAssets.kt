@@ -190,9 +190,6 @@ internal fun NoteEditorDialog(
     )
 }
 
-/** 批注作者筛选的「全部」哨兵值（null 已被「我的」占用）。 */
-internal const val FILTER_ALL = -1L
-
 @Composable
 internal fun AnnotationReviewCard(
     comments: List<AnnotationEntity>,
@@ -218,9 +215,7 @@ internal fun AnnotationReviewCard(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            annotation.personaId?.let { id ->
-                                personaNames[id] ?: "已删除角色"
-                            } ?: "我的批注",
+                            annotationAuthorLabel(annotation, personaNames),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary
                         )

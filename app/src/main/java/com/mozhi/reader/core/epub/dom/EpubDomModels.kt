@@ -1,6 +1,7 @@
 package com.mozhi.reader.core.epub.dom
 
 import com.mozhi.reader.core.library.EpubLayoutDiagnostic
+import com.mozhi.reader.core.library.EpubStylesheetText
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -11,7 +12,9 @@ data class EpubDomChapter(
     val documentTitle: String? = null,
     val bodyNode: EpubDomNode,
     val textLength: Int,
-    val diagnostics: List<EpubLayoutDiagnostic> = emptyList()
+    val diagnostics: List<EpubLayoutDiagnostic> = emptyList(),
+    /** Embedded <style> sheets, with document-relative URLs and their original cascade order. */
+    val embeddedStylesheets: List<EpubStylesheetText> = emptyList()
 ) {
     companion object {
         const val CURRENT_SCHEMA_VERSION = 10
@@ -29,4 +32,7 @@ data class EpubDomNode(
     val textStart: Int = -1,
     val textEnd: Int = -1,
     val children: List<EpubDomNode> = emptyList()
-)
+) {
+    fun hasInlineStyles(): Boolean =
+        !attributes["style"].isNullOrBlank() || children.any(EpubDomNode::hasInlineStyles)
+}

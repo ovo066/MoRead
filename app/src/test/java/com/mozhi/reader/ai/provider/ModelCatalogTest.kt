@@ -17,6 +17,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ModelCatalogTest {
+    @Test fun rerankModelsUseTheirOwnCapabilityAndEndpoint() = runBlocking {
+        val client = fakeClient { """{"data":[{"id":"BAAI/bge-reranker-v2-m3"},{"id":"ordinary-chat"}]}""" }
+        val result = ModelCatalogFetcher(client).fetch(provider(AiProviderAdapter.CUSTOM), "test-key") as ModelCatalogResult.Success
+        val model = result.models.single { it.type == AiModelType.RERANK }
+        assertEquals("/rerank", model.endpointPath)
+        assertEquals(AiModelType.RERANK, model.toDraft().type)
+    }
     @Test
     fun openRouterAggregatesDedicatedCatalogsAndInfersCapabilities() = runBlocking {
         val paths = Collections.synchronizedList(mutableListOf<String>())

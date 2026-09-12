@@ -24,6 +24,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 data class ChapterDraft(
     val index: Int,
@@ -62,6 +64,10 @@ class LibraryRepository @Inject constructor(
     private val vectorStore: dagger.Lazy<BoxStore>
 ) {
     fun observeBooks(): Flow<List<BookEntity>> = bookDao.observeBooks()
+
+    fun observeBooksIncludingRemoved(): Flow<List<BookEntity>> = bookDao.observeAllBooks()
+
+    suspend fun getBooksIncludingRemoved(): List<BookEntity> = bookDao.getAllBooks()
 
     /** 书架用：一次取全部书的按字符进度累计值，交给 [readFraction] 算百分比。 */
     fun observeBookReadSpans(): Flow<Map<Long, BookReadSpan>> =
@@ -160,7 +166,7 @@ class LibraryRepository @Inject constructor(
      * @return 释放的字节数
      */
     suspend fun clearReExtractableCovers(): Long {
-        val books = bookDao.getBooksWithReExtractableCovers()
+        val books = bookDao.getBooksWithReExtractableCovers().filter { File(it.epubPath).isFile }
         if (books.isEmpty()) return 0L
         var freed = 0L
         val cleared = mutableListOf<Long>()
@@ -515,6 +521,8 @@ class LibraryRepository @Inject constructor(
             }
         }
         database.withTransaction {
+            // A queued reader flush may arrive after the user permanently deleted the book.
+            if (bookDao.getBook(bookId) == null) return@withTransaction
             segments.forEach { segment ->
                 bookDao.insertReadingDay(
                     ReadingDailyEntity(
@@ -534,23 +542,54 @@ class LibraryRepository @Inject constructor(
         }
     }
 
-    suspend fun deleteBook(book: BookEntity) {
-        database.withTransaction {
-            bookDao.deleteBook(book.id)
+    suspend fun deleteBook(book: BookEntity) = removeBookData(book, deleteRecords = true)
+
+    suspend fun removeBookKeepingRecords(book: BookEntity) = removeBookData(book, deleteRecords = false)
+
+    private suspend fun removeBookData(book: BookEntity, deleteRecords: Boolean) =
+        BookContentMutation.withBook(book.id) { removeBookDataLocked(book, deleteRecords) }
+
+    private suspend fun removeBookDataLocked(book: BookEntity, deleteRecords: Boolean) = withContext(Dispatchers.IO) {
+        val conversationIds = database.withTransaction {
+            val ids = database.chatDao().getConversationIdsForBook(book.id)
+            if (deleteRecords) bookDao.deleteBook(book.id)
+            else bookDao.markRemoved(book.id, System.currentTimeMillis().coerceAtLeast(1L))
+            database.proactiveAnnotationJobDao().deleteForBook(book.id)
             database.shelfOrganizationDao().deleteEmptyCollections()
+            ids
         }
         // 向量清理失败不阻塞删书（孤儿切片按 bookId 隔离，检索不到）。
         runCatching { VectorQueries.removeChunksForBook(vectorStore.get(), book.id) }
         textStore.delete(book.id)
         mediaStore.delete(book.id)
         layoutStore.delete(book.id)
-        File(context.filesDir, "illustrations/${book.id}").deleteRecursively()
+        File(context.filesDir, "speech-cache/${book.id}").deleteRecursively()
         File(context.cacheDir, "agent-speech/${book.id}").deleteRecursively()
-        File(book.epubPath).takeIf { it.isFile && it.isInsideAppStorage() }?.delete()
-        book.coverPath
-            ?.let(::File)
-            ?.takeIf { it.isFile && it.isInsideAppStorage() && !it.isImageLibraryAsset() }
-            ?.delete()
+        val otherBooks = bookDao.getAllBooks().filterNot { it.id == book.id }
+        File(book.epubPath).takeIf { original ->
+            original.isFile && original.isInsideAppStorage() && otherBooks.none { it.epubPath == book.epubPath }
+        }?.delete()
+        if (deleteRecords) {
+            runCatching { VectorQueries.removeMemoriesForBook(vectorStore.get(), book.id) }
+            File(context.filesDir, "illustrations/${book.id}").deleteRecursively()
+            conversationIds.forEach { id ->
+                File(context.filesDir, "attachments/$id").deleteRecursively()
+                runCatching { VectorQueries.removeMemoriesForConversation(vectorStore.get(), id) }
+            }
+            book.coverPath?.let(::File)?.takeIf { cover ->
+                cover.isFile && cover.isInsideAppStorage() && !cover.isImageLibraryAsset() &&
+                    otherBooks.none { it.coverPath == book.coverPath }
+            }?.delete()
+        }
+        val contentRoots = listOf("book-text", "book-media", "book-layout", "speech-cache")
+            .map { File(context.filesDir, "$it/${book.id}") } + File(context.cacheDir, "agent-speech/${book.id}")
+        val personalRoots = if (deleteRecords) listOf(File(context.filesDir, "illustrations/${book.id}")) +
+            conversationIds.map { File(context.filesDir, "attachments/$it") } else emptyList()
+        val original = File(book.epubPath)
+        val originalRemains = original.isFile && original.isInsideAppStorage() && otherBooks.none { it.epubPath == book.epubPath }
+        check(!originalRemains && (contentRoots + personalRoots).none { root -> root.exists() && root.walkTopDown().any(File::isFile) }) {
+            "记录处理已完成，但部分文件未能清理，请到存储管理重试"
+        }
     }
 
     private fun File.isInsideAppStorage(): Boolean {

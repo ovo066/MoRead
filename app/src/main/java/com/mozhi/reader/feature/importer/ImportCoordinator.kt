@@ -374,7 +374,13 @@ class ImportCoordinator @Inject constructor(
      * Books imported from TXT also go through the EPUB spine here: the generated EPUB is the only
      * remaining copy of their text, and it holds exactly one resource per chapter.
      */
-    suspend fun materializeLegacyBook(book: BookEntity): Boolean = withContext(Dispatchers.IO) {
+    suspend fun materializeLegacyBook(book: BookEntity): Boolean =
+        com.mozhi.reader.core.library.BookContentMutation.withBook(book.id) {
+            val current = libraryRepository.getBook(book.id)
+            if (current == null || current.removedAt > 0L) true else materializeLegacyBookContent(current)
+        }
+
+    private suspend fun materializeLegacyBookContent(book: BookEntity): Boolean = withContext(Dispatchers.IO) {
         val epubFile = File(book.epubPath).takeIf(File::isFile) ?: return@withContext false
         val publication = runCatching { readium.open(epubFile) }.getOrNull() ?: return@withContext false
         try {

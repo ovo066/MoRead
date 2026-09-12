@@ -203,6 +203,7 @@ class ModelCatalogFetcher @Inject constructor(
     private fun OpenAiCatalog.Entry.inferredType(): AiModelType {
         val outputs = architecture?.outputModalities.orEmpty().map(String::lowercase)
         return when {
+            "rerank" in id.lowercase() || "rerank" in outputs -> AiModelType.RERANK
             "speech" in outputs -> AiModelType.TTS
             "image" in outputs -> AiModelType.IMAGE
             modelNameLooksLikeImage(id) -> AiModelType.IMAGE
@@ -213,6 +214,7 @@ class ModelCatalogFetcher @Inject constructor(
     private fun endpointFor(type: AiModelType): String = when (type) {
         AiModelType.CHAT -> ""
         AiModelType.EMBEDDING -> "/embeddings"
+        AiModelType.RERANK -> "/rerank"
         AiModelType.TTS -> "/audio/speech"
         AiModelType.IMAGE -> "/images/generations"
     }

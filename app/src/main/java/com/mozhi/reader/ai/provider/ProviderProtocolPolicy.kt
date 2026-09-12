@@ -13,6 +13,7 @@ import com.mozhi.reader.core.database.entity.AiProviderEntity
 sealed interface ModelProtocolRoute {
     data class Chat(val dialect: ApiDialect) : ModelProtocolRoute
     data class Embedding(val dialect: ApiDialect) : ModelProtocolRoute
+    data object Rerank : ModelProtocolRoute
     data object Media : ModelProtocolRoute
     data class Unsupported(val reason: String) : ModelProtocolRoute
 }
@@ -65,6 +66,9 @@ object ProviderProtocolPolicy {
         when (model.type) {
             AiModelType.CHAT -> ModelProtocolRoute.Chat(modelChatDialect(provider, model))
             AiModelType.EMBEDDING -> embeddingRoute(provider)
+            AiModelType.RERANK -> if (provider.adapter == AiProviderAdapter.CUSTOM) {
+                ModelProtocolRoute.Rerank
+            } else ModelProtocolRoute.Unsupported("重排模型请使用支持 /rerank 的自定义供应商")
             AiModelType.TTS, AiModelType.IMAGE -> mediaRoute(provider)
         }
 

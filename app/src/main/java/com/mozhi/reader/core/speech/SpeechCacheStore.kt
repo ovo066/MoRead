@@ -89,11 +89,12 @@ class SpeechCacheStore @Inject constructor(
     }
 
     suspend fun clearBook(bookId: Long): Long = withContext(Dispatchers.IO) {
-        val target = File(directory(), bookId.toString())
-        if (!target.isDirectory) return@withContext 0L
-        val bytes = target.walkTopDown().filter(File::isFile).sumOf(File::length)
-        target.deleteRecursively()
-        bytes
+        val targets = listOf(File(directory(), bookId.toString()), File(context.cacheDir, "$LEGACY_DIRECTORY/$bookId"))
+        fun size() = targets.filter(File::isDirectory).sumOf { it.walkTopDown().filter(File::isFile).sumOf(File::length) }
+        val before = size()
+        targets.forEach { it.deleteRecursively() }
+        val after = size()
+        (before - after).coerceAtLeast(0L)
     }
 
     fun audioFiles(): List<File> = directory()

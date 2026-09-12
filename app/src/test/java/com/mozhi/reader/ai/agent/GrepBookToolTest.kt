@@ -27,6 +27,34 @@ class GrepBookToolTest {
     private fun JsonObject.cursor() = this["next_cursor"]?.jsonPrimitive?.contentOrNull
     private fun JsonObject.code() = this["error"]?.jsonObject?.get("code")?.jsonPrimitive?.content
 
+    @Test fun chapterRangeFiltersBeforeScanningAndCountsOnlyThatRange() = runTest {
+        bodies = listOf("范围外猫猫猫", "目标猫猫", "边界猫未读猫", "未读猫")
+        allowed = ReadingScope.upto(2, 3)
+        val visited = mutableSetOf<Int>()
+        val result = query(tool(load = { i -> visited += i; ChapterDocument(i, "", bodies[i]) })) {
+            put("from_chapter", 2); put("to_chapter", 4)
+        }
+        assertEquals(setOf(1, 2), visited)
+        assertEquals(3, result["count"]!!.jsonObject["value"]!!.jsonPrimitive.int)
+        assertEquals(2, result["scope"]!!.jsonObject["from_chapter"]!!.jsonPrimitive.int)
+        assertEquals(3, result["scope"]!!.jsonObject["to_chapter"]!!.jsonPrimitive.int)
+        assertFalse(result.toString().contains("范围外"))
+        assertFalse(result.toString().contains("未读"))
+    }
+
+    @Test fun cursorRetainsChapterLowerBoundAndRejectsScopeEdits() = runTest {
+        bodies = listOf("范围外猫", "猫 猫 猫", "后章猫")
+        allowed = ReadingScope.upto(1, bodies[1].length)
+        val first = query { put("from_chapter", 2); put("to_chapter", 3) }
+        allowed = ReadingScope.WholeBook
+        val next = query(cursor = first.cursor())
+        assertEquals(3, next["count"]!!.jsonObject["value"]!!.jsonPrimitive.int)
+        assertEquals(2, next["scope"]!!.jsonObject["from_chapter"]!!.jsonPrimitive.int)
+        assertEquals(2, next["scope"]!!.jsonObject["to_chapter"]!!.jsonPrimitive.int)
+        assertEquals("CURSOR_INVALID", query(cursor = first.cursor()) { put("from_chapter", 1) }.code())
+        assertEquals("CURSOR_INVALID", query(cursor = first.cursor()) { put("to_chapter", 1) }.code())
+    }
+
     @Test fun pagesRetainTheirSnapshotAcrossToolInstancesAndProgressGrowth() = runTest {
         allowed = ReadingScope.upto(0, bodies[0].length)
         val first = query()

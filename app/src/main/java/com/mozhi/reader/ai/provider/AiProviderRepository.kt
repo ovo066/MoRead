@@ -208,6 +208,7 @@ class AiProviderRepository @Inject constructor(
     private fun ModelRole.requiredModelType(): AiModelType = when (this) {
         ModelRole.CHAT, ModelRole.CHEAP, ModelRole.SUGGESTION -> AiModelType.CHAT
         ModelRole.EMBEDDING -> AiModelType.EMBEDDING
+        ModelRole.RERANK -> AiModelType.RERANK
         ModelRole.TTS -> AiModelType.TTS
         ModelRole.IMAGE -> AiModelType.IMAGE
     }

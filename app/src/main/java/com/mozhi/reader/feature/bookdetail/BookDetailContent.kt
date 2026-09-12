@@ -276,6 +276,7 @@ internal fun DetailHero(
         ) {
             OutlinedButton(
                 onClick = onListen,
+                enabled = book.removedAt == 0L,
                 shape = MoReadTokens.CapsuleShape,
                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 13.dp),
                 modifier = Modifier.weight(0.42f).heightIn(min = 52.dp)
@@ -286,6 +287,7 @@ internal fun DetailHero(
             }
             Button(
                 onClick = onContinueReading,
+                enabled = book.removedAt == 0L,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary
@@ -297,7 +299,7 @@ internal fun DetailHero(
                 Icon(Icons.Outlined.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(7.dp))
                 Text(
-                    text = if (book.lastReadAt == 0L) "开始阅读" else "继续阅读",
+                    text = if (book.removedAt > 0L) "正文已移除" else if (book.lastReadAt == 0L) "开始阅读" else "继续阅读",
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )

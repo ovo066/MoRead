@@ -6,6 +6,16 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PullBookmarkGestureTest {
+    @Test fun aFastFlingMustNotAddButHoldingThePullCanArm() {
+        val gesture = PullBookmarkGesture(8f, 144f, minimumDurationMs = 220L)
+        gesture.move(0f, 180f, 80L)
+        assertFalse(gesture.shouldAddOnRelease())
+        assertEquals(140L, gesture.remainingHoldMs)
+        gesture.move(0f, 180f, 220L)
+        assertTrue(gesture.shouldAddOnRelease())
+        gesture.move(0f, 110f, 250L)
+        assertFalse(gesture.shouldAddOnRelease())
+    }
     @Test
     fun downwardPullArmsOnlyAfterThreshold() {
         val gesture = PullBookmarkGesture(8f, 88f)

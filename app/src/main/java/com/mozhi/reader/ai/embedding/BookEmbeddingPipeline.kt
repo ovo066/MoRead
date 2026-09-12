@@ -20,7 +20,7 @@ class BookEmbeddingPipeline @Inject constructor(
     private val progressTracker: EmbeddingProgressTracker
 ) {
     suspend fun embedBook(bookId: Long): EmbedOutcome {
-        val book = libraryRepository.getBook(bookId) ?: return EmbedOutcome.Completed
+        val book = libraryRepository.getBook(bookId)?.takeIf { it.removedAt == 0L } ?: return EmbedOutcome.Completed
         val chapters = libraryRepository.getChapters(bookId)
         val totalChapters = chapters.count { it.charCount > 0 }
         val resolved = try {
@@ -41,7 +41,13 @@ class BookEmbeddingPipeline @Inject constructor(
             bookId = bookId,
             chapters = chapters,
             readText = { chapter -> libraryRepository.readChapterText(bookId, chapter) },
-            embed = { texts -> resolved.client.embed(texts) },
+            embed = { texts ->
+                resolved.client.embed(texts).also {
+                    if (libraryRepository.getBook(bookId)?.removedAt != 0L) {
+                        throw kotlinx.coroutines.CancellationException("Book content removed")
+                    }
+                }
+            },
             onProgress = { indexed, total ->
                 progressTracker.markIndexing(
                     bookId = bookId,

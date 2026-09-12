@@ -9,6 +9,7 @@ import io.mockk.every
 import io.mockk.mockk
 import java.io.File
 import java.util.zip.ZipOutputStream
+import java.util.zip.ZipEntry
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -151,6 +152,48 @@ class BookLayoutStoreTest {
         assertNotNull(store.readChapter(1, 0)!!.dom)
     }
 
+    @Test
+    fun layoutsWrittenBeforeEmbeddedStylesWerePreservedRequireRebuild() = runTest {
+        seedOldLayout(styled = true)
+        indexFile.writeText(json.encodeToString(layoutPackage(styled = true).copy(parserRevision = 0)))
+        assertFalse(store.hasCurrentLayout(1, listOf(4)))
+        assertNotNull(store.readChapter(1, 0))
+    }
+
+    @Test
+    fun embeddedAndInlineBackgroundsSurviveStorageWithPortableResourceNames() = runTest {
+        val embeddedHref = "OPS/Images/figure:*one.png"
+        val inlineHref = "OPS/Images/inline.png"
+        val unusedHref = "OPS/Images/unused.png"
+        val paths = listOf(embeddedHref, inlineHref, unusedHref)
+        val epub = temporary.newFile("backgrounds.epub").apply {
+            ZipOutputStream(outputStream()).use { zip ->
+                paths.forEach { path ->
+                    zip.putNextEntry(ZipEntry(path))
+                    zip.write(path.toByteArray())
+                    zip.closeEntry()
+                }
+            }
+        }
+        val styledDom = dom.copy(
+            embeddedStylesheets = listOf(EpubStylesheetText("${dom.href}#style-0",
+                ".art { background-image: url('Images/figure:*one.png'); }")),
+            bodyNode = dom.bodyNode.copy(attributes = mapOf("style" to "background-image:url('Images/inline.png')"))
+        )
+        val pkg = layoutPackage(styled = false).copy(resources = paths.mapIndexed { index, path ->
+            EpubLayoutResource("image-$index", path, path, "image/png", kind = EpubLayoutResourceKind.IMAGE,
+                sizeBytes = path.toByteArray().size.toLong())
+        })
+        store.replace(1, epub, pkg, listOf(EpubLayoutChapterInput(0, dom.href, legacy, styledDom)))
+        val loaded = BookLayoutStore(context).readChapter(1, 0)!!
+        assertEquals(styledDom, loaded.dom)
+        assertEquals(embeddedHref, File(loaded.resourcePaths.getValue(embeddedHref)).readText())
+        assertEquals(inlineHref, File(loaded.resourcePaths.getValue(inlineHref)).readText())
+        assertFalse(loaded.resourcePaths.containsKey(unusedHref))
+        assertTrue(File(layoutRoot, "resources").listFiles()!!.all { ':' !in it.name && '*' !in it.name })
+        assertTrue(store.hasCurrentLayout(1, listOf(4)))
+    }
+
     private fun seedOldLayout(styled: Boolean) {
         domFile.parentFile!!.mkdirs()
         legacyFile.parentFile!!.mkdirs()
@@ -160,6 +203,7 @@ class BookLayoutStoreTest {
     }
 
     private fun layoutPackage(styled: Boolean) = EpubLayoutPackage(
+        parserRevision = EpubLayoutPackage.CURRENT_PARSER_REVISION,
         packageDocumentPath = "OPS/content.opf",
         stylesheets = if (styled) listOf(EpubStylesheetText("OPS/style.css", "p { color: black; }")) else emptyList(),
         chapters = listOf(EpubLayoutChapterRef(0, dom.href, 4, "chapters/ch-00000.json"))

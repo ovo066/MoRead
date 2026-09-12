@@ -64,7 +64,11 @@ class BookTextMaterializeWorker(
             } else if (book.sourceType == BookSourceType.EPUB) {
                 // 已完整的精排数据就地压实（明文 DOM JSON → gzip、清空多余的旧引擎块列表）。
                 // 纯 I/O、幂等、带完成标记；失败只影响这一本，下次启动再试。
-                runCatching { layoutStore.compact(book.id) }
+                runCatching {
+                    com.mozhi.reader.core.library.BookContentMutation.withBook(book.id) {
+                        if (repository.getBook(book.id)?.removedAt == 0L) layoutStore.compact(book.id)
+                    }
+                }
             }
         }
         if (pending.isEmpty()) return successResult()

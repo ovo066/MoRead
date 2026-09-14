@@ -22,21 +22,30 @@ class ProactiveAnnotationParagraphsTest {
     @Test fun deterministicCandidatesAreBoundedAndOrdered() {
         val body = (0..40).joinToString("\n") { "$it" + "句子。".repeat(30) }
         val rows = ProactiveAnnotationParagraphs.candidates(body, Int.MAX_VALUE)
-        assertEquals(10, rows.size)
+        assertEquals(41, rows.size)
+        assertEquals(10, ProactiveAnnotationParagraphs.candidates(body, 10).size)
         assertEquals(rows, ProactiveAnnotationParagraphs.candidates(body, Int.MAX_VALUE))
         assertEquals(rows.sortedBy { it.end }, rows)
     }
     @Test fun prefixEndsAtTargetAndNeverContainsSuffix() {
         val body = "前".repeat(40_000) + "\n" + "目标".repeat(30) + "\n禁止后文"
-        val target = ProactiveAnnotationParagraphs.split(body)[1]
+        val target = ProactiveAnnotationParagraphs.split(body).last()
         val prefix = ProactiveAnnotationParagraphs.prefix(body, target)
         assertTrue(prefix.endsWith("目标".repeat(30)))
         assertFalse(prefix.contains("禁止后文"))
         assertEquals(ProactiveAnnotationParagraphs.MAX_PREFIX_CHARS, prefix.length)
     }
-    @Test fun longTargetRemainsWholeAndSourceRevisionChangesWithBody() {
-        val body = "字".repeat(40_000)
-        assertEquals(body, ProactiveAnnotationParagraphs.prefix(body, ProactiveAnnotationParagraphs.split(body).single()))
+    @Test fun longTargetSplitsWithoutDroppingTextOrExceedingTheContextBudget() {
+        val body = "字🙂".repeat(40_000)
+        val targets = ProactiveAnnotationParagraphs.split(body)
+        assertEquals(body, targets.joinToString("") { body.substring(it.start, it.end) })
+        assertTrue(targets.all { it.end - it.start <= ProactiveAnnotationParagraphs.MAX_TARGET_CHARS })
+        targets.forEach {
+            val prefix = ProactiveAnnotationParagraphs.prefix(body, it)
+            assertTrue(prefix.length <= ProactiveAnnotationParagraphs.MAX_PREFIX_CHARS)
+            assertFalse(prefix.first().isLowSurrogate())
+            assertFalse(prefix.last().isHighSurrogate())
+        }
         assertNotEquals(ProactiveAnnotationParagraphs.revision(body), ProactiveAnnotationParagraphs.revision(body + "新"))
     }
 }

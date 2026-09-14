@@ -18,7 +18,6 @@ import com.mozhi.reader.core.vector.VectorQueries
 import dagger.hilt.android.qualifiers.ApplicationContext
 import io.objectbox.BoxStore
 import java.io.File
-import java.time.Instant
 import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -99,6 +98,9 @@ class LibraryRepository @Inject constructor(
 
     fun observeAllReadingDays(): Flow<List<ReadingDailyEntity>> =
         bookDao.observeAllReadingDays()
+
+    fun observeReadingHours(start: Long, end: Long): Flow<List<com.mozhi.reader.core.database.entity.ReadingHourlyEntity>> =
+        database.readingHourlyDao().observeBetween(start, end)
 
     suspend fun getBook(bookId: Long): BookEntity? = bookDao.getBook(bookId)
 
@@ -283,7 +285,7 @@ class LibraryRepository @Inject constructor(
         chapters: List<ChapterTextInput>,
         markReady: Boolean = true
     ) {
-        val ranges = textWriter.write(textStore.textFile(bookId), chapters)
+        val ranges = withContext(Dispatchers.IO) { textWriter.write(textStore.textFile(bookId), chapters) }
         textStore.invalidate(bookId)
         database.withTransaction {
             ranges.forEach { range ->
@@ -361,10 +363,10 @@ class LibraryRepository @Inject constructor(
         val normalized = chapters.sortedBy(EditableChapterDraft::index).mapIndexed { index, chapter ->
             chapter.copy(index = index)
         }
-        val ranges = textWriter.write(
+        val ranges = withContext(Dispatchers.IO) { textWriter.write(
             textStore.textFile(bookId),
             normalized.map { chapter -> ChapterTextInput(chapter.index, chapter.body) }
-        )
+        ) }
         textStore.invalidate(bookId)
         database.withTransaction {
             bookDao.deleteChaptersForBook(bookId)
@@ -413,6 +415,33 @@ class LibraryRepository @Inject constructor(
 
     suspend fun markTextReady(bookId: Long) {
         bookDao.updateTextVersion(bookId, CURRENT_TEXT_VERSION)
+    }
+
+    suspend fun compactBookText(bookId: Long): Long = compactBookTextWithResult(bookId).freedBytes
+
+    /** Verify the only remaining text representation before dropping an old generated TXT EPUB. */
+    suspend fun discardGeneratedTxtEpub(bookId: Long): Long = BookContentMutation.withBook(bookId) {
+        withContext(Dispatchers.IO) {
+            val book = getBook(bookId) ?: return@withContext 0L
+            if (book.sourceType != BookSourceType.TXT || book.epubPath.isBlank() || book.removedAt > 0 ||
+                book.textVersion < CURRENT_TEXT_VERSION) return@withContext 0L
+            val chapters = getChapters(bookId).sortedBy { it.chapterIndex }
+            if (chapters.isEmpty() || chapters.size != book.totalChapters ||
+                chapters.map { it.chapterIndex } != chapters.indices.toList()) return@withContext 0L
+            chapters.forEach { readChapterTextStrict(bookId, it) }
+            val archive = File(book.epubPath)
+            if (bookDao.clearGeneratedTxtEpub(bookId, book.epubPath) == 0) return@withContext 0L
+            val ownedRoot = File(context.filesDir, "books").canonicalFile.toPath()
+            if (!archive.isFile || !archive.canonicalFile.toPath().startsWith(ownedRoot) ||
+                bookDao.getAllBooks().any { it.epubPath == book.epubPath }) return@withContext 0L
+            val size = archive.length()
+            if (archive.delete()) size else 0L
+        }
+    }
+
+    suspend fun compactBookTextWithResult(bookId: Long): BookTextCompactionResult = BookContentMutation.withBook(bookId) {
+        if (getBook(bookId)?.removedAt != 0L) BookTextCompactionResult(BookTextCompactionOutcome.MISSING)
+        else textStore.compactWithResult(bookId)
     }
 
     suspend fun readChapterText(bookId: Long, chapter: ChapterEntity): String =
@@ -497,29 +526,7 @@ class LibraryRepository @Inject constructor(
         recordedAt: Long = System.currentTimeMillis()
     ) {
         if (durationMs < MIN_READING_DURATION_MS) return
-        val zoneId = ZoneId.systemDefault()
-        val segments = buildList {
-            var segmentStartAt = (recordedAt - durationMs).coerceAtLeast(0L)
-            while (segmentStartAt < recordedAt) {
-                val localDate = Instant.ofEpochMilli(segmentStartAt)
-                    .atZone(zoneId)
-                    .toLocalDate()
-                val nextDayAt = localDate
-                    .plusDays(1)
-                    .atStartOfDay(zoneId)
-                    .toInstant()
-                    .toEpochMilli()
-                val segmentEndAt = minOf(recordedAt, nextDayAt)
-                add(
-                    ReadingSegment(
-                        epochDay = localDate.toEpochDay(),
-                        durationMs = segmentEndAt - segmentStartAt,
-                        lastReadAt = segmentEndAt
-                    )
-                )
-                segmentStartAt = segmentEndAt
-            }
-        }
+        val segments = readingTimeSlices(durationMs, recordedAt, ZoneId.systemDefault())
         database.withTransaction {
             // A queued reader flush may arrive after the user permanently deleted the book.
             if (bookDao.getBook(bookId) == null) return@withTransaction
@@ -538,6 +545,9 @@ class LibraryRepository @Inject constructor(
                     durationMs = segment.durationMs,
                     lastReadAt = segment.lastReadAt
                 )
+                database.readingHourlyDao().insert(com.mozhi.reader.core.database.entity.ReadingHourlyEntity(
+                    bookId, segment.epochDay, segment.hour, 0L))
+                database.readingHourlyDao().addDuration(bookId, segment.epochDay, segment.hour, segment.durationMs)
             }
         }
     }
@@ -612,11 +622,6 @@ class LibraryRepository @Inject constructor(
         private const val MIN_READING_DURATION_MS = 1_000L
     }
 
-    private data class ReadingSegment(
-        val epochDay: Long,
-        val durationMs: Long,
-        val lastReadAt: Long
-    )
 }
 
 private fun List<ChapterDraft>.toFlatTocEntries(): List<BookTocEntryDraft> = map { chapter ->

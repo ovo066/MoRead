@@ -5,32 +5,24 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowBack
-import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -39,8 +31,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -54,18 +45,13 @@ import com.mozhi.reader.core.database.entity.AiProviderEntity
 import com.mozhi.reader.core.database.entity.ModelRole
 import com.mozhi.reader.ui.components.DashedAddRow
 import com.mozhi.reader.ui.components.FrostedSurface
-import com.mozhi.reader.ui.components.MoReadBackdrop
-import com.mozhi.reader.ui.components.MoReadDropdownMenu
-import com.mozhi.reader.ui.components.MoReadMenuItem
-import com.mozhi.reader.ui.components.MoReadMenuSection
-import com.mozhi.reader.ui.theme.MoReadTokens
-import java.util.Locale
+import com.mozhi.reader.ui.components.MoReadRowDivider
+import com.mozhi.reader.ui.components.MoReadSecondaryPage
+import com.mozhi.reader.ui.components.MoReadSection
+import com.mozhi.reader.ui.theme.sectionCardColor
+import com.mozhi.reader.ui.theme.sectionHairline
 
-/**
- * AI 服务二级页：供应商列表与模型分配从设置一级页搬到这里。
- * 两者要一起看——分配模型时得知道有哪些供应商——所以合成一页而不是拆两页。
- */
-@OptIn(ExperimentalMaterial3Api::class)
+/** Providers and role assignments share the same page so every selected model has a clear owner. */
 @Composable
 fun AiServiceScreen(
     onBack: () -> Unit,
@@ -73,299 +59,148 @@ fun AiServiceScreen(
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    val snackbarHostState = remember { SnackbarHostState() }
-    val modelsByProvider = remember(state.models) { state.models.groupBy(AiModelEntity::providerId) }
-
+    val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(viewModel) {
         viewModel.events.collect { event ->
-            when (event) {
-                is SettingsEvent.ShowMessage -> snackbarHostState.showSnackbar(event.message)
-            }
+            when (event) { is SettingsEvent.ShowMessage -> snackbar.showSnackbar(event.message) }
         }
     }
+    Box(Modifier.fillMaxSize()) {
+        AiServiceContent(state, onBack, onOpenProvider, viewModel::assignModel,
+            viewModel::retryEmbedding, viewModel::rebuildEmbedding)
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(20.dp))
+    }
+}
 
-    MoReadBackdrop {
-        Scaffold(
-            containerColor = Color.Transparent,
-            contentColor = MaterialTheme.colorScheme.onBackground,
-            topBar = {
-                TopAppBar(
-                    title = { Text("AI 服务") },
-                    navigationIcon = {
-                        IconButton(onClick = onBack) {
-                            Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回")
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-                )
-            },
-            snackbarHost = { SnackbarHost(snackbarHostState) }
-        ) { padding ->
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
-                contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 32.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                item {
-                    Text(
-                        "模型供应商",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(start = 4.dp, top = 4.dp)
-                    )
-                }
-                items(state.providers, key = AiProviderEntity::id) { provider ->
-                    ProviderRow(
-                        provider = provider,
-                        models = modelsByProvider[provider.id].orEmpty(),
-                        onClick = { onOpenProvider(provider.id) }
-                    )
-                }
-                item {
-                    DashedAddRow(label = "添加 Provider", onClick = { onOpenProvider(0) })
-                }
-
-                item {
-                    Text(
-                        "模型分配",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(start = 4.dp, top = 10.dp)
-                    )
-                }
-                item {
-                    ModelAssignmentCard(
-                        providers = state.providers,
-                        models = state.models,
-                        assignments = state.assignments,
-                        onSelect = viewModel::assignModel
-                    )
-                }
-                item {
-                    Text("重排可不配置。启用后，每次检索最多发送 24 段已读候选、共 12000 字，按供应商计费；超时或失败自动使用原排序。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 4.dp))
-                }
-                item {
-                    EmbeddingLibraryStatusCard(
-                        progress = state.embeddingProgress,
-                        onRetry = viewModel::retryEmbedding,
-                        onRebuild = viewModel::rebuildEmbedding
-                    )
-                }
+@Composable
+internal fun AiServiceContent(
+    state: SettingsUiState, onBack: () -> Unit, onOpenProvider: (Long) -> Unit,
+    onAssign: (ModelRole, Long?) -> Unit, onRetry: () -> Unit = {}, onRebuild: () -> Unit = {}
+) {
+    val modelsByProvider = remember(state.models) { state.models.groupBy(AiModelEntity::providerId) }
+    MoReadSecondaryPage(title = "AI 服务", subtitle = "连接模型供应商，为不同阅读任务选择合适的模型。", onBack = onBack,
+        actions = { IconButton(onClick = { onOpenProvider(0) }) { Icon(Icons.Outlined.Add, "添加供应商") } }) {
+        if (!state.isLoaded) return@MoReadSecondaryPage
+        item {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("模型供应商", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                Text("${state.providers.size} 家 · ${state.models.size} 个模型", style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+        }
+        items(state.providers, key = { "provider-${it.id}" }) { provider ->
+            ProviderRow(provider, modelsByProvider[provider.id].orEmpty()) { onOpenProvider(provider.id) }
+        }
+        item { DashedAddRow(label = "添加供应商", onClick = { onOpenProvider(0) }) }
+        item {
+            Text("模型分配", style = MaterialTheme.typography.titleMedium)
+            Text("点击用途行选择模型，模型可以重复用于不同任务。", style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        item { ModelAssignmentCard(state.providers, state.models, state.assignments, onAssign) }
+        item {
+            Text("主动段评未单独分配时使用批量任务（cheap）模型。重排可不配置；失败时沿用本地检索排序。",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        item { EmbeddingLibraryStatusCard(state.embeddingProgress, onRetry, onRebuild) }
+    }
+}
+
+@Composable
+private fun ProviderRow(provider: AiProviderEntity, models: List<AiModelEntity>, onClick: () -> Unit) {
+    Surface(onClick = onClick, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp),
+        color = sectionCardColor(), border = BorderStroke(1.dp, sectionHairline())) {
+        Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            AiIdentityIcon(providerBrand(provider.adapter, provider.name, provider.baseUrl), size = 54.dp)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text(provider.name, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(models.take(2).joinToString(" · ") { it.modelName }.ifBlank { "添加模型后即可分配" },
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("${ProviderProtocolPolicy.providerChatDialect(provider).label()} · ${models.size} 个模型",
+                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+            }
+            Icon(Icons.Outlined.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
 
-/** Provider 紧凑行：logo 位 + 名称 + 类型·方言 + 模型数，点击进详情三级页管理。 */
 @Composable
-private fun ProviderRow(
-    provider: AiProviderEntity,
-    models: List<AiModelEntity>,
-    onClick: () -> Unit
-) {
-    FrostedSurface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(24.dp),
-        shadowElevation = 6.dp
-    ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.primaryContainer,
-                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.size(44.dp)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        text = provider.name.take(2).uppercase(Locale.ROOT),
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(start = 12.dp)
-            ) {
-                Text(provider.name, style = MaterialTheme.typography.titleMedium)
-                Text(
-                    buildString {
-                        append(provider.adapter.label())
-                        append(" · ")
-                        append(ProviderProtocolPolicy.providerChatDialect(provider).label())
-                        val capabilities = models.map(AiModelEntity::type).distinct()
-                        if (capabilities.isNotEmpty()) {
-                            append(" · ")
-                            append(capabilities.joinToString("/") { it.label() })
-                        }
-                    },
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 3.dp)
-                )
-            }
-            Surface(
-                shape = MoReadTokens.CapsuleShape,
-                color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.8f),
-                contentColor = MaterialTheme.colorScheme.onSurfaceVariant
-            ) {
-                Text(
-                    text = "${models.size} 个模型",
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
-                )
-            }
-            Icon(
-                Icons.AutoMirrored.Outlined.KeyboardArrowRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 6.dp)
-            )
-        }
-    }
-}
-
-/** 模型分配：一张卡 6 行，右侧胶囊下拉 —— 按「模型」而不是按 Provider 分配。 */
-@Composable
-private fun ModelAssignmentCard(
-    providers: List<AiProviderEntity>,
-    models: List<AiModelEntity>,
-    assignments: Map<ModelRole, Long?>,
-    onSelect: (ModelRole, Long?) -> Unit
-) {
+internal fun ModelAssignmentCard(providers: List<AiProviderEntity>, models: List<AiModelEntity>,
+    assignments: Map<ModelRole, Long?>, onSelect: (ModelRole, Long?) -> Unit) {
     val providersById = providers.associateBy { it.id }
-    FrostedSurface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-        shadowElevation = 6.dp
-    ) {
-        Column(modifier = Modifier.padding(vertical = 6.dp)) {
-            ModelRole.entries.forEach { role ->
-                val eligible = models.filter { model ->
-                    model.type == role.requiredModelType() &&
-                        providersById[model.providerId]?.let { provider ->
-                            ProviderProtocolPolicy.isSupported(provider, model)
-                        } == true
+    val groups = listOf(
+        "阅读与伴读" to listOf(ModelRole.CHAT, ModelRole.CHEAP, ModelRole.PROACTIVE_ANNOTATION, ModelRole.SUGGESTION),
+        "检索与媒体" to listOf(ModelRole.EMBEDDING, ModelRole.RERANK, ModelRole.TTS, ModelRole.IMAGE)
+    )
+    Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
+        groups.forEach { (title, roles) ->
+            MoReadSection(title = title) {
+                roles.forEachIndexed { index, role ->
+                    if (index > 0) MoReadRowDivider()
+                    val eligible = models.filter { model -> model.type == role.requiredModelType() &&
+                        providersById[model.providerId]?.let { ProviderProtocolPolicy.isSupported(it, model) } == true }
+                    val fallback = when (role) {
+                        ModelRole.PROACTIVE_ANNOTATION -> eligible.firstOrNull { it.id == assignments[ModelRole.CHEAP] }
+                        ModelRole.SUGGESTION -> eligible.firstOrNull { it.id == assignments[ModelRole.CHEAP] }
+                            ?: eligible.firstOrNull { it.id == assignments[ModelRole.CHAT] }
+                        else -> null
+                    }
+                    ModelAssignmentRow(role, eligible, providersById, assignments[role], fallback) { onSelect(role, it) }
                 }
-                ModelAssignmentRow(
-                    role = role,
-                    models = eligible,
-                    providersById = providersById,
-                    selectedModelId = assignments[role],
-                    onSelect = { modelId -> onSelect(role, modelId) }
-                )
             }
         }
     }
 }
 
 @Composable
-private fun ModelAssignmentRow(
-    role: ModelRole,
-    models: List<AiModelEntity>,
-    providersById: Map<Long, AiProviderEntity>,
-    selectedModelId: Long?,
-    onSelect: (Long?) -> Unit
-) {
+private fun ModelAssignmentRow(role: ModelRole, models: List<AiModelEntity>, providersById: Map<Long, AiProviderEntity>,
+    selectedModelId: Long?, fallback: AiModelEntity?, onSelect: (Long?) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     val selected = models.firstOrNull { it.id == selectedModelId }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 9.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(role.label(), style = MaterialTheme.typography.titleSmall)
-            Text(
-                role.purpose(),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+    val invalidAssignment = selectedModelId != null && selected == null
+    val effective = if (selectedModelId == null) fallback else selected
+    Row(Modifier.fillMaxWidth().clickable(onClickLabel = "选择${role.label()}模型") { expanded = true }.padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        if (effective != null) ModelIdentityIcon(effective.modelName, effective.type)
+        else AiIdentityIcon(null, role.icon())
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(role.label(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(effective?.modelName ?: if (invalidAssignment) "已分配模型不可用" else role.unassignedLabel(), style = MaterialTheme.typography.titleSmall,
+                maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(if (effective != null) "${if (selected == null) "跟随默认 · " else ""}${providersById[effective.providerId]?.name.orEmpty()}"
+                else if (invalidAssignment) "请重新选择模型或检查供应商配置" else role.purpose(), style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
-        Box {
-            val assigned = selected != null
-            Surface(
-                onClick = { expanded = true },
-                shape = MoReadTokens.CapsuleShape,
-                color = if (assigned) {
-                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.8f)
-                } else {
-                    Color.Transparent
-                },
-                contentColor = if (assigned) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-                border = if (assigned) {
-                    null
-                } else {
-                    BorderStroke(
-                        1.dp,
-                        MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
-                    )
-                }
-            ) {
-                Text(
-                    text = selected?.modelName ?: "未分配",
-                    style = MaterialTheme.typography.labelMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .padding(horizontal = 13.dp, vertical = 7.dp)
-                        .widthIn(max = 132.dp)
-                )
-            }
-            MoReadDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                MoReadMenuItem(
-                    text = "不分配",
-                    selected = selectedModelId == null,
-                    onClick = {
-                        expanded = false
-                        onSelect(null)
-                    }
-                )
-                models.groupBy { it.providerId }.forEach { (providerId, group) ->
-                    MoReadMenuSection(label = providersById[providerId]?.name ?: "未知 Provider")
-                    group.forEach { model ->
-                        MoReadMenuItem(
-                            text = model.modelName,
-                            selected = model.id == selectedModelId,
-                            onClick = {
-                                expanded = false
-                                onSelect(model.id)
-                            }
-                        )
-                    }
-                }
-                if (models.isEmpty()) {
-                    MoReadMenuItem(
-                        text = "没有可用模型，先在上面的供应商里添加",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        onClick = { expanded = false }
-                    )
-                }
-            }
+        Icon(Icons.Outlined.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+    if (expanded) {
+        val choices = listOf(SettingChoice("", role.unassignedLabel(), role.purpose(), role.icon())) + models.map { model ->
+            SettingChoice(model.id.toString(), model.modelName, providersById[model.providerId]?.name.orEmpty(), model.type.icon(), modelBrand(model.modelName))
+        }
+        SettingChoiceDialog("选择${role.label()}模型", choices, selectedModelId?.toString().orEmpty(), { expanded = false }) {
+            expanded = false
+            onSelect(it.toLongOrNull())
         }
     }
+}
+
+private fun ModelRole.unassignedLabel(): String = when (this) {
+    ModelRole.PROACTIVE_ANNOTATION -> "跟随批量任务（cheap）"
+    ModelRole.SUGGESTION -> "跟随默认模型"
+    ModelRole.RERANK -> "使用本地排序"
+    else -> "选择模型"
+}
+
+private fun ModelRole.icon(): ImageVector = when (this) {
+    ModelRole.CHAT -> Icons.Outlined.ChatBubbleOutline
+    ModelRole.CHEAP -> Icons.Outlined.Bolt
+    ModelRole.PROACTIVE_ANNOTATION -> Icons.Outlined.EditNote
+    ModelRole.SUGGESTION -> Icons.Outlined.Lightbulb
+    ModelRole.EMBEDDING -> Icons.Outlined.DataArray
+    ModelRole.RERANK -> Icons.Outlined.Sort
+    ModelRole.TTS -> Icons.Outlined.GraphicEq
+    ModelRole.IMAGE -> Icons.Outlined.Image
 }
 
 /** 向量索引不是「分配了模型就算成功」；这里展示实际落盘章节与可操作错误。 */
@@ -446,6 +281,7 @@ internal fun ModelRole.label(): String = when (this) {
     ModelRole.CHAT -> "主对话"
     ModelRole.CHEAP -> "批量任务"
     ModelRole.SUGGESTION -> "建议回复"
+    ModelRole.PROACTIVE_ANNOTATION -> "主动段评"
     ModelRole.EMBEDDING -> "Embedding"
     ModelRole.RERANK -> "Rerank（可选）"
     ModelRole.TTS -> "语音朗读"
@@ -456,6 +292,7 @@ private fun ModelRole.purpose(): String = when (this) {
     ModelRole.CHAT -> "角色对话与问答"
     ModelRole.CHEAP -> "摘要、索引等后台任务"
     ModelRole.SUGGESTION -> "输入框上方的快捷回复，不选就用批量任务模型"
+    ModelRole.PROACTIVE_ANNOTATION -> "自动随读批注，未分配时使用 cheap"
     ModelRole.EMBEDDING -> "全文与想法检索"
     ModelRole.RERANK -> "书内检索候选重排"
     ModelRole.TTS -> "听书语音合成"
@@ -463,7 +300,7 @@ private fun ModelRole.purpose(): String = when (this) {
 }
 
 private fun ModelRole.requiredModelType(): AiModelType = when (this) {
-    ModelRole.CHAT, ModelRole.CHEAP, ModelRole.SUGGESTION -> AiModelType.CHAT
+    ModelRole.CHAT, ModelRole.CHEAP, ModelRole.SUGGESTION, ModelRole.PROACTIVE_ANNOTATION -> AiModelType.CHAT
     ModelRole.EMBEDDING -> AiModelType.EMBEDDING
     ModelRole.RERANK -> AiModelType.RERANK
     ModelRole.TTS -> AiModelType.TTS

@@ -48,7 +48,7 @@ class AnnotationIndexUiTest {
 
     @Test fun userAndAiTabsFilterIndependentlyAndDeletionRequiresConfirmation() {
         var deleted: Long? = null
-        show { AnnotationIndex(listOf(annotation(1), annotation(2, 9), annotation(3, 99)), mapOf(9L to "伴读一", 100L to "不可见角色"), { deleted = it }) }
+        show { AnnotationIndex(listOf(annotation(1), annotation(2, 9), annotation(3, 99)), mapOf(9L to "伴读一", 100L to "不可见角色"), { deleted = it }, {}) }
         compose.onNodeWithText("我的 1").performClick()
         compose.onNodeWithText("我的划线").assertIsDisplayed()
         compose.onNodeWithText("AI · 伴读一").assertDoesNotExist()

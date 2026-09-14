@@ -7,6 +7,9 @@ import android.view.View
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -25,6 +28,10 @@ import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.BookSourceType
 import com.mozhi.reader.core.storage.*
 import com.mozhi.reader.ui.theme.MoReadTheme
+import com.mozhi.reader.ui.theme.AppearanceSettings
+import com.mozhi.reader.ui.theme.ThemeMode
+import com.mozhi.reader.ui.components.MoReadSecondaryPage
+import com.mozhi.reader.ui.components.MoReadSection
 import io.mockk.*
 import java.io.File
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -43,12 +50,42 @@ class StorageScreenVisualTest {
     @get:Rule val compose = createComposeRule()
     private lateinit var rootView: View
 
-    private fun show(content: @Composable () -> Unit) {
+    private fun show(dark: Boolean = false, content: @Composable () -> Unit) {
         compose.setContent {
             val view = LocalView.current
             SideEffect { rootView = view.rootView }
-            MoReadTheme { content() }
+            MoReadTheme(AppearanceSettings(themeMode = if (dark) ThemeMode.DARK else ThemeMode.LIGHT)) { content() }
         }
+    }
+
+    private val chartUsage get() = listOf(
+        StorageCategoryUsage(StorageCategory.TEXT, 82_313_216),
+        StorageCategoryUsage(StorageCategory.VECTOR, 820_000_000),
+        StorageCategoryUsage(StorageCategory.SPEECH, 450_000_000),
+        StorageCategoryUsage(StorageCategory.ORIGINALS, 150_000_000),
+        StorageCategoryUsage(StorageCategory.MEDIA, 12_000_000)
+    )
+
+    @Test fun chartHighlightsSpeechAndKeepsSelectionAfterRefresh() {
+        var categories by mutableStateOf(chartUsage)
+        show { MoReadSecondaryPage("存储与数据", {}) {
+            item { MoReadSection(title = "空间分布") { StorageDistributionChart(categories) } }
+        } }
+        compose.onNodeWithTag("storage-donut").assertIsDisplayed()
+        capture("storage-distribution.png")
+        compose.onNodeWithText("听书与语音").performClick()
+        compose.onNodeWithText(StorageCategory.SPEECH.description).assertExists()
+        compose.runOnIdle { categories = categories.map { if (it.category == StorageCategory.SPEECH) it.copy(bytes = 500_000_000) else it } }
+        compose.onAllNodesWithText(storagePercentage(500_000_000, categories.sumOf { it.bytes })).assertCountEquals(2)
+    }
+
+    @Test @Config(qualifiers = "w320dp-h740dp-mdpi") fun chartRemainsReadableOnSmallDarkScreens() {
+        show(dark = true) { MoReadSecondaryPage("存储与数据", {}) {
+            item { MoReadSection(title = "空间分布") { StorageDistributionChart(chartUsage) } }
+        } }
+        compose.onNodeWithTag("storage-donut").assertIsDisplayed()
+        compose.onNodeWithText("AI 向量索引").assertIsDisplayed()
+        capture("storage-distribution-dark.png")
     }
     @Test fun spaceBreakdownAndRetainedRecordsHaveReachableActions() {
         val book = BookEntity(id = 7, title = "示例书籍：保留阅读记忆", author = "", coverPath = null,

@@ -2,10 +2,11 @@ package com.mozhi.reader.core.library
 
 import com.mozhi.reader.core.epub.dom.EpubDomChapter
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Required
 
 @Serializable
 data class EpubLayoutPackage(
-    val schemaVersion: Int = CURRENT_SCHEMA_VERSION,
+    @Required val schemaVersion: Int = CURRENT_SCHEMA_VERSION,
     val packageDocumentPath: String,
     val epubVersion: String? = null,
     val uniqueIdentifier: String? = null,
@@ -16,7 +17,9 @@ data class EpubLayoutPackage(
     val chapters: List<EpubLayoutChapterRef> = emptyList(),
     val diagnostics: List<EpubLayoutDiagnostic> = emptyList(),
     /** Missing in older sidecars, which must be rebuilt to recover embedded CSS. */
-    val parserRevision: Int = 0
+    val parserRevision: Int = 0,
+    /** Non-null for archive-backed layouts; chapter DOM is disposable, bounded cache data. */
+    val sourceArchive: String? = null
 ) {
     companion object {
         const val CURRENT_SCHEMA_VERSION = 10
@@ -85,13 +88,14 @@ data class EpubLayoutChapterRef(
     val chapterIndex: Int,
     val href: String,
     val textLength: Int,
-    val fileName: String
+    val fileName: String,
+    val immersivePage: Boolean = false
 )
 
 @Deprecated("v9 compatibility model")
 @Serializable
 data class EpubLayoutChapter(
-    val schemaVersion: Int = 9,
+    @Required val schemaVersion: Int = 9,
     val chapterIndex: Int,
     val href: String,
     val documentTitle: String? = null,

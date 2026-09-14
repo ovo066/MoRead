@@ -76,7 +76,11 @@ class AnnotationDiscussionViewModel @Inject constructor(
         respondPersonaId: Long?
     ) {
         val content = text.trim()
-        if (content.isEmpty()) return
+        if (content.isEmpty()) {
+            respondPersonaId?.let { respond(bookId, target.id, it) }
+            return
+        }
+        if (respondJob?.isActive == true) return
         viewModelScope.launch {
             if (target.personaId == null && target.note.isBlank()) {
                 annotationRepository.updateNote(target.id, content)
@@ -91,7 +95,8 @@ class AnnotationDiscussionViewModel @Inject constructor(
 
     /** 单角色应答；已在生成时忽略新请求（一次一条，防连点失控）。 */
     fun respond(bookId: Long, annotationId: Long, personaId: Long) {
-        if (mutableState.value.streaming != null) return
+        if (respondJob?.isActive == true || mutableState.value.streaming != null) return
+        mutableState.update { it.copy(streaming = DiscussionStreaming(personaId), error = null) }
         respondJob = viewModelScope.launch {
             mutableState.update {
                 it.copy(streaming = DiscussionStreaming(personaId), error = null)

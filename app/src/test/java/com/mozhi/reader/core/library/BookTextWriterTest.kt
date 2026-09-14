@@ -28,7 +28,8 @@ class BookTextWriterTest {
         val ranges = writer.write(target, chapters)
 
         assertEquals(600, ranges.size)
-        assertEquals(target.length(), ranges.sumOf { it.byteLength.toLong() })
+        assertEquals(BookTextArchive.Reader(target).use { it.length }, ranges.sumOf { it.byteLength.toLong() })
+        assertTrue(target.length() < ranges.sumOf { it.byteLength.toLong() })
         var expectedOffset = 0L
         ranges.forEach { range ->
             assertEquals("range ${range.index} is not contiguous", expectedOffset, range.byteOffset)

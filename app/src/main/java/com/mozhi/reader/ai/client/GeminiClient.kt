@@ -3,8 +3,10 @@ package com.mozhi.reader.ai.client
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonNames
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.encodeToJsonElement
@@ -51,11 +53,13 @@ class GeminiClient(
         val data: String
     )
 
+    @OptIn(ExperimentalSerializationApi::class)
     @Serializable
     internal data class Part(
         val text: String? = null,
         /** true = 这段 text 是思维链摘要而不是回答正文（Gemini 2.5 起的 thought summary）。 */
         val thought: Boolean? = null,
+        @JsonNames("thought_signature") val thoughtSignature: String? = null,
         @SerialName("inline_data") val inlineData: InlineData? = null,
         @SerialName("functionCall") val functionCall: FunctionCall? = null,
         @SerialName("functionResponse") val functionResponse: FunctionResponse? = null
@@ -152,7 +156,8 @@ class GeminiClient(
                                         // underscores) is everything after the first separator.
                                         id = "g${pendingCalls.size}_${it.name}",
                                         name = it.name,
-                                        arguments = (it.args ?: JsonObject(emptyMap())).toString()
+                                        arguments = (it.args ?: JsonObject(emptyMap())).toString(),
+                                        thoughtSignature = part.thoughtSignature
                                     )
                                 )
                             }
@@ -231,7 +236,12 @@ class GeminiClient(
                     parts = buildList {
                         if (message.content.isNotBlank()) add(Part(text = message.content))
                         message.toolCalls.forEach { call ->
-                            add(Part(functionCall = FunctionCall(call.name, call.argumentsAsJson())))
+                            add(
+                                Part(
+                                    functionCall = FunctionCall(call.name, call.argumentsAsJson()),
+                                    thoughtSignature = call.thoughtSignature
+                                )
+                            )
                         }
                     }.ifEmpty { listOf(Part(text = "")) }
                 )

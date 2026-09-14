@@ -87,6 +87,18 @@ internal val CommonProviderPresets = listOf(
         "MiniMax（海外）",
         "https://api.minimax.io/v1",
         ApiDialect.OPENAI
+    ),
+    ProviderPreset(
+        AiProviderAdapter.CUSTOM,
+        "火山方舟",
+        "https://ark.cn-beijing.volces.com/api/v3",
+        ApiDialect.OPENAI
+    ),
+    ProviderPreset(
+        AiProviderAdapter.CUSTOM,
+        "硅基流动",
+        "https://api.siliconflow.cn/v1",
+        ApiDialect.OPENAI
     )
 )
 

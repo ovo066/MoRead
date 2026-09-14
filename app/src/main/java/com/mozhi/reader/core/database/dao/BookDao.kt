@@ -210,6 +210,9 @@ interface BookDao {
     @Query("UPDATE books SET textVersion = :version WHERE id = :bookId")
     suspend fun updateTextVersion(bookId: Long, version: Int)
 
+    @Query("UPDATE books SET epubPath = '' WHERE id = :bookId AND sourceType = 'TXT' AND epubPath = :expectedPath")
+    suspend fun clearGeneratedTxtEpub(bookId: Long, expectedPath: String): Int
+
     @Query(
         """
         UPDATE books

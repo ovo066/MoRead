@@ -796,6 +796,21 @@ object DatabaseMigrations {
         }
     }
 
+    val Migration29To30 = object : Migration(29, 30) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("""
+                CREATE TABLE IF NOT EXISTS `reading_hourly` (
+                    `bookId` INTEGER NOT NULL, `epochDay` INTEGER NOT NULL,
+                    `hour` INTEGER NOT NULL, `durationMs` INTEGER NOT NULL,
+                    PRIMARY KEY(`bookId`, `epochDay`, `hour`),
+                    FOREIGN KEY(`bookId`) REFERENCES `books`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+            """.trimIndent())
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_reading_hourly_bookId` ON `reading_hourly` (`bookId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_reading_hourly_epochDay` ON `reading_hourly` (`epochDay`)")
+        }
+    }
+
     val Migration28To29 = object : Migration(28, 29) {
         override fun migrate(db: SupportSQLiteDatabase) {
             db.execSQL("""

@@ -44,7 +44,7 @@ internal fun isOrphanStorageFile(
     if (!isOldStorageFile(file, now)) return false
     val segments = file.relativePath.split('/')
     if (segments.size < 3) return false
-    if (segments[0] == "cache" && segments[1] == "agent-speech") {
+    if (segments[0] == "cache" && segments[1] in setOf("agent-speech", "book-dom")) {
         return segments[2].toLongOrNull()?.let { it !in bookIds } == true
     }
     if (segments[0] != "files") return false

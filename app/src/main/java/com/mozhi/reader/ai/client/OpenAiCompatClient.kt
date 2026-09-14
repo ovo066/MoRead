@@ -78,7 +78,7 @@ class OpenAiCompatClient(
                         choice.delta.content
                             ?.takeIf(String::isNotEmpty)
                             ?.let { trySend(ChatDelta.Text(it)) }
-                        toolCalls.accept(choice.delta.toolCalls)
+                        toolCalls.accept(choice.delta.toolCalls, choice.delta.reasoningDetails)
                     }
 
                     override fun onClosed(eventSource: EventSource) {
@@ -140,10 +140,13 @@ class OpenAiCompatClient(
                             WireToolCall(
                                 id = call.id,
                                 type = "function",
-                                function = WireToolFunction(name = call.name, arguments = call.arguments)
+                                function = WireToolFunction(name = call.name, arguments = call.arguments),
+                                extraContent = call.extraContent
                             )
                         },
-                        toolCallId = message.toolCallId
+                        toolCallId = message.toolCallId,
+                        reasoningDetails = message.toolCalls.firstOrNull { it.reasoningDetails.isNotEmpty() }
+                            ?.reasoningDetails
                     )
                 },
                 temperature = options.temperature,

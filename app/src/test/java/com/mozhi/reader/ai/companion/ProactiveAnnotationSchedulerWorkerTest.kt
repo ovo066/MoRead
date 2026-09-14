@@ -15,6 +15,44 @@ import org.junit.Test
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class ProactiveAnnotationSchedulerWorkerTest {
+    @Test fun selectedCompanionsGenerateIndependentlyWithoutFollowingActiveChatSwitches() = runTest {
+        val f = Fixture(backgroundScope)
+        f.autonomy.value = f.autonomy.value.copy(annotationPersonaIds = setOf(3, 8),
+            annotationLimits = f.autonomy.value.annotationLimits.copy(aheadChapters = 0))
+        val requests = mutableListOf<ProactiveAnnotationRequest>()
+        coEvery { f.service.generateForChapter(capture(requests), any(), any(), any()) } returns ProactiveAnnotationGenerationResult(false, false)
+        f.scheduler.onChapterEntered(1, 0); runCurrent()
+        assertEquals(listOf(3L, 8L), requests.map { it.persona.id })
+        assertEquals(2, f.ledger.rows.size)
+        f.persona.value = 12; runCurrent()
+        f.scheduler.onChapterEntered(1, 0); runCurrent()
+        assertEquals(2, requests.size)
+        f.scheduler.onChapterEntered(1, 1); runCurrent()
+        assertEquals(listOf(3L, 8L), requests.takeLast(2).map { it.persona.id })
+    }
+
+    @Test fun promptEditsInvalidateInFlightWorkAndNewCallsUseTheEditedSnapshot() = runTest {
+        val f = Fixture(backgroundScope)
+        f.autonomy.value = f.autonomy.value.copy(annotationLimits = f.autonomy.value.annotationLimits.copy(aheadChapters = 0))
+        val gate = CompletableDeferred<Unit>()
+        val requests = mutableListOf<ProactiveAnnotationRequest>()
+        var permitAfterEdit: ProactiveAnnotationAllowance? = ProactiveAnnotationAllowance(true)
+        coEvery { f.service.generateForChapter(capture(requests), any(), any(), any()) } coAnswers {
+            if (requests.size == 1) {
+                val allowance = arg<suspend () -> ProactiveAnnotationAllowance?>(1)
+                gate.await()
+                permitAfterEdit = allowance()
+                ProactiveAnnotationGenerationResult(false, true)
+            } else ProactiveAnnotationGenerationResult(false, false)
+        }
+        f.scheduler.onChapterEntered(1, 0); runCurrent()
+        val prompt = GlobalPromptPreset("new", "新口吻", "用一句话提问", true)
+        f.autonomy.value = f.autonomy.value.copy(annotationPrompts = listOf(prompt)); runCurrent()
+        gate.complete(Unit); runCurrent()
+        assertNull(permitAfterEdit)
+        assertEquals(listOf(prompt), requests.last().prompts)
+        assertEquals(0, f.ledger.rows.values.single().attempts)
+    }
     private class Ledger : ProactiveAnnotationJobDao {
         val rows = linkedMapOf<Long, ProactiveAnnotationJobEntity>()
         var dailyCount = 0

@@ -40,6 +40,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.storage.BookStorageUsage
 import com.mozhi.reader.core.storage.StorageCleanup
+import com.mozhi.reader.core.storage.StorageCategory
 import com.mozhi.reader.ui.components.MoReadRow
 import com.mozhi.reader.ui.components.MoReadRowDivider
 import com.mozhi.reader.ui.components.MoReadSecondaryPage
@@ -86,17 +87,14 @@ fun DataSettingsScreen(
             }
             item {
                 MoReadSection(title = "空间分布", icon = Icons.Outlined.Storage) {
-                    usage?.categories?.filter { it.bytes > 0 }?.forEachIndexed { index, row ->
-                        if (index > 0) MoReadRowDivider()
-                        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                            Row {
-                                Text(row.category.title, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
-                                Text(formatBytes(row.bytes), style = MaterialTheme.typography.labelLarge)
-                            }
-                            Text(row.category.description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            LinearProgressIndicator(progress = { (row.bytes.toDouble() / (usage?.totalBytes ?: 1L).coerceAtLeast(1L)).toFloat() }, modifier = Modifier.fillMaxWidth())
-                        }
-                    }
+                    if (usage == null) LinearProgressIndicator(Modifier.fillMaxWidth().padding(16.dp))
+                    else StorageDistributionChart(usage!!.categories)
+                }
+            }
+            item {
+                MoReadSection(title = "书籍体积优化", icon = Icons.Outlined.Storage) {
+                    MoReadRow(title = "无损压缩现有正文", subtitle = "仅处理阅读正文（${usage?.bytes(StorageCategory.TEXT)?.let(::formatBytes) ?: "统计中…"}）。新导入和启动维护会自动压缩，已压缩的正文无需重复处理；向量索引与听书语音不在此范围内。",
+                        trailing = { TextButton(onClick = viewModel::compactText, enabled = !working) { Text("压缩") } })
                 }
             }
             item {

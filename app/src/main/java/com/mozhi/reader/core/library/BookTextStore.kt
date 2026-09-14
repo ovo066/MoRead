@@ -3,7 +3,6 @@ package com.mozhi.reader.core.library
 import android.content.Context
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
-import java.io.RandomAccessFile
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
@@ -42,11 +41,9 @@ class BookTextStore @Inject constructor(
         val body = withContext(Dispatchers.IO) {
             val file = textFile(bookId)
             if (!file.isFile) return@withContext ""
-            val buffer = ByteArray(byteLength)
-            RandomAccessFile(file, "r").use { handle ->
-                if (byteOffset + byteLength > handle.length()) return@withContext ""
-                handle.seek(byteOffset)
-                handle.readFully(buffer)
+            val buffer = BookTextArchive.Reader(file).use { handle ->
+                if (byteOffset > handle.length || byteLength > handle.length - byteOffset) return@withContext ""
+                handle.read(byteOffset, byteLength)
             }
             String(buffer, Charsets.UTF_8)
         }
@@ -65,13 +62,11 @@ class BookTextStore @Inject constructor(
                 throw BookTextException("RESOURCE_LIMIT", "章节超过本地读取上限（8 MiB）")
             }
             currentCoroutineContext().ensureActive()
-            val buffer = ByteArray(byteLength)
-            RandomAccessFile(file, "r").use { handle ->
-                if (byteOffset > handle.length() || byteLength > handle.length() - byteOffset) {
+            val buffer = BookTextArchive.Reader(file).use { handle ->
+                if (byteOffset > handle.length || byteLength > handle.length - byteOffset) {
                     throw BookTextException("SOURCE_MISSING", "章节正文不完整")
                 }
-                handle.seek(byteOffset)
-                handle.readFully(buffer)
+                handle.read(byteOffset, byteLength)
             }
             currentCoroutineContext().ensureActive()
             try {
@@ -90,26 +85,26 @@ class BookTextStore @Inject constructor(
         if (!file.isFile) throw BookTextException("SOURCE_MISSING", "规范正文文件缺失")
         val size = file.length()
         val modified = file.lastModified()
-        if (size > MAX_REVISION_BYTES) {
-            throw BookTextException("RESOURCE_LIMIT", "正文超过版本校验上限（128 MiB）")
-        }
         val digest = MessageDigest.getInstance("SHA-256")
-        file.inputStream().buffered().use { input ->
-            val buffer = ByteArray(64 * 1024)
-            var readTotal = 0L
-            while (true) {
-                currentCoroutineContext().ensureActive()
-                val count = input.read(buffer)
-                if (count < 0) break
-                readTotal += count
-                if (readTotal > MAX_REVISION_BYTES) throw BookTextException("RESOURCE_LIMIT", "正文超过版本校验上限")
-                digest.update(buffer, 0, count)
+        val coroutineContext = currentCoroutineContext()
+        BookTextArchive.Reader(file).use { input ->
+            if (input.length > MAX_REVISION_BYTES) throw BookTextException("RESOURCE_LIMIT", "正文超过版本校验上限（128 MiB）")
+            input.forEachBlock { bytes ->
+                coroutineContext.ensureActive()
+                digest.update(bytes)
             }
-            if (readTotal != size || file.length() != size || file.lastModified() != modified) {
+            if (file.length() != size || file.lastModified() != modified) {
                 throw BookTextException("CONTENT_CHANGED", "正文在读取过程中发生变化，请重新查询")
             }
         }
         digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    suspend fun compact(bookId: Long): Long = compactWithResult(bookId).freedBytes
+
+    suspend fun compactWithResult(bookId: Long): BookTextCompactionResult = withContext(Dispatchers.IO) {
+        val coroutineContext = currentCoroutineContext()
+        BookTextArchive.compactWithResult(textFile(bookId)) { coroutineContext.ensureActive() }
     }
 
     suspend fun delete(bookId: Long) {

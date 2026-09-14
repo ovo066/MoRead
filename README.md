@@ -50,7 +50,7 @@ This list describes the current source tree. For features in a packaged release,
 - **Continuous read-aloud:** system TTS or cloud AI TTS, sentence highlighting, automatic page/chapter advancement, and notification playback controls.
 - **Library organization:** groups, collections, drag-to-reorder, pinning, and reading states. Collection targets stay in place while a book is dragged into them; long-press menus adapt to available space and appear above the bottom navigation. Simplified/Traditional Chinese conversion preserves reading position.
 - **Large-screen support:** adaptive bookshelf grids and side navigation, optional two-page spreads, and side-by-side reading and companion chat.
-- **Reading statistics:** reading-time heatmaps, note and AI-chat counts, and Markdown note export.
+- **Reading statistics:** all-time, yearly, monthly, weekly, and daily views with large heatmaps, a book-cover calendar, reading timelines, time-of-day analysis, and colorful tag/author clouds. See consecutive reading days for each book and open a date for its full reading record. Choose and reorder widgets; export notes as Markdown.
 
 ### AI companion · bring your own API key
 

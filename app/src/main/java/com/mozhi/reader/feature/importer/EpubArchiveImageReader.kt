@@ -9,7 +9,7 @@ import java.util.Locale
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 
-/** Lazy fallback for Readium misses: one archive/index per import, never one scan per image. */
+/** Resolve images directly to their archive entries; one lazy index per import. */
 internal class EpubArchiveImageReader(
     private val file: File?,
     private val layoutPackage: EpubLayoutPackage?,
@@ -27,6 +27,21 @@ internal class EpubArchiveImageReader(
                     .forEach { putIfAbsent(it.lowercase(Locale.ROOT), wanted) }
             }
         }
+    }
+
+    fun resolve(href: String): String? {
+        if (closed || href.startsWith("data:", true)) return null
+        val archiveFile = file?.takeIf(File::isFile) ?: return null
+        val normalized = EpubResourcePath.normalize(href)?.lowercase(Locale.ROOT) ?: return null
+        return runCatching {
+            val archive = zip ?: openZip(archiveFile).also { zip = it }
+            val index = entries ?: buildMap {
+                archive.entries().asSequence().filterNot(ZipEntry::isDirectory).forEach { entry ->
+                    putIfAbsent(entry.name.replace('\\', '/').removePrefix("./").lowercase(Locale.ROOT), entry)
+                }
+            }.also { entries = it }
+            index[aliases[normalized] ?: normalized]?.name
+        }.getOrNull()
     }
 
     fun read(href: String, maxBytes: Int): ByteArray? {

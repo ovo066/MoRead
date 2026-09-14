@@ -245,13 +245,13 @@ class ReaderViewModel @Inject constructor(
                 if (result.bookId != bookId) return@collect
                 val epoch = readerVisibilityEpoch
                 val autonomy = settingsRepository.companionAutonomySettings.first()
-                if (result.personaId != settingsRepository.activePersonaId.first()) return@collect
+                if (result.personaId !in autonomy.annotationPersonasFor(settingsRepository.activePersonaId.first())) return@collect
                 if (!annotationNoticeEligible(autonomy, result.createdCount, readerVisible)) return@collect
                 val text = annotationNoticeComposer.compose(result, autonomy.annotationNotice) ?: return@collect
                 val latest = settingsRepository.companionAutonomySettings.first()
                 if (readerVisible && readerVisibilityEpoch == epoch && latest.noticeActive &&
                     latest.annotationNotice == autonomy.annotationNotice &&
-                    result.personaId == settingsRepository.activePersonaId.first()) {
+                    result.personaId in latest.annotationPersonasFor(settingsRepository.activePersonaId.first())) {
                     mutableState.update { it.copy(annotationNotice = ReaderAnnotationNotice(result, text)) }
                 }
             }
@@ -367,7 +367,7 @@ class ReaderViewModel @Inject constructor(
                     0
                 } else {
                     val sourceBody = libraryRepository.readChapterText(bookId, chapter)
-                    val layout = layoutStore.readChapter(bookId, chapter.chapterIndex)
+                    val layout = layoutStore.readChapter(bookId, chapter.chapterIndex, sourceBody)
                     val images = rawInlineImages[chapter.chapterIndex].orEmpty()
                     withContext(Dispatchers.Default) {
                         chapterPresenter.resolveDisplayedPoint(
@@ -480,7 +480,7 @@ class ReaderViewModel @Inject constructor(
         val chapter = chapterEntities.getOrNull(chapterIndex) ?: return null
         val mode = conversionMode
         val body = libraryRepository.readChapterText(bookId, chapter)
-        val layout = layoutStore.readChapter(bookId, chapterIndex)
+        val layout = layoutStore.readChapter(bookId, chapterIndex, body)
         return withContext(Dispatchers.Default) {
             chapterPresenter.present(
                 body = body,
@@ -530,7 +530,7 @@ class ReaderViewModel @Inject constructor(
     ): ResolvedTextAnchor? {
         val mode = conversionMode
         val images = rawInlineImages[chapterIndex].orEmpty()
-        val layout = layoutStore.readChapter(bookId, chapterIndex)
+        val layout = layoutStore.readChapter(bookId, chapterIndex, sourceBody)
         val resolved = withContext(Dispatchers.Default) {
             val sourceStart = fallbackStart.coerceIn(0, sourceBody.length)
             val sourceRange = ReaderTextAnchors.resolveTextMatch(
@@ -1339,13 +1339,10 @@ class ReaderViewModel @Inject constructor(
                 val book = requireNotNull(libraryRepository.getBook(bookId)) { "书籍不存在" }
                 require(book.sourceType == BookSourceType.TXT) { "当前仅支持重新识别 TXT 书籍的章节" }
                 val existing = libraryRepository.getChapters(bookId)
-                val source = buildString {
-                    existing.forEachIndexed { index, chapter ->
-                        if (index > 0) append("\n\n")
-                        append(chapter.title).append('\n')
-                        append(libraryRepository.readChapterText(bookId, chapter))
-                    }
-                }
+                val source = com.mozhi.reader.core.library.reconstructTxtSource(existing.map { chapter ->
+                    EditableChapterDraft(chapter.chapterIndex, chapter.title, chapter.href,
+                        libraryRepository.readChapterTextStrict(bookId, chapter))
+                })
                 val split = customRegex.trim().takeIf(String::isNotBlank)
                     ?.let { regex ->
                         chapterSplitter.splitWithCustomRegex(source, regex)

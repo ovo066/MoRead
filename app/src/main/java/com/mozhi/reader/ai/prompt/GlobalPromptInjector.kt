@@ -10,14 +10,15 @@ import com.mozhi.reader.core.datastore.GlobalPromptPreset
 object GlobalPromptInjector {
     fun inject(
         messages: List<ChatMessage>,
-        presets: List<GlobalPromptPreset>
+        presets: List<GlobalPromptPreset>,
+        label: String = "全局预设"
     ): List<ChatMessage> {
         val enabled = presets.filter { it.enabled && it.prompt.isNotBlank() }
         if (enabled.isEmpty()) return messages
         val output = messages.toMutableList()
 
-        val beforeSystem = enabled.block(GlobalPromptInjectionPosition.BEFORE_SYSTEM)
-        val afterSystem = enabled.block(GlobalPromptInjectionPosition.AFTER_SYSTEM)
+        val beforeSystem = enabled.block(GlobalPromptInjectionPosition.BEFORE_SYSTEM, label)
+        val afterSystem = enabled.block(GlobalPromptInjectionPosition.AFTER_SYSTEM, label)
         if (beforeSystem.isNotBlank() || afterSystem.isNotBlank()) {
             val systemIndex = output.indexOfFirst { it.role == ChatRole.SYSTEM }
             if (systemIndex >= 0) {
@@ -40,8 +41,8 @@ object GlobalPromptInjector {
             }
         }
 
-        val beforeUser = enabled.block(GlobalPromptInjectionPosition.BEFORE_LAST_USER)
-        val afterUser = enabled.block(GlobalPromptInjectionPosition.AFTER_LAST_USER)
+        val beforeUser = enabled.block(GlobalPromptInjectionPosition.BEFORE_LAST_USER, label)
+        val afterUser = enabled.block(GlobalPromptInjectionPosition.AFTER_LAST_USER, label)
         val userIndex = output.indexOfLast { it.role == ChatRole.USER }
         if (userIndex >= 0 && (beforeUser.isNotBlank() || afterUser.isNotBlank())) {
             output[userIndex] = output[userIndex].withUserInjection(beforeUser, afterUser)
@@ -49,9 +50,9 @@ object GlobalPromptInjector {
         return output
     }
 
-    private fun List<GlobalPromptPreset>.block(position: GlobalPromptInjectionPosition): String =
+    private fun List<GlobalPromptPreset>.block(position: GlobalPromptInjectionPosition, label: String): String =
         filter { it.position == position }
-            .joinToString("\n") { "【全局预设·${it.name}】\n${it.prompt.trim()}" }
+            .joinToString("\n") { "【$label·${it.name}】\n${it.prompt.trim()}" }
 
     private fun ChatMessage.withUserInjection(before: String, after: String): ChatMessage {
         val content = listOf(before, content, after).filter(String::isNotBlank).joinToString("\n\n")

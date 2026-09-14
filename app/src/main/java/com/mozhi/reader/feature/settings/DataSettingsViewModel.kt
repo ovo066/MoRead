@@ -5,6 +5,8 @@ import androidx.lifecycle.viewModelScope
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.storage.StorageCleanup
 import com.mozhi.reader.core.storage.StorageRepository
+import com.mozhi.reader.core.storage.StorageTextCompactionResult
+import com.mozhi.reader.core.library.BookTextCompactionOutcome
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
@@ -23,6 +25,10 @@ class DataSettingsViewModel @Inject constructor(private val storage: StorageRepo
     val events = messages.receiveAsFlow()
 
     fun refresh() = run { storage.refresh() }
+
+    fun compactText() = run {
+        messages.send(textCompactionMessage(storage.compactText()))
+    }
 
     fun clean(kind: StorageCleanup) = run {
         val result = storage.clean(kind)
@@ -54,4 +60,18 @@ class DataSettingsViewModel @Inject constructor(private val storage: StorageRepo
             finally { busy.value = false }
         }
     }
+}
+
+internal fun textCompactionMessage(result: StorageTextCompactionResult): String {
+    val outcomes = result.books.map { it.outcome }
+    val message = when {
+        result.freedBytes > 0 -> "正文压缩完成，本次释放 ${formatBytes(result.freedBytes)}"
+        outcomes.isEmpty() && result.failedBooks > 0 -> "正文压缩未完成，请稍后重试"
+        outcomes.isEmpty() || outcomes.all { it == BookTextCompactionOutcome.MISSING } -> "没有可压缩的阅读正文"
+        outcomes.all { it == BookTextCompactionOutcome.ALREADY_COMPRESSED } -> "阅读正文已经压缩，无需重复压缩"
+        BookTextCompactionOutcome.TOO_LARGE in outcomes -> "部分正文超出单本压缩上限（512 MB），本次未释放空间"
+        outcomes.all { it == BookTextCompactionOutcome.TOO_SMALL } -> "正文文件很小，压缩不会节省空间"
+        else -> "正文已压缩或继续压缩不会更小，本次未额外释放空间"
+    }
+    return message + if (result.failedBooks > 0) "；${result.failedBooks} 本未完成，可重试" else ""
 }

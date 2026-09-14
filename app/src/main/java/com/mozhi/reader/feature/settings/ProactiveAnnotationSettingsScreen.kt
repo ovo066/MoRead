@@ -1,35 +1,38 @@
 package com.mozhi.reader.feature.settings
 
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.BorderColor
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.size
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.unit.dp
+import androidx.compose.material.icons.outlined.EditNote
+import androidx.compose.material.icons.outlined.Groups
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.MaterialTheme
-import com.mozhi.reader.core.datastore.ProactiveAnnotationTiming
-import com.mozhi.reader.core.datastore.ProactiveAnnotationNotice
-import com.mozhi.reader.ui.components.MoReadSegmented
-import com.mozhi.reader.ui.components.MoReadRow
-import com.mozhi.reader.ui.components.PersonaAvatarImage
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mozhi.reader.core.datastore.BookProactiveAnnotationLimits
 import com.mozhi.reader.core.datastore.ProactiveAnnotationLimitSteps
 import com.mozhi.reader.core.datastore.ProactiveAnnotationLimits
+import com.mozhi.reader.core.datastore.ProactiveAnnotationNotice
+import com.mozhi.reader.core.datastore.ProactiveAnnotationTiming
 import com.mozhi.reader.ui.components.MoReadBlock
+import com.mozhi.reader.ui.components.MoReadRow
 import com.mozhi.reader.ui.components.MoReadRowDivider
 import com.mozhi.reader.ui.components.MoReadSecondaryPage
 import com.mozhi.reader.ui.components.MoReadSection
+import com.mozhi.reader.ui.components.MoReadSegmented
 import com.mozhi.reader.ui.components.MoReadSlider
 import com.mozhi.reader.ui.components.MoReadSwitchRow
 import com.mozhi.reader.ui.components.MoReadValueRow
+import com.mozhi.reader.ui.components.PersonaAvatarImage
 
 /**
  * 随读段评的数量与频控。全局与单本书共用同一页：[bookId] 非空即「本书」变体，
@@ -39,13 +42,14 @@ import com.mozhi.reader.ui.components.MoReadValueRow
 fun ProactiveAnnotationSettingsScreen(
     bookId: Long?,
     onBack: () -> Unit,
+    onOpenPrompts: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     ProactiveAnnotationSettingsContent(
         bookId, state, onBack, viewModel::setAnnotationLimits,
         viewModel::setBookAnnotationLimits, viewModel::setProactiveAnnotations,
-        viewModel::setAnnotationNotice
+        viewModel::setAnnotationNotice, viewModel::setAnnotationPersonas, onOpenPrompts, viewModel::toggleAnnotationPersona
     )
 }
 
@@ -57,7 +61,10 @@ internal fun ProactiveAnnotationSettingsContent(
     onSetLimits: (ProactiveAnnotationLimits) -> Unit,
     onSetBookLimits: (Long, BookProactiveAnnotationLimits?) -> Unit,
     onSetEnabled: (Boolean) -> Unit,
-    onSetNotice: (ProactiveAnnotationNotice) -> Unit
+    onSetNotice: (ProactiveAnnotationNotice) -> Unit,
+    onSetPersonas: (Set<Long>) -> Unit = {},
+    onOpenPrompts: () -> Unit = {},
+    onTogglePersona: (Long) -> Unit = {}
 ) {
     val global = state.autonomy.annotationLimits
     val override = bookId?.let { state.autonomy.annotationLimitsByBook[it] }
@@ -111,11 +118,43 @@ internal fun ProactiveAnnotationSettingsContent(
                 }
             }
         }
+        if (bookId == null) {
+            item {
+                val selected = state.autonomy.annotationPersonaIds
+                MoReadSection(title = "参与段评的伴读", icon = Icons.Outlined.Groups,
+                    footer = "每章条数对每位伴读分别生效，每日额度由所有伴读共享，并为后续伴读预留份额。未单独选择时跟随当前伴读。") {
+                    MoReadRow(title = "跟随当前伴读", subtitle = state.personas.firstOrNull { it.id == state.activePersonaId }?.name ?: "尚未选择伴读",
+                        onClick = { onSetPersonas(emptySet()) }, trailing = {
+                            RadioButton(selected = selected.isEmpty(), onClick = { onSetPersonas(emptySet()) })
+                        })
+                    state.personas.forEach { persona ->
+                        MoReadRowDivider()
+                        MoReadRow(title = persona.name, subtitle = if (persona.id in selected) "已参与主动段评" else "可与其他伴读一起参与",
+                            onClick = { onTogglePersona(persona.id) },
+                            trailing = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    PersonaAvatarImage(persona.name, persona.avatarPath, Modifier.size(32.dp))
+                                    Checkbox(checked = persona.id in selected, onCheckedChange = {
+                                        onTogglePersona(persona.id)
+                                    })
+                                }
+                            })
+                    }
+                }
+            }
+            item {
+                MoReadSection(title = "写作方式") {
+                    MoReadRow(icon = Icons.Outlined.EditNote, title = "主动段评提示词",
+                        subtitle = "${state.autonomy.annotationPrompts.count { it.enabled }} / ${state.autonomy.annotationPrompts.size} 条启用 · 可编辑口吻与注入位置",
+                        onClick = onOpenPrompts)
+                }
+            }
+        }
         item {
             MoReadSection(title = "生成方式", footer = if (editing.timing == ProactiveAnnotationTiming.ON_CHAPTER_ENTRY) {
                 "预生成会让 AI 提前读到你还没读到的段落；段评按段落逐条生成、只看到该段之前的正文，" +
-                    "且在你读到之前不会出现在聊天、工具或通知里。每条段评一次快速模型调用；提前 N 章会预先消耗 N 章的额度。"
-            } else "读完一章后为刚读完的章节生成，不读取未读正文。每条段评一次快速模型调用。") {
+                    "且在你读到之前不会出现在聊天、工具或通知里。每条段评一次模型调用；使用主动段评分配，未配置时使用 cheap。提前 N 章会预先消耗 N 章的额度。"
+            } else "读完一章后为刚读完的章节生成，不读取未读正文。每条段评一次模型调用，未单独分配时使用 cheap。") {
                 MoReadBlock {
                     MoReadSegmented(options = ProactiveAnnotationTiming.entries.toList(), selected = editing.timing,
                         onSelect = { if (bookId == null || perBookActive) commit(editing.copy(timing = it)) },
@@ -170,7 +209,7 @@ internal fun ProactiveAnnotationSettingsContent(
             MoReadSection(
                 title = "每章条数",
                 footer = "下限只是写给模型的请求：本章确实没有值得回应的地方时，它仍然可以少给几条。" +
-                    "上限选「不限制」时每章仍最多挑选 10 个候选段落，避免请求失控。"
+                    "上限选「不限制」时会逐个处理候选段落；长章会有更多调用，仍受每日上限约束。超长段落会分段处理。"
             ) {
                 LimitSlider(
                     label = "下限",

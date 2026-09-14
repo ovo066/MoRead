@@ -5,6 +5,9 @@ import androidx.lifecycle.viewModelScope
 import com.mozhi.reader.ai.embedding.EmbeddingProgressTracker
 import com.mozhi.reader.ai.embedding.LibraryEmbeddingProgress
 import com.mozhi.reader.ai.provider.AiProviderRepository
+import com.mozhi.reader.ai.persona.PersonaRepository
+import com.mozhi.reader.core.database.entity.PersonaEntity
+import com.mozhi.reader.core.datastore.GlobalPromptPreset
 import com.mozhi.reader.core.database.entity.AiModelEntity
 import com.mozhi.reader.core.database.entity.AiProviderEntity
 import com.mozhi.reader.core.database.entity.ModelRole
@@ -48,6 +51,8 @@ data class SettingsUiState(
     val multiBubbleEnabled: Boolean = false,
     /** agent 主动调用开关矩阵；全部默认关。 */
     val autonomy: CompanionAutonomySettings = CompanionAutonomySettings(),
+    val personas: List<PersonaEntity> = emptyList(),
+    val activePersonaId: Long? = null,
     val isWorking: Boolean = false,
     /** All local data, using the same inventory as the data-management page. */
     val localStorageBytes: Long? = null
@@ -63,7 +68,8 @@ class SettingsViewModel @Inject constructor(
     private val providerRepository: AiProviderRepository,
     private val readerSettingsRepository: ReaderSettingsRepository,
     private val embeddingProgressTracker: EmbeddingProgressTracker,
-    private val storageRepository: StorageRepository
+    private val storageRepository: StorageRepository,
+    personaRepository: PersonaRepository
 ) : ViewModel() {
     private val working = MutableStateFlow(false)
     private val storage = storageRepository.snapshot
@@ -114,6 +120,10 @@ class SettingsViewModel @Inject constructor(
         AiConfig(providers, models, assignments, embeddingProgress)
     }
 
+    private val companions = combine(personaRepository.observePersonas(), readerSettingsRepository.activePersonaId) { personas, active ->
+        personas to active
+    }
+
     val uiState = combine(
         aiConfig,
         readerSettingsRepository.appearance,
@@ -137,6 +147,8 @@ class SettingsViewModel @Inject constructor(
             isWorking = isWorking,
             localStorageBytes = usage?.totalBytes
         )
+    }.combine(companions) { state, (personas, active) ->
+        state.copy(personas = personas, activePersonaId = active)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.Lazily,
@@ -236,6 +248,33 @@ class SettingsViewModel @Inject constructor(
 
     fun setAnnotationNotice(value: com.mozhi.reader.core.datastore.ProactiveAnnotationNotice) {
         viewModelScope.launch { readerSettingsRepository.setCompanionAnnotationNotice(value) }
+    }
+
+    fun setAnnotationPersonas(ids: Set<Long>) {
+        viewModelScope.launch { readerSettingsRepository.setAnnotationPersonaIds(ids) }
+    }
+
+    fun toggleAnnotationPersona(id: Long) {
+        viewModelScope.launch { readerSettingsRepository.toggleAnnotationPersona(id) }
+    }
+
+    fun saveAnnotationPrompt(preset: GlobalPromptPreset) {
+        viewModelScope.launch {
+            runCatching { readerSettingsRepository.saveAnnotationPrompt(preset) }
+                .onFailure { eventChannel.send(SettingsEvent.ShowMessage(it.message ?: "保存失败")) }
+        }
+    }
+
+    fun setAnnotationPromptEnabled(id: String, enabled: Boolean) {
+        viewModelScope.launch { readerSettingsRepository.setAnnotationPromptEnabled(id, enabled) }
+    }
+
+    fun deleteAnnotationPrompt(id: String) {
+        viewModelScope.launch { readerSettingsRepository.deleteAnnotationPrompt(id) }
+    }
+
+    fun resetAnnotationPrompts() {
+        viewModelScope.launch { readerSettingsRepository.resetAnnotationPrompts() }
     }
 
     fun setAnnotationLimits(limits: ProactiveAnnotationLimits) {

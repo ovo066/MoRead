@@ -41,18 +41,23 @@ internal fun annotationChapterRange(chapterIndex: Int, ahead: Int, lastIndex: In
 internal fun ProactiveAnnotationJobEntity.canAttempt(now: Long): Boolean =
     status != "DONE" && attempts < 2 && (status != "PENDING" || now - updatedAt >= 10 * 60_000)
 
+internal fun annotationBudgetShare(remaining: Int, personas: Int): Int =
+    if (remaining == Int.MAX_VALUE) Int.MAX_VALUE
+    else ((remaining.coerceAtLeast(0).toLong() + personas.coerceAtLeast(1) - 1) / personas.coerceAtLeast(1)).toInt()
+
 /** Only policy that changes generation for this book belongs in the cancellation identity. */
 internal data class ProactiveBookPolicy(
     val enabled: Boolean,
-    val personaId: Long?,
+    val personaIds: List<Long>,
     val limits: ProactiveAnnotationLimits,
     val voice: Boolean,
-    val images: Boolean
+    val images: Boolean,
+    val prompts: List<com.mozhi.reader.core.datastore.GlobalPromptPreset>
 )
 
 internal fun CompanionAutonomySettings.policyFor(bookId: Long, personaId: Long?) = ProactiveBookPolicy(
-    proactiveAnnotationsEnabled, personaId, annotationLimitsFor(bookId).normalized(),
-    annotationVoiceActive, annotationImageActive
+    proactiveAnnotationsEnabled, annotationPersonasFor(personaId), annotationLimitsFor(bookId).normalized(),
+    annotationVoiceActive, annotationImageActive, annotationPrompts.filter { it.enabled }
 )
 
 /** One worker for the entire process. Queue is bounded to six chapters of the visible book. */
@@ -115,7 +120,7 @@ class ProactiveAnnotationScheduler @Inject constructor(
         val bookId = readerBook ?: return@synchronized emptyList()
         val resolved = autonomy.policyFor(bookId, personaId)
         if (observedPolicy == resolved) return@synchronized emptyList()
-        if (observedPolicy?.enabled != resolved.enabled || observedPolicy?.personaId != resolved.personaId) noticeVersion++
+        if (observedPolicy?.enabled != resolved.enabled || observedPolicy?.personaIds != resolved.personaIds) noticeVersion++
         observedPolicy = resolved
         policyVersion++
         pending.clear()
@@ -182,6 +187,14 @@ class ProactiveAnnotationScheduler @Inject constructor(
     }
 
     private suspend fun run(trigger: Trigger) {
+        val policy = settings.companionAutonomySettings.first().policyFor(trigger.bookId, settings.activePersonaId.first())
+        for ((index, personaId) in policy.personaIds.withIndex()) {
+            if (synchronized(lock) { observedPolicy != policy || readerBook != trigger.bookId }) break
+            runForPersona(trigger, personaId, policy.personaIds.size - index)
+        }
+    }
+
+    private suspend fun runForPersona(trigger: Trigger, personaId: Long, remainingPersonas: Int) {
         val version = synchronized(lock) {
             if (readerBook != trigger.bookId) return
             policyVersion to readerVersion
@@ -195,11 +208,13 @@ class ProactiveAnnotationScheduler @Inject constructor(
         val dao = database.proactiveAnnotationJobDao()
         fun startOfDay(): Long = java.time.LocalDate.now().atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
         // Exhausted global budgets must not repeatedly load/hash a chapter or touch its PAUSED ledger.
-        val budget = quota.reserve(initial.limits, requestVoice = false, requestImages = false)
+        val budget = quota.reserve(initial.limits.copy(maxPerChapter = ProactiveAnnotationLimits.UNLIMITED), requestVoice = false, requestImages = false)
         if (!budget.accepted || budget.maxAnnotations <= 0) return
-        if (!initial.limits.dailyUnlimited && dao.createdSince(startOfDay()) >= initial.limits.dailyMax) return
+        val dailyRemaining = if (initial.limits.dailyUnlimited) Int.MAX_VALUE else (initial.limits.dailyMax - dao.createdSince(startOfDay())).coerceAtLeast(0)
+        if (dailyRemaining <= 0) return
+        val share = annotationBudgetShare(minOf(dailyRemaining, budget.maxAnnotations), remainingPersonas)
         if (!readerContextValid()) return
-        val personaId = initial.personaId ?: return
+        if (personaId !in initial.personaIds) return
         val persona = personas.getPersona(personaId) ?: return
         val chapter = library.getChapter(trigger.bookId, trigger.chapterIndex) ?: return
         val body = library.readChapterText(trigger.bookId, chapter)
@@ -237,8 +252,9 @@ class ProactiveAnnotationScheduler @Inject constructor(
         suspend fun allowance(): com.mozhi.reader.core.datastore.ProactiveAnnotationAllowance? {
             if (!valid()) return null
             val limits = initial.limits
-            val chapterCap = if (limits.chapterUnlimited) ProactiveAnnotationLimits.MAX_PER_CHAPTER else limits.maxPerChapter
+            val chapterCap = if (limits.chapterUnlimited) Int.MAX_VALUE else limits.maxPerChapter
             if (done.size >= chapterCap) return null
+            if (ids.size >= share) return null
             if (!limits.dailyUnlimited && dao.createdSince(startOfDay()) >= limits.dailyMax) return null
             return quota.reserve(limits, initial.voice && persona.voiceId.isNotBlank(), initial.images)
                 .takeIf { it.accepted && it.maxAnnotations > 0 && readerContextValid() }
@@ -248,7 +264,7 @@ class ProactiveAnnotationScheduler @Inject constructor(
             val limits = initial.limits
             outcome = service.generateForChapter(
                 request = ProactiveAnnotationRequest(trigger.bookId, trigger.chapterIndex, body, persona,
-                    if (limits.chapterUnlimited) ProactiveAnnotationLimits.MAX_PER_CHAPTER else limits.maxPerChapter, done.toSet()),
+                    if (limits.chapterUnlimited) Int.MAX_VALUE else limits.maxPerChapter, done.toSet(), initial.prompts),
                 allowance = { allowance() },
                 recordMedia = { voices, images ->
                     check(valid()) { "generation_context_changed_before_media_charge" }
@@ -288,7 +304,7 @@ class ProactiveAnnotationScheduler @Inject constructor(
         // Quota/timing/media/notice-copy edits don't invalidate a count notice for already committed rows.
         // Disabled master, persona change or any reader lifecycle transition still suppress publication.
         val autonomy = settings.companionAutonomySettings.first()
-        if (ids.isNotEmpty() && autonomy.noticeActive && settings.activePersonaId.first() == personaId) {
+        if (ids.isNotEmpty() && autonomy.noticeActive && personaId in autonomy.annotationPersonasFor(settings.activePersonaId.first())) {
             synchronized(lock) {
                 if (version.second == readerVersion && noticeEpoch == noticeVersion && readerBook == trigger.bookId) {
                     mutableResults.tryEmit(ProactiveAnnotationBatchResult(trigger.bookId, trigger.chapterIndex,

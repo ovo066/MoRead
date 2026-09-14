@@ -72,9 +72,9 @@ class AnnotationDiscussionService @Inject constructor(
                 transcript = transcript
             )
             val latestUser = replies.lastOrNull { it.personaId == null }?.contentMarkdown
-                ?: annotation.note.ifBlank { "（用户只划了这段原文，没有写想法）" }
+                ?: annotation.note.takeIf { annotation.personaId == null && it.isNotBlank() }
             val enabledTools = CompanionToolRouter.select(
-                userText = latestUser,
+                userText = latestUser.orEmpty(),
                 sceneAvailable = true,
                 personaEnabledTools = persona.enabledTools().toSet(),
                 webSearchEnabled = false,
@@ -90,7 +90,8 @@ class AnnotationDiscussionService @Inject constructor(
                 ChatMessage(ChatRole.SYSTEM, system),
                 ChatMessage(
                     ChatRole.USER,
-                    "用户刚刚在这段讨论里说：「$latestUser」\n" +
+                    (latestUser?.let { "用户在这段讨论里说：「$it」\n" }
+                        ?: "用户邀请你点评这段划线原文，没有附加想法。\n") +
                         "请以${persona.name}的身份直接给出你在讨论串里的下一条发言。"
                 )
             )

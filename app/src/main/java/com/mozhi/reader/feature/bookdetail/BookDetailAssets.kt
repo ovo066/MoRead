@@ -194,15 +194,19 @@ internal fun NoteEditorDialog(
 internal fun AnnotationReviewCard(
     comments: List<AnnotationEntity>,
     personaNames: Map<Long, String>,
-    onDelete: (Long) -> Unit
+    onDelete: (Long) -> Unit,
+    onLocate: ((AnnotationEntity) -> Unit)?
 ) {
     val first = comments.first()
     FrostedSurface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().let { base ->
+            if (onLocate != null) base.clickable(onClickLabel = "跳到原文") { onLocate(first) } else base
+        },
         shape = RoundedCornerShape(18.dp),
         shadowElevation = 3.dp
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
+            if (onLocate != null) TextButton(onClick = { onLocate(first) }, modifier = Modifier.align(Alignment.End)) { Text("跳到原文") }
             Text(
                 "第 ${first.chapterIndex + 1} 章 · “${first.selectedText.take(180)}${if (first.selectedText.length > 180) "…" else ""}”",
                 style = MaterialTheme.typography.bodySmall,

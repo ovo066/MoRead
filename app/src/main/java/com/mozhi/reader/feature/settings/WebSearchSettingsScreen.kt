@@ -2,30 +2,25 @@ package com.mozhi.reader.feature.settings
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Language
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.TravelExplore
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -33,16 +28,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.mozhi.reader.ai.search.WebSearchProvider
 import com.mozhi.reader.ai.search.TavilyDepth
+import com.mozhi.reader.ai.search.WebSearchProvider
 import com.mozhi.reader.ui.components.FrostedSurface
+import com.mozhi.reader.ui.components.MoReadRowDivider
+import com.mozhi.reader.ui.components.MoReadSecondaryPage
+import com.mozhi.reader.ui.components.MoReadSection
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -63,27 +59,7 @@ fun WebSearchSettingsScreen(
     var keyInput by remember(provider) { mutableStateOf("") }
     val hasKey = state.hasKeys[provider] == true
 
-    Scaffold(
-        containerColor = Color.Transparent,
-        topBar = {
-            TopAppBar(
-                title = { Text("网络搜索") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-            )
-        }
-    ) { padding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
-            contentPadding = PaddingValues(start = 20.dp, top = 8.dp, end = 20.dp, bottom = 36.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
+    MoReadSecondaryPage(title = "网络搜索", subtitle = "选择搜索引擎，让伴读查资料、读网页。", onBack = onBack) {
             item {
                 Text(
                     "开启后，伴读角色可以联网查资料、读网页。",
@@ -123,21 +99,7 @@ fun WebSearchSettingsScreen(
                 }
             }
             item {
-                Text("搜索引擎", style = MaterialTheme.typography.titleSmall)
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    WebSearchProvider.entries.forEach { candidate ->
-                        FilterChip(
-                            selected = provider == candidate,
-                            onClick = { viewModel.setProvider(candidate) },
-                            label = { Text(candidate.label) }
-                        )
-                    }
-                }
+                SearchEngineChoices(provider, state.hasKeys, viewModel::setProvider)
             }
             item {
                 FrostedSurface(
@@ -257,7 +219,6 @@ fun WebSearchSettingsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-        }
     }
 }
 
@@ -267,16 +228,25 @@ private fun TavilyDepthSelector(
     selected: TavilyDepth,
     onSelect: (TavilyDepth) -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(title, style = MaterialTheme.typography.labelLarge)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TavilyDepth.entries.forEach { depth ->
-                FilterChip(
-                    selected = selected == depth,
-                    onClick = { onSelect(depth) },
-                    label = { Text(depth.label) }
-                )
+    SettingChoiceField(title, if (selected == TavilyDepth.BASIC) "基础 · Basic" else "深入 · Advanced", selected.name,
+        listOf(SettingChoice(TavilyDepth.BASIC.name, "基础 · Basic", "更快，更省额度", Icons.Outlined.Bolt),
+            SettingChoice(TavilyDepth.ADVANCED.name, "深入 · Advanced", "获取更深入的资料", Icons.Outlined.TravelExplore)),
+        { onSelect(TavilyDepth.valueOf(it)) }, icon = Icons.Outlined.Search)
+}
+
+@Composable
+internal fun SearchEngineChoices(selected: WebSearchProvider, hasKeys: Map<WebSearchProvider, Boolean>, onSelect: (WebSearchProvider) -> Unit) {
+    MoReadSection(title = "搜索引擎", footer = "切换引擎会保留各自保存的地址和 API Key。") {
+        WebSearchProvider.entries.forEachIndexed { index, provider ->
+            if (index > 0) MoReadRowDivider()
+            val (brand, detail) = when (provider) {
+                WebSearchProvider.FIRECRAWL -> AiBrand.FIRECRAWL to "网页搜索与正文抓取"
+                WebSearchProvider.EXA -> AiBrand.EXA to "语义搜索与资料发现"
+                WebSearchProvider.TAVILY -> AiBrand.TAVILY to "面向问答的搜索与提取"
             }
+            SettingChoiceRow(SettingChoice(provider.name, provider.label,
+                "$detail · ${if (hasKeys[provider] == true) "已保存 Key" else "待配置 Key"}", brand = brand),
+                selected == provider) { onSelect(provider) }
         }
     }
 }

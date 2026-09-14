@@ -5,6 +5,12 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ProactiveAnnotationSchedulerTest {
+    @Test fun finiteDailyBudgetReservesAShareForTheOtherSelectedCompanions() {
+        assertEquals(5, annotationBudgetShare(10, 2))
+        assertEquals(4, annotationBudgetShare(10, 3))
+        assertEquals(0, annotationBudgetShare(0, 3))
+        assertEquals(Int.MAX_VALUE, annotationBudgetShare(Int.MAX_VALUE, 3))
+    }
     private val job = ProactiveAnnotationJobEntity(bookId = 1, chapterIndex = 2, personaId = 3,
         sourceRevision = "hash", createdAt = 0, updatedAt = 0, attempts = 1, status = "FAILED")
     @Test fun chapterRangeIsBoundedToSixAndBookEnd() {

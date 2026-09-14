@@ -46,6 +46,8 @@ enum class ModelRole {
     CHEAP,
     /** 伴读输入区的 AI 建议回复；未分配时回落 CHEAP → CHAT。 */
     SUGGESTION,
+    /** 随读主动段评；未分配时使用 CHEAP。 */
+    PROACTIVE_ANNOTATION,
     EMBEDDING,
     /** Optional dedicated rerank endpoint; leaving it unassigned keeps local fusion ordering. */
     RERANK,
@@ -59,6 +61,7 @@ data class BookEntity(
     val title: String,
     val author: String,
     val coverPath: String?,
+    /** Original EPUB archive; TXT uses only canonical text and chapter rows. */
     val epubPath: String,
     val sourceType: BookSourceType,
     val importedAt: Long,
@@ -72,7 +75,7 @@ data class BookEntity(
     @ColumnInfo(defaultValue = "0")
     val maxReachedCharOffset: Int = lastReadCharOffset,
     val lastReadAt: Long = 0,
-    /** 0 = no `text.mz` on disk yet, 1 = current plain-text format. */
+    /** Content/coordinate revision; text.mz may be plain UTF-8 or a compatible block archive. */
     val textVersion: Int = 0,
     /** 旧版逗号分隔标签，仅为回退兼容保留。 */
     @Deprecated("改用 book_tag_refs，保留仅用于旧版回退")
@@ -161,7 +164,7 @@ data class ChapterEntity(
     val href: String,
     /** UTF-16 code units in the chapter body, not bytes. */
     val charCount: Int,
-    /** Byte offset into the book's `text.mz`; -1 until the book is materialized. */
+    /** Byte offset into the decoded UTF-8 stream of text.mz; -1 until materialized. */
     val textByteOffset: Long = -1,
     val textByteLength: Int = 0
 )

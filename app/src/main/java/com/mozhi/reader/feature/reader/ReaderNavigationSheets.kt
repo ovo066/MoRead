@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -137,13 +138,15 @@ internal fun ContentsSheet(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .height(78.dp)
                 .padding(start = 20.dp, end = 16.dp, top = 2.dp, bottom = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "目录",
-                    style = MaterialTheme.typography.headlineSmall,
+                    text = if (usesPublisherToc) "全部目录" else "全部章节",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
                     color = palette.onBackground
                 )
                 Text(

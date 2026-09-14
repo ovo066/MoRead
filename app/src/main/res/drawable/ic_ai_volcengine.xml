@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Lobe Icons 1.95.0: volcengine-color.svg; MIT, see licenses/lobe-icons-MIT.txt. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+    <path android:pathData="M 19.44 10.153 l -2.936 11.586 a .215 .215 0 0 0 .214 .261 h 5.87 a .215 .215 0 0 0 .214 -.261 l -2.95 -11.586 a .214 .214 0 0 0 -.412 0 z M 3.28 12.778 l -2.275 8.96 A .214 .214 0 0 0 1.22 22 h 4.532 a .212 .212 0 0 0 .214 -.165 .214 .214 0 0 0 0 -.097 l -2.276 -8.96 a .214 .214 0 0 0 -.41 0 z" android:fillType="nonZero" android:fillColor="#FF00E5E5" />
+    <path android:pathData="M 7.29 5.359 L 3.148 21.738 a .215 .215 0 0 0 .203 .261 h 8.29 a .214 .214 0 0 0 .215 -.261 L 7.7 5.358 a .214 .214 0 0 0 -.41 0 z" android:fillType="nonZero" android:fillColor="#FF006EFF" />
+    <path android:pathData="M 14.44 .15 a .214 .214 0 0 0 -.41 0 L 8.366 21.739 a .214 .214 0 0 0 .214 .261 H 19.9 a .216 .216 0 0 0 .171 -.078 .214 .214 0 0 0 .044 -.183 L 14.439 .15 z" android:fillType="nonZero" android:fillColor="#FF006EFF" />
+    <path android:pathData="M 10.278 7.741 L 6.685 21.736 a .214 .214 0 0 0 .214 .264 h 7.17 a .215 .215 0 0 0 .214 -.264 L 10.688 7.741 a .214 .214 0 0 0 -.41 0 z" android:fillType="nonZero" android:fillColor="#FF00E5E5" />
+</vector>

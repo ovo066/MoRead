@@ -45,7 +45,6 @@ class ImportCoordinator @Inject constructor(
     private val encodingDetector: TextEncodingDetector,
     private val ruleLoader: TxtTocRuleLoader,
     private val chapterSplitter: TxtChapterSplitter,
-    private val epubGenerator: EpubGenerator,
     private val textExtractor: EpubTextExtractor,
     private val layoutParser: EpubLayoutDocumentParser,
     private val packageInspector: EpubPackageInspector,
@@ -203,37 +202,14 @@ class ImportCoordinator @Inject constructor(
         require(author.length <= 120) { "作者不能超过 120 个字符" }
         require(session.splitResult.chapters.isNotEmpty()) { "没有可导入的章节" }
 
-        val output = File(booksDirectory(), "${UUID.randomUUID()}.epub")
+        var insertedBookId: Long? = null
         try {
-            onProgress(ImportProgress(context.getString(R.string.import_generating_epub), total = session.splitResult.chapters.size))
-            val generated = epubGenerator.generate(
-                outputFile = output,
-                title = title.trim(),
-                author = author.trim(),
-                chapters = session.splitResult.chapters
-            ) { completed, total ->
-                onProgress(ImportProgress(context.getString(R.string.import_generating_epub), completed, total))
-            }
-
-            onProgress(
-                ImportProgress(
-                    message = context.getString(R.string.import_validating_epub),
-                    completed = generated.chapters.size,
-                    total = generated.chapters.size
-                )
-            )
-            val publication = try {
-                readium.open(generated.file)
-            } catch (error: Throwable) {
-                throw IllegalStateException("生成的 EPUB 校验失败", error)
-            }
-            publication.close()
-
+            val chapters = session.splitResult.chapters.map { ChapterDraft(it.index, it.title, "", it.charCount) }
             onProgress(
                 ImportProgress(
                     message = context.getString(R.string.import_writing_library),
-                    completed = generated.chapters.size,
-                    total = generated.chapters.size
+                    completed = chapters.size,
+                    total = chapters.size
                 )
             )
             val bookId = libraryRepository.insertBook(
@@ -241,19 +217,20 @@ class ImportCoordinator @Inject constructor(
                     title = title.trim(),
                     author = author.trim(),
                     coverPath = null,
-                    epubPath = generated.file.absolutePath,
+                    epubPath = "",
                     sourceType = BookSourceType.TXT,
                     importedAt = System.currentTimeMillis(),
-                    totalChapters = generated.chapters.size
+                    totalChapters = chapters.size
                 ),
-                chapters = generated.chapters
+                chapters = chapters
             )
+            insertedBookId = bookId
 
             onProgress(
                 ImportProgress(
                     message = context.getString(R.string.import_writing_text),
-                    completed = generated.chapters.size,
-                    total = generated.chapters.size
+                    completed = chapters.size,
+                    total = chapters.size
                 )
             )
             libraryRepository.materializeBookText(
@@ -266,7 +243,9 @@ class ImportCoordinator @Inject constructor(
             // 向量索引不再随导入自动建立；伴读首次检索该书时按需触发
             bookId
         } catch (error: Throwable) {
-            output.delete()
+            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                insertedBookId?.let { libraryRepository.getBook(it) }?.let { libraryRepository.deleteBook(it) }
+            }
             throw error
         }
     }
@@ -344,9 +323,9 @@ class ImportCoordinator @Inject constructor(
                     chapters = spine.chapters,
                     markReady = false
                 )
-                mediaStore.replace(bookId, spine.images)
+                mediaStore.replace(bookId, spine.images, target)
                 if (layoutPackage != null && spine.layouts.isNotEmpty()) {
-                    layoutStore.replace(bookId, target, layoutPackage, spine.layouts)
+                    layoutStore.initialize(bookId, target, layoutPackage, spine.layouts)
                 }
                 libraryRepository.markTextReady(bookId)
                 // 向量索引改为按需触发，见 BookEmbeddingScheduler.enqueueForBook
@@ -355,13 +334,16 @@ class ImportCoordinator @Inject constructor(
                 publication.close()
             }
         } catch (error: Throwable) {
-            val inserted = insertedBookId?.let { libraryRepository.getBook(it) }
-            if (inserted != null) {
-                libraryRepository.deleteBook(inserted)
-            } else {
-                coverFile?.delete()
-                target.delete()
+            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                val inserted = insertedBookId?.let { libraryRepository.getBook(it) }
+                if (inserted != null) {
+                    libraryRepository.deleteBook(inserted)
+                } else {
+                    coverFile?.delete()
+                    target.delete()
+                }
             }
+            if (error is kotlinx.coroutines.CancellationException) throw error
             Log.e(TAG, "EPUB import failed: $displayName", error)
             throw IllegalStateException("EPUB 解析失败：${error.userFacingCause()}", error)
         }
@@ -371,14 +353,32 @@ class ImportCoordinator @Inject constructor(
      * Backfills `text.mz` for a book imported before plain text was stored, and converts its saved
      * Readium locators to character offsets.
      *
-     * Books imported from TXT also go through the EPUB spine here: the generated EPUB is the only
-     * remaining copy of their text, and it holds exactly one resource per chapter.
+     * Old TXT imports that predate text.mz recover from their generated EPUB once. New TXT imports
+     * already have canonical text and do not create an EPUB.
      */
     suspend fun materializeLegacyBook(book: BookEntity): Boolean =
         com.mozhi.reader.core.library.BookContentMutation.withBook(book.id) {
             val current = libraryRepository.getBook(book.id)
             if (current == null || current.removedAt > 0L) true else materializeLegacyBookContent(current)
         }
+
+    /** Startup storage upgrade. None of these changes alter saved text/reading coordinates. */
+    suspend fun optimizeStoredBook(book: BookEntity) {
+        if (book.textVersion < LibraryRepository.CURRENT_TEXT_VERSION || book.removedAt > 0) return
+        libraryRepository.compactBookText(book.id)
+        if (book.sourceType == BookSourceType.TXT) {
+            libraryRepository.discardGeneratedTxtEpub(book.id)
+        } else {
+            com.mozhi.reader.core.library.BookContentMutation.withBook(book.id) {
+                val current = libraryRepository.getBook(book.id) ?: return@withBook
+                if (current.removedAt > 0) return@withBook
+                val archive = File(current.epubPath).takeIf(File::isFile) ?: return@withBook
+                val lengths = libraryRepository.getChapters(book.id).sortedBy { it.chapterIndex }.map { it.charCount }
+                layoutStore.adoptArchive(book.id, archive, lengths)
+                mediaStore.adoptArchive(book.id, archive)
+            }
+        }
+    }
 
     private suspend fun materializeLegacyBookContent(book: BookEntity): Boolean = withContext(Dispatchers.IO) {
         val epubFile = File(book.epubPath).takeIf(File::isFile) ?: return@withContext false
@@ -402,9 +402,9 @@ class ImportCoordinator @Inject constructor(
                 chapters = spine.chapters,
                 markReady = false
             )
-            mediaStore.replace(book.id, spine.images)
+            mediaStore.replace(book.id, spine.images, epubFile.takeIf { book.sourceType == BookSourceType.EPUB })
             if (layoutPackage != null && spine.layouts.isNotEmpty()) {
-                layoutStore.replace(book.id, epubFile, layoutPackage, spine.layouts)
+                layoutStore.initialize(book.id, epubFile, layoutPackage, spine.layouts)
             }
             // v0 没有正文字符轨，需要从旧 Readium locator 迁移；v1→v2 只补图片 sidecar，
             // 「［图片］」token 长度不变，必须保留已有的阅读/批注字符坐标。
@@ -519,6 +519,11 @@ class ImportCoordinator @Inject constructor(
             // 正文始终保留同长度的「［图片］」token。资源缺失时它直接作为降级文本，
             // 资源可用时 sidecar 在同一 UTF-16 偏移把该行替换为真实图片。
             extracted.images.forEach { reference ->
+                val archivePath = archiveImages.resolve(reference.href)
+                if (archivePath != null) {
+                    images += BookImageInput(index, reference.charOffset, reference.href, reference.altText, archivePath = archivePath)
+                    return@forEach
+                }
                 val imageBytes = if (resourceCache.containsKey(reference.href)) {
                     resourceCache[reference.href]
                 } else {
@@ -538,7 +543,7 @@ class ImportCoordinator @Inject constructor(
             }
             chapters += ChapterTextInput(index = index, body = extracted.text)
             parsedLayout?.let { parsed ->
-                layouts += EpubLayoutChapterInput(index, chapterHref, parsed.document, parsed.dom)
+                layouts += EpubLayoutChapterInput(index, chapterHref, parsed.document.copy(blocks = emptyList()))
             }
         }
         }

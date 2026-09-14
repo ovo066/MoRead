@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import com.mozhi.reader.ui.theme.AccentPreset
 import com.mozhi.reader.ui.theme.AppearanceSettings
 import com.mozhi.reader.ui.theme.ThemeMode
@@ -1135,7 +1136,10 @@ class ReaderSettingsRepository @Inject constructor(
                 ),
                 annotationLimitsByBook = ProactiveAnnotationLimitsCodec.decodeBooks(
                     preferences[Keys.CompanionAnnotationLimitsByBook]
-                )
+                ),
+                annotationPersonaIds = preferences[Keys.CompanionAnnotationPersonas].orEmpty()
+                    .mapNotNull { it.toLongOrNull()?.takeIf { id -> id > 0 } }.toSet(),
+                annotationPrompts = ProactiveAnnotationPrompts.decode(preferences[Keys.CompanionAnnotationPrompts])
             )
         }
 
@@ -1161,6 +1165,43 @@ class ReaderSettingsRepository @Inject constructor(
 
     suspend fun setCompanionAnnotationNotice(value: ProactiveAnnotationNotice) {
         dataStore.edit { it[Keys.CompanionAnnotationNotice] = value.name }
+    }
+
+    suspend fun setAnnotationPersonaIds(ids: Set<Long>) {
+        dataStore.edit { it[Keys.CompanionAnnotationPersonas] = ids.filter { id -> id > 0 }.map(Long::toString).toSet() }
+    }
+
+    suspend fun toggleAnnotationPersona(id: Long) {
+        if (id <= 0) return
+        dataStore.edit { preferences ->
+            val selected = preferences[Keys.CompanionAnnotationPersonas].orEmpty()
+            preferences[Keys.CompanionAnnotationPersonas] = if (id.toString() in selected) selected - id.toString() else selected + id.toString()
+        }
+    }
+
+    suspend fun saveAnnotationPrompt(preset: GlobalPromptPreset) {
+        val clean = preset.copy(id = preset.id.ifBlank { java.util.UUID.randomUUID().toString() },
+            name = preset.name.trim().take(80), prompt = preset.prompt.trim().take(GlobalPromptPresetStore.MAX_PROMPT_CHARS))
+        require(clean.name.isNotBlank() && clean.prompt.isNotBlank()) { "名称和提示词不能为空" }
+        editAnnotationPrompts { existing ->
+            if (existing.any { it.id == clean.id }) existing.map { if (it.id == clean.id) clean else it }
+            else existing + clean
+        }
+    }
+
+    suspend fun setAnnotationPromptEnabled(id: String, enabled: Boolean) = editAnnotationPrompts { presets ->
+        presets.map { if (it.id == id) it.copy(enabled = enabled) else it }
+    }
+
+    suspend fun deleteAnnotationPrompt(id: String) = editAnnotationPrompts { it.filterNot { preset -> preset.id == id } }
+
+    suspend fun resetAnnotationPrompts() = editAnnotationPrompts { ProactiveAnnotationPrompts.DEFAULTS }
+
+    private suspend fun editAnnotationPrompts(transform: (List<GlobalPromptPreset>) -> List<GlobalPromptPreset>) {
+        dataStore.edit { preferences ->
+            preferences[Keys.CompanionAnnotationPrompts] = ProactiveAnnotationPrompts.encode(
+                transform(ProactiveAnnotationPrompts.decode(preferences[Keys.CompanionAnnotationPrompts])))
+        }
     }
 
     suspend fun setCompanionAnnotationLimits(limits: ProactiveAnnotationLimits) {
@@ -1198,6 +1239,8 @@ class ReaderSettingsRepository @Inject constructor(
     }
 
     private object Keys {
+        val CompanionAnnotationPersonas = stringSetPreferencesKey("companion_annotation_personas")
+        val CompanionAnnotationPrompts = stringPreferencesKey("companion_annotation_prompts")
         val CompanionAnnotationLimits = stringPreferencesKey("companion_annotation_limits")
         val CompanionAnnotationLimitsByBook =
             stringPreferencesKey("companion_annotation_limits_by_book")

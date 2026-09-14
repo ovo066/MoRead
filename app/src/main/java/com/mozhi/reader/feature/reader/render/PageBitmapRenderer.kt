@@ -17,6 +17,8 @@ import android.util.LruCache
 import android.text.TextPaint
 import com.caverock.androidsvg.SVG
 import com.mozhi.reader.core.datastore.ReaderSyntaxFont
+import com.mozhi.reader.core.library.EpubArchiveAsset
+import com.mozhi.reader.core.library.EpubArchivePool
 import com.mozhi.reader.feature.reader.engine.BackgroundSizeMode
 import com.mozhi.reader.feature.reader.engine.ImmersiveArtworkFit
 import com.mozhi.reader.feature.reader.engine.TransientHighlightSpan
@@ -106,9 +108,10 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         color = pageStyle.mutedColor
         alpha = 24
     }
-    private val imageCache = object : LruCache<String, Bitmap>(IMAGE_CACHE_KB) {
+    private val archiveImages = EpubArchivePool()
+    private val imageCache = object : LruCache<String, Bitmap>(IMAGE_CACHE_PIXELS) {
         override fun sizeOf(key: String, value: Bitmap): Int =
-            (value.allocationByteCount / 1024).coerceAtLeast(1)
+            (value.width.toLong() * value.height).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
 
         override fun entryRemoved(evicted: Boolean, key: String, oldValue: Bitmap, newValue: Bitmap?) {
             if (oldValue !== newValue && !oldValue.isRecycled) oldValue.recycle()
@@ -1005,11 +1008,7 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
     }
 
     private fun loadImage(path: String, targetWidth: Int, targetHeight: Int): Bitmap? {
-        val cacheKey = if (path.endsWith(".svg", true)) {
-            "$path|${targetWidth.coerceAtLeast(1)}x${targetHeight.coerceAtLeast(1)}"
-        } else {
-            path
-        }
+        val cacheKey = "$path|${(targetWidth.coerceAtLeast(1) + 127) / 128}x${(targetHeight.coerceAtLeast(1) + 127) / 128}"
         imageCache.get(cacheKey)?.takeIf { !it.isRecycled }?.let { return it }
         val bitmap = decodeImage(path, targetWidth, targetHeight) ?: return null
         imageCache.put(cacheKey, bitmap)
@@ -1018,14 +1017,17 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
 
     /** 普通正文插图按目标尺寸采样，缓存由 renderer 生命周期托管。 */
     private fun decodeImage(path: String, targetWidth: Int, targetHeight: Int): Bitmap? {
-        if (path.endsWith(".svg", true)) return decodeSvg(path, targetWidth, targetHeight)
+        val source = EpubArchiveAsset.parse(path)
+        val bytes = source?.let { archiveImages.read(it) ?: return null }
+        if (path.endsWith(".svg", true)) return decodeSvg(path, targetWidth, targetHeight, bytes)
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         val readBounds = runCatching {
-            BitmapFactory.decodeFile(path, bounds)
+            if (bytes != null) BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            else BitmapFactory.decodeFile(path, bounds)
             true
         }.getOrDefault(false)
         if (!readBounds || bounds.outWidth <= 0 || bounds.outHeight <= 0) {
-            return decodeSvg(path, targetWidth, targetHeight)
+            return decodeSvg(path, targetWidth, targetHeight, bytes)
         }
         var sample = 1
         val safeWidth = targetWidth.coerceAtLeast(1)
@@ -1035,21 +1037,21 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         ) {
             sample *= 2
         }
+        while ((bounds.outWidth / sample).toLong() * (bounds.outHeight / sample) > MAX_IMAGE_PIXELS) sample *= 2
         val bitmap = runCatching {
-            BitmapFactory.decodeFile(
-                path,
-                BitmapFactory.Options().apply {
-                    inSampleSize = sample
-                    inPreferredConfig = Bitmap.Config.ARGB_8888
-                }
-            )
+            val options = BitmapFactory.Options().apply {
+                inSampleSize = sample
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            }
+            if (bytes != null) BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+            else BitmapFactory.decodeFile(path, options)
         }.getOrNull() ?: return null
         return bitmap
     }
 
-    private fun decodeSvg(path: String, targetWidth: Int, targetHeight: Int): Bitmap? {
+    private fun decodeSvg(path: String, targetWidth: Int, targetHeight: Int, bytes: ByteArray? = null): Bitmap? {
         val svg = runCatching {
-            File(path).inputStream().buffered().use { input -> SVG.getFromInputStream(input) }
+            (bytes?.inputStream() ?: File(path).inputStream()).buffered().use { input -> SVG.getFromInputStream(input) }
         }.getOrNull() ?: return null
         val viewBox = svg.documentViewBox
         val intrinsicWidth = svg.documentWidth.takeIf { it.isFinite() && it > 0f }
@@ -1066,7 +1068,8 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
             MAX_SVG_DIMENSION / intrinsicWidth,
             MAX_SVG_DIMENSION / intrinsicHeight
         )
-        val scale = kotlin.math.min(requestedScale, dimensionScale).coerceAtLeast(MIN_SVG_SCALE)
+        val pixelScale = kotlin.math.sqrt(MAX_IMAGE_PIXELS.toDouble() / (intrinsicWidth.toDouble() * intrinsicHeight)).toFloat()
+        val scale = minOf(requestedScale, dimensionScale, pixelScale).coerceAtLeast(0f)
         val pixelWidth = (intrinsicWidth * scale).toInt().coerceIn(1, MAX_SVG_DIMENSION)
         val pixelHeight = (intrinsicHeight * scale).toInt().coerceIn(1, MAX_SVG_DIMENSION)
         val bitmap = runCatching {
@@ -1085,6 +1088,7 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
 
     fun release() {
         imageCache.evictAll()
+        archiveImages.close()
         backgroundProvider.release()
     }
 
@@ -1169,10 +1173,10 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
     }
 
     private companion object {
-        const val IMAGE_CACHE_KB = 32 * 1024
+        const val IMAGE_CACHE_PIXELS = 8 * 1024 * 1024
+        const val MAX_IMAGE_PIXELS = 4 * 1024 * 1024
         const val IMAGE_CORNER_RADIUS = 12f
         const val MAX_SVG_DIMENSION = 4096
-        const val MIN_SVG_SCALE = 0.01f
         const val ANNOTATION_HIGHLIGHT_RADIUS = 4f
         const val LISTEN_HIGHLIGHT_ID = -1L
     }

@@ -7,11 +7,16 @@ import android.graphics.Canvas
 import com.caverock.androidsvg.SVG
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
+import java.util.zip.ZipFile
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -23,10 +28,12 @@ data class BookImageInput(
     val charOffset: Int,
     val sourceName: String,
     val altText: String,
-    val bytes: ByteArray
+    val bytes: ByteArray = byteArrayOf(),
+    /** Exact ZIP entry name; only exceptional/data-URI images need a second file. */
+    val archivePath: String? = null
 )
 
-/** 阅读器消费的行内图片元数据；图片原文件保存在应用私有目录。 */
+/** 阅读器消费的行内图片元数据；imagePath 可以指向 EPUB 内的资源。 */
 data class BookInlineImage(
     val chapterIndex: Int,
     val charOffset: Int,
@@ -44,43 +51,50 @@ data class BookInlineImage(
 class BookMediaStore @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
-    suspend fun replace(bookId: Long, images: List<BookImageInput>) = withContext(Dispatchers.IO) {
+    suspend fun replace(bookId: Long, images: List<BookImageInput>, epubFile: File? = null) = withContext(Dispatchers.IO) {
         val root = directory(bookId)
         val staging = File(root.parentFile, "${root.name}.tmp-${System.nanoTime()}")
         staging.deleteRecursively()
         staging.mkdirs()
         val stored = ArrayList<StoredImage>(images.size)
         val assetsBySource = HashMap<String, StoredAsset>()
+        val archivePool = EpubArchivePool()
         try {
             images.forEachIndexed { index, input ->
-                if (input.bytes.isEmpty() || input.bytes.size > MAX_IMAGE_BYTES) return@forEachIndexed
-                val existing = assetsBySource[input.sourceName]
+                val sourceKey = input.archivePath ?: input.sourceName
+                val existing = assetsBySource[sourceKey]
                 val asset = if (existing != null) {
                     existing
                 } else {
-                    val sourceExtension = imageExtension(input.sourceName, input.bytes)
+                    val archived = epubFile != null && input.archivePath != null
+                    val bytes = if (archived) archivePool.read(EpubArchiveAsset(epubFile!!, input.archivePath!!))
+                        ?: return@forEachIndexed else input.bytes
+                    if (bytes.isEmpty() || bytes.size > MAX_IMAGE_BYTES) return@forEachIndexed
+                    val sourceExtension = imageExtension(input.sourceName, bytes)
                         ?: return@forEachIndexed
                     val extension = if (sourceExtension == "svg") "png" else sourceExtension
                     val fileName = "ch-${input.chapterIndex.toString().padStart(5, '0')}-" +
                         "${index.toString().padStart(4, '0')}.$extension"
                     val output = File(staging, fileName)
                     val dimensions = if (sourceExtension == "svg") {
-                        renderSvgToPng(input.bytes, output) ?: return@forEachIndexed
+                        if (archived) svgDimensions(bytes) ?: return@forEachIndexed
+                        else renderSvgToPng(bytes, output) ?: return@forEachIndexed
                     } else {
-                        output.writeBytes(input.bytes)
                         val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                         val decodedBounds = runCatching {
-                            BitmapFactory.decodeFile(output.absolutePath, options)
+                            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
                             true
                         }.getOrDefault(false)
                         if (!decodedBounds || options.outWidth <= 0 || options.outHeight <= 0) {
                             output.delete()
                             return@forEachIndexed
                         }
+                        if (!archived) output.writeBytes(bytes)
                         options.outWidth to options.outHeight
                     }
-                    StoredAsset(fileName, dimensions.first, dimensions.second).also { value ->
-                        assetsBySource[input.sourceName] = value
+                    StoredAsset(if (archived) "" else fileName, dimensions.first, dimensions.second,
+                        if (archived) input.archivePath else null).also { value ->
+                        assetsBySource[sourceKey] = value
                     }
                 }
                 stored += StoredImage(
@@ -89,10 +103,15 @@ class BookMediaStore @Inject constructor(
                     fileName = asset.fileName,
                     pixelWidth = asset.pixelWidth,
                     pixelHeight = asset.pixelHeight,
-                    altText = input.altText.take(MAX_ALT_CHARS)
+                    altText = input.altText.take(MAX_ALT_CHARS),
+                    archivePath = asset.archivePath
                 )
             }
             File(staging, MANIFEST_NAME).writeText(json.encodeToString(stored))
+            epubFile?.let {
+                File(staging, ARCHIVE_FILE).writeText(json.encodeToString(StoredArchive(it.portableArchivePath(context.filesDir))))
+                File(staging, ARCHIVE_MARKER).writeText("1")
+            }
             root.deleteRecursively()
             if (!staging.renameTo(root)) {
                 root.mkdirs()
@@ -102,7 +121,7 @@ class BookMediaStore @Inject constructor(
         } catch (error: Throwable) {
             staging.deleteRecursively()
             throw error
-        }
+        } finally { archivePool.close() }
     }
 
     suspend fun read(bookId: Long): List<BookInlineImage> = withContext(Dispatchers.IO) {
@@ -111,7 +130,14 @@ class BookMediaStore @Inject constructor(
         val stored = runCatching {
             json.decodeFromString<List<StoredImage>>(manifest.readText())
         }.getOrElse { return@withContext emptyList() }
+        val archive = readArchive(root)
         stored.mapNotNull { image ->
+            if (image.archivePath != null) {
+                val source = archive ?: return@mapNotNull null
+                return@mapNotNull BookInlineImage(image.chapterIndex, image.charOffset,
+                    EpubArchiveAsset(source, image.archivePath).encode(), image.pixelWidth, image.pixelHeight, image.altText)
+            }
+            if (image.fileName.isBlank()) return@mapNotNull null
             val file = File(root, image.fileName)
             val safe = runCatching {
                 file.canonicalFile.toPath().startsWith(root.canonicalFile.toPath())
@@ -126,6 +152,83 @@ class BookMediaStore @Inject constructor(
                 altText = image.altText
             )
         }
+    }
+
+    /** Match old copies by bytes before removing them; converted/edited exceptions stay on disk. */
+    suspend fun adoptArchive(bookId: Long, epubFile: File): Long = withContext(Dispatchers.IO) {
+        val root = directory(bookId)
+        if (readArchive(root) != null && File(root, ARCHIVE_MARKER).isFile || !epubFile.isFile) return@withContext 0L
+        val manifest = File(root, MANIFEST_NAME).takeIf(File::isFile) ?: return@withContext 0L
+        val stored = runCatching { json.decodeFromString<List<StoredImage>>(manifest.readText()) }.getOrNull()
+            ?: return@withContext 0L
+        val matches = HashMap<String, String>()
+        ZipFile(epubFile).use { zip ->
+            val entriesBySize = zip.entries().asSequence().filter { !it.isDirectory && it.size in 1..MAX_IMAGE_BYTES }
+                .groupBy { it.size }
+            val hashes = HashMap<String, ByteArray>()
+            stored.map { it.fileName }.filter(String::isNotBlank).distinct().forEach { name ->
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                val local = safeImageFile(root, name) ?: return@forEach
+                val candidates = entriesBySize[local.length()].orEmpty()
+                if (candidates.isEmpty()) return@forEach
+                val hash = local.inputStream().use { stream ->
+                    val digest = MessageDigest.getInstance("SHA-256")
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    while (true) { val n = stream.read(buffer); if (n < 0) break; digest.update(buffer, 0, n) }
+                    digest.digest()
+                }
+                val match = candidates.firstOrNull { entry ->
+                    val other = hashes.getOrPut(entry.name) {
+                        zip.getInputStream(entry).use { stream ->
+                            val digest = MessageDigest.getInstance("SHA-256")
+                            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                            var total = 0L
+                            while (true) {
+                                val n = stream.read(buffer); if (n < 0) break
+                                total += n
+                                require(total <= MAX_IMAGE_BYTES) { "EPUB 图片超过读取上限" }
+                                digest.update(buffer, 0, n)
+                            }
+                            digest.digest()
+                        }
+                    }
+                    hash.contentEquals(other)
+                }
+                if (match != null) matches[name] = match.name
+            }
+        }
+        // Commit references before deleting any copy. Interrupted upgrades remain readable.
+        writeAtomic(File(root, ARCHIVE_FILE), json.encodeToString(StoredArchive(epubFile.portableArchivePath(context.filesDir))))
+        val updated = stored.map { image ->
+            matches[image.fileName]?.let { image.copy(fileName = "", archivePath = it) } ?: image
+        }
+        writeAtomic(manifest, json.encodeToString(updated))
+        val referencedFiles = updated.mapTo(hashSetOf()) { it.fileName }
+        var complete = true
+        val freed = root.listFiles().orEmpty().filter { it.isFile && it.name !in referencedFiles &&
+            it.name.matches(Regex("ch-\\d+-\\d+\\.[a-zA-Z0-9]+")) }.sumOf { file ->
+            val bytes = file.length()
+            if (file.delete()) bytes else { complete = false; 0L }
+        }
+        if (complete) writeAtomic(File(root, ARCHIVE_MARKER), "1")
+        freed
+    }
+
+    private fun readArchive(root: File): File? = runCatching {
+        val stored = json.decodeFromString<StoredArchive>(File(root, ARCHIVE_FILE).readText())
+        resolveArchivePath(context.filesDir, stored.path)
+    }.getOrNull()
+
+    private fun safeImageFile(root: File, name: String): File? = runCatching {
+        File(root, name).canonicalFile.takeIf { it.isFile && it.toPath().startsWith(root.canonicalFile.toPath()) }
+    }.getOrNull()
+
+    private fun writeAtomic(file: File, text: String) {
+        val temporary = File.createTempFile("media-", ".tmp", file.parentFile)
+        try {
+            temporary.writeText(text)
+            Files.move(temporary.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        } finally { temporary.delete() }
     }
 
     fun delete(bookId: Long) {
@@ -187,13 +290,23 @@ class BookMediaStore @Inject constructor(
         }
     }
 
+    private fun svgDimensions(bytes: ByteArray): Pair<Int, Int>? = runCatching {
+        val svg = SVG.getFromInputStream(bytes.inputStream())
+        val width = svg.documentWidth.takeIf { it.isFinite() && it > 0f }
+            ?: svg.documentViewBox?.width()?.takeIf { it.isFinite() && it > 0f } ?: DEFAULT_VECTOR_WIDTH.toFloat()
+        val height = svg.documentHeight.takeIf { it.isFinite() && it > 0f }
+            ?: svg.documentViewBox?.height()?.takeIf { it.isFinite() && it > 0f } ?: DEFAULT_VECTOR_HEIGHT.toFloat()
+        width.roundToInt().coerceAtLeast(1) to height.roundToInt().coerceAtLeast(1)
+    }.getOrNull()
+
     private fun ByteArray.startsWith(prefix: ByteArray): Boolean =
         size >= prefix.size && indices.take(prefix.size).all { this[it] == prefix[it] }
 
     private data class StoredAsset(
         val fileName: String,
         val pixelWidth: Int,
-        val pixelHeight: Int
+        val pixelHeight: Int,
+        val archivePath: String? = null
     )
 
     @Serializable
@@ -203,12 +316,17 @@ class BookMediaStore @Inject constructor(
         val fileName: String,
         val pixelWidth: Int,
         val pixelHeight: Int,
-        val altText: String
+        val altText: String,
+        val archivePath: String? = null
     )
+
+    @Serializable private data class StoredArchive(val path: String)
 
     private companion object {
         const val ROOT_DIRECTORY = "book-media"
         const val MANIFEST_NAME = "images.json"
+        const val ARCHIVE_FILE = "archive.json"
+        const val ARCHIVE_MARKER = ".archive-v1"
         const val MAX_IMAGE_BYTES = 30 * 1024 * 1024
         const val MAX_ALT_CHARS = 500
         const val DEFAULT_VECTOR_WIDTH = 1_200

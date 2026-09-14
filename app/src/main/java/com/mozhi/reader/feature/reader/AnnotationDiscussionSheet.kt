@@ -359,10 +359,11 @@ internal fun AnnotationDiscussionSheet(
     onDeleteAnnotation: (Long) -> Unit,
     onDeleteReply: (Long) -> Unit,
     onCancelStreaming: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    defaultRespondPersonaId: Long? = null
 ) {
     var input by remember { mutableStateOf("") }
-    // AI 回应是可选项：默认不邀请任何角色，点 @ 行头像才会让 TA 回应
+    // 有文字时可选择邀请角色；空输入发送则邀请选中的角色或当前伴读。
     var respondTarget by remember { mutableStateOf<Long?>(null) }
     val clipboard = LocalClipboardManager.current
     val quote = annotations.firstOrNull()?.selectedText.orEmpty()
@@ -554,17 +555,20 @@ internal fun AnnotationDiscussionSheet(
             }
         }
 
-        val canSend = input.isNotBlank() && annotations.isNotEmpty() && streaming == null
+        val emptyReplyPersona = personas.firstOrNull { it.id == respondTarget }
+            ?: personas.firstOrNull { it.id == defaultRespondPersonaId }
+            ?: personas.firstOrNull()
+        val canSend = (input.isNotBlank() || emptyReplyPersona != null) && annotations.isNotEmpty() && streaming == null
         ReaderComposerBar(
             input = input,
             onInputChange = { input = it },
-            placeholder = if (respondTarget != null) "说点什么，TA 会回应…" else "写下你的想法…",
+            placeholder = emptyReplyPersona?.let { "留空发送，请${it.name}点评原文" } ?: "写下你的想法…",
             canSend = canSend,
             isStreaming = streaming != null,
             palette = palette,
             onSend = {
                 val target = annotations.firstOrNull { it.personaId == null } ?: annotations.first()
-                onSend(target, input.trim(), respondTarget)
+                onSend(target, input.trim(), respondTarget ?: emptyReplyPersona?.id?.takeIf { input.isBlank() })
                 input = ""
             },
             onStop = onCancelStreaming,

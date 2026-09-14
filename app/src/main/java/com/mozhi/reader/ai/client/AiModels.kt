@@ -37,7 +37,16 @@ enum class ChatRole(val wire: String) {
 data class ToolCall(
     val id: String,
     val name: String,
-    val arguments: String
+    val arguments: String,
+    /** Opaque native Gemini signature; replay on the same functionCall part. */
+    val thoughtSignature: String? = null,
+    /** OpenAI-compatible tool metadata, including Google's thought_signature. */
+    val extraContent: JsonObject? = null,
+    /**
+     * OpenRouter's message-level reasoning blocks. Stored once on the first call of a round
+     * so existing toolCallsJson persistence also retains the full sequence for replay.
+     */
+    val reasoningDetails: List<JsonObject> = emptyList()
 )
 
 /** A tool declared to the model. [parameters] is a JSON Schema object. */
@@ -75,7 +84,7 @@ sealed interface ChatDelta {
     /**
      * 模型的思维链增量（OpenAI `reasoning_content`/`reasoning`、Claude `thinking_delta`、
      * Gemini `part.thought`、Responses `reasoning_summary_text.delta`）。
-     * 只用于本地展示，永不作为历史回传——各方言都不接受自己吐出的 reasoning 再喂回去。
+     * 只用于本地展示。工具续接需要的签名和结构化推理另随 [ToolCall] 保存，不能从展示文字重建。
      */
     data class Reasoning(val text: String) : ChatDelta
 
@@ -98,7 +107,8 @@ internal data class WireToolCall(
     val index: Int? = null,
     val id: String? = null,
     val type: String? = null,
-    val function: WireToolFunction? = null
+    val function: WireToolFunction? = null,
+    @SerialName("extra_content") val extraContent: JsonObject? = null
 )
 
 @Serializable
@@ -118,7 +128,8 @@ internal data class WireRequestMessage(
     val role: String,
     val content: kotlinx.serialization.json.JsonElement? = null,
     @SerialName("tool_calls") val toolCalls: List<WireToolCall>? = null,
-    @SerialName("tool_call_id") val toolCallId: String? = null
+    @SerialName("tool_call_id") val toolCallId: String? = null,
+    @SerialName("reasoning_details") val reasoningDetails: List<JsonObject>? = null
 )
 
 @Serializable
@@ -169,7 +180,8 @@ internal data class ChatCompletionChunk(
         @SerialName("reasoning_content") val reasoningContent: String? = null,
         /** OpenRouter 把同一份东西放在 `reasoning` 下。 */
         val reasoning: String? = null,
-        @SerialName("tool_calls") val toolCalls: List<WireToolCall>? = null
+        @SerialName("tool_calls") val toolCalls: List<WireToolCall>? = null,
+        @SerialName("reasoning_details") val reasoningDetails: List<JsonObject>? = null
     ) {
         /** 两种拼写取先到的那个；都为空表示这一帧没有思维链。 */
         val reasoningText: String?
@@ -184,31 +196,57 @@ internal data class ChatCompletionChunk(
  * text. Providers that omit `index` (rare) fall back to appending to the last slot.
  */
 internal class OpenAiToolCallAccumulator {
-    private class Slot(var id: String = "", var name: String = "", val arguments: StringBuilder = StringBuilder())
+    private class Slot(
+        var id: String = "",
+        var name: String = "",
+        val arguments: StringBuilder = StringBuilder(),
+        var extraContent: JsonObject? = null
+    )
 
     private val slots = LinkedHashMap<Int, Slot>()
+    private val reasoningDetails = ArrayList<JsonObject>()
 
-    fun accept(fragments: List<WireToolCall>?) {
+    fun accept(fragments: List<WireToolCall>?, details: List<JsonObject>? = null) {
+        // Signature-only chunks may arrive before or after the tool-call fragments.
+        details?.let { reasoningDetails.addAll(it) }
         fragments?.forEach { fragment ->
             val index = fragment.index ?: (slots.keys.maxOrNull() ?: 0)
             val slot = slots.getOrPut(index) { Slot() }
             fragment.id?.let { slot.id = it }
             fragment.function?.name?.let { slot.name = it }
             fragment.function?.arguments?.let { slot.arguments.append(it) }
+            fragment.extraContent?.let {
+                slot.extraContent = mergeToolCallMetadata(slot.extraContent, it)
+            }
         }
     }
 
     fun isEmpty(): Boolean = slots.isEmpty()
 
-    fun build(): List<ToolCall> = slots.values
+    fun build(): List<ToolCall> = slots.toSortedMap().values
         .filter { it.name.isNotBlank() }
         .mapIndexed { position, slot ->
             ToolCall(
                 id = slot.id.ifBlank { "call_$position" },
                 name = slot.name,
-                arguments = slot.arguments.toString().ifBlank { "{}" }
+                arguments = slot.arguments.toString().ifBlank { "{}" },
+                extraContent = slot.extraContent,
+                reasoningDetails = if (position == 0) reasoningDetails.toList() else emptyList()
             )
         }
+}
+
+/** Merge metadata objects without losing a signature when a later chunk adds sibling fields. */
+private fun mergeToolCallMetadata(previous: JsonObject?, fragment: JsonObject): JsonObject {
+    val merged = previous.orEmpty().toMutableMap()
+    fragment.forEach { (key, value) ->
+        merged[key] = if (value is JsonObject) {
+            mergeToolCallMetadata(merged[key] as? JsonObject, value)
+        } else {
+            value
+        }
+    }
+    return JsonObject(merged)
 }
 
 /** OpenAI chat/completions 请求侧 content：纯文本走字符串，带图走多模态数组。 */

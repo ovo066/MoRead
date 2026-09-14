@@ -84,4 +84,28 @@ class AnnotationSettingsPersistenceTest {
             assertEquals(5, repo.companionAutonomySettings.first().annotationLimitsFor(7).aheadChapters)
         } finally { scope.coroutineContext.job.cancelAndJoin() }
     }
+
+    @Test fun multipleCompanionsAndEditablePromptPositionsPersistIndependently() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        try {
+            val store = createStore("annotation-custom.preferences_pb", scope)
+            val repo = ReaderSettingsRepository(store)
+            assertEquals(listOf(9L), repo.companionAutonomySettings.first().annotationPersonasFor(9))
+            repo.toggleAnnotationPersona(3)
+            repo.toggleAnnotationPersona(5)
+            repo.toggleAnnotationPersona(3)
+            repo.toggleAnnotationPersona(7)
+            repo.saveAnnotationPrompt(GlobalPromptPreset("custom", "文学联想", "用两句话说说联想。", true, GlobalPromptInjectionPosition.AFTER_LAST_USER))
+            repo.setAnnotationPromptEnabled("annotation-voice", false)
+            val restored = ReaderSettingsRepository(store).companionAutonomySettings.first()
+            assertEquals(listOf(5L, 7L), restored.annotationPersonasFor(9))
+            assertFalse(restored.annotationPrompts.first { it.id == "annotation-voice" }.enabled)
+            assertEquals(GlobalPromptInjectionPosition.AFTER_LAST_USER, restored.annotationPrompts.last().position)
+            assertEquals("用两句话说说联想。", restored.annotationPrompts.last().prompt)
+            repo.deleteAnnotationPrompt("custom")
+            assertFalse(repo.companionAutonomySettings.first().annotationPrompts.any { it.id == "custom" })
+            repo.setAnnotationPersonaIds(emptySet())
+            assertEquals(listOf(9L), repo.companionAutonomySettings.first().annotationPersonasFor(9))
+        } finally { scope.coroutineContext.job.cancelAndJoin() }
+    }
 }

@@ -4,41 +4,37 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.CloudDownload
-import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.InputChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -46,24 +42,26 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mozhi.reader.ai.client.ApiDialect
 import com.mozhi.reader.ai.client.ChatOptions
 import com.mozhi.reader.ai.client.PromptCacheTtl
 import com.mozhi.reader.ai.client.ReasoningEffort
-import com.mozhi.reader.ai.provider.AiProviderDraft
 import com.mozhi.reader.ai.provider.AiModelDraft
+import com.mozhi.reader.ai.provider.AiProviderDraft
 import com.mozhi.reader.ai.provider.CatalogModel
 import com.mozhi.reader.ai.provider.ProviderProtocolPolicy
 import com.mozhi.reader.core.database.entity.AiModelEntity
@@ -71,10 +69,12 @@ import com.mozhi.reader.core.database.entity.AiModelType
 import com.mozhi.reader.core.database.entity.AiProviderAdapter
 import com.mozhi.reader.core.database.entity.AiProviderEntity
 import com.mozhi.reader.core.database.entity.AiProviderType
-import com.mozhi.reader.ui.components.FrostedSurface
 import com.mozhi.reader.ui.components.MoReadBackdrop
-import com.mozhi.reader.ui.components.SectionLabel
-import com.mozhi.reader.ui.theme.MoReadTokens
+import com.mozhi.reader.ui.components.MoReadBlock
+import com.mozhi.reader.ui.components.MoReadRow
+import com.mozhi.reader.ui.components.MoReadRowDivider
+import com.mozhi.reader.ui.components.MoReadSecondaryPage
+import com.mozhi.reader.ui.components.MoReadSection
 
 /**
  * Provider 详情二级页（providerId = 0 新建）：基本信息 + 模型管理 + 连接测试。
@@ -190,625 +190,250 @@ fun ProviderDetailScreen(
 }
 
 @Composable
-private fun ProviderForm(
-    state: ProviderDetailState,
-    onBack: () -> Unit,
-    onSave: (AiProviderDraft) -> Unit,
-    onTest: () -> Unit,
-    onDelete: () -> Unit,
-    onFetchModels: () -> Unit,
-    onAddModel: () -> Unit,
-    onEditModel: (AiModelEntity) -> Unit
+internal fun ProviderForm(
+    state: ProviderDetailState, onBack: () -> Unit, onSave: (AiProviderDraft) -> Unit,
+    onTest: () -> Unit, onDelete: () -> Unit, onFetchModels: () -> Unit,
+    onAddModel: () -> Unit, onEditModel: (AiModelEntity) -> Unit
 ) {
     val provider = state.provider
     var name by remember(provider?.id) { mutableStateOf(provider?.name.orEmpty()) }
-    var baseUrl by remember(provider?.id) {
-        mutableStateOf(provider?.baseUrl ?: ApiDialect.OPENAI.defaultBaseUrl())
-    }
+    var baseUrl by remember(provider?.id) { mutableStateOf(provider?.baseUrl ?: ApiDialect.OPENAI.defaultBaseUrl()) }
     var apiKey by remember(provider?.id) { mutableStateOf("") }
+    var keyVisible by remember { mutableStateOf(false) }
     var extraJson by remember(provider?.id) { mutableStateOf(provider?.extraJson ?: "{}") }
-    var adapter by remember(provider?.id) {
-        mutableStateOf(provider?.adapter ?: AiProviderAdapter.CUSTOM)
-    }
-    var dialect by remember(provider?.id) {
-        mutableStateOf(
-            ProviderProtocolPolicy.normalizeChatDialect(
-                adapter,
-                ApiDialect.fromWire(provider?.apiFormat)
-            )
-        )
-    }
-    var reasoning by remember(provider?.id) {
-        mutableStateOf(ChatOptions.fromExtraJson(provider?.extraJson).reasoning)
-    }
-    var cacheTtl by remember(provider?.id) {
-        mutableStateOf(ChatOptions.fromExtraJson(provider?.extraJson).cacheTtl)
-    }
+    var adapter by remember(provider?.id) { mutableStateOf(provider?.adapter ?: AiProviderAdapter.CUSTOM) }
+    var dialect by remember(provider?.id) { mutableStateOf(ProviderProtocolPolicy.normalizeChatDialect(adapter, ApiDialect.fromWire(provider?.apiFormat))) }
+    var advanced by rememberSaveable { mutableStateOf(false) }
+    val options = remember(extraJson) { ChatOptions.fromExtraJson(extraJson) }
+    val dirty = provider != null && (name != provider.name || baseUrl != provider.baseUrl ||
+        apiKey.isNotBlank() || extraJson != provider.extraJson || dialect.name != provider.apiFormat)
+    val validJson = remember(extraJson) { runCatching { com.mozhi.reader.ai.client.AiJson.parseToJsonElement(extraJson.ifBlank { "{}" }) is kotlinx.serialization.json.JsonObject }.getOrDefault(false) }
+    fun draft() = AiProviderDraft(id = provider?.id ?: 0, name = name, baseUrl = baseUrl,
+        type = provider?.type ?: AiProviderType.CHAT, apiFormat = dialect.name, adapter = adapter,
+        extraJson = extraJson.ifBlank { "{}" }, apiKey = apiKey)
 
-    fun buildDraft() = AiProviderDraft(
-        id = provider?.id ?: 0,
-        name = name,
-        baseUrl = baseUrl,
-        type = provider?.type ?: AiProviderType.CHAT,
-        apiFormat = dialect.name,
-        adapter = adapter,
-        extraJson = extraJson.withReasoningKey(reasoning).withCacheKeys(cacheTtl),
-        apiKey = apiKey
-    )
-
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = 32.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
+    MoReadSecondaryPage(title = if (state.isNew) "添加供应商" else "供应商配置",
+        subtitle = if (state.isNew) "选择服务，填入连接信息，然后添加模型。" else "${provider!!.name} · 管理连接、模型与默认参数",
+        onBack = onBack,
+        actions = { if (!state.isNew) IconButton(onClick = onDelete) { Icon(Icons.Outlined.DeleteOutline, "删除供应商", tint = MaterialTheme.colorScheme.error) } },
+        bottomBar = {
+            Button(onClick = { onSave(draft()) }, enabled = !state.isWorking && name.isNotBlank() && baseUrl.isNotBlank() && validJson,
+                shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp).navigationBarsPadding().heightIn(min = 52.dp)) {
+                Icon(Icons.Outlined.Check, null, Modifier.padding(end = 8.dp).size(18.dp))
+                Text("保存配置")
+            }
+        }) {
+        if (state.isNew) item {
+            val preset = CommonProviderPresets.firstOrNull { it.adapter == adapter && it.baseUrl == baseUrl }
+            SettingChoiceField("供应商", preset?.name ?: adapter.label(), preset?.baseUrl.orEmpty(),
+                CommonProviderPresets.map { SettingChoice(it.baseUrl, it.name, it.baseUrl, brand = providerBrand(it.adapter, it.name, it.baseUrl)) } +
+                    SettingChoice("", "自定义供应商", "兼容接口、本地服务或中转地址", Icons.Outlined.Dns),
+                onSelect = { key ->
+                    val choice = CommonProviderPresets.firstOrNull { it.baseUrl == key }
+                    adapter = choice?.adapter ?: AiProviderAdapter.CUSTOM
+                    if (choice != null) { name = choice.name; baseUrl = choice.baseUrl; dialect = choice.dialect }
+                }, brand = providerBrand(adapter, name, baseUrl), icon = Icons.Outlined.Hub)
+        }
         item {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .statusBarsPadding()
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                FrostedSurface(shape = CircleShape, shadowElevation = 6.dp) {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回")
+            MoReadSection(title = "连接信息", icon = Icons.Outlined.Link) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    if (!state.isNew) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        AiIdentityIcon(providerBrand(adapter, name, baseUrl), size = 48.dp)
+                        Column { Text(name, style = MaterialTheme.typography.titleMedium)
+                            Text(adapter.label(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     }
-                }
-                Text(
-                    text = if (state.isNew) "添加 AI Provider" else provider!!.name,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (!state.isNew) {
-                        FrostedSurface(shape = CircleShape, shadowElevation = 6.dp) {
-                            IconButton(onClick = onDelete) {
-                                Icon(
-                                    Icons.Outlined.Delete,
-                                    contentDescription = "删除 Provider",
-                                    tint = MaterialTheme.colorScheme.error
-                                )
-                            }
-                        }
-                    }
-                    FrostedSurface(shape = CircleShape, shadowElevation = 6.dp) {
-                        IconButton(
-                            onClick = { onSave(buildDraft()) },
-                            enabled = !state.isWorking && name.isNotBlank() && baseUrl.isNotBlank()
-                        ) {
-                            Icon(
-                                Icons.Outlined.Check,
-                                contentDescription = "保存",
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        }
+                    OutlinedTextField(name, { name = it }, label = { Text("名称") }, singleLine = true,
+                        leadingIcon = { Icon(Icons.Outlined.Badge, null) }, shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(baseUrl, { baseUrl = it }, label = { Text("接口地址 · Base URL") }, singleLine = true,
+                        leadingIcon = { Icon(Icons.Outlined.Language, null) }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                        shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(apiKey, { apiKey = it }, label = { Text(if (state.isNew) "API Key" else "API Key（留空保持不变）") }, singleLine = true,
+                        leadingIcon = { Icon(Icons.Outlined.Key, null) },
+                        trailingIcon = { IconButton(onClick = { keyVisible = !keyVisible }) { Icon(if (keyVisible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility, "切换密钥可见性") } },
+                        visualTransformation = if (keyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth())
+                    DialectField(dialect, ProviderProtocolPolicy.supportedChatDialects(adapter)) { picked ->
+                        if (state.isNew && baseUrl == dialect.defaultBaseUrl()) baseUrl = picked.defaultBaseUrl()
+                        dialect = picked
                     }
                 }
             }
         }
-
-        item { SectionLabel(title = "基本信息") }
-        item {
-            FrostedSurface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp),
-                shape = RoundedCornerShape(24.dp),
-                shadowElevation = 4.dp
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    if (state.isNew) {
-                        Column {
-                            Text("供应商预设", style = MaterialTheme.typography.titleSmall)
-                            ProviderPresetChips(
-                                selected = adapter,
-                                onSelect = { preset ->
-                                    adapter = preset?.adapter ?: AiProviderAdapter.CUSTOM
-                                    preset?.let {
-                                        name = it.name
-                                        baseUrl = it.baseUrl
-                                        dialect = it.dialect
-                                    }
-                                }
-                            )
-                        }
-                    } else {
-                        Text(
-                            "适配：${adapter.label()}",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    OutlinedTextField(
-                        value = name,
-                        onValueChange = { name = it },
-                        label = { Text("名称") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Column {
-                        Text("默认聊天协议", style = MaterialTheme.typography.titleSmall)
-                        DialectChips(
-                            selected = dialect,
-                            options = ProviderProtocolPolicy.supportedChatDialects(adapter),
-                            onSelect = { picked ->
-                                dialect = picked
-                                if (state.isNew) baseUrl = picked.defaultBaseUrl()
-                            }
-                        )
-                        Text(
-                            if (adapter == AiProviderAdapter.OPENROUTER) {
-                                "只影响对话模型，其余能力自动选择接口"
-                            } else {
-                                "每个模型也可以单独指定协议"
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    OutlinedTextField(
-                        value = baseUrl,
-                        onValueChange = { baseUrl = it },
-                        label = { Text("Base URL") },
-                        supportingText = {
-                            Text("支持 HTTP / HTTPS；HTTP 仅建议用于可信局域网。示例：${dialect.defaultBaseUrl()}")
-                        },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = apiKey,
-                        onValueChange = { apiKey = it },
-                        label = {
-                            Text(if (state.isNew) "API Key" else "API Key（留空保持不变）")
-                        },
-                        visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Text(
-                        "对话、向量、语音、生图的能力在每个模型上单独设置。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        }
-
-        item { SectionLabel(title = "请求选项") }
-        item {
-            FrostedSurface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp),
-                shape = RoundedCornerShape(24.dp),
-                shadowElevation = 4.dp
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Column {
-                        Text("思考等级", style = MaterialTheme.typography.titleSmall)
-                        Text(
-                            "只对推理模型生效，想得越深越慢、越贵",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Row(
-                            modifier = Modifier.padding(top = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            FilterChip(
-                                selected = reasoning == null,
-                                onClick = { reasoning = null },
-                                label = { Text("默认") }
-                            )
-                            ReasoningEffort.entries.forEach { effort ->
-                                FilterChip(
-                                    selected = reasoning == effort,
-                                    onClick = { reasoning = effort },
-                                    label = { Text(effort.label()) }
-                                )
-                            }
-                        }
-                    }
-                    if (dialect == ApiDialect.CLAUDE) {
-                        Column {
-                            Text("提示词缓存", style = MaterialTheme.typography.titleSmall)
-                            Text(
-                                "角色设定等重复内容缓存在服务端，长对话更省钱",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Row(
-                                modifier = Modifier.padding(top = 8.dp),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                FilterChip(
-                                    selected = cacheTtl == null,
-                                    onClick = { cacheTtl = null },
-                                    label = { Text("关闭") }
-                                )
-                                FilterChip(
-                                    selected = cacheTtl == PromptCacheTtl.FIVE_MINUTES,
-                                    onClick = { cacheTtl = PromptCacheTtl.FIVE_MINUTES },
-                                    label = { Text("5 分钟") }
-                                )
-                                FilterChip(
-                                    selected = cacheTtl == PromptCacheTtl.ONE_HOUR,
-                                    onClick = { cacheTtl = PromptCacheTtl.ONE_HOUR },
-                                    label = { Text("1 小时") }
-                                )
-                            }
-                        }
-                    }
-                    OutlinedTextField(
-                        value = extraJson,
-                        onValueChange = { extraJson = it },
-                        label = { Text("厂商附加参数 JSON") },
-                        supportingText = {
-                            Text("如 temperature、top_p、max_tokens")
-                        },
-                        minLines = 2,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            }
-        }
-
         if (!state.isNew) {
             item {
-                Text(
-                    "连接测试与拉取模型只使用上次保存的配置；修改后请先点右上角保存。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 24.dp)
-                )
-            }
-            item { SectionLabel(title = "模型") }
-            item {
-                ModelsCard(
-                    models = state.models,
-                    canFetch = !state.isWorking,
-                    onFetchModels = onFetchModels,
-                    onAddModel = onAddModel,
-                    onEditModel = onEditModel
-                )
+                MoReadSection(title = "已添加的模型 · ${state.models.size}", icon = Icons.Outlined.AutoAwesome) {
+                    ModelsCard(state.models, !state.isWorking && !dirty, onFetchModels, onAddModel, onEditModel)
+                }
             }
             item {
-                Button(
-                    onClick = onTest,
-                    enabled = !state.isWorking,
-                    shape = MoReadTokens.CapsuleShape,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp)
-                ) { Text(if (state.connected) "测试连接（已连接）" else "测试连接") }
-            }
-        } else {
-            item {
-                Text(
-                    text = "保存后就能拉取模型列表并测试连接。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 24.dp)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun DialectChips(
-    selected: ApiDialect,
-    options: List<ApiDialect>,
-    onSelect: (ApiDialect) -> Unit
-) {
-    Column(
-        modifier = Modifier.padding(top = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        options.chunked(2).forEach { rowDialects ->
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                rowDialects.forEach { apiDialect ->
-                    FilterChip(
-                        selected = selected == apiDialect,
-                        onClick = { onSelect(apiDialect) },
-                        label = { Text(apiDialect.label()) }
-                    )
+                MoReadSection {
+                    MoReadRow(title = "连接测试", icon = Icons.Outlined.WifiTethering,
+                        subtitle = if (dirty) "连接信息已修改，请先保存" else if (state.connected) "上次测试成功" else "使用已保存的连接与模型",
+                        trailing = { TextButton(onClick = onTest, enabled = !state.isWorking && !dirty) { Text("测试") } })
                 }
             }
         }
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun ProviderPresetChips(
-    selected: AiProviderAdapter,
-    onSelect: (ProviderPreset?) -> Unit
-) {
-    FlowRow(
-        modifier = Modifier.padding(top = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        CommonProviderPresets.forEach { preset ->
-            FilterChip(
-                selected = selected == preset.adapter,
-                onClick = { onSelect(preset) },
-                label = { Text(preset.name) }
-            )
-        }
-        FilterChip(
-            selected = selected == AiProviderAdapter.CUSTOM,
-            onClick = { onSelect(null) },
-            label = { Text("自定义") }
-        )
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun ModelTypeChips(selected: AiModelType, onSelect: (AiModelType) -> Unit) {
-    FlowRow(
-        modifier = Modifier.padding(top = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        AiModelType.entries.forEach { type ->
-            FilterChip(
-                selected = selected == type,
-                onClick = { onSelect(type) },
-                label = { Text(type.label()) }
-            )
-        }
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun ModelsCard(
-    models: List<AiModelEntity>,
-    canFetch: Boolean,
-    onFetchModels: () -> Unit,
-    onAddModel: () -> Unit,
-    onEditModel: (AiModelEntity) -> Unit
-) {
-    FrostedSurface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 20.dp),
-        shape = RoundedCornerShape(24.dp),
-        shadowElevation = 4.dp
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                models.forEach { model ->
-                    InputChip(
-                        selected = false,
-                        onClick = { onEditModel(model) },
-                        shape = MoReadTokens.CapsuleShape,
-                        label = {
-                            Text(
-                                "${model.type.label()} · ${model.modelName}",
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        },
-                        trailingIcon = {
-                            Icon(
-                                Icons.Outlined.Tune,
-                                contentDescription = "配置 ${model.modelName}",
-                                modifier = Modifier.size(14.dp)
-                            )
-                        }
-                    )
+        item {
+            MoReadSection(title = "默认生成参数", icon = Icons.Outlined.Tune, footer = "各模型可以覆盖这些默认值；留空使用服务端默认。") {
+                ModelParameterRows(extraJson, { extraJson = it }, temperatureMax = if (dialect == ApiDialect.CLAUDE) 1.0 else 2.0)
+                MoReadRowDivider(inset = 16.dp)
+                MoReadBlock {
+                    SettingChoiceField("思考强度", options.reasoning?.label() ?: "默认", options.reasoning?.name.orEmpty(),
+                        listOf(SettingChoice("", "默认", "由模型决定")) + ReasoningEffort.entries.map { SettingChoice(it.name, it.label()) },
+                        { extraJson = extraJson.withReasoningKey(it.takeIf(String::isNotEmpty)?.let(ReasoningEffort::valueOf)) }, icon = Icons.Outlined.Psychology)
                 }
-                AssistChip(
-                    onClick = onFetchModels,
-                    enabled = canFetch,
-                    shape = MoReadTokens.CapsuleShape,
-                    label = { Text("拉取模型") },
-                    leadingIcon = {
-                        Icon(
-                            Icons.Outlined.CloudDownload,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-                )
-                AssistChip(
-                    onClick = onAddModel,
-                    shape = MoReadTokens.CapsuleShape,
-                    label = { Text("手动添加") },
-                    leadingIcon = {
-                        Icon(
-                            Icons.Outlined.Add,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-                )
+                if (dialect == ApiDialect.CLAUDE) MoReadBlock {
+                    SettingChoiceField("提示词缓存", when (options.cacheTtl) { null -> "关闭"; PromptCacheTtl.ONE_HOUR -> "1 小时"; else -> "5 分钟" },
+                        options.cacheTtl?.name.orEmpty(), listOf(SettingChoice("", "关闭"), SettingChoice(PromptCacheTtl.FIVE_MINUTES.name, "5 分钟"), SettingChoice(PromptCacheTtl.ONE_HOUR.name, "1 小时")),
+                        { extraJson = extraJson.withCacheKeys(it.takeIf(String::isNotEmpty)?.let(PromptCacheTtl::valueOf)) }, icon = Icons.Outlined.Cached)
+                }
             }
-            if (models.isEmpty()) {
-                Text(
-                    "还没有模型：拉取或手动添加后才能在「模型分配」里使用",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 6.dp)
-                )
+        }
+        item {
+            MoReadSection(title = "高级设置") {
+                MoReadRow(title = "附加请求参数", subtitle = "请求头与厂商专用 JSON", icon = Icons.Outlined.Code, onClick = { advanced = !advanced },
+                    trailing = { Icon(if (advanced) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, null) })
+                if (advanced) MoReadBlock {
+                    OutlinedTextField(extraJson, { extraJson = it }, label = { Text("高级参数 JSON") }, isError = !validJson,
+                        minLines = 3, maxLines = 10, shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth())
+                }
+            }
+        }
+        if (state.isNew) item { Text("保存后可以拉取模型列表，也可以手动添加模型。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+    }
+}
+
+@Composable
+private fun DialectField(selected: ApiDialect, options: List<ApiDialect>, onSelect: (ApiDialect) -> Unit) {
+    SettingChoiceField("默认聊天协议", selected.label(), selected.name,
+        options.map { SettingChoice(it.name, it.label(), icon = Icons.Outlined.Api) },
+        { onSelect(ApiDialect.valueOf(it)) }, icon = Icons.Outlined.Api)
+}
+
+@Composable
+private fun ModelTypeField(selected: AiModelType, onSelect: (AiModelType) -> Unit) {
+    SettingChoiceField("模型能力", selected.label(), selected.name,
+        AiModelType.entries.map { SettingChoice(it.name, it.label(), icon = it.icon()) },
+        { onSelect(AiModelType.valueOf(it)) }, icon = selected.icon())
+}
+
+@Composable
+private fun ModelsCard(models: List<AiModelEntity>, canFetch: Boolean, onFetchModels: () -> Unit,
+    onAddModel: () -> Unit, onEditModel: (AiModelEntity) -> Unit) {
+    Column {
+        models.forEachIndexed { index, model ->
+            if (index > 0) MoReadRowDivider()
+            Row(Modifier.fillMaxWidth().clickable { onEditModel(model) }.padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                ModelIdentityIcon(model.modelName, model.type)
+                Column(Modifier.weight(1f)) {
+                    Text(model.modelName, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text("${model.type.label()} · 点击配置参数", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Icon(Icons.Outlined.ChevronRight, "配置 ${model.modelName}", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        if (models.isEmpty()) Text("还没有模型，拉取目录或手动添加一个。", Modifier.padding(16.dp), style = MaterialTheme.typography.bodySmall)
+        Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = onFetchModels, enabled = canFetch, shape = RoundedCornerShape(14.dp), modifier = Modifier.weight(1f)) {
+                Icon(Icons.Outlined.CloudDownload, null, Modifier.padding(end = 6.dp).size(18.dp)); Text("拉取模型")
+            }
+            OutlinedButton(onClick = onAddModel, shape = RoundedCornerShape(14.dp), modifier = Modifier.weight(1f)) {
+                Icon(Icons.Outlined.Add, null, Modifier.padding(end = 6.dp).size(18.dp)); Text("手动添加")
             }
         }
     }
 }
 
-/** 模型级能力、端点与参数配置；新建时名称可用逗号/换行批量填写。 */
+/** Model editing uses the same full-page parameter layout as provider configuration. */
 @Composable
-private fun ModelEditorDialog(
-    provider: AiProviderEntity,
-    model: AiModelEntity?,
-    onDismiss: () -> Unit,
-    onConfirm: (AiModelDraft) -> Unit,
-    onDelete: (() -> Unit)?
+internal fun ModelEditorDialog(
+    provider: AiProviderEntity, model: AiModelEntity?, onDismiss: () -> Unit,
+    onConfirm: (AiModelDraft) -> Unit, onDelete: (() -> Unit)?
+) {
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        ModelEditorContent(provider, model, onDismiss, onConfirm, onDelete)
+    }
+}
+
+@Composable
+internal fun ModelEditorContent(
+    provider: AiProviderEntity, model: AiModelEntity?, onDismiss: () -> Unit,
+    onConfirm: (AiModelDraft) -> Unit, onDelete: (() -> Unit)?
 ) {
     var input by remember(model?.id) { mutableStateOf(model?.modelName.orEmpty()) }
     var type by remember(model?.id) { mutableStateOf(model?.type ?: AiModelType.CHAT) }
-    var chatApiFormat by remember(model?.id) {
-        mutableStateOf(model?.chatApiFormat.orEmpty())
-    }
+    var chatApiFormat by remember(model?.id) { mutableStateOf(model?.chatApiFormat.orEmpty()) }
     var endpointPath by remember(model?.id) { mutableStateOf(model?.endpointPath.orEmpty()) }
     var extraJson by remember(model?.id) { mutableStateOf(model?.extraJson ?: "{}") }
+    var advanced by rememberSaveable { mutableStateOf(false) }
     val automaticEndpoint = defaultModelEndpoint(provider.adapter, type)
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(if (model == null) "添加模型到 ${provider.name}" else "配置模型") },
-        text = {
-            LazyColumn(
-                modifier = Modifier.heightIn(max = 520.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                item {
-                    OutlinedTextField(
-                        value = input,
-                        onValueChange = { input = it },
-                        label = { Text("模型名") },
-                        supportingText = {
-                            Text(if (model == null) "可用逗号或换行批量添加" else "服务端模型 ID")
-                        },
-                        minLines = 1,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+    val validJson = remember(extraJson) { runCatching { com.mozhi.reader.ai.client.AiJson.parseToJsonElement(extraJson.ifBlank { "{}" }) is kotlinx.serialization.json.JsonObject }.getOrDefault(false) }
+    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        MoReadSecondaryPage(title = if (model == null) "添加模型" else "模型设置", subtitle = "${provider.name} · 模型能力与生成参数",
+            modifier = Modifier.imePadding(), onBack = onDismiss,
+            actions = { if (onDelete != null) IconButton(onClick = onDelete) { Icon(Icons.Outlined.DeleteOutline, "删除模型", tint = MaterialTheme.colorScheme.error) } },
+            bottomBar = {
+                Button(onClick = { onConfirm(AiModelDraft(id = model?.id ?: 0,
+                    modelName = input, type = type, chatApiFormat = chatApiFormat, endpointPath = endpointPath, extraJson = extraJson.ifBlank { "{}" })) },
+                    enabled = input.isNotBlank() && validJson, shape = RoundedCornerShape(18.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp).navigationBarsPadding().heightIn(min = 52.dp)) {
+                    Icon(Icons.Outlined.Check, null, Modifier.padding(end = 8.dp).size(18.dp)); Text("保存模型")
                 }
-                item {
-                    Text("模型能力", style = MaterialTheme.typography.titleSmall)
-                    ModelTypeChips(selected = type, onSelect = { type = it })
-                }
-                if (type == AiModelType.CHAT) {
-                    item {
-                        Text("聊天协议", style = MaterialTheme.typography.titleSmall)
-                        ModelChatDialectChips(
-                            provider = provider,
-                            selectedWire = chatApiFormat,
-                            onSelect = { chatApiFormat = it }
-                        )
+            }) {
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    ModelIdentityIcon(input, type, size = 56.dp)
+                    Column(Modifier.weight(1f)) {
+                        Text(input.ifBlank { "新模型" }, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(provider.name, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-                item {
-                    OutlinedTextField(
-                        value = endpointPath,
-                        onValueChange = { endpointPath = it },
-                        label = { Text("专用端点（可选）") },
-                        supportingText = {
-                            Text(
-                                if (automaticEndpoint.isBlank()) {
-                                    "留空使用供应商协议的默认对话端点"
-                                } else {
-                                    "留空自动使用 $automaticEndpoint"
-                                }
-                            )
-                        },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-                item {
-                    OutlinedTextField(
-                        value = extraJson,
-                        onValueChange = { extraJson = it },
-                        label = { Text("模型专用参数 JSON") },
-                        supportingText = {
-                            Text(
-                                when (type) {
-                                    AiModelType.IMAGE ->
-                                        "例：{\"body\":{\"aspect_ratio\":\"16:9\",\"resolution\":\"2K\"}}"
-                                    AiModelType.TTS -> if (provider.adapter == AiProviderAdapter.MINIMAX) {
-                                        "MiniMax 例：{\"body\":{\"group_id\":\"可选\",\"voice_setting\":{\"voice_id\":\"male-qn-qingse\",\"speed\":1.0,\"vol\":1.0,\"pitch\":0},\"audio_setting\":{\"format\":\"mp3\"}}}"
-                                    } else {
-                                        "OpenAI 例：{\"body\":{\"voice\":\"alloy\",\"response_format\":\"mp3\",\"speed\":1.0}}"
-                                    }
-                                    else -> "会覆盖供应商上的同名参数"
-                                }
-                            )
-                        },
-                        minLines = 2,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
             }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    onConfirm(
-                        AiModelDraft(
-                            id = model?.id ?: 0,
-                            modelName = input,
-                            type = type,
-                            chatApiFormat = chatApiFormat.takeIf {
-                                type == AiModelType.CHAT
-                            }.orEmpty(),
-                            endpointPath = endpointPath,
-                            extraJson = extraJson
-                        )
-                    )
-                },
-                enabled = input.isNotBlank()
-            ) { Text(if (model == null) "添加" else "保存") }
-        },
-        dismissButton = {
-            Row {
-                onDelete?.let {
-                    TextButton(onClick = it) {
-                        Text("删除", color = MaterialTheme.colorScheme.error)
+            item {
+                MoReadSection(title = "基本信息") {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                        OutlinedTextField(input, { input = it }, label = { Text("模型名称") },
+                            supportingText = { Text(if (model == null) "使用服务端模型 ID，可用逗号或换行批量添加" else "服务端模型 ID") },
+                            shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth())
+                        ModelTypeField(type) { type = it }
+                        if (type == AiModelType.CHAT) ModelChatDialectField(provider, chatApiFormat) { chatApiFormat = it }
                     }
                 }
-                TextButton(onClick = onDismiss) { Text("取消") }
             }
-        }
-    )
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun ModelChatDialectChips(
-    provider: AiProviderEntity,
-    selectedWire: String,
-    onSelect: (String) -> Unit
-) {
-    val inherited = ProviderProtocolPolicy.providerChatDialect(provider)
-    FlowRow(
-        modifier = Modifier.padding(top = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        FilterChip(
-            selected = selectedWire.isBlank(),
-            onClick = { onSelect("") },
-            label = { Text("跟随默认 · ${inherited.label()}") }
-        )
-        ProviderProtocolPolicy.supportedChatDialects(provider.adapter).forEach { dialect ->
-            FilterChip(
-                selected = selectedWire == dialect.name,
-                onClick = { onSelect(dialect.name) },
-                label = { Text(dialect.label()) }
-            )
+            if (type == AiModelType.CHAT) item {
+                val dialect = chatApiFormat.takeIf(String::isNotBlank)?.let(ApiDialect::valueOf) ?: ProviderProtocolPolicy.providerChatDialect(provider)
+                MoReadSection(title = "生成参数", icon = Icons.Outlined.Tune, footer = "未单独设置的参数跟随供应商；修改只影响这个模型。") {
+                    ModelParameterRows(extraJson, { extraJson = it }, inheritedJson = provider.extraJson,
+                        temperatureMax = if (dialect == ApiDialect.CLAUDE) 1.0 else 2.0)
+                }
+            }
+            item {
+                MoReadSection(title = "高级设置") {
+                    MoReadRow(title = "专用端点与附加参数", icon = Icons.Outlined.Code,
+                        subtitle = if (endpointPath.isBlank()) "跟随供应商默认接口" else endpointPath,
+                        onClick = { advanced = !advanced }, trailing = { Icon(if (advanced) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, null) })
+                    if (advanced) Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                        OutlinedTextField(endpointPath, { endpointPath = it }, label = { Text("专用端点（可选）") }, singleLine = true,
+                            supportingText = { Text(if (automaticEndpoint.isBlank()) "留空使用默认对话端点" else "留空使用 $automaticEndpoint") },
+                            shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(extraJson, { extraJson = it }, label = { Text("模型专用参数 JSON") },
+                            supportingText = { Text("覆盖供应商同名参数，可设置 body 与 headers") }, isError = !validJson,
+                            minLines = 3, maxLines = 10, shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth())
+                    }
+                }
+            }
         }
     }
+}
+
+@Composable
+private fun ModelChatDialectField(provider: AiProviderEntity, selectedWire: String, onSelect: (String) -> Unit) {
+    val inherited = ProviderProtocolPolicy.providerChatDialect(provider)
+    val choices = listOf(SettingChoice("", "跟随供应商", inherited.label(), Icons.Outlined.Link)) +
+        ProviderProtocolPolicy.supportedChatDialects(provider.adapter).map { SettingChoice(it.name, it.label(), icon = Icons.Outlined.Api) }
+    SettingChoiceField("聊天协议", choices.firstOrNull { it.key == selectedWire }?.title ?: "跟随供应商",
+        selectedWire, choices, onSelect, icon = Icons.Outlined.Api)
 }
 
 /** 拉取到的模型目录：多选加入，已添加的置灰。 */
@@ -881,7 +506,8 @@ private fun ModelCatalogPickDialog(
                                 onCheckedChange = null,
                                 enabled = !added
                             )
-                            Column(modifier = Modifier.padding(start = 4.dp)) {
+                            ModelIdentityIcon(model.modelName, model.type, size = 34.dp)
+                            Column(modifier = Modifier.weight(1f).padding(start = 10.dp)) {
                                 Text(
                                     text = model.modelName,
                                     style = MaterialTheme.typography.bodyMedium,

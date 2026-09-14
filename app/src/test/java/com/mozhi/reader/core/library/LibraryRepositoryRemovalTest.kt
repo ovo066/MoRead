@@ -105,10 +105,10 @@ class LibraryRepositoryRemovalTest {
             old.version = 28
         }
         val migrated = Room.databaseBuilder(context, MoReadDatabase::class.java, "knowledge-migration.db")
-            .addMigrations(DatabaseMigrations.Migration28To29).build()
+            .addMigrations(DatabaseMigrations.Migration28To29, DatabaseMigrations.Migration29To30).build()
         try {
             assertEquals("旧版章节资料", migrated.chapterKnowledgeDao().get(1, 0)?.contentJson)
-            assertEquals(29, migrated.openHelper.writableDatabase.version)
+            assertEquals(MoReadDatabase.VERSION, migrated.openHelper.writableDatabase.version)
             assertNull(migrated.bookCharacterDao().getGuide(1))
             assertTrue(migrated.bookCharacterDao().getParts(1).isEmpty())
             assertEquals("旧书", migrated.bookDao().getBook(1)?.title)
@@ -134,14 +134,14 @@ class LibraryRepositoryRemovalTest {
             old.version = 25
         }
         val migrated = Room.databaseBuilder(context, MoReadDatabase::class.java, "migration.db")
-            .addMigrations(DatabaseMigrations.Migration25To26, DatabaseMigrations.Migration26To27, DatabaseMigrations.Migration27To28, DatabaseMigrations.Migration28To29).build()
+            .addMigrations(DatabaseMigrations.Migration25To26, DatabaseMigrations.Migration26To27, DatabaseMigrations.Migration27To28, DatabaseMigrations.Migration28To29, DatabaseMigrations.Migration29To30).build()
         try {
             val book = requireNotNull(migrated.bookDao().getBook(1))
             assertEquals("旧书", book.title)
             assertEquals(0L, book.removedAt)
             assertEquals(1, book.lastReadChapterIndex)
             assertEquals(20, book.lastReadCharOffset)
-            assertEquals(29, migrated.openHelper.writableDatabase.version)
+            assertEquals(MoReadDatabase.VERSION, migrated.openHelper.writableDatabase.version)
             assertEquals("[]", migrated.chatDao().getConversation(1)?.bookScopesJson)
             assertEquals("历史消息", migrated.chatDao().getMessages(1).single().content)
             assertNull(migrated.chatDao().getMessages(1).single().sourceBookIdsJson)

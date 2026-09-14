@@ -1443,6 +1443,7 @@ fun ReaderScreen(
                 streaming = discussionState.streaming,
                 error = discussionState.error,
                 personas = companionState.personas,
+                defaultRespondPersonaId = companionState.activePersona?.id,
                 illustrations = visibleIllustrations,
                 palette = palette,
                 onPlayAudio = selectionMediaViewModel::playCachedSpeech,

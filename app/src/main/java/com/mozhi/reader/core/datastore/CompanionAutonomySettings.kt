@@ -31,8 +31,15 @@ data class CompanionAutonomySettings(
     /** 段评数量与频控的全局默认值；单本书可在详情页覆盖。 */
     val annotationLimits: ProactiveAnnotationLimits = ProactiveAnnotationLimits(),
     /** 按书覆盖表，键为书 id；`enabled` 为假的条目视为跟随全局。 */
-    val annotationLimitsByBook: Map<Long, BookProactiveAnnotationLimits> = emptyMap()
+    val annotationLimitsByBook: Map<Long, BookProactiveAnnotationLimits> = emptyMap(),
+    /** Empty preserves the previous behavior: follow the current companion. */
+    val annotationPersonaIds: Set<Long> = emptySet(),
+    val annotationPrompts: List<GlobalPromptPreset> = ProactiveAnnotationPrompts.DEFAULTS
 ) {
+    fun annotationPersonasFor(activePersonaId: Long?): List<Long> =
+        if (annotationPersonaIds.isEmpty()) listOfNotNull(activePersonaId)
+        else annotationPersonaIds.filter { it > 0 }.sorted()
+
     /** 某本书实际生效的段评额度。 */
     fun annotationLimitsFor(bookId: Long): ProactiveAnnotationLimits =
         resolveProactiveAnnotationLimits(annotationLimits, annotationLimitsByBook[bookId])

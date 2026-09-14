@@ -46,6 +46,7 @@ import com.mozhi.reader.core.database.entity.TtsVoiceEntity
         ChapterEntity::class,
         BookmarkEntity::class,
         ReadingDailyEntity::class,
+        com.mozhi.reader.core.database.entity.ReadingHourlyEntity::class,
         AiProviderEntity::class,
         AiModelEntity::class,
         ModelAssignmentEntity::class,
@@ -78,6 +79,7 @@ import com.mozhi.reader.core.database.entity.TtsVoiceEntity
 abstract class MoReadDatabase : RoomDatabase() {
     abstract fun proactiveAnnotationJobDao(): com.mozhi.reader.core.database.dao.ProactiveAnnotationJobDao
     abstract fun bookDao(): BookDao
+    abstract fun readingHourlyDao(): com.mozhi.reader.core.database.dao.ReadingHourlyDao
     abstract fun aiProviderDao(): AiProviderDao
     abstract fun chatDao(): ChatDao
     abstract fun personaDao(): PersonaDao
@@ -91,6 +93,6 @@ abstract class MoReadDatabase : RoomDatabase() {
     abstract fun bookCharacterDao(): com.mozhi.reader.core.database.dao.BookCharacterDao
 
     companion object {
-        const val VERSION = 29
+        const val VERSION = 30
     }
 }

@@ -381,7 +381,7 @@ class ReaderViewModelPersistenceTest {
                 coEvery { read(1) } returns emptyList()
             }
             val layoutStore = mockk<BookLayoutStore> {
-                coEvery { readChapter(1, 0) } returns null
+                coEvery { readChapter(1, 0, any()) } returns null
             }
             val settings = ReaderSettings(pageMode = pageMode, bookChineseConversions = mapOf(1L to ChineseConversionMode.TW2SP))
             val settingsRepository = mockk<ReaderSettingsRepository> {

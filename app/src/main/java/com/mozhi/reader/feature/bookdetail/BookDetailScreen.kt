@@ -153,6 +153,7 @@ fun BookDetailScreen(
     onOpenAudiobookRoles: (Long) -> Unit = {},
     onOpenAudiobookProduction: (Long) -> Unit = {},
     onOpenAnnotationLimits: (Long) -> Unit = {},
+    onLocateAnnotation: (AnnotationEntity) -> Unit = {},
     /** 书架长按菜单的深链动作：edit = 直接开信息编辑，cover = 直接开封面选择。 */
     initialAction: String? = null,
     viewModel: BookDetailViewModel = hiltViewModel()
@@ -610,37 +611,17 @@ fun BookDetailScreen(
     }
 
     if (showAnnotations) {
-        ModalBottomSheet(
-            onDismissRequest = { showAnnotations = false },
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(0.86f)
-                    .padding(horizontal = 20.dp)
-            ) {
-                Text("划线与批注", style = MaterialTheme.typography.titleLarge)
-                Text(
-                    "阅读正文时点击划线或“评”标记可参与讨论。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
-                )
-                if (state.hiddenAnnotationCount > 0) {
-                    Text("还有 ${state.hiddenAnnotationCount} 条读到后会出现",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(bottom = 8.dp))
-                }
-                AnnotationIndex(
-                    annotations = state.annotations,
-                    personaNames = state.personaNames,
-                    onDelete = viewModel::deleteAnnotation,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-        }
+        AnnotationIndexSheet(
+            annotations = state.annotations,
+            personaNames = state.personaNames,
+            hiddenCount = state.hiddenAnnotationCount,
+            onDelete = viewModel::deleteAnnotation,
+            onDismiss = { showAnnotations = false },
+            onLocate = if (state.book?.removedAt == 0L) ({ annotation: AnnotationEntity ->
+                showAnnotations = false
+                onLocateAnnotation(annotation)
+            }) else null
+        )
     }
 
     if (showGallery) {

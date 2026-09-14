@@ -7,6 +7,7 @@ import com.mozhi.reader.core.database.dao.ChatDao
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.datastore.BookEmbeddingSettingsStore
 import com.mozhi.reader.core.library.BookRemovalCoordinator
+import com.mozhi.reader.core.library.BookTextCompactionResult
 import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.speech.SpeechCacheStore
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -14,6 +15,7 @@ import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
@@ -23,7 +25,7 @@ import kotlinx.coroutines.withContext
 
 enum class StorageCategory(val title: String, val description: String) {
     ORIGINALS("原书副本", "导入时保存的原书；重建与备份可能需要"),
-    TEXT("阅读正文", "解析后的正文，不是可随意删除的临时缓存"),
+    TEXT("阅读正文", "正文按块无损压缩，阅读时按需解压；旧书会自动压缩"),
     MEDIA("书内插图", "从原书提取的图片"),
     LAYOUT("精排与内嵌字体", "EPUB 排版、样式与字体；DOM 已压缩保存"),
     SPEECH("听书与语音", "清理后再次使用可能重新产生合成费用"),
@@ -63,6 +65,10 @@ data class StorageSnapshot(
 }
 data class StorageCleanupResult(val freedBytes: Long, val skippedFiles: Int = 0)
 
+data class StorageTextCompactionResult(val books: List<BookTextCompactionResult>, val failedBooks: Int = 0) {
+    val freedBytes: Long get() = books.sumOf { it.freedBytes }
+}
+
 @Singleton
 class StorageRepository @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -78,6 +84,18 @@ class StorageRepository @Inject constructor(
     val snapshot = mutableSnapshot.asStateFlow()
 
     suspend fun refresh() = mutex.withLock { refreshLocked() }
+
+    suspend fun compactText(): StorageTextCompactionResult = mutex.withLock {
+        val results = mutableListOf<BookTextCompactionResult>()
+        var failed = 0
+        for (book in library.getBooks()) {
+            try { results += library.compactBookTextWithResult(book.id) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { failed++ }
+        }
+        refreshLocked()
+        StorageTextCompactionResult(results, failed)
+    }
 
     private suspend fun allFiles(): List<StorageFile> = withContext(Dispatchers.IO) {
         linkedMapOf(
@@ -106,7 +124,7 @@ class StorageRepository @Inject constructor(
             val parts = file.relativePath.split('/')
             val id = parts.getOrNull(2)?.toLongOrNull()
             if (id != null && (parts.firstOrNull() == "files" ||
-                    (parts.firstOrNull() == "cache" && parts.getOrNull(1) == "agent-speech"))) {
+                    (parts.firstOrNull() == "cache" && parts.getOrNull(1) in setOf("agent-speech", "book-dom")))) {
                 val category = categoryOf(file.relativePath)
                 val owner = if (category == StorageCategory.ATTACHMENTS) conversationBooks[id] else id
                 if (owner != null) {
@@ -191,6 +209,7 @@ class StorageRepository @Inject constructor(
 internal fun categoryOf(path: String): StorageCategory = when {
     path.startsWith("database/") -> StorageCategory.DATABASE
     path.startsWith("cache/agent-speech/") -> StorageCategory.SPEECH
+    path.startsWith("cache/book-dom/") -> StorageCategory.LAYOUT
     path.startsWith("cache/") -> StorageCategory.CACHE
     path.startsWith("backups/") -> StorageCategory.BACKUP
     else -> when (path.split('/').getOrNull(1)) {

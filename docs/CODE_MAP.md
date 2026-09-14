@@ -24,7 +24,8 @@
 
 - [`MoReadApplication.kt`](../app/src/main/java/com/mozhi/reader/MoReadApplication.kt)：Hilt 应用入口、恢复启动处理、正文物化任务和按需转换预热。
 - [`MainActivity.kt`](../app/src/main/java/com/mozhi/reader/MainActivity.kt)：Activity 与外部打开书籍的入口。
-- [`ui/MoReadApp.kt`](../app/src/main/java/com/mozhi/reader/ui/MoReadApp.kt)：Compose 导航图，装配书架、阅读、伴读、统计及设置页面。
+- [`ui/MoReadApp.kt`](../app/src/main/java/com/mozhi/reader/ui/MoReadApp.kt)：Compose 导航图，装配书架、阅读、伴读、统计及设置页面；Dock 渐隐期间保留原选中项。
+- [`ui/MoReadNavigation.kt`](../app/src/main/java/com/mozhi/reader/ui/MoReadNavigation.kt)：按起止路由统一选择转场；根页互切只做淡出淡入，二级页进退使用配套的横向共享轴动画。根页安全区忽略系统栏可见性，宽屏侧栏留白属于各根页而非共享 NavHost。
 - `ui/components/` 与 `ui/theme/`：共用页面、控件、间距和主题；新增设置页优先复用这里的组件。
 - `core/di/`：应用协程、网络、数据库和向量存储等依赖注入。
 
@@ -32,7 +33,7 @@
 
 | 入口 | 职责与修改注意事项 |
 | --- | --- |
-| [`core/database/MoReadDatabase.kt`](../app/src/main/java/com/mozhi/reader/core/database/MoReadDatabase.kt) | Room 实体/DAO 集合与版本常量；当前 schema 为 **29** |
+| [`core/database/MoReadDatabase.kt`](../app/src/main/java/com/mozhi/reader/core/database/MoReadDatabase.kt) | Room 实体/DAO 集合与版本常量；当前 schema 为 **30** |
 | [`core/database/DatabaseMigrations.kt`](../app/src/main/java/com/mozhi/reader/core/database/DatabaseMigrations.kt) | 数据库迁移；新增迁移后在 `core/di/StorageModule.kt` 注册，并提交导出的 schema |
 | `core/database/entity/`、`core/database/dao/` | 书籍、章节、合集、标签、批注、对话、角色与有声书的数据定义和查询 |
 | [`core/datastore/ReaderSettingsRepository.kt`](../app/src/main/java/com/mozhi/reader/core/datastore/ReaderSettingsRepository.kt) | 阅读排版、主题、书架顺序及按书保存的设置 |
@@ -55,12 +56,13 @@ Room 结构、迁移、备份版本校验和实际数据文件要保持一致。
 
 `feature/importer/` 的选择/预览页面与 `ImportCoordinator` 负责用户流程；`core/importer/BookImportGateway` 提供导入入口，后台批量工作通过 WorkManager 执行。
 
-- TXT：`TextEncodingDetector` → `TxtChapterSplitter` / `TxtTocRuleLoader` → 正文存储；`AiChapterRuleAgent` 提供可选的 AI 分章规则辅助。
+- TXT：`TextEncodingDetector` → `TxtChapterSplitter` / `TxtTocRuleLoader` → 正文存储，不生成 EPUB，`epubPath` 为空；`AiChapterRuleAgent` 提供可选的 AI 分章规则辅助。重新分章按章节索引严格读取正文，还原独立保存的章名；旧生成副本只在全部正文验证通过后移除。
 - EPUB：`EpubPackageInspector`、`EpubMetadataResolver`、`EpubTextExtractor`、`EpubTocMapper` 与 `EpubLayoutDocumentParser` 分别处理包、元信息、文本、目录与布局文档。
 - `core/readium/EpubUriContainer` 为带冒号等特殊资源名的 EPUB 提供 URI 兼容视图：恢复归档条目，并转义清单、目录与文档中的本地引用；原始书包、资源名和正文保持不变，外部 URL 不改写。
-- EPUB 导入复用：`EpubLegacyStyleBridge.newDocumentScope` 在章节间共享不可变 CSS 规则索引，但元素样式缓存按文档隔离；`EpubArchiveImageReader` 仅在 Readium 资源读取未命中时延迟打开 ZIP，同一导入复用归档索引与资源别名映射，结束时关闭，不逐图重新扫描 ZIP。
-- 正文与资源：`core/library/BookTextStore`、`BookTextWriter`、`BookLayoutStore`、`BookMediaStore`。`GzipTextFiles` 按文件头兼容明文与 gzip；新 DOM 直接压缩落盘，旧数据压缩保持索引路径不变并原子替换，失败可重试。只有 DOM 校验通过且存在样式表时才移除重复的旧布局块；无样式表的兼容回退数据必须保留。
-- 内嵌样式表随章节 DOM 保存，并与外链 CSS 按原顺序参与级联；行内与内嵌 CSS 引用的背景资源也会提取。资源采用稳定的本地文件名，兼容特殊字符和长归档路径；`parserRevision` 让旧布局通过已有正文物化流程自动重建。
+- EPUB 导入复用：`EpubLegacyStyleBridge.newDocumentScope` 在章节间共享不可变 CSS 规则索引，但元素样式缓存按文档隔离；`EpubArchiveImageReader` 直接将图片解析为归档条目，同一导入复用 ZIP 索引与别名映射，结束时关闭。
+- 正文与资源：`core/library/BookTextStore`、`BookTextWriter`、`BookLayoutStore`、`BookMediaStore`。EPUB 导入只保存正文、包/章节索引及字体；`BookLayoutCache` 首次阅读章节时解析 DOM，并以 gzip 存入应用缓存，每本上限 8 MiB、全局 64 MiB。淘汰不影响原书，解析器版本变化只丢弃缓存；读取时核对规范正文，不能因重新解析而移动字符锚点。旧布局在归档可用时转换为单个索引，保留无归档旧库的兼容读法。
+- `BookTextArchive` 将正文按 64 KiB 独立压缩，章节读取只解压相交块。章节字节坐标始终指向解压后的 UTF-8 流，不能用压缩文件大小代替正文长度；正文修订哈希也基于解压内容。新导入直接压缩，旧书由正文维护任务或存储页手动压缩，完整校验后原子替换；EPUB 原书继续保留用于重建。
+- `EpubArchiveAsset` / `EpubArchivePool` 将插图、SVG 与 CSS 背景直接交给渲染器按需读取，ZIP 句柄按阅读器生命周期复用，位图按像素预算缓存并降采样。`BookMediaStore` 只为内联数据等例外保存副本，旧副本与归档逐字节校验后才删除。内嵌 CSS 随当前章节解析并保持级联顺序；布局 JSON 省略默认值，但 schema 字段显式必填。
 - 局域网传书：`core/importer/lan/` 的 HTTP 服务、请求解析与上传命名，页面入口为 `feature/importer/LanTransferScreen`。
 
 ### 书架与合集
@@ -107,6 +109,12 @@ Room 结构、迁移、备份版本校验和实际数据文件要保持一致。
 
 **持久化坐标以原文为准。**繁简词组转换可能改变长度；不能把显示偏移直接写入阅读进度、书签或批注，也不能假设原文与显示文案可按总长度线性换算。已有准确原文范围时，避免用重复的上下文匹配覆盖它。修改这里还要检查搜索、伴读引用、听书高亮与选词相关调用点。
 
+### 阅读统计
+
+阅读统计由 `feature/stats/StatsViewModel` 聚合，`StatsScreen`、`StatsCards`、`StatsCharts` 呈现总 / 年 / 月 / 周 / 日视图。阅读热力默认紧接时长概览，后续为月历、趋势、时段、时间线、排行和带配色的标签/作者云；`StatsSettingsStore` 保存组件显示与顺序。`StatsHistory` 将每日阅读量最大的书籍封面铺入月历日期格，多本阅读显示数量提示，点选日期通过真实 `NavigationSheet` 查看完整记录；月历始终聚合锚点所在的整月。时间线按周展示每本书的阅读日期，只连接实际相邻的阅读日，完整日记录使用带封面的日期节点列表。封面加载保持固定尺寸，缺失或损坏时回落书名底图。
+
+`ReadingTimeSlices` 按当地小时边界切分实际阅读时长，`reading_hourly` 与 `reading_daily` 在同一事务累积；跨午夜及夏令时保持总量，旧日记录不推算为小时记录，保留记录的书籍仍参与统计。
+
 ## 6. AI 伴读、检索与记忆
 
 | 模块 | 入口与职责 |
@@ -135,6 +143,10 @@ Room 结构、迁移、备份版本校验和实际数据文件要保持一致。
 - `core/vector/VectorQueries` 在章节范围内不超过 512 个切片时使用精确余弦排序（限制向量复制量）；较大范围使用有界 ANN 补召回，不承诺穷举。
 - `AiModelType.RERANK` / `ModelRole.RERANK` 提供独立可选重排模型；自定义供应商使用 `RerankApiClient` 调用 `/rerank` 或模型自定义路径，采用 query/documents 与 index/relevance_score 格式。`ConfiguredChunkReranker` 只重排已过滤候选的有界前缀：最多 24 段、每段 800 字、合计 12000 字、5 秒。未分配时不调用重排模型，异常、超时或不完整排名回落原融合排序；不更改向量阈值，不重建索引。书内与书库检索共用此链路，发送候选前及返回证据前再次核对正文和范围。
 - `feature/bookdetail/AnnotationIndex` 明确区分全部、我的与 AI 划线，并支持进一步按 AI 角色筛选。来源以 `personaId` 是否为空为准，不按样式、颜色或是否自动生成推断；删除角色不会将其批注算作用户内容。计数只使用已通过可见性过滤的批注。
+- 详情页批注使用 `AnnotationIndexSheet` / `NavigationSheet`，每个来源与角色筛选保留独立滚动状态。点击段评将原文坐标和 `textAnchorJson` 交给既有 `ReaderLocateRequest` 路径，复用繁简坐标转换与短暂高亮。段落讨论允许留空发送来邀请当前伴读，不落空用户消息；有文字且未邀请角色时仍只保存用户想法。
+- `AiServiceScreen` / `ProviderDetailScreen` 按供应商、用途和生成参数分组。`AiSettingsComponents` 根据模型名识别系列图标，独立于中转供应商；未知模型按能力显示图标。图标是随包分发的本地矢量资源。`ModelParameterFields` 编辑常用参数并保留其他 JSON，请求体中的同名覆盖项一并处理，防止界面值与请求值不一致。`WebSearchSettingsScreen` 使用带图标的引擎列表。
+- 图标转换脚本 `scripts/convert-ai-icons.py` 显式分隔 SVG 圆弧的两个标志位，避免紧凑的 `01` 被 Android/Compose 当成一个数而破坏轮廓；彩色品牌保留原始渐变。GLM 使用 Z.ai 标志，火山方舟与硅基流动按名称或接口主机识别，服务图标独立于兼容协议。
+- `StorageDistributionChart` 用环形图和按占用排序的条形图展示真实文件大小，点击分类联动高亮；小项可合并或展开，汇总保持字节总量一致。正文压缩只处理阅读正文，结果区分已压缩、文件过小、没有压缩收益、文件缺失及失败，避免把所有情况都显示为释放 0 B。
 - `ui/components/FontPreviewChoice` 在阅读字体、主题字体、语法高亮字体和伴读字体的选择器中显示实际字形样本；候选横向列表使用懒加载，不因浏览预览自动修改选中的字体。
 - 离线指标与外部样书工具在 `core/retrieval/evaluation/` 测试包中，说明见 [本地检索评测](RETRIEVAL_EVALUATION.md)。公开仓库只保留运行器与指标单测，真实书籍和标注由调用者在本地配置。
 
@@ -178,6 +190,11 @@ EPUB 兼容回归包括 `EpubImportCompatibilityTest`（资源 URI 与目录）�
 | 章节检索范围与来源筛选 | `ChapterSearchRangeTest`、`GrepBookToolTest`、`AnnotationIndexTest` / `AnnotationIndexUiTest`；`RankingMetricsTest` 验证指标计算，真实语料评测为显式启用 |
 | 排版与导入 | `EpubLegacyStyleBridgeTest`、`EpubArchiveImageReaderTest`、`EpubDomFragmentLocatorTest`、`EpubLayoutCapabilityTest`、`ImmersiveArtworkFitTest` 与对应引擎测试；真实样书与设备阅读回归 |
 | 布局压缩兼容 | `BookLayoutStoreTest`、`GzipTextFilesTest`：旧索引、明文/gzip 混合、缺失或损坏文件、重试及新导入 |
+| 按需布局与归档图片 | `BookLayoutArchiveCacheTest`、`BookMediaArchiveTest`、`EpubImportPipelineTest`：缓存淘汰/版本、正文坐标、归档 PNG/SVG 渲染、旧副本校验和缺省 schema |
+| 阅读统计 | `StatsViewModelTest`、`StatsSettingsStoreTest`、`StatsScreenVisualTest`、`ReadingTimeSlicesTest`、`BookStorageAndTimeMigrationTest`：周期聚合、整月封面数据、跨周/年连续阅读区间、组件持久化、大格热力、真实日期/时间线弹层、跨午夜/夏令时及历史数据迁移 |
+| 页面切换稳定性 | `NavigationMotionTest`、`NavigationStabilityTest`：真实 NavHost 内逐帧检查根页不缩放、阅读返回的系统栏留白与列表锚点、宽屏视口、Dock 退场选中态和快速切页恢复 |
+| 正文压缩与设置交互 | `BookTextArchiveTest`、`BookTextStoreCompressionTest`：跨块读取、内容哈希、坐标与中断保护；`AiSettingsVisualTest`：图标、参数编辑、小屏与深色界面；`AnnotationNavigationSheetTest`：真实弹层贴底、边界滑动、筛选与进度刷新 |
+| 图标轮廓与存储图表 | `AiIconRenderingTest` 将 Compose 矢量渲染与原始 SVG 独立渲染逐像素比对；`StorageDistributionTest` 检查分类汇总、占比和零释放反馈，`StorageScreenVisualTest` 验证图表选择、刷新、小屏和深色界面 |
 | 存储、素材与数据保留 | `StorageFilesTest`、`AssetPreferencesTest`、`LibraryRepositoryRemovalTest`（含真实 25→26→27 迁移和历史保留）、`LocalImageExporterTest`、`DataManagementUiTest`、`AppFontTest` |
 | 自动阅读 | `AutoReadSessionTest`、`AutoReadSurfaceTest`、`AutoReadUiTest`；停顿不追赶、取消不提交、加载超时暂停，仍需真机检查滚动手感与生命周期 |
 | 书库伴读与统计 | `LibraryCompanionToolsetTest`、`LibraryCatalogToolTest`、`LibraryConversationSourcesTest`、`LibraryCompanionRunnerTest`、`LibraryOrganizationCoordinatorTest`、`CompanionStatisticsTest` / `CompanionStatisticsDatabaseTest`、`ReadingAndCompanionVisualTest`（真实控件、合成示例，不调用外部模型） |
@@ -207,5 +224,7 @@ EPUB 兼容回归包括 `EpubImportCompatibilityTest`（资源 URI 与目录）�
 - `ProactiveAnnotationNoticeComposer` 默认使用不调用 API 的内置条数提示；显式选择快速模型时，`ModelRole.CHEAP` 仅接收有长度上限的角色名、性格与说话风格，生成一句角色口吻的共读弹幕，不传正文、段评、历史、记忆或条数。超时、失败和不合规输出回落互动短句，不回落统计通知；胶囊不抢焦点，未读结果不提供跳转入口。
 - 回退诊断只记录超时、错误类型和输出长度，不记录模型原文、角色资料或异常消息里的连接信息。
 - 随读段评设置复用父页面的 `SettingsViewModel`，冷启动先显示稳定页面框架，真实设置加载前不渲染临时默认开关和滑块。
+- `CompanionAutonomySettings` 保存多伴读选择和独立段评预设。未单独选角色时跟随当前伴读；多选时按角色分别去重、共享每日额度并预留后续角色份额。`AnnotationPromptSettingsScreen` 复用预设编辑器，支持多条开关、编辑和四种注入位置；`ProactiveAnnotationPrompts` 提供可修改的内置口吻与划线风格，原文定位及输出格式契约独立保留。
+- 主动段评通过 `ModelRole.PROACTIVE_ANNOTATION` 分配，未配置时只回落 `CHEAP`，已配置模型的错误不会暗中切换模型。每章“不限制”按全部候选段落生成，没有固定 10 条限制；有限条数按原文字符位置分布。`ProactiveAnnotationParagraphs` 拆分超长段落，保留 UTF-16 边界并限制上下文只到目标结尾；每日限额、已完成段落记录和未读可见性仍适用。
 
 对应回归测试位于 `feature/reader/*Spread*Test`、`engine/ReaderContentControllerTest`、`CompanionChat*Test`、`ReaderPaneRetentionTest`、`settings/ProactiveAnnotationSettingsScreenTest`、`core/retrieval/AnnotationVisibilityTest`、`ai/companion/`、`ui/WindowLayoutTest` 和数据库迁移/可见水位的 Android 测试中。

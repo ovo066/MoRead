@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Lobe Icons 1.95.0: exa.svg; MIT, see licenses/lobe-icons-MIT.txt. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+    <path android:pathData="M 3 0 h 19 v 1.791 L 13.892 12 22 22.209 V 24 H 3 V 0 z m 9.62 10.348 l 6.589 -8.557 H 6.03 l 6.59 8.557 z M 5.138 3.935 v 7.17 h 5.52 l -5.52 -7.17 z m 5.52 8.96 h -5.52 v 7.17 l 5.52 -7.17 z M 6.03 22.21 l 6.59 -8.557 6.589 8.557 H 6.03 z" android:fillType="evenOdd" android:fillColor="#FF000000" />
+</vector>

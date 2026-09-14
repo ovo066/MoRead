@@ -255,6 +255,7 @@ class AiClientFactory @Inject constructor(
 
     private suspend fun resolve(role: ModelRole): Pair<AiProviderEntity, AiModelEntity> {
         val modelId = providerDao.getAssignment(role)?.modelId
+            ?: (if (role == ModelRole.PROACTIVE_ANNOTATION) providerDao.getAssignment(ModelRole.CHEAP)?.modelId else null)
             ?: throw AiClientException.NotConfigured(role.label())
         val model = providerDao.getModel(modelId)
             ?: throw AiClientException.NotConfigured(role.label())
@@ -267,7 +268,7 @@ class AiClientFactory @Inject constructor(
     }
 
     private fun ModelRole.requiredType(): AiModelType = when (this) {
-        ModelRole.CHAT, ModelRole.CHEAP, ModelRole.SUGGESTION -> AiModelType.CHAT
+        ModelRole.CHAT, ModelRole.CHEAP, ModelRole.SUGGESTION, ModelRole.PROACTIVE_ANNOTATION -> AiModelType.CHAT
         ModelRole.EMBEDDING -> AiModelType.EMBEDDING
         ModelRole.RERANK -> AiModelType.RERANK
         ModelRole.TTS -> AiModelType.TTS
@@ -278,6 +279,7 @@ class AiClientFactory @Inject constructor(
         ModelRole.CHAT -> "对话模型"
         ModelRole.CHEAP -> "廉价批量模型"
         ModelRole.SUGGESTION -> "建议回复模型"
+        ModelRole.PROACTIVE_ANNOTATION -> "主动段评模型（或批量任务 cheap 模型）"
         ModelRole.EMBEDDING -> "Embedding 模型"
         ModelRole.RERANK -> "重排模型"
         ModelRole.TTS -> "TTS 模型"

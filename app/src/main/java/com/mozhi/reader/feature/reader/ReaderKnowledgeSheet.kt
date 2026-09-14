@@ -1,6 +1,7 @@
 package com.mozhi.reader.feature.reader
 
 import androidx.compose.foundation.background
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -85,7 +86,10 @@ internal fun ReaderKnowledgePages(
     LaunchedEffect(state.error) { state.error?.let { snackbar.showSnackbar(it) } }
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
-            ReaderKnowledgeTabs(tab, palette, onDismiss) { tab = it }
+            ReaderKnowledgeTabs(tab, palette, onDismiss,
+                bookTitle = state.snapshot.book?.title.orEmpty(),
+                position = if (chapters.isEmpty()) "书中导航" else "阅读导航 · 第 ${currentChapterIndex + 1} / ${chapters.size} 章"
+            ) { tab = it }
             Box(Modifier.weight(1f)) {
                 pages.SaveableStateProvider("${state.bookId}:$tab") {
                     when (tab) {
@@ -101,21 +105,41 @@ internal fun ReaderKnowledgePages(
 }
 
 @Composable
-internal fun ReaderKnowledgeTabs(selectedTab: Int, palette: ReaderPalette, onDismiss: () -> Unit = {}, onSelect: (Int) -> Unit) {
-    Row(Modifier.fillMaxWidth().height(58.dp).padding(start = 16.dp, end = 8.dp)
-        .selectableGroup().testTag("knowledge-tabs"), verticalAlignment = Alignment.CenterVertically) {
-        listOf("目录", "大纲", "人物").forEachIndexed { index, label ->
-            val selected = index == selectedTab
-            Column(Modifier.weight(1f).selectable(selected, role = Role.Tab, onClick = { onSelect(index) })
-                .padding(top = 12.dp, bottom = 6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(label, style = MaterialTheme.typography.titleMedium,
-                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                    color = if (selected) palette.onBackground else palette.muted)
-                Spacer(Modifier.height(9.dp))
-                Box(Modifier.width(24.dp).height(3.dp).clip(CircleShape).background(if (selected) palette.accent else Color.Transparent))
+internal fun ReaderKnowledgeTabs(
+    selectedTab: Int, palette: ReaderPalette, onDismiss: () -> Unit = {},
+    bookTitle: String = "", position: String = "阅读导航", onSelect: (Int) -> Unit
+) {
+    Column(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth().height(82.dp).padding(start = 22.dp, end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text(position, style = MaterialTheme.typography.labelSmall, color = palette.muted, maxLines = 1)
+                Text(bookTitle.ifBlank { "书中导航" }, style = MaterialTheme.typography.titleLarge,
+                    color = palette.onBackground, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Spacer(Modifier.width(12.dp))
+            Surface(shape = CircleShape, color = palette.glass) {
+                IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, "关闭目录与资料", tint = palette.muted, modifier = Modifier.size(20.dp)) }
             }
         }
-        IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, "关闭目录与资料", tint = palette.muted) }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp).height(54.dp)
+            .clip(RoundedCornerShape(18.dp)).background(palette.glass).padding(4.dp)
+            .selectableGroup().testTag("knowledge-tabs"), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            val icons = listOf(Icons.Outlined.FormatListBulleted, Icons.Outlined.AccountTree, Icons.Outlined.PeopleAlt)
+            listOf("目录", "大纲", "人物").forEachIndexed { index, label ->
+                val selected = index == selectedTab
+                val background by animateColorAsState(if (selected) palette.accentContainer else Color.Transparent, label = "navigation-tab")
+                Row(Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(14.dp)).background(background)
+                    .selectable(selected, role = Role.Tab, onClick = { onSelect(index) }),
+                    horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                    Icon(icons[index], null, Modifier.size(18.dp), tint = if (selected) palette.accent else palette.muted)
+                    Spacer(Modifier.width(7.dp))
+                    Text(label, style = MaterialTheme.typography.titleSmall,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (selected) palette.accent else palette.muted)
+                }
+            }
+        }
+        Spacer(Modifier.height(10.dp))
     }
 }
 
@@ -124,7 +148,7 @@ private fun KnowledgeHeading(title: String, subtitle: String, palette: ReaderPal
     Row(Modifier.fillMaxWidth().height(78.dp).padding(start = 20.dp, end = 8.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.headlineSmall, color = palette.onBackground)
+            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = palette.onBackground)
             Text(subtitle, style = MaterialTheme.typography.bodySmall, color = palette.muted,
                 maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 5.dp))
         }

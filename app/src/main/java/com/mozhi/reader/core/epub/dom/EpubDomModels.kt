@@ -3,10 +3,11 @@ package com.mozhi.reader.core.epub.dom
 import com.mozhi.reader.core.library.EpubLayoutDiagnostic
 import com.mozhi.reader.core.library.EpubStylesheetText
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Required
 
 @Serializable
 data class EpubDomChapter(
-    val schemaVersion: Int = CURRENT_SCHEMA_VERSION,
+    @Required val schemaVersion: Int = CURRENT_SCHEMA_VERSION,
     val chapterIndex: Int,
     val href: String,
     val documentTitle: String? = null,

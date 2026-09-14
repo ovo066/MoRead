@@ -130,7 +130,7 @@ fun GlobalPresetSettingsScreen(
 }
 
 @Composable
-private fun PresetRow(
+internal fun PresetRow(
     preset: GlobalPromptPreset,
     onEnabled: (Boolean) -> Unit,
     onEdit: () -> Unit,
@@ -174,10 +174,11 @@ private fun PresetRow(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PresetEditorDialog(
+internal fun PresetEditorDialog(
     initial: GlobalPromptPreset,
     onDismiss: () -> Unit,
-    onSave: (GlobalPromptPreset) -> Unit
+    onSave: (GlobalPromptPreset) -> Unit,
+    kindLabel: String = "全局预设"
 ) {
     var name by remember(initial.id) { mutableStateOf(initial.name) }
     var prompt by remember(initial.id) { mutableStateOf(initial.prompt) }
@@ -185,7 +186,7 @@ private fun PresetEditorDialog(
     var expanded by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (initial.id.isBlank()) "添加全局预设" else "编辑全局预设") },
+        title = { Text(if (initial.id.isBlank()) "添加$kindLabel" else "编辑$kindLabel") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(

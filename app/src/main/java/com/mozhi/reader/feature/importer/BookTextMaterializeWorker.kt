@@ -49,6 +49,9 @@ class BookTextMaterializeWorker(
         val layoutStore = entryPoint.bookLayoutStore()
         val pending = ArrayList<BookEntity>()
         for (book in repository.getBooks()) {
+            runCatching { coordinator.optimizeStoredBook(book) }.onFailure {
+                if (it is kotlinx.coroutines.CancellationException) throw it
+            }
             val chapterLengths = if (book.sourceType == BookSourceType.EPUB) {
                 repository.getChapters(book.id)
                     .sortedBy { it.chapterIndex }
@@ -61,21 +64,17 @@ class BookTextMaterializeWorker(
                 !layoutStore.hasCurrentLayout(book.id, chapterLengths)
             if (needsRepair) {
                 pending += book
-            } else if (book.sourceType == BookSourceType.EPUB) {
-                // 已完整的精排数据就地压实（明文 DOM JSON → gzip、清空多余的旧引擎块列表）。
-                // 纯 I/O、幂等、带完成标记；失败只影响这一本，下次启动再试。
-                runCatching {
-                    com.mozhi.reader.core.library.BookContentMutation.withBook(book.id) {
-                        if (repository.getBook(book.id)?.removedAt == 0L) layoutStore.compact(book.id)
-                    }
-                }
             }
         }
         if (pending.isEmpty()) return successResult()
 
         var failed = false
         pending.forEach { book ->
-            val materialized = runCatching { coordinator.materializeLegacyBook(book) }
+            val materialized = runCatching {
+                coordinator.materializeLegacyBook(book).also { ready ->
+                    if (ready) repository.getBook(book.id)?.let { coordinator.optimizeStoredBook(it) }
+                }
+            }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
                 .getOrDefault(false)
             if (!materialized) failed = true
         }

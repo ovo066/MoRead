@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Lobe Icons 1.95.0: tavily.svg; MIT, see licenses/lobe-icons-MIT.txt. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+    <path android:pathData="M 8.033 14.273 a 1.612 1.612 0 0 1 1.139 .47 l .04 .042 .044 .043 a 1.61 1.61 0 0 1 0 2.277 l -3.073 3.073 .816 .816 c .6 .6 .303 1.627 -.525 1.814 l -5.159 1.165 a 1.07 1.07 0 0 1 -.897 -.2 l -.102 -.09 a 1.07 1.07 0 0 1 -.289 -1 l 1.164 -5.158 A 1.079 1.079 0 0 1 3.006 17 l .816 .817 3.074 -3.074 a 1.612 1.612 0 0 1 1.137 -.47 z M 17.042 13.246 c 0 -.85 .935 -1.366 1.653 -.912 l 4.47 2.824 c .336 .212 .503 .562 .503 .911 0 .35 -.167 .7 -.501 .913 l -4.472 2.824 a 1.079 1.079 0 0 1 -1.654 -.912 v -1.155 h -7.027 c .37 -.4 .605 -.902 .677 -1.438 l .022 -.232 a 2.65 2.65 0 0 0 -.492 -1.669 h 6.821 v -1.154 z M 8.188 0 c .35 0 .7 .168 .913 .503 l 2.823 4.47 a 1.079 1.079 0 0 1 -.911 1.655 H 9.857 v 6.692 h -1.67 a 2.633 2.633 0 0 0 -1.668 .48 V 6.629 H 5.365 c -.849 0 -1.366 -.936 -.912 -1.654 L 7.276 .503 A 1.072 1.072 0 0 1 8.188 0 z" android:fillType="evenOdd" android:fillColor="#FF000000" />
+</vector>

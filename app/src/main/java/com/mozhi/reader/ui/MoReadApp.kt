@@ -1,29 +1,23 @@
 package com.mozhi.reader.ui
 
 import android.net.Uri
-import androidx.compose.animation.AnimatedContentScope
-import androidx.compose.animation.EnterTransition
-import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.FastOutLinearInEasing
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.AutoStories
@@ -35,11 +29,11 @@ import androidx.compose.material.icons.outlined.InsertChartOutlined
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -52,12 +46,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.navigation.NamedNavArgument
-import androidx.navigation.NavBackStackEntry
-import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavType
-import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
@@ -90,6 +79,7 @@ import com.mozhi.reader.feature.settings.ImageGenSettingsScreen
 import com.mozhi.reader.feature.settings.FontLibraryScreen
 import com.mozhi.reader.feature.settings.ImageLibraryScreen
 import com.mozhi.reader.feature.settings.ProactiveAnnotationSettingsScreen
+import com.mozhi.reader.feature.settings.AnnotationPromptSettingsScreen
 import com.mozhi.reader.feature.settings.GlobalPresetSettingsScreen
 import com.mozhi.reader.feature.settings.BackupSettingsScreen
 import com.mozhi.reader.feature.settings.ProviderDetailScreen
@@ -111,60 +101,13 @@ import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
 
-/**
- * 页面转场（Material 3 motion）：
- * - 根页互切用 fade-through——旧页 90ms 快出、新页再 210ms 淡入，两页几乎不
- *   叠帧绘制。Navigation 默认的 700ms 双页叠加淡入淡出既拖沓又让重列表掉帧。
- * - 二级页推入用 shared-axis X：入场从右侧 1/4 滑入，底页微退场；返回镜像。
- */
 /** 聊天页 →（返回）→ 阅读页的一次性跳转参数。 */
 private const val LOCATE_CHAPTER_KEY = "locate-chapter"
 private const val LOCATE_START_KEY = "locate-start"
 private const val LOCATE_END_KEY = "locate-end"
 private const val LOCATE_ANCHOR_KEY = "locate-anchor"
 
-private const val ROOT_FADE_OUT_MS = 90
-private const val ROOT_FADE_IN_MS = 210
-private const val PUSH_MS = 280
-
-private fun rootEnter(): EnterTransition =
-    fadeIn(tween(ROOT_FADE_IN_MS, delayMillis = ROOT_FADE_OUT_MS, easing = LinearOutSlowInEasing)) +
-        scaleIn(
-            initialScale = 0.92f,
-            animationSpec = tween(ROOT_FADE_IN_MS, delayMillis = ROOT_FADE_OUT_MS, easing = LinearOutSlowInEasing)
-        )
-
-private fun rootExit(): ExitTransition =
-    fadeOut(tween(ROOT_FADE_OUT_MS, easing = FastOutLinearInEasing))
-
-/** 二级页统一注册入口：带 shared-axis X 转场的 composable。 */
-private fun NavGraphBuilder.pushComposable(
-    route: String,
-    arguments: List<NamedNavArgument> = emptyList(),
-    content: @Composable AnimatedContentScope.(NavBackStackEntry) -> Unit
-) = composable(
-    route = route,
-    arguments = arguments,
-    enterTransition = {
-        slideInHorizontally(tween(PUSH_MS, easing = FastOutSlowInEasing)) { it / 4 } +
-            fadeIn(tween(PUSH_MS, easing = LinearOutSlowInEasing))
-    },
-    exitTransition = {
-        slideOutHorizontally(tween(PUSH_MS, easing = FastOutSlowInEasing)) { -it / 8 } +
-            fadeOut(tween(160, easing = FastOutLinearInEasing))
-    },
-    popEnterTransition = {
-        slideInHorizontally(tween(PUSH_MS, easing = FastOutSlowInEasing)) { -it / 8 } +
-            fadeIn(tween(PUSH_MS, easing = LinearOutSlowInEasing))
-    },
-    popExitTransition = {
-        slideOutHorizontally(tween(PUSH_MS, easing = FastOutSlowInEasing)) { it / 4 } +
-            fadeOut(tween(160, easing = FastOutLinearInEasing))
-    },
-    content = content
-)
-
-private enum class RootDestination(
+internal enum class RootDestination(
     val route: String,
     val label: String,
     val icon: ImageVector,
@@ -221,31 +164,12 @@ fun MoReadApp(
     MoReadBackdrop {
         MoReadWindowLayout { windowWidth ->
             val expanded = windowWidth == MoReadWindowWidth.EXPANDED
-            val isRootRoute = RootDestination.entries.any { it.route == currentRoute }
-            Scaffold(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(start = if (expanded && isRootRoute) {
-                        MoReadLayoutPolicy.NavigationRailWidthDp.dp
-                    } else 0.dp),
-                // 背景由 MoReadBackdrop 画，Scaffold 只做布局所以是透明的；但 contentColor
-                // 必须显式给 —— 默认 contentColorFor(Transparent) 匹配不到任何角色，会返回
-                // Color.Unspecified，于是所有没写死颜色的 Text 都拿不到前景色（夜间即黑底黑字）。
-                containerColor = Color.Transparent,
-                contentColor = MaterialTheme.colorScheme.onBackground
-            ) { padding ->
-                NavHost(
+            MoReadNavigationScaffold { padding ->
+                MoReadNavigationHost(
                     navController = navController,
-                    startDestination = RootDestination.Bookshelf.route,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .hazeSource(hazeState),
-                    enterTransition = { rootEnter() },
-                    exitTransition = { rootExit() },
-                    popEnterTransition = { rootEnter() },
-                    popExitTransition = { rootExit() }
+                    modifier = Modifier.fillMaxSize().hazeSource(hazeState)
                 ) {
-                composable(RootDestination.Bookshelf.route) {
+                rootComposable(RootDestination.Bookshelf.route, expanded) {
                     BookshelfScreen(
                         contentPadding = padding,
                         externalImportUri = incomingBookUri,
@@ -270,10 +194,10 @@ fun MoReadApp(
                         onSelectionModeChanged = { bookshelfSelectionActive = it }
                     )
                 }
-                composable(RootDestination.Stats.route) {
+                rootComposable(RootDestination.Stats.route, expanded) {
                     MoReadBoundedContent { StatsScreen(contentPadding = padding) }
                 }
-                composable(RootDestination.Companion.route) {
+                rootComposable(RootDestination.Companion.route, expanded) {
                     MoReadBoundedContent {
                         CompanionScreen(
                             contentPadding = padding,
@@ -286,7 +210,7 @@ fun MoReadApp(
                         )
                     }
                 }
-                composable(RootDestination.Settings.route) { entry ->
+                rootComposable(RootDestination.Settings.route, expanded) { entry ->
                     SettingsScreen(
                         contentPadding = padding,
                         viewModel = hiltViewModel(entry),
@@ -334,8 +258,14 @@ fun MoReadApp(
                     ProactiveAnnotationSettingsScreen(
                         bookId = null,
                         onBack = navController::popBackStack,
+                        onOpenPrompts = { navController.navigate("annotation-prompts") },
                         viewModel = hiltViewModel<SettingsViewModel>(settingsEntry)
                     )
+                }
+                pushComposable("annotation-prompts") { entry ->
+                    val settingsEntry = remember(entry) { navController.getBackStackEntry(RootDestination.Settings.route) }
+                    AnnotationPromptSettingsScreen(onBack = navController::popBackStack,
+                        viewModel = hiltViewModel<SettingsViewModel>(settingsEntry))
                 }
                 pushComposable("annotation-limits/{bookId}") { entry ->
                     // Keep a book's settings warm when revisiting from the same detail page.
@@ -440,6 +370,15 @@ fun MoReadApp(
                         onBack = navController::popBackStack,
                         onContinueReading = { bookId ->
                             navController.navigate("reader/$bookId")
+                        },
+                        onLocateAnnotation = { annotation ->
+                            navController.navigate("reader/${annotation.bookId}")
+                            navController.currentBackStackEntry?.savedStateHandle?.let { handle ->
+                                handle[LOCATE_START_KEY] = annotation.startCharOffset
+                                handle[LOCATE_END_KEY] = annotation.endCharOffset
+                                handle[LOCATE_ANCHOR_KEY] = annotation.textAnchorJson
+                                handle[LOCATE_CHAPTER_KEY] = annotation.chapterIndex
+                            }
                         },
                         onListen = { bookId -> navController.navigate("listen/$bookId") },
                         onPlayAudiobook = { bookId ->
@@ -657,23 +596,50 @@ fun MoReadApp(
 
             // Dock 是覆盖在内容上的浮层，不占 Scaffold 的 bottomBar 布局高度。
             // 否则 Scaffold 会在整屏底部预留一条矩形空白，看起来像胶囊背后的白横条。
-            if (showBottomBar) {
-                AdaptiveNavDock(
-                    hazeState = hazeState,
-                    vertical = expanded,
-                    modifier = Modifier.align(if (expanded) Alignment.CenterStart else Alignment.BottomCenter),
-                    selectedRoute = currentRoute,
-                    onSelect = { item ->
-                        navController.navigate(item.route) {
-                            popUpTo(RootDestination.Bookshelf.route) { saveState = true }
-                            launchSingleTop = true
-                            restoreState = true
-                        }
+            MoReadNavigationDock(
+                visible = showBottomBar,
+                hazeState = hazeState,
+                vertical = expanded,
+                modifier = Modifier.align(if (expanded) Alignment.CenterStart else Alignment.BottomCenter),
+                currentRoute = currentRoute,
+                onSelect = { item ->
+                    navController.navigate(item.route) {
+                        popUpTo(RootDestination.Bookshelf.route) { saveState = true }
+                        launchSingleTop = true
+                        restoreState = true
                     }
-                )
-            }
+                }
+            )
             AppUpdatePrompt()
         }
+    }
+}
+
+/** Keep the selected capsule intact while the dock fades out with an outgoing root. */
+@Composable
+internal fun MoReadNavigationDock(
+    visible: Boolean,
+    hazeState: HazeState,
+    vertical: Boolean,
+    currentRoute: String?,
+    modifier: Modifier = Modifier,
+    onSelect: (RootDestination) -> Unit
+) {
+    var lastRootRoute by remember { mutableStateOf(RootDestination.Bookshelf.route) }
+    val selectedRoute = currentRoute?.takeIf(::isRootRoute) ?: lastRootRoute
+    SideEffect { lastRootRoute = selectedRoute }
+    AnimatedVisibility(
+        visible = visible,
+        modifier = modifier,
+        enter = fadeIn(tween(160)),
+        exit = fadeOut(tween(160))
+    ) {
+        AdaptiveNavDock(
+            hazeState = hazeState,
+            vertical = vertical,
+            selectedRoute = selectedRoute,
+            onSelect = { if (visible) onSelect(it) }
+        )
     }
 }
 
@@ -693,7 +659,9 @@ private fun AdaptiveNavDock(
         modifier = if (vertical) {
             modifier.padding(start = 14.dp)
         } else {
-            modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 10.dp)
+            modifier.fillMaxWidth()
+                .windowInsetsPadding(stableNavigationInsets().only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
+                .padding(bottom = 10.dp)
         },
         contentAlignment = Alignment.Center
     ) {

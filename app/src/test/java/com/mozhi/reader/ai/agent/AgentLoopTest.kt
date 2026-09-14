@@ -1,6 +1,7 @@
 package com.mozhi.reader.ai.agent
 
 import com.mozhi.reader.ai.client.AiClientException
+import com.mozhi.reader.ai.client.AiJson
 import com.mozhi.reader.ai.client.ChatDelta
 import com.mozhi.reader.ai.client.ChatMessage
 import com.mozhi.reader.ai.client.ChatRole
@@ -15,8 +16,10 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
 import com.mozhi.reader.ai.memory.RollingSummarizer
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 import org.junit.Assert.assertEquals
@@ -267,6 +270,50 @@ class AgentLoopTest {
     }
 
     @Test
+    fun `tool signatures survive persistence and loading a new agent loop`() = runTest {
+        val dao = FakeChatDao(seed(ChatRole.USER to "进度如何"))
+        val tool = EchoTool("已读到第 3 章")
+        val signedCall = ToolCall(
+            id = "call_1",
+            name = "echo_tool",
+            arguments = "{}",
+            thoughtSignature = "native-signature",
+            extraContent = AiJson.parseToJsonElement(
+                """{"google":{"thought_signature":"compatible-signature"}}"""
+            ).jsonObject,
+            reasoningDetails = listOf(AiJson.parseToJsonElement(
+                """{"type":"reasoning.encrypted","data":"router-signature","id":"call_1","format":"google-gemini-v1","index":0}"""
+            ).jsonObject)
+        )
+        var round = 0
+        loop(dao).runWith(1, listOf(tool)) {
+            AgentLoop.Streamer { messages, _ ->
+                if (round++ == 0) {
+                    flowOf(ChatDelta.ToolCalls(listOf(signedCall)))
+                } else {
+                    assertEquals(signedCall, messages.flatMap { it.toolCalls }.single())
+                    flowOf(ChatDelta.Text("你读到第 3 章了"))
+                }
+            }
+        }.toList()
+        val persisted = dao.messages.single { !it.toolCallsJson.isNullOrBlank() }
+        assertEquals(
+            listOf(signedCall),
+            AiJson.decodeFromString(ListSerializer(ToolCall.serializer()), persisted.toolCallsJson!!)
+        )
+        dao.insertMessage(MessageEntity(conversationId = 1, role = "user", content = "继续", createdAt = 10))
+        var reloaded = false
+        loop(dao).runWith(1, listOf(tool)) {
+            AgentLoop.Streamer { messages, _ ->
+                assertEquals(signedCall, messages.flatMap { it.toolCalls }.single())
+                reloaded = true
+                flowOf(ChatDelta.Text("继续阅读吧"))
+            }
+        }.toList()
+        assertTrue(reloaded)
+    }
+
+    @Test
     fun `tool preface commits before tool activity and next round starts separately`() = runTest {
         val dao = FakeChatDao(seed(ChatRole.USER to "搜搜今天新闻"))
         val tool = EchoTool("搜索结果")
@@ -438,6 +485,7 @@ class AgentLoopTest {
     fun `detached run executes tools and feeds results to the next round`() = runTest {
         val dao = FakeChatDao(emptyList())
         val tool = EchoTool("第 2 章的雪是白色的")
+        val signedCall = ToolCall("call_1", "echo_tool", "{}", thoughtSignature = "native-signature")
         var round = 0
         val events = loop(dao).runDetachedWith(
             listOf(ChatMessage(ChatRole.USER, "前文的雪什么颜色")),
@@ -447,9 +495,10 @@ class AgentLoopTest {
             AgentLoop.Streamer { messages, _ ->
                 round++
                 if (round == 1) {
-                    flowOf(ChatDelta.ToolCalls(listOf(ToolCall("call_1", "echo_tool", "{}"))))
+                    flowOf(ChatDelta.ToolCalls(listOf(signedCall)))
                 } else {
                     assertEquals(ChatRole.TOOL, messages.last().role)
+                    assertEquals(signedCall, messages.flatMap { it.toolCalls }.single())
                     flowOf(ChatDelta.Text("是白色的"))
                 }
             }

@@ -18,6 +18,22 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ProactiveAnnotationServiceTest {
+    @Test fun customPresetsRespectAllPositionsAndCanReplaceBuiltInWritingRules() {
+        val presets = com.mozhi.reader.core.datastore.GlobalPromptInjectionPosition.entries.mapIndexed { index, position ->
+            com.mozhi.reader.core.datastore.GlobalPromptPreset("$index", "preset-$index", "marker-$index", true, position)
+        } + com.mozhi.reader.core.datastore.GlobalPromptPreset("off", "disabled", "never-inject", false)
+        val messages = proactiveAnnotationMessages(persona, "目标段落正文", presets)
+        val system = messages.first().content.orEmpty()
+        val user = messages.last().content.orEmpty()
+        assertTrue(system.indexOf("marker-0") < system.indexOf("你是"))
+        assertTrue(system.endsWith("marker-1"))
+        assertTrue(user.indexOf("marker-2") < user.indexOf("正文前缀"))
+        assertTrue(user.endsWith("marker-3"))
+        assertFalse(messages.any { "never-inject" in it.content.orEmpty() })
+        assertFalse(system.contains("用你自己的口吻和性格写"))
+        assertTrue(system.contains("只输出一个 JSON 对象"))
+        assertTrue(system.contains("绝不推测后文"))
+    }
     private val factory = mockk<AiClientFactory>()
     private val client = mockk<ChatApiClient>()
     private val media = mockk<AiMediaGenerationService>()
@@ -29,7 +45,7 @@ class ProactiveAnnotationServiceTest {
     private val request = ProactiveAnnotationRequest(1, 3, body, persona, 2, emptySet())
     private val permit = ProactiveAnnotationAllowance(true, maxAnnotations = 2)
 
-    init { coEvery { factory.forRole(ModelRole.CHEAP) } returns ResolvedChatClient(client, ChatOptions(), mockk(), "mock") }
+    init { coEvery { factory.forRole(ModelRole.PROACTIVE_ANNOTATION) } returns ResolvedChatClient(client, ChatOptions(), mockk(), "mock") }
 
     @Test fun eachRequestUsesOnlyTargetPrefixAndStoresExactProvenance() = runTest {
         val requests = mutableListOf<List<ChatMessage>>()

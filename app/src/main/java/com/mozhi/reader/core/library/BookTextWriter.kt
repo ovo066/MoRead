@@ -8,7 +8,7 @@ import javax.inject.Singleton
 /**
  * A chapter's slice of a book's `text.mz`.
  *
- * [byteOffset]/[byteLength] index the UTF-8 file. [charCount] counts UTF-16 code units in the
+ * [byteOffset]/[byteLength] index the decoded UTF-8 stream. [charCount] counts UTF-16 code units in the
  * decoded string. The two spaces are never interchangeable — every read seeks by bytes, every
  * reading position is expressed in characters.
  */
@@ -31,7 +31,7 @@ class BookTextWriter @Inject constructor() {
 
     fun write(target: File, chapters: List<ChapterTextInput>): List<ChapterTextRange> {
         target.parentFile?.mkdirs()
-        val temporary = File(target.parentFile, target.name + ".tmp")
+        val temporary = File.createTempFile("text-write-", ".tmp", target.parentFile)
         val ranges = ArrayList<ChapterTextRange>(chapters.size)
         try {
             BufferedOutputStream(temporary.outputStream()).use { stream ->
@@ -49,8 +49,8 @@ class BookTextWriter @Inject constructor() {
                     offset += bytes.size
                 }
             }
-            if (target.exists() && !target.delete()) error("无法覆盖已有文本文件")
-            if (!temporary.renameTo(target)) error("无法写入书籍文本文件")
+            BookTextArchive.compact(temporary)
+            BookTextArchive.replaceAtomically(temporary, target)
         } catch (error: Throwable) {
             temporary.delete()
             throw error

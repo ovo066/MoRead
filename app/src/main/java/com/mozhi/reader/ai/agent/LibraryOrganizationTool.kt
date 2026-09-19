@@ -27,5 +27,6 @@ internal class LibraryOrganizationTool(private val coordinator: LibraryOrganizat
         }
         putJsonArray("required") { add("changes") }
     })
-    override suspend fun execute(arguments: JsonObject): String = LibraryOrganizationPlans.encode(coordinator.preview(LibraryOrganizationPlans.requests(arguments)))
+    override suspend fun execute(arguments: JsonObject): ToolResult =
+        ToolResult.Success(LibraryOrganizationPlans.encode(coordinator.preview(LibraryOrganizationPlans.requests(arguments))))
 }

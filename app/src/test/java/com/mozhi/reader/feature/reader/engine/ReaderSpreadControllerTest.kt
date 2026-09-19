@@ -76,13 +76,13 @@ class ReaderSpreadControllerTest {
     }
 
     @Test
-    fun `forward and backward intra chapter turns survive neighbor annotation publication`() = runTest {
+    fun `forward and backward intra chapter turns survive neighbor illustration publication`() = runTest {
         val controller = controller(count = 2)
         controller.updateEnvironment(spec, FakeMeasure(), spread = true)
         finishLayouts()
         for (forward in listOf(true, false)) {
             val turn = controller.captureTurn(forward)
-            val markers = if (forward) listOf(InlineMarkerReservation(3, InlineMarkerKind.ANNOTATION)) else emptyList()
+            val markers = if (forward) listOf(InlineMarkerReservation(3, InlineMarkerKind.ILLUSTRATION)) else emptyList()
             controller.setInlineMarkers(mapOf(1 to markers))
             finishLayouts()
             assertTrue(controller.canCommitTurn(turn))
@@ -98,7 +98,7 @@ class ReaderSpreadControllerTest {
         finishLayouts()
         val turn = controller.captureTurn(forward = true)
         assertEquals(1, turn.targetPages.first().chapterIndex)
-        controller.setInlineMarkers(mapOf(1 to listOf(InlineMarkerReservation(3, InlineMarkerKind.ANNOTATION))))
+        controller.setInlineMarkers(mapOf(1 to listOf(InlineMarkerReservation(3, InlineMarkerKind.ILLUSTRATION))))
         finishLayouts()
         assertEquals(turn.sourcePages, controller.turnPages(0))
         assertNotEquals(turn.targetPages, controller.turnPages(1))
@@ -223,7 +223,7 @@ class ReaderSpreadControllerTest {
         assertEquals(right.page.chapterPosition + right.page.charLength, frozen.displayEnd)
         controller.focus(right.page.chapterPosition + 1)
         assertTrue(controller.isCurrentVisibleRead(frozen)) // Focus is not the visible endpoint.
-        controller.setInlineMarkers(mapOf(0 to listOf(InlineMarkerReservation(3, InlineMarkerKind.ANNOTATION))))
+        controller.setInlineMarkers(mapOf(0 to listOf(InlineMarkerReservation(3, InlineMarkerKind.ILLUSTRATION))))
         finishLayouts()
         assertFalse(controller.isCurrentVisibleRead(frozen))
         assertNull(controller.rebaseDrawnSnapshot(frozen)) // Old bitmap cannot claim the new spread.
@@ -237,7 +237,7 @@ class ReaderSpreadControllerTest {
         controller.updateEnvironment(spec, FakeMeasure(), spread = true)
         finishLayouts()
         val drawn = controller.captureVisibleRead(controller.curSpread().toList())!!
-        controller.setInlineMarkers(mapOf(1 to listOf(InlineMarkerReservation(3, InlineMarkerKind.ANNOTATION))))
+        controller.setInlineMarkers(mapOf(1 to listOf(InlineMarkerReservation(3, InlineMarkerKind.ILLUSTRATION))))
         finishLayouts()
         assertFalse(controller.isCurrentVisibleRead(drawn))
         val rebased = controller.rebaseDrawnSnapshot(drawn)!!
@@ -396,7 +396,7 @@ class ReaderSpreadControllerTest {
         val right = controller.curSpread().second as RenderPage.Laid
         val anchor = right.page.chapterPosition + 1
         controller.focus(anchor)
-        controller.setInlineMarkers(mapOf(0 to listOf(InlineMarkerReservation(5, InlineMarkerKind.ANNOTATION))))
+        controller.setInlineMarkers(mapOf(0 to listOf(InlineMarkerReservation(5, InlineMarkerKind.ILLUSTRATION))))
         finishLayouts()
         assertEquals(anchor, controller.charOffset)
         assertTrue(controller.isDisplaying(0, anchor))
@@ -418,7 +418,7 @@ class ReaderSpreadControllerTest {
         val current = controller.laidChapter(0)
         val next = controller.laidChapter(1)
         val generation = controller.layoutGeneration
-        controller.setInlineMarkers(mapOf(102 to listOf(InlineMarkerReservation(5, InlineMarkerKind.ANNOTATION))))
+        controller.setInlineMarkers(mapOf(102 to listOf(InlineMarkerReservation(5, InlineMarkerKind.ILLUSTRATION))))
         finishLayouts()
         assertSame(current, controller.laidChapter(0))
         assertSame(next, controller.laidChapter(1))
@@ -448,7 +448,7 @@ class ReaderSpreadControllerTest {
         val neighbor = controller.laidChapter(1)
         val frozenTurn = controller.captureTurn(forward = true)
         block = true
-        controller.setInlineMarkers(mapOf(0 to listOf(InlineMarkerReservation(3, InlineMarkerKind.ANNOTATION))))
+        controller.setInlineMarkers(mapOf(0 to listOf(InlineMarkerReservation(3, InlineMarkerKind.ILLUSTRATION))))
         runCurrent()
         try {
             assertTrue(started.await(5, TimeUnit.SECONDS))

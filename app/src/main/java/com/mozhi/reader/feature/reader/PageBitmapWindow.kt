@@ -43,6 +43,29 @@ internal fun shouldRefreshPageWindowImmediately(
     hasPreparedTurn: Boolean
 ): Boolean = !turnRunning || (relativePosition == 0 && hasPreparedTurn)
 
+/** 合并手势期间的正文/批注更新；落定后按最终窗口刷新一次，不重放过期的相对页号。 */
+internal class PageWindowRefreshQueue {
+    private var pending = false
+
+    fun request(relativePosition: Int, turnRunning: Boolean, hasPreparedTurn: Boolean): Int? {
+        if (!shouldRefreshPageWindowImmediately(turnRunning, relativePosition, hasPreparedTurn)) {
+            pending = true
+            return null
+        }
+        // 提交过程必须同步轮换三页缓冲；积累的更新仍由落定回调统一刷新。
+        if (turnRunning) return relativePosition
+        val result = if (pending) 0 else relativePosition
+        pending = false
+        return result
+    }
+
+    fun finishTurn(): Int? {
+        if (!pending) return null
+        pending = false
+        return 0
+    }
+}
+
 /** 只有卷曲几何需要一张包含纸面的完整快照；其余模式复用静态背景层。 */
 internal fun PageTurnAnimation.usesEmbeddedPageBackground(): Boolean =
     this == PageTurnAnimation.SIMULATION

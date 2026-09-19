@@ -65,7 +65,8 @@ class AnnotationSettingsPersistenceTest {
     @Test fun newKeysDefaultConservativelyAndRoundTrip() = runTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         try {
-            val repo = ReaderSettingsRepository(createStore("reader.preferences_pb", scope))
+            val store = createStore("reader.preferences_pb", scope)
+            val repo = ReaderSettingsRepository(store)
             assertFalse(repo.companionAutonomySettings.first().proactiveAnnotationsEnabled)
             assertEquals(ProactiveAnnotationNotice.BUILT_IN, repo.companionAutonomySettings.first().annotationNotice)
             assertEquals(ProactiveAnnotationTiming.AFTER_CHAPTER_COMPLETE, repo.companionAutonomySettings.first().annotationLimits.timing)
@@ -74,14 +75,21 @@ class AnnotationSettingsPersistenceTest {
             repo.setWidePageLayout(WidePageLayout.DUAL)
             repo.setCompanionSidePaneEnabled(true)
             repo.setCompanionAnnotationNotice(ProactiveAnnotationNotice.FAST_MODEL)
-            val limits = ProactiveAnnotationLimits(timing = ProactiveAnnotationTiming.ON_CHAPTER_ENTRY, aheadChapters = 3)
+            val limits = ProactiveAnnotationLimits(timing = ProactiveAnnotationTiming.ON_CHAPTER_ENTRY, aheadChapters = 3,
+                context = ProactiveAnnotationContextSettings(AnnotationContextMode.CUSTOM, 45_000))
             repo.setCompanionAnnotationLimits(limits)
-            repo.setCompanionAnnotationLimitsForBook(7, BookProactiveAnnotationLimits(true, limits.copy(aheadChapters = 5)))
+            repo.setCompanionAnnotationLimitsForBook(7, BookProactiveAnnotationLimits(true, limits.copy(aheadChapters = 5,
+                context = ProactiveAnnotationContextSettings(AnnotationContextMode.ECONOMY))))
             assertEquals(WidePageLayout.DUAL, repo.settings.first().widePageLayout)
             assertTrue(repo.settings.first().companionSidePaneEnabled)
             assertEquals(ProactiveAnnotationNotice.FAST_MODEL, repo.companionAutonomySettings.first().annotationNotice)
             assertEquals(limits, repo.companionAutonomySettings.first().annotationLimits)
             assertEquals(5, repo.companionAutonomySettings.first().annotationLimitsFor(7).aheadChapters)
+            val restored = ReaderSettingsRepository(store).companionAutonomySettings.first()
+            assertEquals(45_000, restored.annotationLimits.context.budgetChars)
+            assertEquals(8_000, restored.annotationLimitsFor(7).context.budgetChars)
+            repo.setCompanionAnnotationLimitsForBook(7, BookProactiveAnnotationLimits(false, limits))
+            assertEquals(45_000, repo.companionAutonomySettings.first().annotationLimitsFor(7).context.budgetChars)
         } finally { scope.coroutineContext.job.cancelAndJoin() }
     }
 

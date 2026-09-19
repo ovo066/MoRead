@@ -88,7 +88,7 @@ internal class EpubBlockLayout(private val ctx: EpubLayoutContext) {
             output.forcedBreaks += cursor.y
         }
         val geometry = contentBox(style, cb)
-        cursor.addGap(blockGapTop(box))
+        cursor.addGap(blockGapTop(box, cb.width))
 
         val hasTopEdge = geometry.borderTop + geometry.paddingTop > 0f
         val decorated = style.hasDecoration()
@@ -183,7 +183,7 @@ internal class EpubBlockLayout(private val ctx: EpubLayoutContext) {
             output.keepRanges += borderBoxTop..borderBoxBottom
         }
         if (style.breakAfter) output.forcedBreaks += cursor.y
-        cursor.addGap(blockGapBottom(box))
+        cursor.addGap(blockGapBottom(box, cb.width))
     }
 
     /** Layout a display:block replaced image with its own margins, padding, border and centering. */
@@ -309,7 +309,8 @@ internal class EpubBlockLayout(private val ctx: EpubLayoutContext) {
                             topOffset = imageTopOffset,
                             width = it.width,
                             height = it.height,
-                            altText = it.altText
+                            altText = it.altText,
+                            charOffset = it.charOffset
                         )
                     )
                 }.orEmpty()
@@ -760,22 +761,28 @@ internal class EpubBlockLayout(private val ctx: EpubLayoutContext) {
         val maxWidth = style.maxWidth.resolve(width)?.let { value ->
             if (style.boxSizingBorderBox) value - edgeExtras else value
         }
-        val contentWidth = when {
+        var contentWidth = when {
             declared != null -> min(declared, maxWidth ?: Float.MAX_VALUE)
             else -> {
                 val auto = width - (marginLeft ?: 0f) - (marginRight ?: 0f) - edgeExtras
                 min(auto, maxWidth ?: Float.MAX_VALUE)
             }
         }.coerceAtLeast(1f)
+        // Reflow fixed-width, auto-centered cards into a narrow reading column. Explicit
+        // negative margins (publisher bleed) remain untouched; never center an overflowing box
+        // with negative auto margins, which cuts off both borders and its inline artwork.
+        if (style.width is ResolvedLength.Px && marginLeft == null && marginRight == null) {
+            contentWidth = min(contentWidth, (width - edgeExtras).coerceAtLeast(1f))
+        }
         if (declared != null || maxWidth != null && contentWidth < width - edgeExtras) {
-            val slack = width - contentWidth - edgeExtras
+            val slack = width - contentWidth - edgeExtras - (marginLeft ?: 0f) - (marginRight ?: 0f)
             when {
                 marginLeft == null && marginRight == null -> {
                     marginLeft = slack / 2f
                     marginRight = slack / 2f
                 }
-                marginLeft == null -> marginLeft = slack - (marginRight ?: 0f)
-                marginRight == null -> marginRight = slack - marginLeft
+                marginLeft == null -> marginLeft = slack.coerceAtLeast(0f)
+                marginRight == null -> marginRight = slack.coerceAtLeast(0f)
             }
         }
         val borderBoxLeft = cb.left + (marginLeft ?: 0f)
@@ -807,14 +814,20 @@ internal class EpubBlockLayout(private val ctx: EpubLayoutContext) {
         return output.decorations.lastIndex
     }
 
-    private fun blockGapTop(box: EpubBlockBox): Float {
+    // SMART normalizes reading rhythm, not the geometry of artwork, panels and wrappers.
+    private fun preservesStructuralSpacing(box: EpubBlockBox): Boolean =
+        box.tag !in PARAGRAPH_TAGS && box.tag !in HEADING_TAGS || box.style.hasDecoration() || centersContent(box)
+
+    private fun blockGapTop(box: EpubBlockBox, containingWidth: Float): Float {
         val style = box.style
         val declared = "margin-top" in style.appliedProperties
         val fallback = if (box.tag in HEADING_TAGS) ctx.spec.titleTopSpacing else 0f
-        return ctx.blockGap(style.marginTop.resolve(ctx.spec.visibleWidth), declared, fallback)
+        val margin = style.marginTop.resolve(containingWidth)
+        if (declared && preservesStructuralSpacing(box)) return margin ?: 0f
+        return ctx.blockGap(margin, declared, fallback)
     }
 
-    private fun blockGapBottom(box: EpubBlockBox): Float {
+    private fun blockGapBottom(box: EpubBlockBox, containingWidth: Float): Float {
         val style = box.style
         val declared = "margin-bottom" in style.appliedProperties
         val fallback = when {
@@ -822,7 +835,9 @@ internal class EpubBlockLayout(private val ctx: EpubLayoutContext) {
             box.tag in PARAGRAPH_TAGS -> ctx.spec.paragraphSpacing
             else -> 0f
         }
-        return ctx.blockGap(style.marginBottom.resolve(ctx.spec.visibleWidth), declared, fallback)
+        val margin = style.marginBottom.resolve(containingWidth)
+        if (declared && preservesStructuralSpacing(box)) return margin ?: 0f
+        return ctx.blockGap(margin, declared, fallback)
     }
 
     private companion object {

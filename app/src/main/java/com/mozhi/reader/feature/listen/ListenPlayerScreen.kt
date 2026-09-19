@@ -91,7 +91,13 @@ import com.mozhi.reader.core.speech.SleepTimerPlan
 import com.mozhi.reader.core.speech.SleepTimerPlanner
 import com.mozhi.reader.core.speech.SleepTimerState
 import com.mozhi.reader.core.speech.TtsEngineMode
+import com.mozhi.reader.ui.bookIdOrNull
+import com.mozhi.reader.ui.components.MoReadButton
+import com.mozhi.reader.ui.components.MoReadButtonStyle
 import com.mozhi.reader.ui.components.SleepTimerSheet
+import com.mozhi.reader.ui.components.immersivePlaybackColors
+import com.mozhi.reader.ui.theme.MoReadSpacing
+import com.mozhi.reader.ui.theme.moReadMetrics
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.io.File
 import javax.inject.Inject
@@ -106,7 +112,7 @@ class ListenPlayerViewModel @Inject constructor(
     private val libraryRepository: LibraryRepository,
     private val audiobookRepository: AudiobookRepository
 ) : ViewModel() {
-    val bookId = savedStateHandle.get<String>("bookId")?.toLongOrNull() ?: 0L
+    val bookId = savedStateHandle.bookIdOrNull() ?: 0L
     val playbackMode = if (savedStateHandle.get<String>("source") == "produced") {
         ListenPlaybackMode.PRODUCED
     } else {
@@ -371,17 +377,14 @@ fun ListenPlayerScreen(
                 Spacer(Modifier.height(14.dp))
 
                 // ── 五键传输控制
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    TransportButton(Icons.Outlined.SkipPrevious, "上一章", 26.dp, viewModel::previousChapter)
-                    TransportButton(Icons.Outlined.FastRewind, "上一段", 30.dp, viewModel::previousSegment)
-                    PlayButton(playing = playing, onClick = viewModel::toggle)
-                    TransportButton(Icons.Outlined.FastForward, "下一段", 30.dp, viewModel::nextSegment)
-                    TransportButton(Icons.Outlined.SkipNext, "下一章", 26.dp, viewModel::nextChapter)
-                }
+                ListenTransportControls(
+                    playing = playing,
+                    onPreviousChapter = viewModel::previousChapter,
+                    onPreviousSegment = viewModel::previousSegment,
+                    onToggle = viewModel::toggle,
+                    onNextSegment = viewModel::nextSegment,
+                    onNextChapter = viewModel::nextChapter
+                )
 
                 Spacer(Modifier.height(18.dp))
 
@@ -723,21 +726,31 @@ private fun CoverArtwork(book: BookEntity?, playing: Boolean) {
 }
 
 @Composable
-private fun PlayButton(playing: Boolean, onClick: () -> Unit) {
-    Surface(
-        onClick = onClick,
-        shape = CircleShape,
-        color = Color(0xFFF3F1EC),
-        contentColor = Color(0xFF17171A),
-        modifier = Modifier.size(72.dp)
+internal fun ListenTransportControls(
+    playing: Boolean,
+    onPreviousChapter: () -> Unit,
+    onPreviousSegment: () -> Unit,
+    onToggle: () -> Unit,
+    onNextSegment: () -> Unit,
+    onNextChapter: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(MoReadSpacing.xs),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(contentAlignment = Alignment.Center) {
-            Icon(
-                imageVector = if (playing) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,
-                contentDescription = if (playing) "暂停" else "播放",
-                modifier = Modifier.size(34.dp)
-            )
-        }
+        TransportButton(Icons.Outlined.SkipPrevious, "上一章", onPreviousChapter, Modifier.weight(1f))
+        MoReadButton("上一段", onPreviousSegment, Modifier.weight(1f),
+            style = MoReadButtonStyle.Tonal, icon = Icons.Outlined.FastRewind, iconOnly = true,
+            colors = immersivePlaybackColors(primary = false), iconSize = 30.dp)
+        MoReadButton(if (playing) "暂停" else "播放", onToggle,
+            Modifier.size(moReadMetrics().buttonHeight + MoReadSpacing.xxl),
+            icon = if (playing) Icons.Outlined.Pause else Icons.Outlined.PlayArrow, iconOnly = true,
+            colors = immersivePlaybackColors(primary = true), iconSize = 34.dp)
+        MoReadButton("下一段", onNextSegment, Modifier.weight(1f),
+            style = MoReadButtonStyle.Tonal, icon = Icons.Outlined.FastForward, iconOnly = true,
+            colors = immersivePlaybackColors(primary = false), iconSize = 30.dp)
+        TransportButton(Icons.Outlined.SkipNext, "下一章", onNextChapter, Modifier.weight(1f))
     }
 }
 
@@ -745,18 +758,18 @@ private fun PlayButton(playing: Boolean, onClick: () -> Unit) {
 private fun TransportButton(
     icon: ImageVector,
     description: String,
-    iconSize: androidx.compose.ui.unit.Dp,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Surface(
         onClick = onClick,
         shape = CircleShape,
         color = Color.Transparent,
         contentColor = Color(0xFFF3F1EC).copy(alpha = 0.86f),
-        modifier = Modifier.size(52.dp)
+        modifier = modifier.height(moReadMetrics().buttonHeight)
     ) {
         Box(contentAlignment = Alignment.Center) {
-            Icon(icon, contentDescription = description, modifier = Modifier.size(iconSize))
+            Icon(icon, contentDescription = description, modifier = Modifier.size(26.dp))
         }
     }
 }

@@ -3,6 +3,7 @@ package com.mozhi.reader.ai.knowledge
 import com.mozhi.reader.ai.agent.AgentEvent
 import com.mozhi.reader.ai.agent.AgentLoop
 import com.mozhi.reader.ai.agent.AgentTool
+import com.mozhi.reader.ai.agent.ToolResult
 import com.mozhi.reader.ai.client.AiJson
 import com.mozhi.reader.ai.client.ChatMessage
 import com.mozhi.reader.ai.client.ChatRole
@@ -63,10 +64,10 @@ class ChapterKnowledgeAgent @Inject constructor(
         val submit = object : AgentTool {
             override val displayName = "核对并保存整理结果"
             override val spec = ToolSpec(name, "提交有原文依据的整理结果。核对失败时只修正错误，不编造原文。", schema)
-            override suspend fun execute(arguments: JsonObject): String {
+            override suspend fun execute(arguments: JsonObject): ToolResult {
                 validate()
                 submitted = parse(arguments.toString())
-                return "核对通过，已接收结果。"
+                return ToolResult.Success("核对通过，已接收结果。")
             }
         }
         withTimeoutOrNull(90_000) {

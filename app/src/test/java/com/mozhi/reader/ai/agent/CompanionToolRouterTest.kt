@@ -63,61 +63,29 @@ class CompanionToolRouterTest {
     }
 
     @Test
-    fun `scene routing recognizes readback intents`() {
-        val tools = CompanionToolRouter.select(
-            userText = "看看目录和我划过的句子，再读一下旧梗概",
-            sceneAvailable = true,
-            personaEnabledTools = emptySet(),
-            webSearchEnabled = false,
-            longTermMemoryEnabled = false
-        )
-
-        assertTrue("list_chapters" in tools)
-        assertTrue("list_annotations" in tools)
-        assertTrue("list_notes" in tools)
-    }
-
-    @Test
-    fun `scene question does not attach unrelated tools`() {
-        val tools = CompanionToolRouter.select(
-            userText = "这句话是什么意思？",
-            sceneAvailable = true,
-            personaEnabledTools = allTools,
-            webSearchEnabled = true,
-            longTermMemoryEnabled = true
-        )
-
-        assertTrue(tools.isEmpty())
-    }
-
-    @Test
-    fun `image request only attaches image and needed book lookup`() {
-        val tools = CompanionToolRouter.select(
-            userText = "根据书里这个人物画一张插图",
-            sceneAvailable = false,
-            personaEnabledTools = allTools,
-            webSearchEnabled = true,
-            longTermMemoryEnabled = true
-        )
-
-        assertEquals(setOf("search_book", "grep_book", "generate_image"), tools)
-        assertFalse("synthesize_speech" in tools)
+    fun `discussion always exposes all read tools even without intent keywords`() {
+        val tools = CompanionToolRouter.forDiscussion(longTermMemoryEnabled = true)
+        assertEquals(setOf("get_reading_progress", "search_book", "grep_book", "read_book_section",
+            "list_chapters", "list_annotations", "list_notes", "recall_memory"), tools)
+        assertFalse("add_annotation" in tools)
+        assertFalse("generate_image" in tools)
         assertFalse("web_search" in tools)
     }
 
     @Test
+    fun `discussion respects disabled long term memory without losing book retrieval`() {
+        val tools = CompanionToolRouter.forDiscussion(longTermMemoryEnabled = false)
+        assertFalse("recall_memory" in tools)
+        assertTrue("search_book" in tools)
+        assertTrue("read_book_section" in tools)
+    }
+
+    @Test
     fun `required tools bypass persona selection`() {
-        val tools = CompanionToolRouter.select(
-            userText = "生成剧情梗概",
-            sceneAvailable = false,
+        val tools = CompanionToolRouter.available(
             personaEnabledTools = emptySet(),
             requiredTools = setOf("get_reading_progress", "read_book_section", "save_plot_summary"),
-            webSearchEnabled = false,
-            longTermMemoryEnabled = false
-        )
-
-        assertTrue("get_reading_progress" in tools)
-        assertTrue("read_book_section" in tools)
+            webSearchEnabled = false, longTermMemoryEnabled = false)
         assertTrue("save_plot_summary" in tools)
         assertFalse("generate_image" in tools)
     }

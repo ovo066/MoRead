@@ -4,30 +4,36 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mozhi.reader.ai.embedding.EmbeddingProgressTracker
 import com.mozhi.reader.ai.embedding.LibraryEmbeddingProgress
-import com.mozhi.reader.ai.provider.AiProviderRepository
 import com.mozhi.reader.ai.persona.PersonaRepository
-import com.mozhi.reader.core.database.entity.PersonaEntity
-import com.mozhi.reader.core.datastore.GlobalPromptPreset
+import com.mozhi.reader.ai.provider.AiProviderRepository
 import com.mozhi.reader.core.database.entity.AiModelEntity
 import com.mozhi.reader.core.database.entity.AiProviderEntity
 import com.mozhi.reader.core.database.entity.ModelRole
-import com.mozhi.reader.core.datastore.CompanionAutonomySettings
+import com.mozhi.reader.core.database.entity.PersonaEntity
 import com.mozhi.reader.core.datastore.BookProactiveAnnotationLimits
+import com.mozhi.reader.core.datastore.CompanionAutonomySettings
 import com.mozhi.reader.core.datastore.CompanionMemorySettings
+import com.mozhi.reader.core.datastore.GlobalPromptPreset
 import com.mozhi.reader.core.datastore.ProactiveAnnotationLimits
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
 import com.mozhi.reader.core.datastore.ShelfLayout
+import com.mozhi.reader.core.storage.StorageRepository
 import com.mozhi.reader.ui.theme.AccentPreset
 import com.mozhi.reader.ui.theme.AppearanceSettings
+import com.mozhi.reader.ui.theme.ColorSchemePreset
+import com.mozhi.reader.ui.theme.NavStyle
+import com.mozhi.reader.ui.theme.SemanticHarmony
+import com.mozhi.reader.ui.theme.ShapeStyle
+import com.mozhi.reader.ui.theme.SurfaceStyle
 import com.mozhi.reader.ui.theme.ThemeMode
 import dagger.hilt.android.lifecycle.HiltViewModel
-import com.mozhi.reader.core.storage.StorageRepository
 import java.util.Locale
 import javax.inject.Inject
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -69,8 +75,19 @@ class SettingsViewModel @Inject constructor(
     private val readerSettingsRepository: ReaderSettingsRepository,
     private val embeddingProgressTracker: EmbeddingProgressTracker,
     private val storageRepository: StorageRepository,
-    personaRepository: PersonaRepository
+    personaRepository: PersonaRepository,
+    annotationRepository: com.mozhi.reader.core.library.AnnotationRepository
 ) : ViewModel() {
+    /**
+     * 今日随读段评用量。额度用完时页面必须自己说清楚，否则用户只会看到「怎么突然不段评了」——
+     * 预生成（提前 N 章）会把额度花在还没读到的章节上，更难自己对上号。
+     */
+    val todayAnnotationCount: StateFlow<Int> = annotationRepository
+        .observeProactiveCreatedSince(
+            java.time.LocalDate.now().atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+        )
+        .stateIn(viewModelScope, SharingStarted.Lazily, 0)
+
     private val working = MutableStateFlow(false)
     private val storage = storageRepository.snapshot
     private val eventChannel = Channel<SettingsEvent>(Channel.BUFFERED)
@@ -192,6 +209,26 @@ class SettingsViewModel @Inject constructor(
 
     fun setCustomAccent(argb: Int) {
         viewModelScope.launch { readerSettingsRepository.setCustomAccent(argb) }
+    }
+
+    fun setColorScheme(preset: ColorSchemePreset) {
+        viewModelScope.launch { readerSettingsRepository.setColorScheme(preset) }
+    }
+
+    fun setSemanticHarmony(value: SemanticHarmony) {
+        viewModelScope.launch { readerSettingsRepository.setSemanticHarmony(value) }
+    }
+
+    fun setSurfaceStyle(value: SurfaceStyle) {
+        viewModelScope.launch { readerSettingsRepository.setSurfaceStyle(value) }
+    }
+
+    fun setNavStyle(value: NavStyle) {
+        viewModelScope.launch { readerSettingsRepository.setNavStyle(value) }
+    }
+
+    fun setShapeStyle(value: ShapeStyle) {
+        viewModelScope.launch { readerSettingsRepository.setShapeStyle(value) }
     }
 
     fun setShelfLayout(layout: ShelfLayout) {

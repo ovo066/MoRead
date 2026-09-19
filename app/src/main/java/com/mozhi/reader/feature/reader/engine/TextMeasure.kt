@@ -33,6 +33,17 @@ interface TextMeasure {
     /** Width of one ideographic space (U+3000) at content size, the unit of paragraph indent. */
     fun indentColumnWidth(): Float
 
+    /**
+     * Advance that user/publisher letter spacing adds to a cluster measured on its own.
+     *
+     * `getTextWidths` only distributes letter spacing *between* the characters of the run it is
+     * given, so a per-cluster measurement (the EPUB box layout) loses it entirely while a
+     * whole-paragraph measurement (the plain-text typesetter) keeps it. Layouts that measure one
+     * cluster at a time must add this themselves, or the reader's letter-spacing setting does
+     * nothing for those books.
+     */
+    fun clusterLetterSpacing(style: MeasuredTextStyle): Float = 0f
+
     fun metrics(style: MeasuredTextStyle): LineMetrics {
         val base = metrics(style.isTitle)
         return LineMetrics(

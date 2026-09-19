@@ -16,9 +16,12 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.mozhi.reader.ui.theme.canvasColor
 import com.mozhi.reader.ui.theme.isDarkTheme
+import com.mozhi.reader.ui.theme.isFlatSurface
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.hazeEffect
 import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
@@ -55,11 +58,10 @@ fun MoReadBackdrop(
             .compositeOver(canvas)
         listOf(ambient, canvas, lowerCanvas)
     }
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .background(Brush.verticalGradient(gradient))
-    ) {
+    // 只替换背景 modifier，保留内容的组合位置。分成两套 Box 会在切换质感时丢失导航与滚动状态。
+    val background = if (isFlatSurface()) Modifier.background(canvasColor())
+        else Modifier.background(Brush.verticalGradient(gradient))
+    Box(modifier = modifier.fillMaxSize().then(background)) {
         CompositionLocalProvider(LocalContentColor provides colors.onBackground) {
             content()
         }
@@ -69,32 +71,41 @@ fun MoReadBackdrop(
 /**
  * 低成本玻璃表面。
  *
- * 用于列表卡片等大量重复元素：半透明渐变、0.5dp 高光边和极轻投影，避免实时模糊
- * 让长列表进入昂贵的离屏合成。浮动导航、底部操作舱等少量关键浮层请用
+ * 用于浮层的半透明渐变、0.5dp 高光边和极轻投影。页面内列表使用 MoReadSection。
+ * 浮动导航、底部操作舱等少量关键浮层请用
  * [BlurredGlassSurface] 获得真实背景模糊。
  */
 @Composable
 fun FrostedSurface(
     modifier: Modifier = Modifier,
     shape: Shape = MaterialTheme.shapes.large,
-    color: Color = MaterialTheme.colorScheme.surface.copy(
-        alpha = if (isDarkTheme()) 0.66f else 0.84f
-    ),
+    color: Color = Color.Unspecified,
     contentColor: Color = MaterialTheme.colorScheme.onSurface,
     shadowElevation: Dp = 3.dp,
     content: @Composable () -> Unit
 ) {
     val darkTheme = isDarkTheme()
+    val flat = isFlatSurface()
+    val glassColor = if (color.isSpecified) color else MaterialTheme.colorScheme.surface.copy(
+        alpha = if (darkTheme) 0.66f else 0.84f
+    )
     val highlight = if (darkTheme) {
         Color.White.copy(alpha = 0.14f)
     } else {
         Color.White.copy(alpha = 0.78f)
     }
-    val effectiveShadow = shadowElevation.coerceAtMost(8.dp)
-    val topColor = color.copy(
-        alpha = (color.alpha + if (darkTheme) 0.06f else 0.08f).coerceAtMost(0.94f)
+    val effectiveShadow = shadowElevation.coerceAtMost(if (flat) 2.dp else 8.dp)
+    val topColor = glassColor.copy(
+        alpha = (glassColor.alpha + if (darkTheme) 0.06f else 0.08f).coerceAtMost(0.94f)
     )
-    val bottomColor = color.copy(alpha = (color.alpha * 0.90f).coerceAtLeast(0.32f))
+    val bottomColor = glassColor.copy(alpha = (glassColor.alpha * 0.90f).coerceAtLeast(0.32f))
+    val material = if (flat) {
+        val base = MaterialTheme.colorScheme.surfaceContainerHigh
+        Modifier.background(if (color.isSpecified) color.compositeOver(base) else base)
+    } else {
+        Modifier.background(Brush.verticalGradient(listOf(topColor, glassColor, bottomColor)))
+            .border(0.5.dp, highlight, shape)
+    }
 
     Box(
         modifier = modifier
@@ -106,8 +117,7 @@ fun FrostedSurface(
                 spotColor = Color.Black.copy(alpha = if (darkTheme) 0.28f else 0.14f)
             )
             .clip(shape)
-            .background(Brush.verticalGradient(listOf(topColor, color, bottomColor)))
-            .border(0.5.dp, highlight, shape)
+            .then(material)
     ) {
         CompositionLocalProvider(LocalContentColor provides contentColor) {
             content()
@@ -127,12 +137,14 @@ fun BlurredGlassSurface(
     hazeState: HazeState,
     modifier: Modifier = Modifier,
     shape: Shape = MaterialTheme.shapes.large,
-    tint: Color = MaterialTheme.colorScheme.surface,
+    tint: Color = Color.Unspecified,
     contentColor: Color = MaterialTheme.colorScheme.onSurface,
     shadowElevation: Dp = 6.dp,
     content: @Composable () -> Unit
 ) {
     val darkTheme = isDarkTheme()
+    val flat = isFlatSurface()
+    val glassTint = if (tint.isSpecified) tint else MaterialTheme.colorScheme.surface
     val highlight = if (darkTheme) {
         Color.White.copy(alpha = 0.16f)
     } else {
@@ -140,26 +152,29 @@ fun BlurredGlassSurface(
     }
     val veil = Brush.verticalGradient(
         listOf(
-            tint.copy(alpha = if (darkTheme) 0.12f else 0.28f),
-            tint.copy(alpha = if (darkTheme) 0.06f else 0.16f)
+            glassTint.copy(alpha = if (darkTheme) 0.12f else 0.28f),
+            glassTint.copy(alpha = if (darkTheme) 0.06f else 0.16f)
         )
     )
+    val material = if (flat) {
+        val base = MaterialTheme.colorScheme.surfaceContainerHigh
+        Modifier.background(if (tint.isSpecified) tint.compositeOver(base) else base)
+    } else {
+        Modifier.hazeEffect(state = hazeState, style = HazeMaterials.thin(glassTint))
+            .background(veil)
+            .border(0.5.dp, highlight, shape)
+    }
     Box(
         modifier = modifier
             .shadow(
-                elevation = shadowElevation.coerceAtMost(8.dp),
+                elevation = shadowElevation.coerceAtMost(if (flat) 2.dp else 8.dp),
                 shape = shape,
                 clip = false,
                 ambientColor = Color.Black.copy(alpha = if (darkTheme) 0.24f else 0.10f),
                 spotColor = Color.Black.copy(alpha = if (darkTheme) 0.30f else 0.14f)
             )
             .clip(shape)
-            .hazeEffect(
-                state = hazeState,
-                style = HazeMaterials.thin(tint)
-            )
-            .background(veil)
-            .border(0.5.dp, highlight, shape)
+            .then(material)
     ) {
         CompositionLocalProvider(LocalContentColor provides contentColor) {
             content()

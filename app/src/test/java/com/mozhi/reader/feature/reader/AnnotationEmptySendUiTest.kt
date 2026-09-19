@@ -57,4 +57,34 @@ class AnnotationEmptySendUiTest {
         }
         compose.onNodeWithContentDescription("发送").assertIsNotEnabled()
     }
+
+    /** 忘记点名是段评「发出去没人回」的唯一成因：预选角色必须随文字一起发出去。 */
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Test fun typedTextKeepsThePreselectedPersonaAndCanBeOptedOut() {
+        val annotation = AnnotationEntity(id = 7, bookId = 1, chapterIndex = 0, startCharOffset = 0, endCharOffset = 6,
+            selectedText = "灯塔的光。", createdAt = 1)
+        val persona = PersonaEntity(id = 5, name = "知秋", personality = "", isRoleplay = true, createdAt = 0)
+        var sent: Triple<Long, String, Long?>? = null
+        var remembered: Long? = null
+        compose.setContent { MoReadTheme {
+            val palette = readerPalette(ReaderSettings(), false)
+            ModalBottomSheet(onDismissRequest = {}, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+                AnnotationDiscussionSheet(listOf(annotation), emptyList(), null, null, listOf(persona), emptyList(), palette, {},
+                    { target, text, id -> sent = Triple(target.id, text, id) }, { _, _, _ -> }, {}, {}, {}, {},
+                    defaultRespondPersonaId = 5, onRememberRespondPersona = { remembered = it })
+            }
+        } }
+
+        compose.onNodeWithText("写下你的想法…").assertDoesNotExist()
+        compose.onNode(hasSetTextAction()).performTextInput("这段写得真好")
+        compose.onNodeWithContentDescription("发送").performClick()
+        assertEquals(Triple(7L, "这段写得真好", 5L), sent)
+
+        // 再点一次选中的胶囊 = 这条只记想法，不叫人回复；取消不写回记忆。
+        compose.onNodeWithText("知秋").performClick()
+        compose.onNode(hasSetTextAction()).performTextInput("先自己记一笔")
+        compose.onNodeWithContentDescription("发送").performClick()
+        assertEquals(Triple(7L, "先自己记一笔", null), sent)
+        assertNull(remembered)
+    }
 }

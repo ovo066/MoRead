@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import com.mozhi.reader.ui.theme.moReadMetrics
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CheckCircle
@@ -88,7 +89,7 @@ internal fun CollectionArtwork(
         modifier = modifier.semantics {
             contentDescription = covers.joinToString(prefix = "合集封面：") { it.title }
         },
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(moReadMetrics().radiusFor(12)),
         color = MaterialTheme.colorScheme.surfaceContainerHighest,
         shadowElevation = 8.dp
     ) {
@@ -140,10 +141,10 @@ internal fun GridCollectionItem(
                 if (collectionDragState.activeDrop?.target == target) Modifier.border(
                     2.dp,
                     MaterialTheme.colorScheme.primary,
-                    RoundedCornerShape(12.dp)
+                    RoundedCornerShape(moReadMetrics().radiusFor(12))
                 ) else Modifier
             )
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(moReadMetrics().radiusFor(12)))
             .clickable(onClick = onOpen)
             .semantics {
                 if (!selectionMode) onLongClick(label = collectionActions) { onOpen(); true }
@@ -212,7 +213,7 @@ internal fun ListCollectionItem(
                 if (collectionDragState.activeDrop?.target == target) Modifier.border(
                     2.dp,
                     MaterialTheme.colorScheme.primary,
-                    RoundedCornerShape(24.dp)
+                    RoundedCornerShape(moReadMetrics().radiusFor(24))
                 ) else Modifier
             )
             .clickable(onClick = onOpen)
@@ -222,7 +223,7 @@ internal fun ListCollectionItem(
             .onGloballyPositioned {
                 collectionDragState.register(target, it.boundsInRoot(), registrationOwner)
             },
-        shape = RoundedCornerShape(24.dp),
+        shape = RoundedCornerShape(moReadMetrics().radiusFor(24)),
         shadowElevation = 4.dp
     ) {
         Row(
@@ -318,7 +319,7 @@ internal fun CollectionPickerSheet(
                 item(key = "create") {
                     Surface(
                         onClick = onCreate,
-                        shape = RoundedCornerShape(16.dp),
+                        shape = RoundedCornerShape(moReadMetrics().radiusFor(16)),
                         color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f),
                         contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
                         modifier = Modifier.fillMaxWidth().aspectRatio(0.69f)
@@ -345,7 +346,7 @@ internal fun CollectionPickerSheet(
                     val books = allBooks.filter { it.collectionId == collection.id }
                     Column(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(12.dp))
+                            .clip(RoundedCornerShape(moReadMetrics().radiusFor(12)))
                             .clickable { onSelect(collection.id) }
                     ) {
                         CollectionArtwork(
@@ -560,7 +561,7 @@ internal fun CollectionContentsSheet(
                                         .onGloballyPositioned {
                                             coverBounds = it.boundsInRoot()
                                         }
-                                        .clip(RoundedCornerShape(12.dp))
+                                        .clip(RoundedCornerShape(moReadMetrics().radiusFor(12)))
                                 )
                                 Box(Modifier.align(Alignment.TopEnd)) {
                                     IconButton(onClick = { memberMenuBookId = book.id }) {

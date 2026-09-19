@@ -6,6 +6,7 @@ import com.mozhi.reader.ai.agent.AnnotationDiscussionService
 import com.mozhi.reader.core.database.entity.AnnotationEntity
 import com.mozhi.reader.core.database.entity.AnnotationReplyEntity
 import com.mozhi.reader.core.library.AnnotationRepository
+import com.mozhi.reader.core.datastore.ReaderSettingsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.Job
@@ -24,7 +25,9 @@ data class DiscussionStreaming(
 data class DiscussionUiState(
     val replies: List<AnnotationReplyEntity> = emptyList(),
     val streaming: DiscussionStreaming? = null,
-    val error: String? = null
+    val error: String? = null,
+    /** 上次点名过的角色；弹层用它预选，null = 还没点过名。 */
+    val rememberedPersonaId: Long? = null
 )
 
 /**
@@ -34,7 +37,8 @@ data class DiscussionUiState(
 @HiltViewModel
 class AnnotationDiscussionViewModel @Inject constructor(
     private val annotationRepository: AnnotationRepository,
-    private val discussionService: AnnotationDiscussionService
+    private val discussionService: AnnotationDiscussionService,
+    private val settings: ReaderSettingsRepository
 ) : ViewModel() {
 
     private val mutableState = MutableStateFlow(DiscussionUiState())
@@ -46,11 +50,28 @@ class AnnotationDiscussionViewModel @Inject constructor(
     /** 流式正文真源；UI 快照按 显示帧节拍发布，避免逐 token 重组。 */
     private val streamBuffer = StringBuilder()
 
+    init {
+        // 点名记忆常驻：弹层是即开即用的，晚半拍到达就会错过首帧预选。
+        viewModelScope.launch {
+            settings.discussionPersonaId.collect { id ->
+                mutableState.update { it.copy(rememberedPersonaId = id) }
+            }
+        }
+    }
+
+    /**
+     * 记住这次点名的角色。只记正向选择：取消点名仅对当前这一条发言生效，
+     * 否则「忘记选所以没人回复」会原样换成「上次取消过所以没人回复」。
+     */
+    fun rememberRespondPersona(personaId: Long) {
+        viewModelScope.launch { settings.setDiscussionPersonaId(personaId) }
+    }
+
     /** 弹层打开时绑定该讨论串（同锚点的全部批注 id）。 */
     fun open(annotationIds: List<Long>) {
         repliesJob?.cancel()
         respondJob?.cancel()
-        mutableState.value = DiscussionUiState()
+        mutableState.update { DiscussionUiState(rememberedPersonaId = it.rememberedPersonaId) }
         if (annotationIds.isEmpty()) return
         repliesJob = viewModelScope.launch {
             annotationRepository.observeReplies(annotationIds).collect { replies ->
@@ -62,7 +83,7 @@ class AnnotationDiscussionViewModel @Inject constructor(
     fun close() {
         repliesJob?.cancel()
         respondJob?.cancel()
-        mutableState.value = DiscussionUiState()
+        mutableState.update { DiscussionUiState(rememberedPersonaId = it.rememberedPersonaId) }
     }
 
     /**

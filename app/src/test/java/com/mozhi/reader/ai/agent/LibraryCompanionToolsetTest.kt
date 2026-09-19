@@ -31,10 +31,10 @@ class LibraryCompanionToolsetTest {
     @Test fun selectedBookRoutingCannotBroadenOtherBooksScope() = runTest {
         val read = mutableListOf<LibraryBookScope>()
         var checks = 0
-        val tool = ScopedLibraryTool(template, scopes, { checks++ }) { book, _ -> read += book; "原文" }
-        assertTrue(tool.execute(buildJsonObject { put("book_id", 99) }).contains("不在"))
+        val tool = ScopedLibraryTool(template, scopes, { checks++ }) { book, _ -> read += book; ToolResult.Success("原文") }
+        assertTrue(tool.execute(buildJsonObject { put("book_id", 99) }).content.contains("不在"))
         assertTrue(read.isEmpty())
-        tool.execute(buildJsonObject { put("book_id", 2) })
+        tool.execute(buildJsonObject { put("book_id", 2) }).content
         assertEquals(scopes[1], read.single())
         assertEquals(2, checks)
         assertEquals(2, read.single().readingScope.readableEnd(0, "乙书未读剧情"))
@@ -60,15 +60,15 @@ class LibraryCompanionToolsetTest {
             listOf(object : AgentTool {
                 override val displayName = "读取"
                 override val spec = template.spec
-                override suspend fun execute(arguments: JsonObject): String {
+                override suspend fun execute(arguments: JsonObject): ToolResult {
                     assertFalse("book_id" in arguments)
                     reads += id to boundary
-                    return "原文"
+                    return ToolResult.Success("原文")
                 }
             }, object : AgentTool {
                 override val displayName = "不应注册"
                 override val spec = ToolSpec("delete_book", "forbidden", JsonObject(emptyMap()))
-                override suspend fun execute(arguments: JsonObject): String = error("must never run")
+                override suspend fun execute(arguments: JsonObject): ToolResult = error("must never run")
             })
         }
         val sources = LibraryConversationSources(7, "u", emptyList(), guard, chats)
@@ -76,16 +76,19 @@ class LibraryCompanionToolsetTest {
         assertEquals(setOf("find_books", "propose_library_organization", "read_book_section"), tools.map { it.spec.name }.toSet())
         val read = tools.single { it.spec.name == "read_book_section" }
         assertNull(read.spec.parameters["properties"]!!.jsonObject["book_id"]!!.jsonObject["enum"])
-        read.execute(buildJsonObject { put("book_id", 2); put("from_chapter", 1) })
+        read.execute(buildJsonObject { put("book_id", 2); put("from_chapter", 1) }).content
         assertEquals(listOf(2L to scopes[1].readingScope), reads)
         coVerify(exactly = 1) { guard.capture(listOf(2)) }
     }
 
     @Test fun wrappedFailuresRemainFailuresInsteadOfSuccessfulSourceReads() = runTest {
-        val tool = ScopedLibraryTool(template, scopes, {}) { _, _ -> "缺少 from_chapter" }
+        val failure = ToolResult.Failure("INVALID_ARGUMENT", "Please provide from_chapter")
+        val tool = ScopedLibraryTool(template, scopes, {}) { _, _ -> failure }
         val result = tool.execute(buildJsonObject { put("book_id", 1) })
-        assertTrue(result.startsWith("缺少"))
-        assertFalse(result.isToolSuccess())
+        assertTrue(result is ToolResult.Failure)
+        assertEquals(failure.code, (result as ToolResult.Failure).code)
+        assertTrue(result.content.startsWith(failure.content))
+        assertTrue(result.content.contains("书籍#1"))
     }
 
     @Test fun corruptedOrDuplicateScopeMetadataNeverBecomesWholeLibraryAccess() {

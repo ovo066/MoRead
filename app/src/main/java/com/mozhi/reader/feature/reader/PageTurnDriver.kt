@@ -48,6 +48,8 @@ class PageTurnDriver(
         fun onTurnCommitted()
         /** Called when the direction is decided, so bitmaps can be captured/refreshed. */
         fun onTurnStarted(direction: PageTurnDirection)
+        /** Both committed and cancelled turns have stopped using their frozen page bitmaps. */
+        fun onTurnFinished() = Unit
     }
 
     var viewWidth = 1f
@@ -286,12 +288,14 @@ class PageTurnDriver(
     }
 
     private fun clearTurn() {
+        val hadTurn = isRunning || direction != null
         settleJob = null
         isRunning = false
         isMoved = false
         direction = null
         isCancel = false
         noNext = false
+        if (hadTurn) callbacks.onTurnFinished()
     }
 
     private companion object {
@@ -331,6 +335,7 @@ fun Modifier.readerPageTouch(
     enabled: Boolean,
     driver: PageTurnDriver,
     selection: SelectionGestureHooks? = null,
+    onImageLongPress: ((Offset) -> Boolean)? = null,
     onBookmarkPull: ((Float) -> Unit)? = null,
     onAddBookmark: (() -> Unit)? = null,
     onTap: (position: Offset, fromAbort: Boolean) -> Unit
@@ -363,7 +368,7 @@ fun Modifier.readerPageTouch(
                 val holdRemaining = bookmarkGesture?.remainingHoldMs ?: 0L
                 val event = if (holdRemaining > 0L) {
                     withTimeoutOrNull(holdRemaining) { awaitPointerEvent() }
-                } else if (selection != null && !longPressFired && !slopCrossed && !hadSelection) {
+                } else if ((selection != null || onImageLongPress != null) && !longPressFired && !slopCrossed && !hadSelection) {
                     val remaining = LONG_PRESS_TIMEOUT_MS - (lastUptime - down.uptimeMillis)
                     withTimeoutOrNull(remaining.coerceAtLeast(1L)) { awaitPointerEvent() }
                 } else {
@@ -380,6 +385,16 @@ fun Modifier.readerPageTouch(
                     }
                     longPressFired = true
                     bookmarkGesture = null
+                    if (onImageLongPress?.invoke(upPosition) == true) {
+                        driver.cancelActiveTurn()
+                        // Consume the rest of this hold: it must never become a page turn.
+                        while (true) {
+                            val tail = awaitPointerEvent()
+                            tail.changes.forEach { it.consume() }
+                            if (tail.changes.none { it.pressed }) break
+                        }
+                        return@awaitEachGesture
+                    }
                     selecting = selection?.begin(upPosition) == true
                     continue
                 }

@@ -45,6 +45,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -360,11 +361,18 @@ internal fun AnnotationDiscussionSheet(
     onDeleteReply: (Long) -> Unit,
     onCancelStreaming: () -> Unit,
     onDismiss: () -> Unit,
-    defaultRespondPersonaId: Long? = null
+    defaultRespondPersonaId: Long? = null,
+    onRememberRespondPersona: (Long) -> Unit = {}
 ) {
     var input by remember { mutableStateOf("") }
-    // 有文字时可选择邀请角色；空输入发送则邀请选中的角色或当前伴读。
-    var respondTarget by remember { mutableStateOf<Long?>(null) }
+    // 点名默认落在「上次点过的角色 → 当前伴读角色 → 第一个角色」上，不必每次重选。
+    // 取消点名（再点一次选中的胶囊）只对这一条发言生效，不写回记忆。
+    var overridden by rememberSaveable { mutableStateOf(false) }
+    var overriddenTarget by rememberSaveable { mutableStateOf<Long?>(null) }
+    val fallbackTarget = personas.firstOrNull { it.id == defaultRespondPersonaId }?.id
+        ?: personas.firstOrNull()?.id
+    val respondTarget = if (overridden) overriddenTarget else fallbackTarget
+    val respondPersona = personas.firstOrNull { it.id == respondTarget }
     val clipboard = LocalClipboardManager.current
     val quote = annotations.firstOrNull()?.selectedText.orEmpty()
     val talkCount = annotations.count { it.note.isNotBlank() } + replies.size
@@ -526,7 +534,15 @@ internal fun AnnotationDiscussionSheet(
                 personas.forEach { persona ->
                     val selected = respondTarget == persona.id
                     Surface(
-                        onClick = { respondTarget = if (selected) null else persona.id },
+                        onClick = {
+                            overridden = true
+                            if (selected) {
+                                overriddenTarget = null
+                            } else {
+                                overriddenTarget = persona.id
+                                onRememberRespondPersona(persona.id)
+                            }
+                        },
                         shape = RoundedCornerShape(15.dp),
                         color = if (selected) palette.accentContainer.copy(alpha = 0.65f) else palette.glass,
                         contentColor = if (selected) palette.accent else palette.muted,
@@ -555,20 +571,18 @@ internal fun AnnotationDiscussionSheet(
             }
         }
 
-        val emptyReplyPersona = personas.firstOrNull { it.id == respondTarget }
-            ?: personas.firstOrNull { it.id == defaultRespondPersonaId }
-            ?: personas.firstOrNull()
-        val canSend = (input.isNotBlank() || emptyReplyPersona != null) && annotations.isNotEmpty() && streaming == null
+        val canSend = (input.isNotBlank() || respondPersona != null) && annotations.isNotEmpty() && streaming == null
         ReaderComposerBar(
             input = input,
             onInputChange = { input = it },
-            placeholder = emptyReplyPersona?.let { "留空发送，请${it.name}点评原文" } ?: "写下你的想法…",
+            placeholder = respondPersona?.let { "说点什么，${it.name}会接话（留空＝请 TA 点评原文）" }
+                ?: "写下你的想法…",
             canSend = canSend,
             isStreaming = streaming != null,
             palette = palette,
             onSend = {
                 val target = annotations.firstOrNull { it.personaId == null } ?: annotations.first()
-                onSend(target, input.trim(), respondTarget ?: emptyReplyPersona?.id?.takeIf { input.isBlank() })
+                onSend(target, input.trim(), respondTarget)
                 input = ""
             },
             onStop = onCancelStreaming,

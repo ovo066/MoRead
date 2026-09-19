@@ -1,86 +1,55 @@
 package com.mozhi.reader.ui.theme
 
 import android.app.Activity
+import android.content.Context
+import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 
-/**
- * 中性灰阶底色：不带任何色相，界面上唯一的彩色来源是用户选的强调色。
- * primary 家族由强调色动态派生（见 [withAccent]），此处的占位值会被覆盖。
- */
-private val LightColors = lightColorScheme(
-    background = Color(0xFFFAFAFA),
-    onBackground = Color(0xFF1A1A1A),
-    surface = Color(0xFFFFFFFF),
-    onSurface = Color(0xFF1A1A1A),
-    surfaceVariant = Color(0xFFE8E8E8),
-    onSurfaceVariant = Color(0xFF5E5E5E),
-    surfaceContainerLowest = Color(0xFFFFFFFF),
-    surfaceContainerLow = Color(0xFFF7F7F7),
-    surfaceContainer = Color(0xFFF1F1F1),
-    surfaceContainerHigh = Color(0xFFEAEAEA),
-    surfaceContainerHighest = Color(0xFFE3E3E3),
-    outline = Color(0xFF767676),
-    outlineVariant = Color(0xFFC7C7C7),
-    inverseSurface = Color(0xFF2E2E2E),
-    inverseOnSurface = Color(0xFFF2F2F2),
-    // 中性化的次级家族：空书架插画等处不再靠彩色出效果。
-    secondary = Color(0xFF5E5E5E),
-    onSecondary = Color.White,
-    secondaryContainer = Color(0xFFE4E4E4),
-    onSecondaryContainer = Color(0xFF272727),
-    tertiary = Color(0xFF6B6B6B),
-    onTertiary = Color.White,
-    tertiaryContainer = Color(0xFFDCDCDC),
-    onTertiaryContainer = Color(0xFF232323)
-)
-
-private val DarkColors = darkColorScheme(
-    background = Color(0xFF0E0E0E),
-    onBackground = Color(0xFFE4E4E4),
-    surface = Color(0xFF151515),
-    onSurface = Color(0xFFE4E4E4),
-    surfaceVariant = Color(0xFF3C3C3C),
-    onSurfaceVariant = Color(0xFFC0C0C0),
-    surfaceContainerLowest = Color(0xFF0A0A0A),
-    surfaceContainerLow = Color(0xFF181818),
-    surfaceContainer = Color(0xFF1D1D1D),
-    surfaceContainerHigh = Color(0xFF272727),
-    surfaceContainerHighest = Color(0xFF323232),
-    outline = Color(0xFF8C8C8C),
-    outlineVariant = Color(0xFF414141),
-    inverseSurface = Color(0xFFE4E4E4),
-    inverseOnSurface = Color(0xFF2B2B2B),
-    secondary = Color(0xFFB4B4B4),
-    onSecondary = Color(0xFF2A2A2A),
-    secondaryContainer = Color(0xFF383838),
-    onSecondaryContainer = Color(0xFFE0E0E0),
-    tertiary = Color(0xFFA6A6A6),
-    onTertiary = Color(0xFF262626),
-    tertiaryContainer = Color(0xFF303030),
-    onTertiaryContainer = Color(0xFFDADADA)
-)
-
-private val MoReadShapes = Shapes(
+private val StandardShapes = Shapes(
     extraSmall = RoundedCornerShape(10.dp),
     small = RoundedCornerShape(14.dp),
     medium = RoundedCornerShape(20.dp),
     large = RoundedCornerShape(28.dp),
     extraLarge = RoundedCornerShape(36.dp)
 )
+
+/** 舒展形状：MD3 Expressive 式的大圆角，凡读 `MaterialTheme.shapes` 的地方自动跟随。 */
+private val ExpressiveShapes = Shapes(
+    extraSmall = RoundedCornerShape(14.dp),
+    small = RoundedCornerShape(18.dp),
+    medium = RoundedCornerShape(28.dp),
+    large = RoundedCornerShape(36.dp),
+    extraLarge = RoundedCornerShape(44.dp)
+)
+
+/** Material You 仅 Android 12+ 可用；低版本读到 DYNAMIC 也按中性灰处理。 */
+fun ColorSchemePreset.isAvailable(): Boolean =
+    availableOn(Build.VERSION.SDK_INT) == this
+
+/** 主题和预览共用的取色入口，预览不会受当前自定义强调色影响。 */
+@Composable
+fun rememberSchemeSide(preset: ColorSchemePreset, dark: Boolean): MoReadSchemeSide {
+    val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+    val effective = preset.availableOn(Build.VERSION.SDK_INT)
+    return remember(effective, dark, context, configuration) { schemeSide(effective, dark, context) }
+}
 
 @Composable
 fun MoReadTheme(
@@ -95,27 +64,53 @@ fun MoReadTheme(
         ThemeMode.LIGHT -> false
         ThemeMode.DARK -> true
     }
-    val accent = resolveAccentColor(
-        accent = appearance.accent,
-        customAccentArgb = appearance.customAccentArgb,
-        dark = darkTheme
+    val preset = if (appearance.colorScheme.isAvailable()) appearance.colorScheme else ColorSchemePreset.NEUTRAL
+    // 两侧都要算：阅读页纸色明暗独立于应用明暗，强调色要按纸色自身的明暗取变体。
+    val lightSide = rememberSchemeSide(preset, dark = false)
+    val darkSide = rememberSchemeSide(preset, dark = true)
+    val side = if (darkTheme) darkSide else lightSide
+    val accentLight = resolveAccentColor(
+        appearance.accent, appearance.customAccentArgb, dark = false, schemePrimary = lightSide.colors.primary
     )
-    val colorScheme = remember(darkTheme, accent) {
-        (if (darkTheme) DarkColors else LightColors).withAccent(accent, darkTheme)
+    val accentDark = resolveAccentColor(
+        appearance.accent, appearance.customAccentArgb, dark = true, schemePrimary = darkSide.colors.primary
+    )
+    val accent = if (darkTheme) accentDark else accentLight
+    // 「随方案」时保留方案自己调好的 primary 家族（粉彩 container 等）；
+    // 用户另选强调色才用混底派生 container。
+    val followsScheme = appearance.accent == AccentPreset.FOLLOW && appearance.customAccentArgb == null
+    val colorScheme = remember(side, accent, followsScheme, darkTheme, preset) {
+        if (followsScheme && preset != ColorSchemePreset.NEUTRAL) side.colors
+        else side.colors.withAccent(accent, darkTheme)
     }
-    val moReadColors = remember(darkTheme, accent, appearance.accent, appearance.customAccentArgb) {
+    val moReadColors = remember(side, colorScheme, accentLight, accentDark, appearance) {
+        val effectiveSide = side.copy(colors = colorScheme)
+        val semantic = MoReadSchemes.semantic(effectiveSide, appearance.semanticHarmony, accent, darkTheme)
         MoReadColors(
             accent = accent,
-            // 阅读页纸色明暗独立于应用明暗，palette 按纸色自选变体。
-            accentLight = resolveAccentColor(appearance.accent, appearance.customAccentArgb, dark = false),
-            accentDark = resolveAccentColor(appearance.accent, appearance.customAccentArgb, dark = true),
+            accentLight = accentLight,
+            accentDark = accentDark,
             seal = if (darkTheme) MoReadTokens.SealDark else MoReadTokens.SealLight,
             // 选中胶囊直接用强调色填充：换色能立刻在最显眼处看到效果。
             navSelected = accent,
             onNavSelected = accent.onAccent(),
-            isDark = darkTheme
+            isDark = darkTheme,
+            canvas = side.canvas,
+            semantic = semantic,
+            tagPalette = MoReadSchemes.tagPalette(side, appearance.semanticHarmony, accent, darkTheme),
+            avatarGradients = MoReadSchemes.avatarGradients(preset, semantic, appearance.semanticHarmony),
+            colorScheme = preset,
+            semanticHarmony = appearance.semanticHarmony,
+            surfaceStyle = appearance.surfaceStyle,
+            navStyle = appearance.navStyle,
+            shapeStyle = appearance.shapeStyle
         )
     }
+    val shapes = when (appearance.shapeStyle) {
+        ShapeStyle.STANDARD -> StandardShapes
+        ShapeStyle.EXPRESSIVE -> ExpressiveShapes
+    }
+    val metrics = MoReadMetrics.of(appearance.shapeStyle)
 
     // 系统栏图标要跟「应用内」选的明暗走，而不是 values-night 那套（后者只认系统设置，
     // 用户在应用里手选日间/夜间时就会错）。
@@ -132,21 +127,49 @@ fun MoReadTheme(
         }
     }
 
-    CompositionLocalProvider(LocalMoReadColors provides moReadColors) {
+    CompositionLocalProvider(
+        LocalMoReadColors provides moReadColors,
+        LocalMoReadMetrics provides metrics
+    ) {
         MaterialTheme(
             colorScheme = colorScheme,
             typography = typography,
-            shapes = MoReadShapes,
+            shapes = shapes,
             content = content
         )
     }
 }
 
+/** 阅读器继续使用纸色与原有浮层尺寸，应用质感和舒展圆角只作用于应用界面。 */
+@Composable
+fun ReaderAppearanceScope(content: @Composable () -> Unit) {
+    val colors = LocalMoReadColors.current
+    val readerColors = remember(colors) {
+        colors.copy(surfaceStyle = SurfaceStyle.GLASS, shapeStyle = ShapeStyle.STANDARD)
+    }
+    CompositionLocalProvider(
+        LocalMoReadColors provides readerColors,
+        LocalMoReadMetrics provides MoReadMetrics.Standard
+    ) {
+        MaterialTheme(shapes = StandardShapes, content = content)
+    }
+}
+
+private fun schemeSide(preset: ColorSchemePreset, dark: Boolean, context: Context): MoReadSchemeSide =
+    if (preset == ColorSchemePreset.DYNAMIC && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        MoReadSchemes.dynamicSide(
+            colors = if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context),
+            dark = dark
+        )
+    } else {
+        MoReadSchemes.side(preset, dark)
+    }
+
 /**
  * 把强调色注入 primary 家族。container 由强调色按低透明度混入底色得到，
  * 这样任意强调色都能得到协调的淡底；onPrimary 按亮度取黑/白以保证对比度。
  */
-private fun androidx.compose.material3.ColorScheme.withAccent(
+internal fun androidx.compose.material3.ColorScheme.withAccent(
     accent: Color,
     dark: Boolean
 ): androidx.compose.material3.ColorScheme {

@@ -72,7 +72,9 @@ object MoReadRadius {
 fun Color.onAccent(): Color {
     val onDark = Color(0xFFF7F7F7)
     val onLight = Color(0xFF111111)
-    return if (contrastRatio(onDark, this) >= contrastRatio(onLight, this)) onDark else onLight
+    val preferred = if (contrastRatio(onDark, this) >= contrastRatio(onLight, this)) onDark else onLight
+    return if (contrastRatio(preferred, this) >= MIN_CONTENT_CONTRAST) preferred
+        else if (contrastRatio(Color.White, this) >= contrastRatio(Color.Black, this)) Color.White else Color.Black
 }
 
 /**
@@ -95,8 +97,29 @@ data class MoReadColors(
     val seal: Color,
     val navSelected: Color,
     val onNavSelected: Color,
-    val isDark: Boolean
+    val isDark: Boolean,
+    /** 扁平质感下的页面底色（玻璃质感不读它，Backdrop 自己画渐变）。 */
+    val canvas: Color = Color(0xFFF0F0F0),
+    val semantic: MoReadSemanticColors = NeutralSemanticLight,
+    /** 书架标签四色：琥珀 / 青竹 / 黛蓝 / 绯红。 */
+    val tagPalette: List<Color> = NeutralTagPalette,
+    /** 角色头像兜底渐变，按名字散列取一组。 */
+    val avatarGradients: List<Pair<Color, Color>> = NeutralAvatarGradients,
+    val colorScheme: ColorSchemePreset = ColorSchemePreset.Default,
+    val semanticHarmony: SemanticHarmony = SemanticHarmony.Default,
+    val surfaceStyle: SurfaceStyle = SurfaceStyle.Default,
+    val navStyle: NavStyle = NavStyle.Default,
+    val shapeStyle: ShapeStyle = ShapeStyle.Default
 )
+
+private val NeutralSemanticLight = MoReadSchemes.semantic(
+    side = MoReadSchemes.side(ColorSchemePreset.NEUTRAL, dark = false),
+    harmony = SemanticHarmony.MULTI,
+    accent = AccentPreset.Default.light,
+    dark = false
+)
+private val NeutralTagPalette = MoReadSchemes.side(ColorSchemePreset.NEUTRAL, dark = false).tagPalette
+private val NeutralAvatarGradients = MoReadSchemes.avatarGradients(ColorSchemePreset.NEUTRAL, NeutralSemanticLight)
 
 val LocalMoReadColors = staticCompositionLocalOf {
     MoReadColors(
@@ -109,6 +132,33 @@ val LocalMoReadColors = staticCompositionLocalOf {
         isDark = false
     )
 }
+
+/** 语义色四件套。只用于语义位（图标底、标签、角色），不做装饰。 */
+@Composable
+@ReadOnlyComposable
+fun semanticColors(): MoReadSemanticColors = LocalMoReadColors.current.semantic
+
+@Composable
+@ReadOnlyComposable
+fun surfaceStyle(): SurfaceStyle = LocalMoReadColors.current.surfaceStyle
+
+@Composable
+@ReadOnlyComposable
+fun navStyle(): NavStyle = LocalMoReadColors.current.navStyle
+
+@Composable
+@ReadOnlyComposable
+fun shapeStyle(): ShapeStyle = LocalMoReadColors.current.shapeStyle
+
+/** 扁平质感下的页面底色。 */
+@Composable
+@ReadOnlyComposable
+fun canvasColor(): Color = LocalMoReadColors.current.canvas
+
+/** 是否扁平质感。玻璃 / 扁平的分支只允许出现在 MoReadSurfaces 与本文件的语义函数里。 */
+@Composable
+@ReadOnlyComposable
+fun isFlatSurface(): Boolean = LocalMoReadColors.current.surfaceStyle == SurfaceStyle.FLAT
 
 /** 当前是否深色。等价于旧代码里的 `isSystemInDarkTheme()`，但尊重应用内的主题模式。 */
 @Composable
@@ -154,17 +204,29 @@ fun sectionCardColor(): Color = if (isDarkTheme()) {
     MaterialTheme.colorScheme.surface
 }
 
-/** 发丝线：卡片描边与组内分隔线共用，淡到只在需要时才看得见。 */
+/**
+ * 发丝线：卡片描边与组内分隔线共用，淡到只在需要时才看得见。
+ * 扁平质感下卡面与画布的色差本身就是边界，描边一律隐去（分隔线仍用 [sectionDivider]）。
+ */
 @Composable
 @ReadOnlyComposable
-fun sectionHairline(): Color =
+fun sectionHairline(): Color = if (isFlatSurface()) {
+    Color.Transparent
+} else {
+    MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDarkTheme()) 0.45f else 0.55f)
+}
+
+/** 组内分隔线：玻璃质感与描边同色；扁平质感下描边没了，分隔线仍要淡淡一条。 */
+@Composable
+@ReadOnlyComposable
+fun sectionDivider(): Color =
     MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDarkTheme()) 0.45f else 0.55f)
 
 /** 表单输入区的填充底：比卡面再深/浅一档，不描边也划得出边界。 */
 @Composable
 @ReadOnlyComposable
 fun fieldContainerColor(): Color = if (isDarkTheme()) {
-    MaterialTheme.colorScheme.surfaceContainerHigh
+    if (isFlatSurface()) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceContainerHigh
 } else {
     MaterialTheme.colorScheme.surfaceContainer
 }

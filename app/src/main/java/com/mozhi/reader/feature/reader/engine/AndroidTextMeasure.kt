@@ -76,6 +76,9 @@ class AndroidTextMeasure(
 
     override fun indentColumnWidth(): Float = indentWidth
 
+    override fun clusterLetterSpacing(style: MeasuredTextStyle): Float =
+        paintFor(style).let { it.letterSpacing * it.textSize }
+
     override fun metrics(style: MeasuredTextStyle): LineMetrics = paintFor(style).lineMetrics()
 
     override fun charWidths(text: String, style: MeasuredTextStyle): FloatArray {

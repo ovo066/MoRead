@@ -96,7 +96,11 @@ interface AnnotationDao {
     @Query("DELETE FROM annotation_replies WHERE id = :replyId")
     suspend fun deleteReply(replyId: Long)
 
-    /** 有回复的批注 id 集合：纯高亮一旦有讨论也要在正文出「评」标记。 */
+    /** 今日已生成的段评条数；与调度器的每日闸门读同一口径（跨书、跨角色共享）。 */
+    @Query("SELECT COUNT(*) FROM annotations WHERE proactiveJobId IS NOT NULL AND createdAt >= :since")
+    fun observeProactiveCreatedSince(since: Long): Flow<Int>
+
+    /** 有回复的批注 id 集合：纯高亮一旦有讨论也要在正文显示评论小点。 */
     @Query(
         "SELECT DISTINCT annotationId FROM annotation_replies WHERE annotationId IN " +
             "(SELECT id FROM annotations WHERE bookId = :bookId)"

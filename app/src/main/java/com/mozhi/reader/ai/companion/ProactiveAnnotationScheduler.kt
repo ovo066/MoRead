@@ -14,6 +14,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -32,7 +34,12 @@ data class ProactiveAnnotationBatchResult(
     val annotationIds: List<Long>,
     val personaId: Long? = null,
     val personaPersonality: String = "",
-    val personaSpeakingStyle: String = ""
+    val personaSpeakingStyle: String = "",
+    /**
+     * 今日额度已用完，这一章不会再生成。没有这条，用户只能看到「连着好几章都不段评」，
+     * 而预生成（提前 N 章）会把额度提前花在还没读到的章节上，更难自己想明白。
+     */
+    val dailyBudgetExhausted: Boolean = false
 )
 
 internal fun annotationChapterRange(chapterIndex: Int, ahead: Int, lastIndex: Int): IntRange =
@@ -84,6 +91,8 @@ class ProactiveAnnotationScheduler @Inject constructor(
     private var observedPolicy: ProactiveBookPolicy? = null
     private var lastEntered: Trigger? = null
     private var lastCompleted: Trigger? = null
+    private var exhaustedNoticeDay = Long.MIN_VALUE
+    private val exhaustedNoticeBooks = mutableSetOf<Long>()
     private val commits = ProactiveAnnotationCommitStore(database)
     private val mutableResults = MutableSharedFlow<ProactiveAnnotationBatchResult>(extraBufferCapacity = 8)
     val results = mutableResults.asSharedFlow()
@@ -107,7 +116,12 @@ class ProactiveAnnotationScheduler @Inject constructor(
                         }
                     } ?: break
                     try { run(trigger) }
-                    catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: CancellationException) {
+                        // Only our own scope dying may stop the worker; a job-local cancellation
+                        // (request timeout, cancelled child) must not silence annotations for the
+                        // rest of the process.
+                        currentCoroutineContext().ensureActive()
+                    }
                     catch (_: Exception) { /* Worker survives repository errors; interrupted jobs are resumable. */ }
                     finally { synchronized(lock) { active = null; activeVersion = null } }
                 }
@@ -186,6 +200,41 @@ class ProactiveAnnotationScheduler @Inject constructor(
         }
     }
 
+    /**
+     * 每本书每天最多提示一次；提示本身不读正文、不调模型，也不会因为额度用完而反复打扰。
+     */
+    private suspend fun announceDailyBudgetExhausted(
+        trigger: Trigger,
+        personaId: Long,
+        noticeEpoch: Long,
+        version: Pair<Long, Long>
+    ) {
+        val today = java.time.LocalDate.now().toEpochDay()
+        synchronized(lock) {
+            if (exhaustedNoticeDay != today) {
+                exhaustedNoticeDay = today
+                exhaustedNoticeBooks.clear()
+            }
+            if (!exhaustedNoticeBooks.add(trigger.bookId)) return
+        }
+        val autonomy = settings.companionAutonomySettings.first()
+        if (!autonomy.noticeActive) return
+        if (personaId !in autonomy.annotationPersonasFor(settings.activePersonaId.first())) return
+        val persona = personas.getPersona(personaId) ?: return
+        synchronized(lock) {
+            if (version.second != readerVersion || noticeEpoch != noticeVersion || readerBook != trigger.bookId) return
+            mutableResults.tryEmit(
+                ProactiveAnnotationBatchResult(
+                    bookId = trigger.bookId, chapterIndex = trigger.chapterIndex,
+                    personaName = persona.name, avatarPath = persona.avatarPath,
+                    createdCount = 0, annotationIds = emptyList(), personaId = personaId,
+                    personaPersonality = persona.personality, personaSpeakingStyle = persona.speakingStyle,
+                    dailyBudgetExhausted = true
+                )
+            )
+        }
+    }
+
     private suspend fun run(trigger: Trigger) {
         val policy = settings.companionAutonomySettings.first().policyFor(trigger.bookId, settings.activePersonaId.first())
         for ((index, personaId) in policy.personaIds.withIndex()) {
@@ -209,9 +258,15 @@ class ProactiveAnnotationScheduler @Inject constructor(
         fun startOfDay(): Long = java.time.LocalDate.now().atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
         // Exhausted global budgets must not repeatedly load/hash a chapter or touch its PAUSED ledger.
         val budget = quota.reserve(initial.limits.copy(maxPerChapter = ProactiveAnnotationLimits.UNLIMITED), requestVoice = false, requestImages = false)
-        if (!budget.accepted || budget.maxAnnotations <= 0) return
+        if (!budget.accepted || budget.maxAnnotations <= 0) {
+            announceDailyBudgetExhausted(trigger, personaId, noticeEpoch, version)
+            return
+        }
         val dailyRemaining = if (initial.limits.dailyUnlimited) Int.MAX_VALUE else (initial.limits.dailyMax - dao.createdSince(startOfDay())).coerceAtLeast(0)
-        if (dailyRemaining <= 0) return
+        if (dailyRemaining <= 0) {
+            announceDailyBudgetExhausted(trigger, personaId, noticeEpoch, version)
+            return
+        }
         val share = annotationBudgetShare(minOf(dailyRemaining, budget.maxAnnotations), remainingPersonas)
         if (!readerContextValid()) return
         if (personaId !in initial.personaIds) return
@@ -264,7 +319,8 @@ class ProactiveAnnotationScheduler @Inject constructor(
             val limits = initial.limits
             outcome = service.generateForChapter(
                 request = ProactiveAnnotationRequest(trigger.bookId, trigger.chapterIndex, body, persona,
-                    if (limits.chapterUnlimited) Int.MAX_VALUE else limits.maxPerChapter, done.toSet(), initial.prompts),
+                    if (limits.chapterUnlimited) Int.MAX_VALUE else limits.maxPerChapter, done.toSet(), initial.prompts,
+                    contextBudgetChars = limits.context.budgetChars),
                 allowance = { allowance() },
                 recordMedia = { voices, images ->
                     check(valid()) { "generation_context_changed_before_media_charge" }

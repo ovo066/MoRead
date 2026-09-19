@@ -29,7 +29,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
-import com.mozhi.reader.ui.theme.MoReadRadius
+import com.mozhi.reader.ui.theme.moReadMetrics
 import com.mozhi.reader.ui.theme.fieldContainerColor
 import com.mozhi.reader.ui.theme.sectionHairline
 
@@ -62,6 +62,7 @@ fun MoReadTextField(
     visualTransformation: VisualTransformation = VisualTransformation.None
 ) {
     var focused by remember { mutableStateOf(false) }
+    val fieldShape = moReadMetrics().fieldShape
     val borderColor = when {
         isError -> MaterialTheme.colorScheme.error
         focused -> MaterialTheme.colorScheme.primary
@@ -85,9 +86,9 @@ fun MoReadTextField(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(MoReadRadius.FieldShape)
+                .clip(fieldShape)
                 .background(fieldContainerColor())
-                .border(if (focused || isError) 1.dp else 0.5.dp, borderColor, MoReadRadius.FieldShape)
+                .border(if (focused || isError) 1.dp else 0.5.dp, borderColor, fieldShape)
                 .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = if (singleLine) Alignment.CenterVertically else Alignment.Top
         ) {

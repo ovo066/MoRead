@@ -252,22 +252,22 @@ private class WebScrapeTool(
         }
     )
 
-    override suspend fun execute(arguments: JsonObject): String {
+    override suspend fun execute(arguments: JsonObject): ToolResult {
         val url = arguments["url"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-        if (url.isEmpty()) return "缺少网址 url"
+        if (url.isEmpty()) return ToolResult.Failure("INVALID_ARGUMENT", "缺少网址 url")
         val result = try {
             service.scrape(url)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
-            return error.message ?: "网页抓取失败"
+            return ToolResult.Failure("WEB_SCRAPE_FAILED", error.message ?: "网页抓取失败", error)
         }
-        return buildString {
+        return ToolResult.Success(buildString {
             append("网页正文（回答时请标明来源链接）：\n")
             append("标题：").append(result.title).append('\n')
             append("来源：").append(result.url).append("\n\n")
             append(result.content)
-        }
+        })
     }
 }
 
@@ -295,19 +295,19 @@ private class WebSearchTool(
         }
     )
 
-    override suspend fun execute(arguments: JsonObject): String {
+    override suspend fun execute(arguments: JsonObject): ToolResult {
         val query = arguments["query"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-        if (query.isEmpty()) return "缺少搜索词 query"
+        if (query.isEmpty()) return ToolResult.Failure("INVALID_ARGUMENT", "缺少搜索词 query")
         val limit = (arguments["limit"]?.jsonPrimitive?.intOrNull ?: 5).coerceIn(1, 8)
         val results = try {
             service.search(query, limit)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
-            return error.message ?: "网络搜索失败"
+            return ToolResult.Failure("WEB_SEARCH_FAILED", error.message ?: "网络搜索失败", error)
         }
-        if (results.isEmpty()) return "没有找到与「$query」相关的网页结果。"
-        return buildString {
+        if (results.isEmpty()) return ToolResult.Success("没有找到与「$query」相关的网页结果。")
+        return ToolResult.Success(buildString {
             append("互联网搜索结果（回答时请标明来源链接）：\n")
             results.forEachIndexed { index, result ->
                 append("\n[").append(index + 1).append("] ").append(result.title)
@@ -315,7 +315,7 @@ private class WebSearchTool(
                 if (result.snippet.isNotBlank()) append("\n").append(result.snippet)
                 append('\n')
             }
-        }
+        })
     }
 }
 
@@ -338,12 +338,12 @@ private class GetReadingProgressTool(
         }
     )
 
-    override suspend fun execute(arguments: JsonObject): String {
-        val book = libraryRepository.getBook(bookId) ?: return "未找到当前书籍"
+    override suspend fun execute(arguments: JsonObject): ToolResult {
+        val book = libraryRepository.getBook(bookId) ?: return ToolResult.Failure("SOURCE_MISSING", "未找到当前书籍")
         val currentIndex = book.lastReadChapterIndex.coerceAtLeast(0)
         val notes = noteRepository.getForBook(bookId)
         val visibleAnnotations = annotationRepository.getVisibleCounts(bookId, currentIndex, readingScope)
-        return formatProgressOverview(
+        return ToolResult.Success(formatProgressOverview(
             overview = ProgressOverview(
                 book = book,
                 currentChapter = libraryRepository.getChapter(bookId, currentIndex),
@@ -362,7 +362,7 @@ private class GetReadingProgressTool(
                 bookmarkCount = libraryRepository.getBookmarks(bookId).size
             ),
             readingScope = readingScope
-        )
+        ))
     }
 }
 
@@ -415,29 +415,29 @@ internal class ReadBookSectionTool(
         }
     )
 
-    override suspend fun execute(arguments: JsonObject): String {
+    override suspend fun execute(arguments: JsonObject): ToolResult {
         val fromChapter = arguments["from_chapter"]?.jsonPrimitive?.intOrNull
-            ?: return "缺少起始章节号 from_chapter"
+            ?: return ToolResult.Failure("INVALID_ARGUMENT", "缺少起始章节号 from_chapter")
         val toChapter = arguments["to_chapter"]?.jsonPrimitive?.intOrNull ?: fromChapter
         val startChar = (arguments["start_char"]?.jsonPrimitive?.intOrNull ?: 0).coerceAtLeast(0)
         val maxChars = (arguments["max_chars"]?.jsonPrimitive?.intOrNull ?: DEFAULT_SECTION_CHARS)
             .coerceIn(MIN_SECTION_CHARS, MAX_SECTION_CHARS)
-        if (fromChapter < 1 || toChapter < fromChapter) return "章节范围无效：$fromChapter-$toChapter"
+        if (fromChapter < 1 || toChapter < fromChapter) return ToolResult.Failure("INVALID_ARGUMENT", "章节范围无效：$fromChapter-$toChapter")
 
-        val book = libraryRepository.getBook(bookId) ?: return "未找到当前书籍"
+        val book = libraryRepository.getBook(bookId) ?: return ToolResult.Failure("SOURCE_MISSING", "未找到当前书籍")
         val maxReadableChapter = readingScope.clampLastChapter(book.totalChapters) + 1
         if (toChapter > maxReadableChapter) {
-            return if (!readingScope.isWholeBook) {
+            return ToolResult.Failure("OUT_OF_SCOPE", if (!readingScope.isWholeBook) {
                 "超出已读范围：用户只读到第 $maxReadableChapter 章，不能读取第 $toChapter 章。"
             } else {
                 "章节超出本书范围：本书共 $maxReadableChapter 章，不能读取第 $toChapter 章。"
-            }
+            })
         }
         val chapterEntities = libraryRepository.getChapters(bookId).associateBy { it.chapterIndex }
         val readableChapters = buildList {
             for (chapterNumber in fromChapter..toChapter) {
                 val chapterIndex = chapterNumber - 1
-                val chapter = chapterEntities[chapterIndex] ?: return "未找到第 $chapterNumber 章"
+                val chapter = chapterEntities[chapterIndex] ?: return ToolResult.Failure("SOURCE_MISSING", "未找到第 $chapterNumber 章")
                 val fullBody = libraryRepository.readChapterText(bookId, chapter)
                 add(
                     ChapterDocument(
@@ -474,15 +474,15 @@ internal fun formatBookSection(
     toChapter: Int,
     startChar: Int,
     maxChars: Int
-): String {
+): ToolResult {
     val byIndex = chapters.associateBy(ChapterDocument::chapterIndex)
     val output = StringBuilder()
     var remaining = maxChars
     for (chapterNumber in fromChapter..toChapter) {
-        val chapter = byIndex[chapterNumber - 1] ?: return "未找到第 $chapterNumber 章"
+        val chapter = byIndex[chapterNumber - 1] ?: return ToolResult.Failure("SOURCE_MISSING", "未找到第 $chapterNumber 章")
         val chapterStart = if (chapterNumber == fromChapter) startChar else 0
         if (chapterStart > chapter.body.length) {
-            return "第 $chapterNumber 章可读内容只到字符偏移 ${chapter.body.length}，start_char=$chapterStart 超出范围。"
+            return ToolResult.Failure("INVALID_ARGUMENT", "第 $chapterNumber 章可读内容只到字符偏移 ${chapter.body.length}，start_char=$chapterStart 超出范围。")
         }
         val header = buildString {
             if (output.isNotEmpty()) append("\n\n")
@@ -514,7 +514,7 @@ internal fun formatBookSection(
             break
         }
     }
-    return output.toString().ifBlank { "指定范围内还没有已读正文。" }
+    return ToolResult.Success(output.toString().ifBlank { "指定范围内还没有已读正文。" })
 }
 
 /** 逐字定位交给共享实现；批注要求唯一命中，聊天页的跳转允许多处，规则只有一份。 */
@@ -560,14 +560,14 @@ private class GenerateImageTool(
         }
     )
 
-    override suspend fun execute(arguments: JsonObject): String {
+    override suspend fun execute(arguments: JsonObject): ToolResult {
         val prompt = arguments["prompt"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-        if (prompt.isEmpty()) return "缺少生图提示词 prompt"
-        val book = getBook() ?: return "未找到当前书籍"
+        if (prompt.isEmpty()) return ToolResult.Failure("INVALID_ARGUMENT", "缺少生图提示词 prompt")
+        val book = getBook() ?: return ToolResult.Failure("SOURCE_MISSING", "未找到当前书籍")
         val chapterNumber = arguments["chapter_number"]?.jsonPrimitive?.intOrNull
         val maxVisibleChapter = readingScope.clampLastChapter(book.totalChapters)
         if (chapterNumber != null && chapterNumber !in 1..maxVisibleChapter + 1) {
-            return "插图锚点超出当前可见范围：最多可访问第 ${maxVisibleChapter + 1} 章。"
+            return ToolResult.Failure("OUT_OF_SCOPE", "插图锚点超出当前可见范围：最多可访问第 ${maxVisibleChapter + 1} 章。")
         }
         val chapterIndex = chapterNumber?.minus(1) ?: if (readingScope.isWholeBook) {
             book.lastReadChapterIndex
@@ -581,7 +581,7 @@ private class GenerateImageTool(
             0
         }).coerceAtLeast(0)
         if (!readingScope.isWholeBook && chapterIndex == readingScope.maxChapterIndex && charOffset > readingScope.maxCharOffset) {
-            return "插图锚点超出当前阅读水位（最大字符偏移 ${readingScope.maxCharOffset}）。"
+            return ToolResult.Failure("OUT_OF_SCOPE", "插图锚点超出当前阅读水位（最大字符偏移 ${readingScope.maxCharOffset}）。")
         }
         val illustration = mediaService.generateIllustration(
             bookId = bookId,
@@ -591,13 +591,13 @@ private class GenerateImageTool(
             prompt = prompt,
             personaId = personaId
         )
-        return AgentMediaResult(
+        return ToolResult.Success(AgentMediaResult(
             mediaKind = "image",
             mediaId = illustration.id,
             path = illustration.imagePath,
             mediaType = illustration.mediaType,
             message = "插图已保存到《${book.title}》插图廊"
-        ).encode()
+        ).encode())
     }
 }
 
@@ -645,9 +645,9 @@ private class SynthesizeSpeechTool(
         }
     )
 
-    override suspend fun execute(arguments: JsonObject): String {
+    override suspend fun execute(arguments: JsonObject): ToolResult {
         val text = arguments["text"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-        if (text.isEmpty()) return "缺少朗读文本 text"
+        if (text.isEmpty()) return ToolResult.Failure("INVALID_ARGUMENT", "缺少朗读文本 text")
         val speech = mediaService.synthesizeSpeech(
             bookId = bookId,
             text = text,
@@ -657,12 +657,12 @@ private class SynthesizeSpeechTool(
             pitch = arguments["pitch"]?.jsonPrimitive?.intOrNull,
             format = arguments["format"]?.jsonPrimitive?.contentOrNull
         )
-        return AgentMediaResult(
+        return ToolResult.Success(AgentMediaResult(
             mediaKind = "audio",
             path = speech.path,
             mediaType = speech.mediaType,
             message = if (speech.cacheHit) "已复用语音缓存，可直接播放" else "语音已生成并缓存，可直接播放"
-        ).encode()
+        ).encode())
     }
 }
 
@@ -682,7 +682,7 @@ private class WriteNoteTool(
         parameters = noteParameters("笔记标题", "笔记 Markdown 正文")
     )
 
-    override suspend fun execute(arguments: JsonObject): String = saveNote(
+    override suspend fun execute(arguments: JsonObject): ToolResult = saveNote(
         arguments = arguments,
         kind = NoteRepository.KIND_NOTE,
         defaultTitle = "伴读笔记"
@@ -692,15 +692,15 @@ private class WriteNoteTool(
         arguments: JsonObject,
         kind: String,
         defaultTitle: String
-    ): String {
+    ): ToolResult {
         val content = arguments["content_md"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-        if (content.isEmpty()) return "缺少笔记正文 content_md"
-        val book = getBook() ?: return "未找到当前书籍"
+        if (content.isEmpty()) return ToolResult.Failure("INVALID_ARGUMENT", "缺少笔记正文 content_md")
+        val book = getBook() ?: return ToolResult.Failure("SOURCE_MISSING", "未找到当前书籍")
         val title = arguments["title"]?.jsonPrimitive?.contentOrNull?.trim()
             .orEmpty().ifBlank { defaultTitle }
         val requestedId = arguments["note_id"]?.jsonPrimitive?.contentOrNull?.toLongOrNull()
         val requested = requestedId?.let { notes.getNote(it) }
-        if (requestedId != null && requested == null) return "未找到第 $requestedId 条笔记"
+        if (requestedId != null && requested == null) return ToolResult.Failure("SOURCE_MISSING", "未找到第 $requestedId 条笔记")
         return when (val target = resolveNoteWriteTarget(
             requested = requested,
             latest = null,
@@ -722,7 +722,7 @@ private class WriteNoteTool(
                     sourceScopeChapterIndex = readingScope.maxChapterIndex,
                     sourceScopeCharOffset = readingScope.maxCharOffset
                 )
-                "已保存到《${book.title}》的笔记（编号 $noteId），来源范围：${scopeLabel(readingScope)}。"
+                ToolResult.Success("已保存到《${book.title}》的笔记（编号 $noteId），来源范围：${scopeLabel(readingScope)}。")
             }
             is NoteWriteTarget.Update -> {
                 val before = target.note.contentMarkdown.length
@@ -736,9 +736,9 @@ private class WriteNoteTool(
                     sourceScopeChapterIndex = readingScope.maxChapterIndex,
                     sourceScopeCharOffset = readingScope.maxCharOffset
                 )
-                "已更新第 ${target.note.id} 条读书笔记（$before → ${updatedContent.length} 字），来源范围：${scopeLabel(readingScope)}。"
+                ToolResult.Success("已更新第 ${target.note.id} 条读书笔记（$before → ${updatedContent.length} 字），来源范围：${scopeLabel(readingScope)}。")
             }
-            is NoteWriteTarget.Reject -> target.reason
+            is NoteWriteTarget.Reject -> ToolResult.Failure("WRITE_REJECTED", target.reason)
         }
     }
 }
@@ -759,18 +759,18 @@ private class SavePlotSummaryTool(
         parameters = plotSummaryParameters()
     )
 
-    override suspend fun execute(arguments: JsonObject): String {
+    override suspend fun execute(arguments: JsonObject): ToolResult {
         val content = arguments["content_md"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-        if (content.isEmpty()) return "缺少梗概正文 content_md"
-        val book = getBook() ?: return "未找到当前书籍"
+        if (content.isEmpty()) return ToolResult.Failure("INVALID_ARGUMENT", "缺少梗概正文 content_md")
+        val book = getBook() ?: return ToolResult.Failure("SOURCE_MISSING", "未找到当前书籍")
         val currentChapter = readingScope.clampLastChapter(book.totalChapters) + 1
         val fromChapter = arguments["from_chapter"]?.jsonPrimitive?.intOrNull ?: 1
         val toChapter = arguments["to_chapter"]?.jsonPrimitive?.intOrNull ?: currentChapter
         if (fromChapter < 1 || toChapter < fromChapter) {
-            return "梗概章节范围无效：$fromChapter-$toChapter"
+            return ToolResult.Failure("INVALID_ARGUMENT", "梗概章节范围无效：$fromChapter-$toChapter")
         }
         if (toChapter > currentChapter) {
-            return "梗概超出已读范围：用户只读到第 $currentChapter 章，不能保存到第 $toChapter 章。"
+            return ToolResult.Failure("OUT_OF_SCOPE", "梗概超出已读范围：用户只读到第 $currentChapter 章，不能保存到第 $toChapter 章。")
         }
         val defaultTitle = if (fromChapter == 1 && toChapter == currentChapter) {
             "剧情梗概 · 截至第 $toChapter 章"
@@ -783,7 +783,7 @@ private class SavePlotSummaryTool(
             .orEmpty().ifBlank { defaultTitle }
         val requestedId = arguments["note_id"]?.jsonPrimitive?.contentOrNull?.toLongOrNull()
         val requested = requestedId?.let { notes.getNote(it) }
-        if (requestedId != null && requested == null) return "未找到第 $requestedId 条笔记"
+        if (requestedId != null && requested == null) return ToolResult.Failure("SOURCE_MISSING", "未找到第 $requestedId 条笔记")
         val asNew = arguments["as_new"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: false
         val latest = if (requested == null && !asNew) {
             notes.latestByKind(bookId, personaId, NoteRepository.KIND_PLOT_SUMMARY)
@@ -809,7 +809,7 @@ private class SavePlotSummaryTool(
                     sourceScopeChapterIndex = readingScope.maxChapterIndex,
                     sourceScopeCharOffset = readingScope.maxCharOffset
                 )
-                "第 $fromChapter-$toChapter 章剧情梗概已保存（编号 $noteId），可在书籍详情的「剧情梗概与笔记」中回顾。"
+                ToolResult.Success("第 $fromChapter-$toChapter 章剧情梗概已保存（编号 $noteId），可在书籍详情的「剧情梗概与笔记」中回顾。")
             }
             is NoteWriteTarget.Update -> {
                 val previousTo = target.note.relatedChapterIndex?.plus(1)
@@ -824,9 +824,9 @@ private class SavePlotSummaryTool(
                     sourceScopeCharOffset = readingScope.maxCharOffset
                 )
                 val oldRange = previousTo?.let { "原覆盖至第 $it 章 → " }.orEmpty()
-                "已更新第 ${target.note.id} 条剧情梗概（${oldRange}现第 $fromChapter-$toChapter 章，$before → ${content.take(MAX_NOTE_CHARS).length} 字）。"
+                ToolResult.Success("已更新第 ${target.note.id} 条剧情梗概（${oldRange}现第 $fromChapter-$toChapter 章，$before → ${content.take(MAX_NOTE_CHARS).length} 字）。")
             }
-            is NoteWriteTarget.Reject -> target.reason
+            is NoteWriteTarget.Reject -> ToolResult.Failure("WRITE_REJECTED", target.reason)
         }
     }
 }
@@ -962,26 +962,26 @@ internal class SearchBookTool(
         }
     )
 
-    override suspend fun execute(arguments: JsonObject): String = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+    override suspend fun execute(arguments: JsonObject): ToolResult = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
         kotlinx.coroutines.withTimeoutOrNull(15_000) { executeLocal(arguments) }
-            ?: "检索达到本地时间上限，正文覆盖未完成；请缩小章节范围或缩短查询后重试，不能据此断言没有匹配。"
+            ?: ToolResult.Failure("RESOURCE_LIMIT", "检索达到本地时间上限，正文覆盖未完成；请缩小章节范围或缩短查询后重试，不能据此断言没有匹配。")
     }
 
-    private suspend fun executeLocal(arguments: JsonObject): String {
+    private suspend fun executeLocal(arguments: JsonObject): ToolResult {
         val allowed = readingScope.intersect(currentScope())
         val query = (arguments["query"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
-        if (query.isEmpty()) return "缺少检索词 query"
-        if (query.length > 512) return "检索词 query 过长，最多 512 字符"
+        if (query.isEmpty()) return ToolResult.Failure("INVALID_ARGUMENT", "缺少检索词 query")
+        if (query.length > 512) return ToolResult.Failure("INVALID_ARGUMENT", "检索词 query 过长，最多 512 字符")
         val topK = ((arguments["top_k"] as? JsonPrimitive)?.intOrNull ?: 5).coerceIn(1, 8)
         val sort = when ((arguments["sort"] as? JsonPrimitive)?.contentOrNull ?: "chapter") {
             "chapter" -> com.mozhi.reader.core.retrieval.RetrievalSort.CHAPTER
             "relevance" -> com.mozhi.reader.core.retrieval.RetrievalSort.RELEVANCE
-            else -> return "sort 无效，只支持 chapter 或 relevance"
+            else -> return ToolResult.Failure("INVALID_ARGUMENT", "sort 无效，只支持 chapter 或 relevance")
         }
-        val book = getBook() ?: return "未找到当前书籍"
-        if (book.removedAt > 0L) return "本书正文已移除，当前仅保留个人记录，不能检索原文。"
+        val book = getBook() ?: return ToolResult.Failure("SOURCE_MISSING", "未找到当前书籍")
+        if (book.removedAt > 0L) return ToolResult.Failure("SOURCE_MISSING", "本书正文已移除，当前仅保留个人记录，不能检索原文。")
         val range = try { parseChapterSearchBounds(arguments).resolve(book.totalChapters, allowed) }
-            catch (error: IllegalArgumentException) { return error.message ?: "章节范围无效" }
+            catch (error: IllegalArgumentException) { return ToolResult.Failure("INVALID_ARGUMENT", error.message ?: "章节范围无效") }
         val scope = range.scope
         val maxChapterIndex = scope.clampLastChapter(book.totalChapters)
         val revision = sourceRevision?.invoke()
@@ -1004,10 +1004,10 @@ internal class SearchBookTool(
             emptySet()
         }
         val hasIndexInRange = indexedChapters.any { it in range.firstIndex..maxChapterIndex }
-        var scheduleFailure = false
+        var scheduleFailure: Exception? = null
         if (allowVectorIndex && indexFailure == null && !hasIndexInRange && canRequestIndex) {
             try { requestIndex() } catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { scheduleFailure = true }
+            catch (error: Exception) { scheduleFailure = error }
         }
         val pipeline = RetrievalPipeline(
             vectorRecall = RetrievalRecall { request ->
@@ -1058,7 +1058,7 @@ internal class SearchBookTool(
                 vectorFailure is VectorIndexQueryException -> add("本地向量索引查询失败：${vectorFailure.readableMessage()}；已切换到本地 BM25 关键词检索")
                 vectorFailure != null -> add("查询向量生成失败：${vectorFailure.message ?: "embedding 失败"}；本地索引已保留，已自动切换到本地 BM25 关键词检索")
                 !hasIndexInRange && !canRequestIndex -> add("当前范围没有向量索引，本次使用本地 BM25 关键词检索；未新建索引")
-                !hasIndexInRange -> add(if (scheduleFailure) "向量索引任务未能启动；已自动尝试本地 BM25 关键词检索"
+                !hasIndexInRange -> add(if (scheduleFailure != null) "向量索引任务未能启动；已自动尝试本地 BM25 关键词检索"
                     else "本书向量索引正在后台建立；已自动尝试本地 BM25 关键词检索")
             }
             if (!corpus.complete) {
@@ -1074,9 +1074,9 @@ internal class SearchBookTool(
             if (result.rerankFailure != null) add("重排暂不可用，已回退到 RRF 融合排序")
         }
         val degraded = result.vectorFailure != null || result.lexicalFailure != null || !corpus.complete
-        if (!currentScope().contains(scope)) return "阅读范围已缩小，本轮检索结果已丢弃，请重新查询。"
-        if (getBook()?.removedAt != 0L || sourceRevision?.invoke() != revision) return "正文已变化或移除，本轮检索结果已丢弃，请重新查询。"
-        return buildString {
+        if (!currentScope().contains(scope)) return ToolResult.Failure("SCOPE_CHANGED", "阅读范围已缩小，本轮检索结果已丢弃，请重新查询。")
+        if (getBook()?.removedAt != 0L || sourceRevision?.invoke() != revision) return ToolResult.Failure("CONTENT_CHANGED", "正文已变化或移除，本轮检索结果已丢弃，请重新查询。")
+        val content = buildString {
             notes.forEach { append(it).append("。\n") }
             if (result.hits.isEmpty()) {
                 append(if (degraded) "降级检索没有候选。" else "正常检索但没有候选。")
@@ -1100,6 +1100,19 @@ internal class SearchBookTool(
                 append("。窗口内其余文字仅为补充上下文，并非直接命中。\n")
                 append(hit.text).append('\n')
             }
+        }
+        val diagnostics = corpus.diagnostics + listOfNotNull(
+            indexFailure?.let { ToolDiagnostic("INDEX_UNAVAILABLE", it) },
+            result.vectorFailure?.takeUnless { it === indexFailure }?.let { ToolDiagnostic("VECTOR_RECALL_FAILED", it) },
+            result.lexicalFailure?.let { ToolDiagnostic("LEXICAL_RECALL_FAILED", it) },
+            result.rerankFailure?.let { ToolDiagnostic("RERANK_FAILED", it) },
+            scheduleFailure?.let { ToolDiagnostic("INDEX_SCHEDULE_FAILED", it) }
+        )
+        return if (result.hits.isEmpty() && (!corpus.complete || result.lexicalFailure != null)) {
+            ToolResult.Failure(if (corpus.resourceLimited) "RESOURCE_LIMIT" else "SOURCE_UNAVAILABLE", content,
+                result.lexicalFailure ?: corpus.diagnostics.firstOrNull()?.cause)
+        } else {
+            ToolResult.Success(content, partial = degraded, diagnostics = diagnostics)
         }
     }
 }
@@ -1205,15 +1218,15 @@ internal class RecallMemoryTool(
         }
     )
 
-    override suspend fun execute(arguments: JsonObject): String {
+    override suspend fun execute(arguments: JsonObject): ToolResult {
         val query = arguments["query"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-        if (query.isEmpty()) return "缺少检索词 query"
+        if (query.isEmpty()) return ToolResult.Failure("INVALID_ARGUMENT", "缺少检索词 query")
         val vector = try {
             embedQuery(query)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
-            return "记忆检索不可用：${error.message ?: "embedding 失败"}"
+            return ToolResult.Failure("EMBEDDING_FAILED", "记忆检索不可用：${error.message ?: "embedding 失败"}", error)
         }
         val hits = try {
             VectorQueries.searchMemories(
@@ -1224,11 +1237,11 @@ internal class RecallMemoryTool(
             throw cancelled
         } catch (error: Exception) {
             // 记忆是增益项：本地向量库查不了就说清楚，不要把异常抛回 Agent 循环。
-            return "记忆检索不可用：${error.message ?: error.javaClass.simpleName}"
+            return ToolResult.Failure("MEMORY_QUERY_FAILED", "记忆检索不可用：${error.message ?: error.javaClass.simpleName}", error)
         }
-        if (hits.isEmpty()) return "还没有与此相关的长期记忆。"
-        return "相关记忆（按相关度排序）：\n" +
-            hits.joinToString("\n") { "- ${it.get().summary}" }
+        if (hits.isEmpty()) return ToolResult.Success("还没有与此相关的长期记忆。")
+        return ToolResult.Success("相关记忆（按相关度排序）：\n" +
+            hits.joinToString("\n") { "- ${it.get().summary}" })
     }
 
     private companion object {

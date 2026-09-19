@@ -7,6 +7,8 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,10 +16,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.AutoStories
@@ -27,6 +32,7 @@ import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.InsertChartOutlined
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -40,8 +46,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -68,21 +77,21 @@ import com.mozhi.reader.feature.reader.CompanionChatScreen
 import com.mozhi.reader.feature.reader.ReaderCompanionViewModel
 import com.mozhi.reader.feature.reader.ReaderLocateRequest
 import com.mozhi.reader.feature.reader.ReaderScreen
-import com.mozhi.reader.feature.settings.AiServiceScreen
-import com.mozhi.reader.feature.settings.AiAndCompanionSettingsScreen
 import com.mozhi.reader.feature.settings.AboutSettingsScreen
-import com.mozhi.reader.feature.settings.DataSettingsScreen
-import com.mozhi.reader.feature.settings.ReadingAppearanceSettingsScreen
+import com.mozhi.reader.feature.settings.AiAndCompanionSettingsScreen
+import com.mozhi.reader.feature.settings.AiServiceScreen
+import com.mozhi.reader.feature.settings.AnnotationPromptSettingsScreen
 import com.mozhi.reader.feature.settings.ApiLogScreen
 import com.mozhi.reader.feature.settings.AppUpdatePrompt
-import com.mozhi.reader.feature.settings.ImageGenSettingsScreen
+import com.mozhi.reader.feature.settings.BackupSettingsScreen
+import com.mozhi.reader.feature.settings.DataSettingsScreen
 import com.mozhi.reader.feature.settings.FontLibraryScreen
+import com.mozhi.reader.feature.settings.GlobalPresetSettingsScreen
+import com.mozhi.reader.feature.settings.ImageGenSettingsScreen
 import com.mozhi.reader.feature.settings.ImageLibraryScreen
 import com.mozhi.reader.feature.settings.ProactiveAnnotationSettingsScreen
-import com.mozhi.reader.feature.settings.AnnotationPromptSettingsScreen
-import com.mozhi.reader.feature.settings.GlobalPresetSettingsScreen
-import com.mozhi.reader.feature.settings.BackupSettingsScreen
 import com.mozhi.reader.feature.settings.ProviderDetailScreen
+import com.mozhi.reader.feature.settings.ReadingAppearanceSettingsScreen
 import com.mozhi.reader.feature.settings.SettingsScreen
 import com.mozhi.reader.feature.settings.SettingsViewModel
 import com.mozhi.reader.feature.settings.SpeechCacheScreen
@@ -95,8 +104,13 @@ import com.mozhi.reader.ui.components.BlurredGlassSurface
 import com.mozhi.reader.ui.components.MoReadBackdrop
 import com.mozhi.reader.ui.components.MoReadBoundedContent
 import com.mozhi.reader.ui.theme.MoReadTokens
+import com.mozhi.reader.ui.theme.NavStyle
+import com.mozhi.reader.ui.theme.ReaderAppearanceScope
+import com.mozhi.reader.ui.theme.isFlatSurface
 import com.mozhi.reader.ui.theme.navSelectedColor
+import com.mozhi.reader.ui.theme.navStyle
 import com.mozhi.reader.ui.theme.onNavSelectedColor
+import com.mozhi.reader.ui.theme.sectionDivider
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
@@ -271,7 +285,7 @@ fun MoReadApp(
                     // Keep a book's settings warm when revisiting from the same detail page.
                     val owner = remember(entry) { navController.previousBackStackEntry ?: entry }
                     ProactiveAnnotationSettingsScreen(
-                        bookId = entry.arguments?.getString("bookId")?.toLongOrNull()
+                        bookId = entry.bookIdOrNull()
                             ?: return@pushComposable,
                         onBack = navController::popBackStack,
                         viewModel = hiltViewModel<SettingsViewModel>(owner)
@@ -364,7 +378,7 @@ fun MoReadApp(
                     )
                 ) { entry ->
                     BookDetailScreen(
-                        bookId = entry.arguments?.getString("bookId")?.toLongOrNull()
+                        bookId = entry.bookIdOrNull()
                             ?: return@pushComposable,
                         initialAction = entry.arguments?.getString("action"),
                         onBack = navController::popBackStack,
@@ -437,29 +451,31 @@ fun MoReadApp(
                     val locateAnchor = entry.savedStateHandle
                         .getStateFlow<String?>(LOCATE_ANCHOR_KEY, null)
                         .collectAsStateWithLifecycle()
-                    ReaderScreen(
-                        bookId = entry.arguments?.getString("bookId")?.toLongOrNull()
-                            ?: return@pushComposable,
-                        onBack = navController::popBackStack,
-                        onOpenCompanionChat = { bookId ->
-                            navController.navigate("companion-chat/$bookId")
-                        },
-                        onOpenListenPlayer = { bookId -> navController.navigate("listen/$bookId") },
-                        pendingLocate = locateChapter.value?.let { chapter ->
-                            ReaderLocateRequest(
-                                chapterIndex = chapter,
-                                startCharOffset = locateStart.value ?: 0,
-                                endCharOffset = locateEnd.value ?: 0,
-                                sourceAnchorJson = locateAnchor.value.orEmpty()
-                            )
-                        },
-                        onPendingLocateConsumed = {
-                            entry.savedStateHandle[LOCATE_CHAPTER_KEY] = null
-                            entry.savedStateHandle[LOCATE_START_KEY] = null
-                            entry.savedStateHandle[LOCATE_END_KEY] = null
-                            entry.savedStateHandle[LOCATE_ANCHOR_KEY] = null
-                        }
-                    )
+                    val readerBookId = entry.bookIdOrNull() ?: return@pushComposable
+                    ReaderAppearanceScope {
+                        ReaderScreen(
+                            bookId = readerBookId,
+                            onBack = navController::popBackStack,
+                            onOpenCompanionChat = { bookId ->
+                                navController.navigate("companion-chat/$bookId")
+                            },
+                            onOpenListenPlayer = { bookId -> navController.navigate("listen/$bookId") },
+                            pendingLocate = locateChapter.value?.let { chapter ->
+                                ReaderLocateRequest(
+                                    chapterIndex = chapter,
+                                    startCharOffset = locateStart.value ?: 0,
+                                    endCharOffset = locateEnd.value ?: 0,
+                                    sourceAnchorJson = locateAnchor.value.orEmpty()
+                                )
+                            },
+                            onPendingLocateConsumed = {
+                                entry.savedStateHandle[LOCATE_CHAPTER_KEY] = null
+                                entry.savedStateHandle[LOCATE_START_KEY] = null
+                                entry.savedStateHandle[LOCATE_END_KEY] = null
+                                entry.savedStateHandle[LOCATE_ANCHOR_KEY] = null
+                            }
+                        )
+                    }
                 }
                 pushComposable(
                     route = "listen/{bookId}?source={source}",
@@ -470,7 +486,7 @@ fun MoReadApp(
                         }
                     )
                 ) { entry ->
-                    val bookId = entry.arguments?.getString("bookId")?.toLongOrNull()
+                    val bookId = entry.bookIdOrNull()
                         ?: return@pushComposable
                     ListenPlayerScreen(
                         bookId = bookId,
@@ -532,7 +548,7 @@ fun MoReadApp(
                     )
                 }
                 pushComposable("companion-chat/{bookId}") { entry ->
-                    val bookId = entry.arguments?.getString("bookId")?.toLongOrNull()
+                    val bookId = entry.bookIdOrNull()
                         ?: return@pushComposable
                     // The same reader session survives side-pane -> full-screen navigation.
                     // Standalone/deep-linked chat still owns a VM on its own entry.
@@ -544,20 +560,22 @@ fun MoReadApp(
                         }
                     }
                     val companionViewModel: ReaderCompanionViewModel = hiltViewModel(readerEntry ?: entry)
-                    CompanionChatScreen(
-                        bookId = bookId,
-                        companionViewModel = companionViewModel,
-                        onBack = navController::popBackStack,
-                        onLocateInBook = { chapterIndex, start, end, sourceAnchorJson ->
-                            navController.previousBackStackEntry?.savedStateHandle?.let { handle ->
-                                handle[LOCATE_START_KEY] = start
-                                handle[LOCATE_END_KEY] = end
-                                handle[LOCATE_ANCHOR_KEY] = sourceAnchorJson
-                                handle[LOCATE_CHAPTER_KEY] = chapterIndex
+                    ReaderAppearanceScope {
+                        CompanionChatScreen(
+                            bookId = bookId,
+                            companionViewModel = companionViewModel,
+                            onBack = navController::popBackStack,
+                            onLocateInBook = { chapterIndex, start, end, sourceAnchorJson ->
+                                navController.previousBackStackEntry?.savedStateHandle?.let { handle ->
+                                    handle[LOCATE_START_KEY] = start
+                                    handle[LOCATE_END_KEY] = end
+                                    handle[LOCATE_ANCHOR_KEY] = sourceAnchorJson
+                                    handle[LOCATE_CHAPTER_KEY] = chapterIndex
+                                }
+                                navController.popBackStack()
                             }
-                            navController.popBackStack()
-                        }
-                    )
+                        )
+                    }
                 }
                 pushComposable("library-companion") {
                     com.mozhi.reader.feature.companion.LibraryCompanionScreen(
@@ -648,13 +666,23 @@ internal fun MoReadNavigationDock(
  * 低成本玻璃材质，避免整页大量离屏合成。
  */
 @Composable
-private fun AdaptiveNavDock(
+internal fun AdaptiveNavDock(
     hazeState: HazeState,
     vertical: Boolean,
     modifier: Modifier = Modifier,
     selectedRoute: String?,
     onSelect: (RootDestination) -> Unit
 ) {
+    // 通栏样式只在手机宽度下成立；平板侧栏仍是竖向悬浮舱。
+    if (!vertical && navStyle() == NavStyle.BAR) {
+        FullWidthNavBar(
+            hazeState = hazeState,
+            modifier = modifier,
+            selectedRoute = selectedRoute,
+            onSelect = onSelect
+        )
+        return
+    }
     Box(
         modifier = if (vertical) {
             modifier.padding(start = 14.dp)
@@ -769,5 +797,127 @@ private fun NavDockItem(
                 )
             }
         }
+    }
+}
+
+/**
+ * 通栏导航条：贴底通宽、图标在上标签在下、选中态是一枚指示胶囊（MD3 NavigationBar 语义）。
+ * 与悬浮舱是同一组目的地、同一套选中色，只是布局与贴边方式不同。
+ */
+@Composable
+private fun FullWidthNavBar(
+    hazeState: HazeState,
+    modifier: Modifier = Modifier,
+    selectedRoute: String?,
+    onSelect: (RootDestination) -> Unit
+) {
+    val items: @Composable () -> Unit = {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .selectableGroup()
+                .windowInsetsPadding(
+                    stableNavigationInsets().only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom)
+                )
+                .heightIn(min = 80.dp)
+                .padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            RootDestination.entries.forEach { item ->
+                NavBarItem(
+                    item = item,
+                    modifier = Modifier.weight(1f),
+                    selected = selectedRoute == item.route,
+                    onClick = { onSelect(item) }
+                )
+            }
+        }
+    }
+    if (isFlatSurface()) {
+        Box(
+            modifier = modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surfaceContainer)
+        ) {
+            HorizontalDivider(color = sectionDivider())
+            items()
+        }
+    } else {
+        BlurredGlassSurface(
+            hazeState = hazeState,
+            modifier = modifier.fillMaxWidth(),
+            shape = RectangleShape,
+            tint = MaterialTheme.colorScheme.surface,
+            shadowElevation = 0.dp
+        ) { items() }
+    }
+}
+
+@Composable
+private fun NavBarItem(
+    item: RootDestination,
+    modifier: Modifier = Modifier,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    // 扁平质感下指示胶囊用淡底 + 深字，与分段控件同一套口径；玻璃质感下维持实色填充。
+    val flat = isFlatSurface()
+    val indicator by animateColorAsState(
+        targetValue = when {
+            !selected -> Color.Transparent
+            flat -> MaterialTheme.colorScheme.primaryContainer
+            else -> navSelectedColor()
+        },
+        animationSpec = tween(durationMillis = 240),
+        label = "nav-bar-indicator"
+    )
+    val iconColor by animateColorAsState(
+        targetValue = when {
+            !selected -> MaterialTheme.colorScheme.onSurfaceVariant
+            flat -> MaterialTheme.colorScheme.onPrimaryContainer
+            else -> onNavSelectedColor()
+        },
+        animationSpec = tween(durationMillis = 220),
+        label = "nav-bar-icon"
+    )
+    val labelColor by animateColorAsState(
+        targetValue = if (selected) {
+            MaterialTheme.colorScheme.onSurface
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        },
+        animationSpec = tween(durationMillis = 220),
+        label = "nav-bar-label"
+    )
+    Column(
+        modifier = modifier
+            .clip(MoReadTokens.CapsuleShape)
+            .selectable(selected = selected, role = Role.Tab, onClick = onClick)
+            .heightIn(min = 64.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .size(width = 64.dp, height = 32.dp)
+                .clip(MoReadTokens.CapsuleShape)
+                .background(indicator),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = if (selected) item.selectedIcon else item.icon,
+                contentDescription = null,
+                tint = iconColor,
+                modifier = Modifier.size(22.dp)
+            )
+        }
+        Text(
+            text = item.label,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            color = labelColor,
+            modifier = Modifier.padding(top = 4.dp)
+        )
     }
 }

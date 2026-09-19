@@ -37,11 +37,12 @@ import io.mockk.mockk
 import io.mockk.spyk
 import io.mockk.verify
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.job
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
@@ -283,7 +284,7 @@ class ReaderViewModelPersistenceTest {
                     reader.viewModel.resolveIllustrationRange(illustration.copy(textAnchorJson = ""))
                 )
             } finally {
-                mediaViewModel.viewModelScope.cancel()
+                mediaViewModel.viewModelScope.coroutineContext.job.cancelAndJoin()
             }
         }
     }
@@ -303,7 +304,7 @@ class ReaderViewModelPersistenceTest {
             reader.viewModel.setReaderVisible(true)
             verify(exactly = 2) { reader.annotationScheduler.onChapterEntered(1L, 0) }
         } finally {
-            reader.viewModel.viewModelScope.cancel()
+            reader.viewModel.viewModelScope.coroutineContext.job.cancelAndJoin()
             Dispatchers.resetMain()
         }
     }
@@ -316,7 +317,8 @@ class ReaderViewModelPersistenceTest {
             while (reader.progress.tryReceive().isSuccess) { /* Discard progress from opening the fixture. */ }
             test(reader)
         } finally {
-            reader.viewModel.viewModelScope.cancel()
+            // Combined flows must finish cancelling their children before Main is reset.
+            reader.viewModel.viewModelScope.coroutineContext.job.cancelAndJoin()
             Dispatchers.resetMain()
         }
     }

@@ -81,6 +81,21 @@ class EpubBoxLayoutBackendTest {
         ).pages.flatMap(TextPage::lines)
 
         assertTrue(lines.none { it.text.startsWith("，") })
+        assertEquals(listOf("天地", "玄，黄", "宇"), lines.map { it.text })
+        assertTrue(lines.flatMap { it.columns }.all { it.end <= 30.01f })
+    }
+
+    @Test
+    fun `nested quotes and paired punctuation stay inside justified lines`() {
+        for (body in listOf("天地玄黄！？”后文继续", "天地玄（“黄宇”）洪荒", "天地玄黄……后文继续", "天地玄黄——后文继续")) {
+            val lines = typeset(body, listOf(block(0, 0, body.length)),
+                typesetSpec = spec.copy(visibleWidth = 60f, justifyContent = true)).pages.flatMap(TextPage::lines)
+            assertEquals(body, lines.joinToString("") { it.text })
+            assertTrue(lines.none { it.text.first() in "，。！？）”’…—" })
+            assertTrue(lines.none { it.text.last() in "（“‘" })
+            assertTrue(lines.flatMap { it.columns }.all { it.end <= 60.01f })
+            assertEquals(body.length, lines.sumOf { it.charLength })
+        }
     }
 
     @Test

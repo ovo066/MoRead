@@ -1,5 +1,6 @@
 package com.mozhi.reader.feature.listen
 
+import com.mozhi.reader.ui.bookIdOrNull
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -40,7 +41,7 @@ class AudiobookRoleViewModel @Inject constructor(
     private val mediaService: AiMediaGenerationService,
     voiceRepository: TtsVoiceRepository
 ) : ViewModel() {
-    val bookId = savedStateHandle.get<String>("bookId")?.toLongOrNull() ?: 0L
+    val bookId = savedStateHandle.bookIdOrNull() ?: 0L
     private val working = MutableStateFlow(false)
     private val message = MutableStateFlow<String?>(null)
     private val previewPath = MutableStateFlow<String?>(null)

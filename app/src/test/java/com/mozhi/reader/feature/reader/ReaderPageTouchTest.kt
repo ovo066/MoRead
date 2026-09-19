@@ -30,7 +30,7 @@ class ReaderPageTouchTest {
     private val progress = mutableListOf<Float>()
     private lateinit var driver: PageTurnDriver
 
-    private fun mount(selection: SelectionGestureHooks? = null) {
+    private fun mount(selection: SelectionGestureHooks? = null, image: ((Offset) -> Boolean)? = null) {
         compose.setContent {
             val scope = rememberCoroutineScope()
             driver = remember { PageTurnDriver(scope, object : PageTurnDriver.Callbacks {
@@ -41,7 +41,7 @@ class ReaderPageTouchTest {
                 override fun onTurnStarted(direction: PageTurnDirection) { starts++ }
             }).apply { mode = PageTurnDriver.Mode.INSTANT } }
             Box(Modifier.size(300.dp, 400.dp).testTag("page").readerPageTouch(
-                enabled = true, driver = driver, selection = selection,
+                enabled = true, driver = driver, selection = selection, onImageLongPress = image,
                 onBookmarkPull = { progress += it }, onAddBookmark = { bookmarks++ }
             ) { _, _ -> taps++ })
         }
@@ -180,6 +180,33 @@ class ReaderPageTouchTest {
             assertEquals(0, turns)
             assertEquals(0, taps)
         }
+    }
+
+    @Test fun imageLongPressConsumesReleaseWithoutSelectingOrTurning() {
+        val selection = Selection(active = false)
+        var images = 0
+        mount(selection, image = { images++; true })
+        compose.onNodeWithTag("page").performTouchInput { down(Offset(150f, 150f)) }
+        compose.mainClock.advanceTimeBy(700)
+        compose.onNodeWithTag("page").performTouchInput {
+            moveTo(Offset(20f, 150f), delayMillis = 100)
+            up()
+        }
+        compose.runOnIdle {
+            assertEquals(1, images)
+            assertEquals(0, selection.begins)
+            assertEquals(0, turns); assertEquals(0, taps); assertEquals(0, bookmarks)
+            assertFalse(driver.isRunning)
+        }
+    }
+
+    @Test fun missingImageFallsBackToOrdinaryTextSelection() {
+        val selection = Selection(active = false)
+        mount(selection, image = { false })
+        compose.onNodeWithTag("page").performTouchInput { down(Offset(150f, 150f)) }
+        compose.mainClock.advanceTimeBy(700)
+        compose.onNodeWithTag("page").performTouchInput { up() }
+        compose.runOnIdle { assertEquals(1, selection.begins); assertEquals(0, turns); assertEquals(0, taps) }
     }
 
     private fun assertCancelled() = compose.runOnIdle {

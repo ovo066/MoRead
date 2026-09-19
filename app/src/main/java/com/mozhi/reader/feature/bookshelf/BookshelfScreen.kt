@@ -43,6 +43,7 @@ import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items as listItems
 import androidx.compose.foundation.shape.CircleShape
+import com.mozhi.reader.ui.theme.moReadMetrics
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
@@ -673,7 +674,7 @@ private fun ImportMethodRow(
 ) {
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(moReadMetrics().radiusFor(20)),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -1034,7 +1035,7 @@ private fun ReadingNowCard(
 
     FrostedSurface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(28.dp),
+        shape = RoundedCornerShape(moReadMetrics().radiusFor(28)),
         shadowElevation = 6.dp
     ) {
         Box {
@@ -1042,7 +1043,7 @@ private fun ReadingNowCard(
             Canvas(
                 modifier = Modifier
                     .matchParentSize()
-                    .clip(RoundedCornerShape(28.dp))
+                    .clip(RoundedCornerShape(moReadMetrics().radiusFor(28)))
             ) {
                 drawCircle(
                     brush = Brush.radialGradient(
@@ -1063,7 +1064,7 @@ private fun ReadingNowCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Surface(
-                        shape = RoundedCornerShape(20.dp),
+                        shape = RoundedCornerShape(moReadMetrics().radiusFor(20)),
                         color = MaterialTheme.colorScheme.secondaryContainer,
                         contentColor = MaterialTheme.colorScheme.onSecondaryContainer
                     ) {
@@ -1506,7 +1507,7 @@ private fun GridBookItem(
                 if (collectionDragState.activeDrop?.target == target) Modifier.border(
                     2.dp,
                     MaterialTheme.colorScheme.primary,
-                    RoundedCornerShape(12.dp)
+                    RoundedCornerShape(moReadMetrics().radiusFor(12))
                 ) else Modifier
             )
             .clickable(onClick = onOpen)
@@ -1605,7 +1606,7 @@ private fun ListBookItem(
                 if (collectionDragState.activeDrop?.target == target) Modifier.border(
                     2.dp,
                     MaterialTheme.colorScheme.primary,
-                    RoundedCornerShape(24.dp)
+                    RoundedCornerShape(moReadMetrics().radiusFor(24))
                 ) else Modifier
             )
             .clickable(onClick = onOpen)
@@ -1622,7 +1623,7 @@ private fun ListBookItem(
                 onLongPressOnly = onLongPress,
                 reorderActions = reorderActions
             ),
-        shape = RoundedCornerShape(24.dp),
+        shape = RoundedCornerShape(moReadMetrics().radiusFor(24)),
         shadowElevation = 4.dp
     ) {
         Row(
@@ -1716,7 +1717,7 @@ private fun BookCover(
     )
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(moReadMetrics().radiusFor(12)),
         color = coverColor(book.title),
         shadowElevation = 10.dp
     ) {
@@ -1779,7 +1780,7 @@ internal fun CompactBookArtwork(book: BookEntity, modifier: Modifier) {    val c
     }
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(moReadMetrics().radiusFor(12)),
         color = coverColor(book.title),
         shadowElevation = 7.dp
     ) {
@@ -1937,7 +1938,7 @@ private fun NoShelfResults(query: String, filter: ShelfFilter) {
 private fun EmptyBookshelf(onImport: () -> Unit) {
     FrostedSurface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(32.dp),
+        shape = RoundedCornerShape(moReadMetrics().radiusFor(32)),
         shadowElevation = 10.dp
     ) {
         Column(
@@ -1954,7 +1955,7 @@ private fun EmptyBookshelf(onImport: () -> Unit) {
                             translationX = -34f
                             translationY = 8f
                         },
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(moReadMetrics().radiusFor(14)),
                     color = MaterialTheme.colorScheme.secondaryContainer,
                     shadowElevation = 7.dp
                 ) {}
@@ -1967,7 +1968,7 @@ private fun EmptyBookshelf(onImport: () -> Unit) {
                             translationX = 34f
                             translationY = 10f
                         },
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(moReadMetrics().radiusFor(14)),
                     color = MaterialTheme.colorScheme.tertiaryContainer,
                     shadowElevation = 7.dp
                 ) {}
@@ -1975,7 +1976,7 @@ private fun EmptyBookshelf(onImport: () -> Unit) {
                     modifier = Modifier
                         .size(width = 82.dp, height = 120.dp)
                         .align(Alignment.Center),
-                    shape = RoundedCornerShape(16.dp),
+                    shape = RoundedCornerShape(moReadMetrics().radiusFor(16)),
                     color = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary,
                     shadowElevation = 12.dp
@@ -2025,7 +2026,7 @@ private fun ImportProgressOverlay() {
         contentAlignment = Alignment.Center
     ) {
         FrostedSurface(
-            shape = RoundedCornerShape(26.dp),
+            shape = RoundedCornerShape(moReadMetrics().radiusFor(26)),
             shadowElevation = 18.dp
         ) {
             Row(

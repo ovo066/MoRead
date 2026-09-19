@@ -51,9 +51,11 @@ class ReaderKnowledgeVisualTest {
         characters = BookCharactersSnapshot(VisibleBookCharacters(personEntry, guide)))
 
     private fun show(tab: Int = 1, dark: Boolean = false, input: () -> KnowledgeUiState = { state },
-        actions: ReaderKnowledgeActions = ReaderKnowledgeActions(), onDismiss: () -> Unit = {}) {
+        actions: ReaderKnowledgeActions = ReaderKnowledgeActions(), onDismiss: () -> Unit = {},
+        appearance: com.mozhi.reader.ui.theme.AppearanceSettings = com.mozhi.reader.ui.theme.AppearanceSettings()) {
         compose.setContent {
-            MoReadTheme {
+            MoReadTheme(appearance) {
+                com.mozhi.reader.ui.theme.ReaderAppearanceScope {
                 val palette = readerPalette(if (dark) ReaderSettings(theme = ReaderTheme.DARK) else ReaderSettings(), dark)
                 Box(Modifier.fillMaxSize().background(palette.background)) {
                     NavigationSheet(onDismiss, palette.glassStrong, palette.onBackground, palette.scrim) {
@@ -61,6 +63,7 @@ class ReaderKnowledgeVisualTest {
                         SideEffect { root = view.rootView }
                         ReaderKnowledgePages(input(), chapters, emptyList(), 1, palette, { _, _ -> }, onDismiss, actions, tab)
                     }
+                }
                 }
             }
         }
@@ -188,6 +191,35 @@ class ReaderKnowledgeVisualTest {
         assertEquals(contentsPosition, scroll("contents-list"), 0.001f)
         assertEquals(header, top("knowledge-tabs"), 0.5f)
         capture("navigation-sheet-scroll.png")
+    }
+
+    @Test fun expressiveFlatApplicationKeepsReaderSheetEdgesAndAnchorsStable() {
+        val live = mutableStateOf(state.copy(characters = BookCharactersSnapshot(VisibleBookCharacters(personEntry,
+            guide.copy(characters = (0 until 40).map { BookCharacter("人物$it", guide.characters.first().evidence) })))))
+        show(input = { live.value }, appearance = com.mozhi.reader.ui.theme.AppearanceSettings(
+            colorScheme = com.mozhi.reader.ui.theme.ColorSchemePreset.HAZE_BLUE,
+            surfaceStyle = com.mozhi.reader.ui.theme.SurfaceStyle.FLAT,
+            shapeStyle = com.mozhi.reader.ui.theme.ShapeStyle.EXPRESSIVE))
+        val sheetTop = top("navigation-viewport")
+        val tabsTop = top("knowledge-tabs")
+        listOf("大纲" to "outline-list", "人物" to "characters-list", "目录" to "contents-list").forEach { (tab, list) ->
+            selectTab(tab)
+            val target = compose.onNodeWithTag(list)
+            target.performScrollToIndex(0)
+            repeat(2) { target.performTouchInput { swipeDown(durationMillis = 120) } }
+            target.performScrollToIndex(39)
+            repeat(2) { target.performTouchInput { swipeUp(durationMillis = 120) } }
+            target.performScrollToIndex(12)
+            val anchor = scroll(list)
+            compose.runOnIdle {
+                live.value = live.value.copy(tasks = mapOf(0 to KnowledgeTaskState(active = true, progress = "生成中 2 / 3")))
+            }
+            assertEquals(anchor, scroll(list), 0.001f)
+            assertEquals(sheetTop, top("navigation-viewport"), 0.5f)
+            assertEquals(tabsTop, top("knowledge-tabs"), 0.5f)
+            assertEquals(root.height.toFloat(), compose.onNodeWithTag("navigation-viewport").fetchSemanticsNode().boundsInRoot.bottom, 1f)
+        }
+        capture("navigation-sheet-with-app-theme.png")
     }
 
     private fun selectTab(label: String) { compose.onNode(hasText(label) and hasClickAction()).performClick() }

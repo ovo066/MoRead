@@ -39,7 +39,7 @@ import com.mozhi.reader.ui.components.blockSheetDrag
 internal data class ReaderKnowledgeActions(
     val preview: (Int) -> Unit = {}, val cancel: (Int) -> Unit = {}, val delete: (Int) -> Unit = {},
     val locate: (ChapterKnowledgeEntity, KnowledgeFact) -> Unit = { _, _ -> },
-    val previewCharacters: () -> Unit = {}, val cancelCharacters: () -> Unit = {}, val deleteCharacters: () -> Unit = {},
+    val previewCharacters: (Boolean) -> Unit = {}, val cancelCharacters: () -> Unit = {}, val deleteCharacters: () -> Unit = {},
     val locateCharacter: (BookCharacterGuideEntity, CharacterEvidence) -> Unit = { _, _ -> }
 )
 
@@ -66,9 +66,32 @@ internal fun ReaderKnowledgeContentsSheet(
     ) }
     state.pendingCharacters?.let { plan -> AlertDialog(
         onDismissRequest = viewModel::dismissPreview,
-        title = { Text(if (plan.resuming) "继续提取全书人物？" else "提取全书人物？") },
-        text = { Text("${plan.bookTitle}\n整本书 · ${plan.chapterCount} 章 · ${plan.sourceCharacters} 字\n模型：${plan.modelLabel}\n\n将逐章发送正文给模型，包含尚未阅读的内容，资料可能涉及后续情节。全程最多 ${plan.maximumRequests} 次调用，按服务商计费。${if (plan.resuming) "\n已保存 ${plan.completedParts} 段进度，核对通过后会直接复用。" else ""}\n\n可以随时停止，完成后整份保存。") },
-        confirmButton = { TextButton(onClick = viewModel::generateCharacters) { Text(if (plan.resuming) "继续提取" else "提取全书") } },
+        title = { Text(when {
+            plan.resuming -> if (plan.progressBounded) "继续提取读过的人物？" else "继续提取全书人物？"
+            plan.progressBounded -> "提取读过的人物？"
+            else -> "提取全书人物？"
+        }) },
+        text = { Text(buildString {
+            append(plan.bookTitle).append('\n')
+            append(if (plan.progressBounded) "读到此处 · 前 ${plan.chapterCount} 章" else "整本书 · ${plan.chapterCount} 章")
+            append(" · ${plan.sourceCharacters} 字\n模型：${plan.modelLabel}\n\n")
+            append(if (plan.progressBounded) {
+                "只发送已经读过的正文，最后一章截到当前进度，资料不会剧透后续情节。"
+            } else {
+                "将逐章发送正文给模型，包含尚未阅读的内容，资料可能涉及后续情节。"
+            })
+            append("全程最多 ${plan.maximumRequests} 次调用，按服务商计费。")
+            append("已核对过的段落会直接复用，不再重复计费。")
+            if (plan.resuming) append("\n已保存 ${plan.completedParts} 段进度，核对通过后会直接复用。")
+            append("\n\n可以随时停止，完成后整份保存。")
+        }) },
+        confirmButton = { TextButton(onClick = viewModel::generateCharacters) {
+            Text(when {
+                plan.resuming -> "继续提取"
+                plan.progressBounded -> "提取到此处"
+                else -> "提取全书"
+            })
+        } },
         dismissButton = { TextButton(onClick = viewModel::dismissPreview) { Text("取消") } }
     ) }
 }
@@ -271,17 +294,46 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
     val listState = rememberLazyListState()
     val filtered = remember(people, query) { people.filter { it.name.contains(query.trim(), ignoreCase = true) } }
     val titles = remember(chapters) { chapters.associate { it.chapterIndex to it.title } }
+    // 默认「读到此处」：第一次点进来的人不该被未读情节剧透，全书要自己选。
+    // 已有资料时跟随它的范围（资料在加载完才到，所以把它算进 key，避免停在错误的档位）。
+    var progressBounded by rememberSaveable(state.bookId, saved?.guide?.progressBounded) {
+        mutableStateOf(saved?.guide?.progressBounded ?: true)
+    }
     Column(Modifier.fillMaxSize()) {
-        KnowledgeHeading("书中人物", if (saved == null) "扫描整本书，汇集人物与关系" else
-            "${people.size} 位人物 · 已扫描全书 ${saved.guide.scannedChapters} 章", palette) { information = true }
+        KnowledgeHeading("书中人物", when {
+            saved == null -> "扫描已读章节，汇集人物与关系"
+            saved.guide.progressBounded -> "${people.size} 位人物 · 读到第 ${saved.guide.scannedChapters} 章为止"
+            else -> "${people.size} 位人物 · 已扫描全书 ${saved.guide.scannedChapters} 章"
+        }, palette) { information = true }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp).height(44.dp)
+            .clip(RoundedCornerShape(14.dp)).background(palette.glass).padding(3.dp)
+            .selectableGroup().testTag("character-scope"), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+            listOf(true to "读到此处", false to "全书").forEach { (bounded, label) ->
+                val selected = bounded == progressBounded
+                val background by animateColorAsState(
+                    if (selected) palette.accentContainer else Color.Transparent, label = "character-scope-tab")
+                Row(Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(11.dp)).background(background)
+                    .selectable(selected, enabled = !busy, role = Role.RadioButton, onClick = { progressBounded = bounded }),
+                    horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                    Text(label, style = MaterialTheme.typography.labelLarge,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (selected) palette.accent else palette.muted)
+                }
+            }
+        }
         Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
-            FilledTonalButton(onClick = if (busy) actions.cancelCharacters else actions.previewCharacters,
+            FilledTonalButton(onClick = { if (busy) actions.cancelCharacters() else actions.previewCharacters(progressBounded) },
                 enabled = !state.loading && !state.preparingCharacters,
                 colors = ButtonDefaults.filledTonalButtonColors(containerColor = palette.accentContainer, contentColor = palette.accent)) {
                 Icon(if (busy) Icons.Outlined.Stop else Icons.Outlined.AutoAwesome, null, Modifier.size(16.dp))
                 Spacer(Modifier.width(6.dp))
-                Text(when { busy -> "停止提取"; state.preparingCharacters -> "准备中…"; state.characters.checkpointParts > 0 -> "继续提取";
-                    saved != null -> "更新全书人物"; else -> "提取全书人物" })
+                Text(when {
+                    busy -> "停止提取"
+                    state.preparingCharacters -> "准备中…"
+                    state.characters.checkpointParts > 0 -> "继续提取"
+                    saved != null -> if (progressBounded) "更新到当前进度" else "更新全书人物"
+                    else -> if (progressBounded) "提取读过的人物" else "提取全书人物"
+                })
             }
             Spacer(Modifier.weight(1f))
             if (saved != null || state.characters.checkpointParts > 0) IconButton(onClick = { deleting = true }, enabled = !busy) {
@@ -293,6 +345,7 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
                 busy -> task.progress + " · 可离开此页"
                 state.characters.checkpointParts > 0 -> "已保存 ${state.characters.checkpointParts} 段进度，可继续提取"
                 state.characters.outdated -> "正文已变化，请重新提取"
+                progressBounded -> "只扫描读过的正文 · 不会剧透后续情节"
                 else -> "覆盖未读章节 · 资料可能涉及后续情节"
             }, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall,
                 color = if (task?.error != null) MaterialTheme.colorScheme.error else palette.muted)
@@ -308,8 +361,8 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (filtered.isEmpty()) item(key = "empty") {
                 KnowledgeEmpty(if (query.isNotBlank()) "没有找到这个人物" else if (saved != null) "本书未提取到人物" else "人物，一处看清",
-                    if (query.isNotBlank()) "试试原文中的姓名或称呼。" else if (saved != null) "已扫描整本书，没有发现可核对的人物资料。" else
-                        "手动提取整本书的人物、身份与关系。完成后随时查看，也能回到原文。", palette)
+                    if (query.isNotBlank()) "试试原文中的姓名或称呼。" else if (saved != null) "这一轮扫描没有发现可核对的人物资料。" else
+                        "「读到此处」只看读过的章节，不会剧透；「全书」会扫描整本书。完成后随时查看，也能回到原文。", palette)
             }
             items(filtered, key = { it.name }, contentType = { "character" }) { person ->
                 var expanded by rememberSaveable(person.name) { mutableStateOf(false) }
@@ -339,7 +392,7 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
             }
         }
     }
-    if (information) KnowledgeInfoDialog("全书人物", "由 AI 逐章扫描整本书，包括还没读到的章节。资料可能涉及后续情节。\n\n每条资料保留原文依据；仅合并相同姓名，不擅自猜测别名，以免认错人物。长篇中优先保留人物最初的介绍和后续的重要事实。\n\n随时停止会保留已核对的进度，再次提取时可继续。更新期间仍能查看上次完成的资料。", { information = false })
+    if (information) KnowledgeInfoDialog("书中人物", "由 AI 逐章扫描正文，提取人物、身份与关系。\n\n「读到此处」只发送已经读过的内容，最后一章截到当前进度，资料不会剧透；「全书」会扫描整本书，包括还没读到的章节，资料可能涉及后续情节。\n\n每条资料保留原文依据；仅合并相同姓名，不擅自猜测别名，以免认错人物。长篇中优先保留人物最初的介绍和后续的重要事实。\n\n核对过的段落会留作缓存：读了几章之后再点「更新到当前进度」，只有新读的章节需要重新计费。随时停止会保留进度，再次提取时可继续，更新期间仍能查看上次完成的资料。", { information = false })
     if (deleting) ConfirmKnowledgeDelete("删除人物资料？", "删除这本书的人物资料及未完成的提取进度。", { deleting = false }) {
         deleting = false; actions.deleteCharacters()
     }

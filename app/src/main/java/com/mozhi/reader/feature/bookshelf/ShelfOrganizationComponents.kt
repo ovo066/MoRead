@@ -59,6 +59,7 @@ import com.mozhi.reader.core.database.entity.BookReadState
 import com.mozhi.reader.core.database.entity.BookTagEntity
 import com.mozhi.reader.core.database.entity.BookTagRefEntity
 import com.mozhi.reader.core.database.entity.ShelfGroupEntity
+import com.mozhi.reader.ui.components.shelfTagColor
 import com.mozhi.reader.ui.components.FrostedSurface
 import com.mozhi.reader.ui.components.MoReadMenuDivider
 import com.mozhi.reader.ui.components.MoReadMenuItem
@@ -152,7 +153,7 @@ internal fun ShelfQuickFilters(
                         Surface(
                             modifier = Modifier.size(7.dp),
                             shape = CircleShape,
-                            color = tagColor(tag.colorTag)
+                            color = shelfTagColor(tag.colorTag)
                         ) {}
                     }
                     Text(tag.name, style = MaterialTheme.typography.labelMedium)
@@ -389,12 +390,4 @@ internal fun ShelfGroupPickerSheet(
             Spacer(Modifier.height(12.dp))
         }
     }
-}
-
-private fun tagColor(tag: String): Color = when (tag) {
-    "琥珀" -> Color(0xFFD59B2D)
-    "青竹" -> Color(0xFF4E8B62)
-    "黛蓝" -> Color(0xFF4A6785)
-    "绯红" -> Color(0xFFA84D55)
-    else -> runCatching { Color(android.graphics.Color.parseColor(tag)) }.getOrDefault(Color.Gray)
 }

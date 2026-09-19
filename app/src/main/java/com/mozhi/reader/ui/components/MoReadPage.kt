@@ -41,6 +41,8 @@ import androidx.compose.ui.unit.dp
 import com.mozhi.reader.ui.MoReadLayoutPolicy
 import com.mozhi.reader.ui.rememberMoReadWindowWidth
 import com.mozhi.reader.ui.theme.MoReadTokens
+import com.mozhi.reader.ui.theme.moReadMetrics
+import com.mozhi.reader.ui.theme.sectionDivider
 import com.mozhi.reader.ui.theme.sectionHairline
 
 /** Center a page without constraining its surrounding backdrop or navigation overlays. */
@@ -62,7 +64,7 @@ fun MoReadBoundedContent(
  * 四档横向 padding、两种标题字号。从一个页面退到另一个页面，返回箭头会跳位置，标题会变大小。
  * 这是「不成熟」观感最直接的来源，也是唯一一处改一次就能全线受益的地方。
  *
- * 版式：顶部一条 [TOP_BAR_HEIGHT] 的固定栏（返回 + 紧凑标题 + 动作），大标题作为列表首项
+ * 版式：顶部一条固定栏（返回 + 紧凑标题 + 动作），大标题作为列表首项
  * 随内容滚走；滚过一定距离后紧凑标题淡入。两个标题不同时可见，所以顶栏永远只有一行信息。
  */
 @Composable
@@ -188,11 +190,11 @@ private fun MoReadTopBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(TOP_BAR_HEIGHT)
+                .height(moReadMetrics().topBarHeight)
                 .padding(horizontal = MoReadSpacingSmall),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = onBack, modifier = Modifier.size(TOUCH_TARGET)) {
+            IconButton(onClick = onBack, modifier = Modifier.size(moReadMetrics().touchTarget)) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
                     contentDescription = "返回"
@@ -217,7 +219,7 @@ private fun MoReadTopBar(
         // 紧凑标题露出后才画分隔线：页面停在顶部时顶栏与内容是连着的，不该有一道横杠。
         if (titleAlpha > 0f) {
             androidx.compose.material3.HorizontalDivider(
-                color = sectionHairline().copy(alpha = sectionHairline().alpha * titleAlpha)
+                color = sectionDivider().copy(alpha = sectionDivider().alpha * titleAlpha)
             )
         }
     }
@@ -240,8 +242,7 @@ private fun PageHeroTitle(title: String, subtitle: String?) {
 }
 
 private val MoReadSpacingSmall = 8.dp
-private val TOUCH_TARGET = 44.dp
-private val TOP_BAR_HEIGHT = 52.dp
+// 顶栏高与触达区随形状密度变化，取值见 MoReadMetrics。
 
 /** 大标题滚出多少像素后紧凑标题完全显现。约等于大标题自身的高度。 */
 internal const val TITLE_COLLAPSE_DISTANCE_PX = 56

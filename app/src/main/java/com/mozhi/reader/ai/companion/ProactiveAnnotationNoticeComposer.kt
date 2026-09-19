@@ -17,6 +17,16 @@ fun annotationNoticeEligible(autonomy: CompanionAutonomySettings, createdCount: 
 
 internal fun builtInAnnotationNotice(personaName: String, count: Int): String = "${personaName} 写了 $count 条段评"
 
+/**
+ * 额度用完是系统事实，不是角色弹幕：固定文案、绝不为它再调一次模型。
+ */
+fun dailyAnnotationBudgetNotice(dailyMax: Int): String =
+    if (dailyMax == com.mozhi.reader.core.datastore.ProactiveAnnotationLimits.UNLIMITED) {
+        "今日段评额度已用完，明天恢复"
+    } else {
+        "今日段评额度已用完（$dailyMax 条），明天恢复"
+    }
+
 /** Deliberately excludes book text, generated notes, history, memory and completion counts. */
 internal data class AnnotationReactionPersona(
     val name: String,

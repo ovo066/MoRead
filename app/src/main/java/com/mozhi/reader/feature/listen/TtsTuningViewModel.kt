@@ -1,5 +1,6 @@
 package com.mozhi.reader.feature.listen
 
+import com.mozhi.reader.ui.bookIdOrNull
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -28,7 +29,7 @@ class TtsTuningViewModel @Inject constructor(
     private val settingsStore: TtsSettingsStore,
     private val speechCacheStore: SpeechCacheStore
 ) : ViewModel() {
-    private val bookId = savedStateHandle.get<String>("bookId")?.toLongOrNull() ?: 0L
+    private val bookId = savedStateHandle.bookIdOrNull() ?: 0L
     private val cache = MutableStateFlow<SpeechCacheBookStats?>(null)
 
     val uiState = combine(settingsStore.settings, cache) { settings, bookCache ->

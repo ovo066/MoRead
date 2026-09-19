@@ -146,16 +146,16 @@ internal class ListChaptersTool(
         }
     )
 
-    override suspend fun execute(arguments: JsonObject): String {
-        val book = libraryRepository.getBook(bookId) ?: return "未找到当前书籍"
+    override suspend fun execute(arguments: JsonObject): ToolResult {
+        val book = libraryRepository.getBook(bookId) ?: return ToolResult.Failure("SOURCE_MISSING", "未找到当前书籍")
         val chapters = libraryRepository.getChapters(bookId)
         val toc = libraryRepository.getTocEntries(bookId)
         val from = arguments.int("from_chapter")
         val to = arguments.int("to_chapter")
-        if (from != null && from < 1) return "起始章节号必须从 1 开始"
-        if (to != null && from != null && to < from) return "章节范围无效：$from-$to"
+        if (from != null && from < 1) return ToolResult.Failure("INVALID_ARGUMENT", "起始章节号必须从 1 开始")
+        if (to != null && from != null && to < from) return ToolResult.Failure("INVALID_ARGUMENT", "章节范围无效：$from-$to")
         val level = arguments.text("level").lowercase().ifBlank { "all" }
-        if (level !in setOf("volume", "chapter", "all")) return "level 只能是 volume、chapter 或 all"
+        if (level !in setOf("volume", "chapter", "all")) return ToolResult.Failure("INVALID_ARGUMENT", "level 只能是 volume、chapter 或 all")
         return formatChapterOutline(book, chapters, toc, from, to, level, readingScope)
     }
 }
@@ -168,17 +168,17 @@ internal fun formatChapterOutline(
     toChapter: Int? = null,
     level: String = "all",
     readingScope: ReadingScope
-): String {
-    if (chapters.isEmpty()) return "《${book.title}》还没有可用章节目录。"
+): ToolResult {
+    if (chapters.isEmpty()) return ToolResult.Success("《${book.title}》还没有可用章节目录。")
     val readableLast = readingScope.clampLastChapter(chapters.last().chapterIndex + 1)
     val explicit = fromChapter != null || toChapter != null
     val lastChapterNumber = chapters.last().chapterIndex + 1
     val requestedFrom = (fromChapter ?: if (explicit) 1 else (book.lastReadChapterIndex - 20 + 1)).coerceAtLeast(1)
-    if (requestedFrom > lastChapterNumber) return "起始章节号 $requestedFrom 超出全书范围（共 $lastChapterNumber 章）。"
+    if (requestedFrom > lastChapterNumber) return ToolResult.Failure("OUT_OF_SCOPE", "起始章节号 $requestedFrom 超出全书范围（共 $lastChapterNumber 章）。")
     val requestedTo = (toChapter ?: if (explicit) lastChapterNumber else (book.lastReadChapterIndex + 20 + 1))
         .coerceIn(requestedFrom, lastChapterNumber)
     val visibleTo = minOf(requestedTo - 1, readableLast)
-    if (visibleTo < requestedFrom - 1) return "第 $requestedFrom 章超出当前已读范围。"
+    if (visibleTo < requestedFrom - 1) return ToolResult.Failure("OUT_OF_SCOPE", "第 $requestedFrom 章超出当前已读范围。")
     val visibleFrom = requestedFrom - 1
     val lines = mutableListOf<String>()
     lines += buildString {
@@ -213,7 +213,7 @@ internal fun formatChapterOutline(
     }
     val unread = (chapters.last().chapterIndex - readableLast).coerceAtLeast(0)
     if (!readingScope.isWholeBook && unread > 0) lines += "后面还有 $unread 章尚未读到，标题不予显示。"
-    return capChapterOutline(lines, requestedTo)
+    return ToolResult.Success(capChapterOutline(lines, requestedTo))
 }
 
 
@@ -284,17 +284,17 @@ internal class ListAnnotationsTool(
         }
     )
 
-    override suspend fun execute(arguments: JsonObject): String {
-        val book = libraryRepository.getBook(bookId) ?: return "未找到当前书籍"
+    override suspend fun execute(arguments: JsonObject): ToolResult {
+        val book = libraryRepository.getBook(bookId) ?: return ToolResult.Failure("SOURCE_MISSING", "未找到当前书籍")
         val current = book.lastReadChapterIndex + 1
         val visibleLast = readingScope.clampLastChapter(book.totalChapters) + 1
         val from = arguments.int("from_chapter") ?: current
         var to = arguments.int("to_chapter") ?: from
-        if (from < 1 || to < from) return "章节范围无效：$from-$to"
+        if (from < 1 || to < from) return ToolResult.Failure("INVALID_ARGUMENT", "章节范围无效：$from-$to")
         to = minOf(to, visibleLast)
-        if (from > to) return "第 $from 章超出当前已读范围。"
+        if (from > to) return ToolResult.Failure("OUT_OF_SCOPE", "第 $from 章超出当前已读范围。")
         val author = arguments.text("author").lowercase().ifBlank { "all" }
-        if (author !in setOf("user", "companion", "all")) return "author 只能是 user、companion 或 all"
+        if (author !in setOf("user", "companion", "all")) return ToolResult.Failure("INVALID_ARGUMENT", "author 只能是 user、companion 或 all")
         val query = arguments.text("query")
         val rows = annotations.getForChapterRange(bookId, from - 1, to - 1)
             .filter { row ->
@@ -302,7 +302,7 @@ internal class ListAnnotationsTool(
                     && (!strictSourceScope || readingScope.allowsChunk(row.chapterIndex, row.startCharOffset, row.endCharOffset))
             }
         val counts = annotations.getReplyCounts(rows.map { it.id })
-        return formatAnnotationList(book.title, from, to, rows, counts, author, query, currentPersonaId)
+        return ToolResult.Success(formatAnnotationList(book.title, from, to, rows, counts, author, query, currentPersonaId))
     }
 }
 
@@ -364,19 +364,19 @@ internal class ListNotesTool(
         }
     )
 
-    override suspend fun execute(arguments: JsonObject): String {
+    override suspend fun execute(arguments: JsonObject): ToolResult {
         val noteId = arguments["note_id"]?.jsonPrimitive?.contentOrNull?.toLongOrNull()
         if (noteId != null) {
-            val note = notes.getNote(noteId) ?: return "未找到第 $noteId 条笔记"
-            if (note.bookId != bookId) return "第 $noteId 条笔记不属于当前书籍"
-            if (!note.visibleIn(readingScope) || (strictSourceScope && !note.withinLibraryScope(readingScope))) return "第 $noteId 条笔记产生于当前阅读水位之外，防剧透模式下不可读取。"
+            val note = notes.getNote(noteId) ?: return ToolResult.Failure("SOURCE_MISSING", "未找到第 $noteId 条笔记")
+            if (note.bookId != bookId) return ToolResult.Failure("OUT_OF_SCOPE", "第 $noteId 条笔记不属于当前书籍")
+            if (!note.visibleIn(readingScope) || (strictSourceScope && !note.withinLibraryScope(readingScope))) return ToolResult.Failure("OUT_OF_SCOPE", "第 $noteId 条笔记产生于当前阅读水位之外，防剧透模式下不可读取。")
             val start = (arguments.int("start_char") ?: 0).coerceAtLeast(0)
             val maxChars = (arguments.int("max_chars") ?: DEFAULT_NOTE_READ_CHARS).coerceIn(1_000, MAX_NOTE_READ_CHARS)
-            return formatNoteContent(note, start, maxChars, currentPersonaId)
+            return ToolResult.Success(formatNoteContent(note, start, maxChars, currentPersonaId))
         }
         val kind = arguments.text("kind").lowercase().ifBlank { "all" }
-        if (kind !in setOf("note", "plot_summary", "all")) return "kind 只能是 note、plot_summary 或 all"
-        return formatNoteIndex(notes.getForBook(bookId).filter { it.visibleIn(readingScope) && (!strictSourceScope || it.withinLibraryScope(readingScope)) }, kind, currentPersonaId)
+        if (kind !in setOf("note", "plot_summary", "all")) return ToolResult.Failure("INVALID_ARGUMENT", "kind 只能是 note、plot_summary 或 all")
+        return ToolResult.Success(formatNoteIndex(notes.getForBook(bookId).filter { it.visibleIn(readingScope) && (!strictSourceScope || it.withinLibraryScope(readingScope)) }, kind, currentPersonaId))
     }
 }
 

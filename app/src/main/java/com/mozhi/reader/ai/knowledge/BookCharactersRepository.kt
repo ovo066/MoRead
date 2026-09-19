@@ -11,6 +11,7 @@ import com.mozhi.reader.core.database.entity.ChapterEntity
 import com.mozhi.reader.core.database.entity.ModelRole
 import com.mozhi.reader.core.library.BookContentMutation
 import com.mozhi.reader.core.library.LibraryRepository
+import com.mozhi.reader.core.retrieval.ReadingScope
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
@@ -27,14 +28,25 @@ import kotlinx.serialization.encodeToString
 class BookCharactersPlan internal constructor(
     val bookId: Long, val bookTitle: String, internal val revision: String,
     internal val chapters: List<ChapterEntity>, internal val model: ResolvedChatClient,
-    internal val resumeGenerationId: String?, val completedParts: Int
+    internal val resumeGenerationId: String?, val completedParts: Int,
+    /** true = 只扫到阅读进度为止（边界章只送已读部分），资料不含未读情节。 */
+    val progressBounded: Boolean = false,
+    internal val scope: ReadingScope = ReadingScope.WholeBook
 ) {
     val chapterCount: Int get() = chapters.size
-    val sourceCharacters: Long = chapters.sumOf { it.charCount.toLong() }
+    /** 本次实际要送出的字数：整章，或边界章只到已读位置。 */
+    internal fun scannedChars(chapter: ChapterEntity): Int = when {
+        !progressBounded -> chapter.charCount
+        chapter.chapterIndex < scope.maxChapterIndex -> chapter.charCount
+        else -> minOf(scope.maxCharOffset, chapter.charCount)
+    }
+    val sourceCharacters: Long = chapters.sumOf { scannedChars(it).toLong() }
     val modelLabel: String get() = model.modelName
     internal val modelKey = ChapterKnowledgeCodec.hash("${model.provider.id}|${model.provider.baseUrl}|${model.modelName}|${model.options}")
     // A paragraph-aware part is at least half PART_CHARS, except for the final part.
-    val maximumRequests: Long = chapters.sumOf { (it.charCount.toLong() + ChapterKnowledgeCodec.PART_CHARS / 2 - 1) / (ChapterKnowledgeCodec.PART_CHARS / 2) } * 2
+    val maximumRequests: Long = chapters.sumOf {
+        (scannedChars(it).toLong() + ChapterKnowledgeCodec.PART_CHARS / 2 - 1) / (ChapterKnowledgeCodec.PART_CHARS / 2)
+    } * 2
     val resuming: Boolean get() = resumeGenerationId != null
 }
 
@@ -59,19 +71,32 @@ class BookCharactersRepository @Inject constructor(
                 BookCharactersSnapshot(visible, guide != null && visible == null, resumable?.completedParts ?: 0)
             } } }
 
-    /** Metadata only: opening the page and its confirmation never uploads book text. */
-    suspend fun preview(bookId: Long): BookCharactersPlan = withContext(Dispatchers.IO) {
+    /**
+     * Metadata only: opening the page and its confirmation never uploads book text.
+     *
+     * [progressBounded] 把扫描范围收到 [ReadingScope.uptoProgress]（边界章只送已读部分）；
+     * 全书模式保留自己的明确同意，不继承阅读进度边界。
+     */
+    suspend fun preview(bookId: Long, progressBounded: Boolean = false): BookCharactersPlan = withContext(Dispatchers.IO) {
         val model = clients.forRole(ModelRole.CHEAP)
         BookContentMutation.withBook(bookId) {
             val book = library.getBook(bookId)?.takeIf { it.removedAt == 0L } ?: error("书籍正文已移除")
-            val chapters = library.getChapters(bookId).filter { it.charCount > 0 }.sortedBy { it.chapterIndex }
-            require(chapters.isNotEmpty()) { "这本书没有可提取的正文" }
+            val scope = if (progressBounded) ReadingScope.uptoProgress(book) else ReadingScope.WholeBook
+            val all = library.getChapters(bookId).filter { it.charCount > 0 }.sortedBy { it.chapterIndex }
+            val chapters = if (!progressBounded) all else all.filter { chapter ->
+                scope.allowsChapter(chapter.chapterIndex) &&
+                    (chapter.chapterIndex < scope.maxChapterIndex || scope.maxCharOffset > 0)
+            }
+            require(chapters.isNotEmpty()) {
+                if (progressBounded) "还没有读过的正文可以提取" else "这本书没有可提取的正文"
+            }
             val revision = library.bookTextRevision(bookId)
             val key = ChapterKnowledgeCodec.hash("${model.provider.id}|${model.provider.baseUrl}|${model.modelName}|${model.options}")
             val published = dao.getGuide(bookId)
             val checkpoint = dao.getCheckpoint(bookId)?.takeIf { it.generationId != published?.generationId &&
                 it.sourceRevision == revision && it.modelKey == key && it.promptVersion == BookCharactersCodec.PROMPT_VERSION }
-            BookCharactersPlan(bookId, book.title, revision, chapters, model, checkpoint?.generationId, checkpoint?.completedParts ?: 0)
+            BookCharactersPlan(bookId, book.title, revision, chapters, model, checkpoint?.generationId,
+                checkpoint?.completedParts ?: 0, progressBounded, scope)
         }
     }
 
@@ -84,7 +109,7 @@ class BookCharactersRepository @Inject constructor(
                     require(dao.getCheckpoint(plan.bookId)?.generationId == plan.resumeGenerationId) { "提取进度已变化，请重新确认" }
                     plan.resumeGenerationId
                 } else {
-                    dao.deleteParts(plan.bookId)
+                    // 不清缓存：重跑只换一代标识，正文与模型没变的段照旧复用。
                     UUID.randomUUID().toString()
                 }
             } }
@@ -93,15 +118,18 @@ class BookCharactersRepository @Inject constructor(
                 currentCoroutineContext().ensureActive()
                 val source = withContext(Dispatchers.IO) { BookContentMutation.withBook(plan.bookId) {
                     validateLocked(plan)
-                    library.readChapterTextStrict(plan.bookId, chapter)
+                    val text = library.readChapterTextStrict(plan.bookId, chapter)
+                    if (plan.progressBounded) plan.scope.readableText(chapter.chapterIndex, text) else text
                 } }
                 val cached = withContext(Dispatchers.IO) { dao.getChapterParts(plan.bookId, chapter.chapterIndex).associateBy { it.start } }
                 if (source.isNotBlank()) for (part in ChapterKnowledgeCodec.parts(source, enforceChapterLimit = false).filter { it.text.isNotBlank() }) {
                     currentCoroutineContext().ensureActive()
                     onProgress(chapterNumber, plan.chapterCount, chapter.title)
                     val hash = ChapterKnowledgeCodec.hash(part.text)
+                    // 分段缓存不绑定本次 generationId：正文与模型没变的段，跨次提取直接复用，
+                    // 「更新到当前进度」只为新读的章节付费。
                     val reused = cached[part.start]?.takeIf { row ->
-                        row.generationId == generationId && row.sourceRevision == plan.revision && row.modelKey == plan.modelKey &&
+                        row.sourceRevision == plan.revision && row.modelKey == plan.modelKey &&
                             row.promptVersion == BookCharactersCodec.PROMPT_VERSION && row.end == part.start + part.text.length && row.sourceHash == hash
                     }?.let { row -> cachedCharacters(row.contentJson, part) }
                     val people = reused ?: agent.extractCharacters(plan.model, plan.bookTitle, chapter.title, part) { validate(plan) }
@@ -116,12 +144,15 @@ class BookCharactersRepository @Inject constructor(
                 onProgress(chapterNumber + 1, plan.chapterCount, chapter.title)
             }
             val entry = BookCharacterGuideEntity(plan.bookId, generationId, plan.revision, plan.modelKey, plan.modelLabel,
-                BookCharactersCodec.PROMPT_VERSION, AiJson.encodeToString(accumulator.guide(plan.chapterCount, plan.sourceCharacters)), System.currentTimeMillis())
+                BookCharactersCodec.PROMPT_VERSION,
+                AiJson.encodeToString(accumulator.guide(plan.chapterCount, plan.sourceCharacters, plan.progressBounded)),
+                System.currentTimeMillis())
             return withContext(Dispatchers.IO) { BookContentMutation.withBook(plan.bookId) {
                 validateLocked(plan)
+                // 已核对的分段留着当缓存；清空是破坏性动作，只由调用方（删除资料）显式做一次。
                 database.withTransaction {
                     dao.saveGuide(entry)
-                    dao.deleteParts(plan.bookId)
+                    dao.stampParts(plan.bookId, generationId)
                 }
                 entry
             } }

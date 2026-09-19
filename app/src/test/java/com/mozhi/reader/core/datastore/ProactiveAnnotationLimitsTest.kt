@@ -109,4 +109,23 @@ class ProactiveAnnotationLimitsTest {
             ).summary()
         )
     }
+
+    @Test fun oldSettingsGainBalancedContextWithoutResettingQuotas() {
+        val limits = ProactiveAnnotationLimitsCodec.decodeGlobal("""{"maxPerChapter":5,"dailyMax":30}""")
+        assertEquals(5, limits.maxPerChapter)
+        assertEquals(30, limits.dailyMax)
+        assertEquals(16_000, limits.context.budgetChars)
+    }
+
+    @Test fun contextBudgetsRoundTripAndBookOverrideIsIndependent() {
+        val global = ProactiveAnnotationLimits(context = ProactiveAnnotationContextSettings(AnnotationContextMode.FULL))
+        val book = ProactiveAnnotationLimits(context = ProactiveAnnotationContextSettings(AnnotationContextMode.CUSTOM, 21_000))
+        assertEquals(global, ProactiveAnnotationLimitsCodec.decodeGlobal(ProactiveAnnotationLimitsCodec.encodeGlobal(global)))
+        val overrides = mapOf(7L to BookProactiveAnnotationLimits(true, book))
+        val restored = ProactiveAnnotationLimitsCodec.decodeBooks(ProactiveAnnotationLimitsCodec.encodeBooks(overrides))
+        assertEquals(21_000, resolveProactiveAnnotationLimits(global, restored[7L]).context.budgetChars)
+        assertEquals(32_000, resolveProactiveAnnotationLimits(global, restored[7L]!!.copy(enabled = false)).context.budgetChars)
+        assertEquals(4_000, book.copy(context = book.context.copy(customChars = -1)).normalized().context.budgetChars)
+        assertEquals(64_000, book.copy(context = book.context.copy(customChars = Int.MAX_VALUE)).normalized().context.budgetChars)
+    }
 }

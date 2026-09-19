@@ -32,6 +32,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -40,10 +41,17 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.mozhi.reader.ui.theme.ColorSchemePreset
+import com.mozhi.reader.ui.theme.LocalMoReadColors
 import com.mozhi.reader.ui.theme.MoReadRadius
 import com.mozhi.reader.ui.theme.MoReadTokens
+import com.mozhi.reader.ui.theme.SemanticHarmony
+import com.mozhi.reader.ui.theme.SemanticSlot
+import com.mozhi.reader.ui.theme.moReadMetrics
 import com.mozhi.reader.ui.theme.sectionCardColor
+import com.mozhi.reader.ui.theme.sectionDivider
 import com.mozhi.reader.ui.theme.sectionHairline
+import com.mozhi.reader.ui.theme.semanticColors
 
 /**
  * 分组卡：小节抬头 + 一张素面卡把同类设置收在一起。
@@ -62,6 +70,26 @@ fun MoReadSection(
     title: String? = null,
     icon: ImageVector? = null,
     footer: String? = null,
+    tone: SemanticSlot? = null,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    CompositionLocalProvider(LocalSectionTone provides tone) {
+        MoReadSectionBody(modifier, title, icon, footer, content)
+    }
+}
+
+/**
+ * 分组的语义色位：由 [MoReadSection] 下发给组内各行的图标底。
+ * 中性方案下四个语义色都是灰，因此指派与否在视觉上没有差别。
+ */
+internal val LocalSectionTone = staticCompositionLocalOf<SemanticSlot?> { null }
+
+@Composable
+private fun MoReadSectionBody(
+    modifier: Modifier,
+    title: String?,
+    icon: ImageVector?,
+    footer: String?,
     content: @Composable ColumnScope.() -> Unit
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
@@ -89,12 +117,13 @@ fun MoReadSection(
                 )
             }
         }
+        val cardShape = moReadMetrics().cardShape
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(MoReadRadius.CardShape)
+                .clip(cardShape)
                 .background(sectionCardColor())
-                .border(1.dp, sectionHairline(), MoReadRadius.CardShape),
+                .border(1.dp, sectionHairline(), cardShape),
             content = content
         )
         if (!footer.isNullOrBlank()) {
@@ -110,10 +139,10 @@ fun MoReadSection(
 
 /** 组内行间分隔线；缩进到与文字左缘对齐，让图标列成为一条连续的视觉轴。 */
 @Composable
-fun MoReadRowDivider(inset: androidx.compose.ui.unit.Dp = MoReadTokens.RowDividerInset) {
+fun MoReadRowDivider(inset: androidx.compose.ui.unit.Dp = MoReadTokens.RowDividerInset + moReadMetrics().iconTile - MoReadTokens.IconTile) {
     HorizontalDivider(
         modifier = Modifier.padding(start = inset),
-        color = sectionHairline()
+        color = sectionDivider()
     )
 }
 
@@ -130,27 +159,35 @@ fun MoReadRow(
     onClick: (() -> Unit)? = null,
     trailing: (@Composable RowScope.() -> Unit)? = null
 ) {
+    val metrics = moReadMetrics()
     Row(
         modifier = modifier
             .fillMaxWidth()
             .let { if (onClick != null) it.clickable(onClick = onClick) else it }
-            .defaultMinSize(minHeight = MoReadTokens.RowMinHeight)
+            .defaultMinSize(minHeight = metrics.rowMinHeight)
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (icon != null) {
+            // 图标底取所在分组的语义色；没指派时回落主色家族（= 历史外观）。
+            val appearance = LocalMoReadColors.current
+            val classic = appearance.colorScheme == ColorSchemePreset.NEUTRAL && appearance.semanticHarmony == SemanticHarmony.MULTI
+            val tone = LocalSectionTone.current?.takeUnless { classic }?.let { semanticColors()[it] }
             Box(
                 modifier = Modifier
-                    .size(MoReadTokens.IconTile)
-                    .clip(MoReadRadius.FieldShape)
-                    .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)),
+                    .size(metrics.iconTile)
+                    .clip(metrics.fieldShape)
+                    .background(
+                        tone?.container
+                            ?: MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                    ),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(MoReadTokens.IconGlyph)
+                    tint = tone?.onContainer ?: MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(metrics.iconGlyph)
                 )
             }
         }
@@ -330,7 +367,7 @@ fun MoReadDisclosureRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable(onClick = onToggle)
-                .defaultMinSize(minHeight = MoReadTokens.RowMinHeight)
+                .defaultMinSize(minHeight = moReadMetrics().rowMinHeight)
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {

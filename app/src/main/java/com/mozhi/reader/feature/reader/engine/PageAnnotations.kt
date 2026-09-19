@@ -1,7 +1,7 @@
 package com.mozhi.reader.feature.reader.engine
 
-/** 「评」marker 与锚点右边界的间距系数（× markerRadius）；渲染与点击热区必须共用。 */
-const val ANNOTATION_MARKER_GAP_RATIO = 0.72f
+/** 插图按钮与锚点右边界的间距系数；渲染与点击热区共用。段评小点不占位。 */
+const val INLINE_MARKER_GAP_RATIO = 0.72f
 
 /** Render-layer copy of a Room annotation, kept free of database dependencies for geometry tests. */
 data class ReaderAnnotationMark(
@@ -45,7 +45,8 @@ data class AnnotationHighlightRect(
 data class AnnotationMarker(
     val annotationIds: List<Long>,
     val centerX: Float,
-    val centerY: Float
+    val centerY: Float,
+    val radius: Float
 )
 
 data class IllustrationMarker(
@@ -61,6 +62,7 @@ data class InlineMarker(
     val illustrationIds: List<Long> = emptyList(),
     val centerX: Float,
     val centerY: Float,
+    val radius: Float,
     val occupiedWidth: Float
 )
 
@@ -80,6 +82,12 @@ data class PageInlineMarkerLayout(
 
     fun endFor(lineIndex: Int, columnIndex: Int, column: TextColumn): Float =
         startFor(lineIndex, columnIndex, column) + (column.end - column.start) * scaleFor(lineIndex)
+
+    /** 整个划线文字区域都是入口；不把小点热区扩张到未标注的后续文字。 */
+    fun annotationIdsAt(x: Float, y: Float): List<Long> = highlights
+        .filter { x >= it.left && x < it.right && y >= it.top && y < it.bottom }
+        .map(AnnotationHighlightRect::annotationId)
+        .distinct()
 }
 
 data class PageAnnotationGeometry(
@@ -88,8 +96,8 @@ data class PageAnnotationGeometry(
 )
 
 /**
- * Maps chapter UTF-16 ranges to laid-out cluster rectangles and inline comment markers.
- * marker 始终紧跟划线末尾，并由 [inlineMarkerLayout] 为后续文字预留槽位。
+ * Maps chapter UTF-16 ranges to existing text rectangles and comment dots.
+ * 小点画在末字符的下沿以内，不改变字距、行高、换行或分页。
  */
 fun TextPage.annotationGeometry(
     annotations: List<ReaderAnnotationMark>,
@@ -102,15 +110,14 @@ fun TextPage.annotationGeometry(
         highlights = layout.highlights,
         markers = layout.markers.mapNotNull { marker ->
             marker.annotationIds.takeIf { it.isNotEmpty() }?.let {
-                AnnotationMarker(it, marker.centerX, marker.centerY)
+                AnnotationMarker(it, marker.centerX, marker.centerY, marker.radius)
             }
         }
     )
 }
 
 /**
- * 选段插图的图片标记与批注「评」使用同一种末字符锚定语义。同行多张图合并成一个
- * 可点击标记，避免小图标互相覆盖。
+ * 选段插图保留末字符之后的占位按钮；同一锚点的多张图合并成一个可点击标记。
  */
 fun TextPage.illustrationMarkers(
     illustrations: List<ReaderIllustrationMark>,
@@ -137,7 +144,7 @@ fun TextPage.inlineMarkerLayout(
     annotations.forEach { annotation ->
         if (annotation.endCharOffset <= annotation.startCharOffset) return@forEach
         if (annotation.hasComment) {
-            markerAnchor(annotation.endCharOffset, InlineMarkerKind.ANNOTATION)?.let { anchor ->
+            markerAnchor(annotation.endCharOffset)?.let { anchor ->
                 requests.getOrPut(MarkerKey(anchor.lineIndex, anchor.columnIndex, MarkerKind.ANNOTATION)) {
                     mutableListOf()
                 }.add(annotation.id)
@@ -166,8 +173,16 @@ fun TextPage.inlineMarkerLayout(
             val line = lines[lineIndex]
             entries.forEach { entry ->
                 val anchor = line.columns[entry.key.columnIndex]
-                val isReservedSlot = anchor.inlineMarkerKind?.ordinal == entry.key.kind.ordinal
-                val centerX = if (isReservedSlot) {
+                val isComment = entry.key.kind == MarkerKind.ANNOTATION
+                val radius = if (isComment) {
+                    minOf(markerRadius * 0.3f, (anchor.end - anchor.start) / 2f,
+                        (line.lineBottom - line.lineTop) / 2f).coerceAtLeast(0f)
+                } else markerRadius
+                val isReservedSlot = anchor.inlineMarkerKind == InlineMarkerKind.ILLUSTRATION
+                val centerX = if (isComment) {
+                    // 末字以内的小点，不挤到下一个字，也不需要右侧留白。
+                    minOf(anchor.end, maxRight) - radius
+                } else if (isReservedSlot) {
                     (anchor.start + anchor.end) / 2f
                 } else {
                     (anchor.end + markerGap + markerRadius).coerceAtMost(maxRight - markerRadius)
@@ -178,8 +193,9 @@ fun TextPage.inlineMarkerLayout(
                     annotationIds = if (entry.key.kind == MarkerKind.ANNOTATION) entry.value.distinct() else emptyList(),
                     illustrationIds = if (entry.key.kind == MarkerKind.ILLUSTRATION) entry.value.distinct() else emptyList(),
                     centerX = centerX,
-                    centerY = (line.lineTop + line.lineBottom) / 2f,
-                    occupiedWidth = anchor.end - anchor.start
+                    centerY = if (isComment) line.lineBottom - radius else (line.lineTop + line.lineBottom) / 2f,
+                    radius = radius,
+                    occupiedWidth = if (isComment) 0f else anchor.end - anchor.start
                 )
             }
             shifts[lineIndex] = FloatArray(line.columns.size)
@@ -228,11 +244,13 @@ private data class MarkerKey(
 
 private data class MarkerAnchor(val lineIndex: Int, val columnIndex: Int)
 
-private fun TextPage.markerAnchor(endOffset: Int, kind: InlineMarkerKind): MarkerAnchor? {
-    lines.forEachIndexed { lineIndex, line ->
-        line.columns.forEachIndexed { columnIndex, column ->
-            if (column.inlineMarkerOffset == endOffset && column.inlineMarkerKind == kind) {
-                return MarkerAnchor(lineIndex, columnIndex)
+private fun TextPage.markerAnchor(endOffset: Int, kind: InlineMarkerKind? = null): MarkerAnchor? {
+    if (kind != null) {
+        lines.forEachIndexed { lineIndex, line ->
+            line.columns.forEachIndexed { columnIndex, column ->
+                if (column.inlineMarkerOffset == endOffset && column.inlineMarkerKind == kind) {
+                    return MarkerAnchor(lineIndex, columnIndex)
+                }
             }
         }
     }
@@ -243,6 +261,7 @@ private fun TextPage.markerAnchor(endOffset: Int, kind: InlineMarkerKind): Marke
         if (endOffset <= lineStart || endOffset > lineEnd) return@forEachIndexed
         var cursor = lineStart
         line.columns.forEachIndexed { columnIndex, column ->
+            if (column.sourceLength == 0) return@forEachIndexed
             cursor += column.sourceLength
             if (endOffset <= cursor) return MarkerAnchor(lineIndex, columnIndex)
         }

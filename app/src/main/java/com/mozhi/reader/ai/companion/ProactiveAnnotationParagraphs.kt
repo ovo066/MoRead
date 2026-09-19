@@ -59,8 +59,8 @@ object ProactiveAnnotationParagraphs {
         }.sortedBy { it.end }
     }
 
-    fun prefix(body: String, paragraph: ProactiveAnnotationParagraph): String {
-        var start = minOf(paragraph.start, (paragraph.end - MAX_PREFIX_CHARS).coerceAtLeast(0))
+    fun prefix(body: String, paragraph: ProactiveAnnotationParagraph, maxChars: Int = MAX_PREFIX_CHARS): String {
+        var start = minOf(paragraph.start, (paragraph.end - maxChars.coerceAtLeast(0)).coerceAtLeast(0))
         if (start > 0 && body[start].isLowSurrogate() && body[start - 1].isHighSurrogate()) start++
         return body.substring(start, paragraph.end)
     }

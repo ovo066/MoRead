@@ -57,7 +57,7 @@ class ReaderToolsetReadbackTest {
             toc(5, "章节4剧透", 1, 3, 3, false)
         )
 
-        val text = formatChapterOutline(book, chapters, toc, readingScope = ReadingScope.uptoProgress(book))
+        val text = formatChapterOutline(book, chapters, toc, readingScope = ReadingScope.uptoProgress(book)).content
 
         assertTrue(text.contains("【第一卷】#1-#2"))
         assertTrue(text.contains("后面还有 2 章尚未读到"))
@@ -75,7 +75,7 @@ class ReaderToolsetReadbackTest {
             fromChapter = 1,
             toChapter = 300,
             readingScope = ReadingScope.WholeBook
-        )
+        ).content
         assertTrue(text.length <= 6_000)
         assertTrue(text.contains("目录内容未完"))
         val next = Regex("from_chapter=(\\d+)").find(text)?.groupValues?.get(1)?.toInt()

@@ -15,15 +15,11 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import coil3.compose.AsyncImage
+import com.mozhi.reader.ui.theme.ColorSchemePreset
+import com.mozhi.reader.ui.theme.LocalMoReadColors
+import com.mozhi.reader.ui.theme.SemanticHarmony
+import com.mozhi.reader.ui.theme.onAccent
 import java.io.File
-import kotlin.math.abs
-
-private val AvatarGradients = listOf(
-    Color(0xFF5E5E5E) to Color(0xFF262626),
-    Color(0xFF767676) to Color(0xFF3A3A3A),
-    Color(0xFF4A4A4A) to Color(0xFF1E1E1E),
-    Color(0xFF8A8A8A) to Color(0xFF4A4A4A)
-)
 
 /** 角色头像：有自定义图用图，否则渐变底 + serif 首字（与占位版视觉一致）。 */
 @Composable
@@ -41,7 +37,10 @@ fun PersonaAvatarImage(
             modifier = modifier.clip(CircleShape)
         )
     } else {
-        val (start, end) = AvatarGradients[abs(name.hashCode()) % AvatarGradients.size]
+        // 渐变底来自当前配色方案：中性方案仍是历史的四组灰，莫兰迪方案下按语义色上色。
+        val appearance = LocalMoReadColors.current
+        val gradients = appearance.avatarGradients
+        val (start, end) = gradients[personaPaletteIndex(name, gradients.size)]
         Box(
             modifier = modifier
                 .clip(CircleShape)
@@ -53,7 +52,8 @@ fun PersonaAvatarImage(
                 style = MaterialTheme.typography.titleLarge,
                 fontFamily = FontFamily.Serif,
                 fontWeight = FontWeight.SemiBold,
-                color = Color.White
+                color = if (appearance.colorScheme == ColorSchemePreset.NEUTRAL && appearance.semanticHarmony == SemanticHarmony.MULTI) Color.White
+                    else end.onAccent()
             )
         }
     }

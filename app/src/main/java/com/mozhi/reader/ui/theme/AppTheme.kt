@@ -26,40 +26,128 @@ enum class AccentPreset(
     VIOLET("紫", Color(0xFF6246A8), Color(0xFFB9A5E8)),
     AMBER("橙", Color(0xFF9A5B10), Color(0xFFE0AB63)),
     CYAN("青", Color(0xFF126B70), Color(0xFF79C8CC)),
-    GRAPHITE("灰", Color(0xFF5A5F63), Color(0xFFB0B6BA));
+    GRAPHITE("灰", Color(0xFF5A5F63), Color(0xFFB0B6BA)),
+
+    /**
+     * 跟随配色方案的主色。字段值填「墨」只是为了让色板遍历与对比度用例有个兜底；
+     * 真正的颜色由 [resolveAccentColor] 从当前方案取（中性灰方案下恰好就是墨）。
+     */
+    FOLLOW("随方案", Color(0xFF1F1F1F), Color(0xFFE8E8E8));
 
     companion object {
-        val Default = INK
+        val Default = FOLLOW
     }
 }
 
-/** 外观偏好三件套，由 DataStore 持久化。[customAccentArgb] 非空时优先于 [accent]。 */
+/**
+ * 配色方案：决定整套 M3 ColorScheme（含 secondary/tertiary 家族）与扁平模式的画布色。
+ * [NEUTRAL] 是开箱默认——零色相，与历史版本完全一致；莫兰迪三款是多色相但低饱和的
+ * 协调方案；[DYNAMIC] 走 Material You 取壁纸色（Android 12+，低版本读出即回落 NEUTRAL）。
+ */
+enum class ColorSchemePreset(val label: String, val description: String) {
+    NEUTRAL("原版", "经典灰阶、玻璃质感与悬浮导航舱"),
+    HAZE_BLUE("雾蓝", "莫兰迪雾蓝主色，灰绿 / 灰紫 / 灰粉做语义色"),
+    SAGE("苔绿", "莫兰迪苔绿主色，雾蓝 / 沙棕 / 灰粉做语义色"),
+    ROSE_DUST("灰粉", "莫兰迪灰粉主色，灰紫 / 灰绿 / 杏黄做语义色"),
+    DYNAMIC("跟随壁纸", "Android 12 及以上从壁纸取色");
+
+    /** 该方案推荐的质感与形状；选方案时一并套用，之后可单独再调。 */
+    val recommendedSurface: SurfaceStyle
+        get() = if (this == NEUTRAL) SurfaceStyle.GLASS else SurfaceStyle.FLAT
+
+    val recommendedShape: ShapeStyle
+        get() = if (this == NEUTRAL) ShapeStyle.STANDARD else ShapeStyle.EXPRESSIVE
+
+    companion object {
+        val Default = NEUTRAL
+    }
+}
+
+/** 保留设备能力判断的纯函数入口，旧设备不显示也不应用壁纸取色。 */
+fun ColorSchemePreset.availableOn(apiLevel: Int): ColorSchemePreset =
+    if (this == ColorSchemePreset.DYNAMIC && apiLevel < 31) ColorSchemePreset.NEUTRAL else this
+
+/** 语义色的色相策略：多色相直接用方案的四个家族；统一色相把四个语义色全部从强调色派生。 */
+enum class SemanticHarmony(val label: String) {
+    MULTI("多色相"),
+    MONO("统一色相");
+
+    companion object {
+        val Default = MULTI
+    }
+}
+
+/** 界面质感：玻璃（半透明 + 高光边 + 模糊）或扁平（不透明 tonal 面）。以后可加液态玻璃。 */
+enum class SurfaceStyle(val label: String) {
+    GLASS("玻璃"),
+    FLAT("扁平");
+
+    companion object {
+        val Default = GLASS
+    }
+}
+
+/** 底部导航样式：悬浮胶囊舱或通栏导航条。 */
+enum class NavStyle(val label: String) {
+    FLOATING_DOCK("悬浮舱"),
+    BAR("通栏");
+
+    companion object {
+        val Default = FLOATING_DOCK
+    }
+}
+
+/** 形状与密度：标准刻度或 MD3 Expressive 式的大圆角、高控件。 */
+enum class ShapeStyle(val label: String) {
+    STANDARD("标准"),
+    EXPRESSIVE("舒展");
+
+    companion object {
+        val Default = STANDARD
+    }
+}
+
+/** 外观偏好，由 DataStore 持久化。[customAccentArgb] 非空时优先于 [accent]。 */
 data class AppearanceSettings(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val accent: AccentPreset = AccentPreset.Default,
     val customAccentArgb: Int? = null,
-    val appFont: com.mozhi.reader.core.datastore.ReaderFontAsset? = null
+    val appFont: com.mozhi.reader.core.datastore.ReaderFontAsset? = null,
+    val colorScheme: ColorSchemePreset = ColorSchemePreset.Default,
+    val semanticHarmony: SemanticHarmony = SemanticHarmony.Default,
+    val surfaceStyle: SurfaceStyle = SurfaceStyle.Default,
+    val navStyle: NavStyle = NavStyle.Default,
+    val shapeStyle: ShapeStyle = ShapeStyle.Default
 )
 
-/** 纯函数，便于单测：自定义色优先，否则取预设的日/夜值。 */
+/**
+ * 纯函数，便于单测：自定义色优先，其次「随方案」取方案主色，否则取预设的日/夜值。
+ * [schemePrimary] 是当前方案在该明暗下的 primary；FOLLOW 以外的预设不读它。
+ */
 fun resolveAccentColor(
     accent: AccentPreset,
     customAccentArgb: Int?,
-    dark: Boolean
+    dark: Boolean,
+    schemePrimary: Color? = null
 ): Color = customAccentArgb
     ?.let { adaptCustomAccent(Color(it), dark) }
-    ?: if (dark) accent.dark else accent.light
+    ?: when {
+        accent == AccentPreset.FOLLOW && schemePrimary != null -> schemePrimary
+        dark -> accent.dark
+        else -> accent.light
+    }
 
 /**
  * 用户自选的颜色不保证在当前底色上可读 —— 深色底上太暗、浅色底上太亮的都往回拉，
  * 保证强调色始终能从背景里跳出来。
  */
 internal fun adaptCustomAccent(color: Color, dark: Boolean): Color {
-    val luminance = color.luminance()
+    val opaque = color.copy(alpha = 1f)
+    val luminance = opaque.luminance()
     return when {
-        dark && luminance < MIN_DARK_LUMINANCE -> color.lightenTo(MIN_DARK_LUMINANCE)
-        !dark && luminance > MAX_LIGHT_LUMINANCE -> color.darkenTo(MAX_LIGHT_LUMINANCE)
-        else -> color
+        dark && luminance < MIN_DARK_LUMINANCE -> opaque.lightenTo(MIN_DARK_LUMINANCE)
+        !dark && luminance > MAX_LIGHT_LUMINANCE -> opaque.darkenTo(MAX_LIGHT_LUMINANCE)
+        else -> opaque
     }
 }
 
@@ -75,9 +163,10 @@ private fun Color.adjustTowards(bound: Color, target: Float): Color {
     repeat(ADJUST_ITERATIONS) {
         val mid = (low + high) / 2f
         result = lerpColor(this, bound, mid)
-        if (result.luminance() < target) low = mid else high = mid
+        val needsMore = if (bound == Color.White) result.luminance() < target else result.luminance() > target
+        if (needsMore) low = mid else high = mid
     }
-    return result
+    return lerpColor(this, bound, high)
 }
 
 private fun lerpColor(from: Color, to: Color, fraction: Float): Color = Color(
@@ -88,7 +177,7 @@ private fun lerpColor(from: Color, to: Color, fraction: Float): Color = Color(
 )
 
 private const val MIN_DARK_LUMINANCE = 0.35f
-private const val MAX_LIGHT_LUMINANCE = 0.45f
+private const val MAX_LIGHT_LUMINANCE = 0.13f
 private const val ADJUST_ITERATIONS = 12
 
 /**
@@ -97,11 +186,7 @@ private const val ADJUST_ITERATIONS = 12
  */
 internal fun readableOn(background: Color, preferred: Color): Color {
     if (contrastRatio(preferred, background) >= MIN_CONTENT_CONTRAST) return preferred
-    val target = if (background.luminance() > MAX_LIGHT_LUMINANCE) {
-        Color(0xFF111111)
-    } else {
-        Color(0xFFF2F2F2)
-    }
+    val target = background.onAccent()
     // 先把原色朝目标混掉一半，保住一点色相；仍不达标才用纯中性色。
     val blended = preferred.copy(alpha = 0.55f).compositeOver(target)
     return if (contrastRatio(blended, background) >= MIN_CONTENT_CONTRAST) blended else target

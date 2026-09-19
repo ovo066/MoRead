@@ -40,7 +40,7 @@ class ChapterSearchRangeTest {
             }, indexingEnabled = { false })
         val result = tool.execute(buildJsonObject {
             put("query", "灯塔线索"); put("from_chapter", 3); put("to_chapter", 6)
-        })
+        }).content
         assertEquals(listOf(2, 3), loaded)
         assertTrue(result, result.contains("第 3 至 4 章"))
         assertFalse(result, result.contains("未读尾部"))
@@ -71,7 +71,7 @@ class ChapterSearchRangeTest {
             ReadingScope.WholeBook, loadChapter = { ChapterDocument(0, "单章", body) }, indexingEnabled = { false })
         val result = tool.execute(buildJsonObject {
             put("query", "灯塔"); put("from_chapter", 1); put("to_chapter", 1); put("top_k", 5)
-        })
+        }).content
         assertTrue(result, result.contains("本轮选择 5 个候选"))
     }
 
@@ -110,7 +110,7 @@ class ChapterSearchRangeTest {
                     ChapterDocument(0, "本章", body)
                 }, currentScope = { scope }, indexingEnabled = { false },
                 reranker = ChunkReranker { _, candidates -> ranked = true; candidates }, sourceRevision = { revision })
-            val result = tool.execute(buildJsonObject { put("query", "灯塔线索") })
+            val result = tool.execute(buildJsonObject { put("query", "灯塔线索") }).content
             assertFalse(ranked)
             assertFalse(result, result.contains("灯塔线索1"))
             assertTrue(result, result.contains("已丢弃"))

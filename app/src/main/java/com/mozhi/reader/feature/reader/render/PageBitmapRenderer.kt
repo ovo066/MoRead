@@ -77,19 +77,6 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         color = pageStyle.accentColor
         alpha = if (pageStyle.isDark) 30 else 38
     }
-    private val annotationMarkerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = pageStyle.accentColor
-        style = Paint.Style.STROKE
-        strokeWidth = (pageStyle.tipSizePx * 0.11f).coerceAtLeast(1.5f)
-        strokeCap = Paint.Cap.ROUND
-        strokeJoin = Paint.Join.ROUND
-    }
-    private val annotationMarkerTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-        textSize = pageStyle.tipSizePx * 0.82f
-        color = pageStyle.accentColor
-        textAlign = Paint.Align.CENTER
-        typeface = Typeface.DEFAULT_BOLD
-    }
     private val illustrationMarkerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = pageStyle.accentColor
         style = Paint.Style.STROKE
@@ -296,7 +283,7 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
     }
 
     /**
-     * 内容层（听书底色 → 批注墨迹 → 正文 → 「评」标记），坐标为内容局部系，画布由调用方
+     * 内容层（听书底色 → 批注墨迹与评论小点 → 正文 → 插图按钮），坐标为内容局部系，画布由调用方
      * 平移定位；翻页位图与滚动条带共用这一份代码。[clipTop]/[clipBottom] 是页内可见窗，
      * 滚动模式用它跳过视口外的行，避免逐帧画整页。
      */
@@ -326,7 +313,7 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
                     )
                 ),
                 markerRadius = markerRadius,
-                markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.ANNOTATION_MARKER_GAP_RATIO,
+                markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.INLINE_MARKER_GAP_RATIO,
                 maxRight = pageStyle.contentWidth
             )
             listenGeometry.highlights.forEach { rect ->
@@ -343,7 +330,7 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
             annotations = annotations,
             illustrations = illustrations,
             markerRadius = markerRadius,
-            markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.ANNOTATION_MARKER_GAP_RATIO,
+            markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.INLINE_MARKER_GAP_RATIO,
             maxRight = pageStyle.contentWidth
         )
         val markById = annotations.associateBy(ReaderAnnotationMark::id)
@@ -352,6 +339,17 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
             if (rect.bottom < clipTop || rect.top > clipBottom) return@forEach
             val mark = markById[rect.annotationId]
             drawAnnotationInk(canvas, rect, mark)
+        }
+        // 评论小点与划线一起垫在字形之下，保持原有字形、行高与文字边界。
+        geometry.markers.filter { it.annotationIds.isNotEmpty() }.forEach { marker ->
+            if (marker.centerY + marker.radius < clipTop || marker.centerY - marker.radius > clipBottom) {
+                return@forEach
+            }
+            val colorTag = markById[marker.annotationIds.first()]?.colorTag.orEmpty()
+            val paint = inkPaint("COMMENT_DOT", colorTag) {
+                color = AnnotationInk.lineColor(colorTag, pageStyle.isDark, pageStyle.accentColor)
+            }
+            canvas.drawCircle(marker.centerX, marker.centerY, marker.radius, paint)
         }
         val contentPaint = pageStyle.measure.contentPaint
         val titlePaint = pageStyle.measure.titlePaint
@@ -498,60 +496,17 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
             }
         }
         geometry.markers.forEach { marker ->
-            if (marker.centerY + markerRadius < clipTop || marker.centerY - markerRadius > clipBottom) {
+            if (marker.centerY + marker.radius < clipTop || marker.centerY - marker.radius > clipBottom) {
                 return@forEach
             }
             when {
-                marker.annotationIds.isNotEmpty() -> drawAnnotationMarker(
-                    canvas,
-                    marker.centerX,
-                    marker.centerY,
-                    markerRadius,
-                    marker.annotationIds.size
-                )
                 marker.illustrationIds.isNotEmpty() -> drawIllustrationMarker(
                     canvas,
                     marker.centerX,
                     marker.centerY,
-                    markerRadius
+                    marker.radius
                 )
             }
-        }
-    }
-
-    private fun drawAnnotationMarker(
-        canvas: Canvas,
-        centerX: Float,
-        centerY: Float,
-        radius: Float,
-        count: Int
-    ) {
-        val bubble = RectF(
-            centerX - radius * 0.78f,
-            centerY - radius * 0.62f,
-            centerX + radius * 0.78f,
-            centerY + radius * 0.48f
-        )
-        canvas.drawRoundRect(bubble, radius * 0.28f, radius * 0.28f, annotationMarkerPaint)
-        val tail = Path().apply {
-            moveTo(centerX - radius * 0.22f, bubble.bottom)
-            lineTo(centerX - radius * 0.34f, centerY + radius * 0.78f)
-            lineTo(centerX + radius * 0.05f, bubble.bottom)
-        }
-        canvas.drawPath(tail, annotationMarkerPaint)
-        if (count > 1) {
-            canvas.drawText(
-                count.toString(),
-                centerX,
-                centerY - (annotationMarkerTextPaint.ascent() + annotationMarkerTextPaint.descent()) / 2f,
-                annotationMarkerTextPaint
-            )
-        } else {
-            val dotRadius = radius * 0.075f
-            val y = centerY - radius * 0.04f
-            canvas.drawCircle(centerX - radius * 0.25f, y, dotRadius, illustrationGlyphPaint)
-            canvas.drawCircle(centerX, y, dotRadius, illustrationGlyphPaint)
-            canvas.drawCircle(centerX + radius * 0.25f, y, dotRadius, illustrationGlyphPaint)
         }
     }
 

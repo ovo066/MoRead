@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import com.mozhi.reader.ui.theme.moReadMetrics
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -203,7 +204,7 @@ internal fun ImageLibraryPickerDialog(
                                     model = File(image.filePath),
                                     contentDescription = image.displayName,
                                     contentScale = ContentScale.Crop,
-                                    modifier = Modifier.size(52.dp).clip(RoundedCornerShape(10.dp))
+                                    modifier = Modifier.size(52.dp).clip(RoundedCornerShape(moReadMetrics().radiusFor(10)))
                                 )
                             },
                             trailingContent = if (currentPath == image.filePath) {
@@ -211,7 +212,7 @@ internal fun ImageLibraryPickerDialog(
                             } else {
                                 null
                             },
-                            modifier = Modifier.clip(RoundedCornerShape(14.dp)).clickable {
+                            modifier = Modifier.clip(RoundedCornerShape(moReadMetrics().radiusFor(14))).clickable {
                                 onSelect(image)
                             }
                         )
@@ -242,7 +243,7 @@ internal fun BookIndexCard(
         progress.stage == EmbeddingIndexStage.FAILED
     FrostedSurface(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
+        shape = RoundedCornerShape(moReadMetrics().radiusFor(24)),
         shadowElevation = 6.dp
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -316,7 +317,7 @@ internal fun CoverSourceAction(
 ) {
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(moReadMetrics().radiusFor(16)),
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         modifier = modifier
     ) {
@@ -361,7 +362,7 @@ internal fun OnlineCoverPickerDialog(
                 ) {
                     item {
                         Surface(
-                            shape = RoundedCornerShape(14.dp),
+                            shape = RoundedCornerShape(moReadMetrics().radiusFor(14)),
                             color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
                         ) {
                             Column(
@@ -401,7 +402,7 @@ internal fun OnlineCoverPickerDialog(
                     items(results, key = OnlineBookCover::imageUrl) { candidate ->
                         Surface(
                             onClick = { onSelect(candidate) },
-                            shape = RoundedCornerShape(16.dp),
+                            shape = RoundedCornerShape(moReadMetrics().radiusFor(16)),
                             color = MaterialTheme.colorScheme.surfaceContainerLow
                         ) {
                             Row(
@@ -414,7 +415,7 @@ internal fun OnlineCoverPickerDialog(
                                     contentDescription = candidate.title,
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier.size(width = 58.dp, height = 84.dp)
-                                        .clip(RoundedCornerShape(9.dp))
+                                        .clip(RoundedCornerShape(moReadMetrics().radiusFor(9)))
                                         .background(MaterialTheme.colorScheme.surfaceContainerHighest),
                                     loading = {
                                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -550,7 +551,7 @@ internal fun CoverCropDialog(
                     modifier = Modifier
                         .fillMaxWidth()
                         .aspectRatio(2f / 3f)
-                        .clip(RoundedCornerShape(18.dp))
+                        .clip(RoundedCornerShape(moReadMetrics().radiusFor(18)))
                         .background(MaterialTheme.colorScheme.surfaceContainerHighest)
                 ) {
                     AsyncImage(

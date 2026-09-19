@@ -63,6 +63,8 @@ import com.mozhi.reader.feature.reader.engine.annotationGeometry
 import com.mozhi.reader.feature.reader.engine.dragSelectionHandle
 import com.mozhi.reader.feature.reader.engine.hitTextPos
 import com.mozhi.reader.feature.reader.engine.inlineMarkerLayout
+import com.mozhi.reader.feature.reader.engine.ReaderPageImage
+import com.mozhi.reader.feature.reader.engine.imageAt
 import com.mozhi.reader.feature.reader.engine.linkAt
 import com.mozhi.reader.feature.reader.engine.selectionBodyRange
 import com.mozhi.reader.feature.reader.engine.selectionRects
@@ -81,7 +83,7 @@ import kotlinx.coroutines.launch
 /**
  * 连续滚动阅读面（PageMode.SCROLL）：以章节为单位把分页布局拼成 [ChapterStrip] 条带，
  * 手指驱动 + 惯性衰减自由滚动，跨章无缝续读。页眉/页脚固定，正文在中间的内容带内
- * 滚动；选词、批注墨迹、「评」标记、听书句底色全部复用分页引擎的几何与画笔。
+ * 滚动；选词、批注墨迹、评论小点、听书句底色全部复用分页引擎的几何与画笔。
  *
  * 位置真源仍是 controller 的 (chapterIndex, charOffset)：滚动落定/跨章时把视口顶部
  * 的字符写回；目录/书签/搜索等外部跳转通过 contentHook 通知本面重锚。
@@ -107,6 +109,7 @@ internal fun ReaderScrollPane(
     onAnnotationClick: (annotationIds: List<Long>) -> Unit,
     onIllustrationClick: (illustrationIds: List<Long>) -> Unit = {},
     onLinkClick: (ReaderPageLink) -> Unit = {},
+    onEpubImageLongPress: (ReaderPageImage) -> Unit = {},
     onTtsAction: (selection: String) -> Unit,
     onImageAction: (selection: String, context: String, range: IntRange) -> Unit,
     onEditText: ((selection: String, range: IntRange) -> Unit)?,
@@ -396,6 +399,18 @@ internal fun ReaderScrollPane(
                             }
                             if (event == null) {
                                 longPressFired = true
+                                val image = holder.imageAt(upPosition)
+                                if (image != null) {
+                                    selection.clear()
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onEpubImageLongPress(image)
+                                    while (true) {
+                                        val tail = awaitPointerEvent()
+                                        tail.changes.forEach { it.consume() }
+                                        if (tail.changes.none { it.pressed }) break
+                                    }
+                                    return@awaitEachGesture
+                                }
                                 selecting = selection.begin(upPosition)
                                 continue
                             }
@@ -891,6 +906,13 @@ internal class ScrollPaneHolder(private val controller: ReaderContentController)
         return Offset(style.paddingLeft, contentTop + block.originY + top)
     }
 
+    fun imageAt(position: Offset): ReaderPageImage? {
+        val currentStyle = style ?: return null
+        val hit = resolve(position) ?: return null
+        if (hit.local.x < 0f || hit.local.x >= currentStyle.contentWidth) return null
+        return hit.page.imageAt(hit.local.x, hit.local.y, hit.chapterIndex)
+    }
+
     fun linkAt(position: Offset): ReaderPageLink? {
         val hit = resolve(position) ?: return null
         return hit.page.linkAt(hit.local.x, hit.local.y, hit.chapterIndex)
@@ -904,22 +926,10 @@ internal class ScrollPaneHolder(private val controller: ReaderContentController)
             annotations = annotations.filter { it.chapterIndex == hit.chapterIndex },
             illustrations = illustrations.filter { it.chapterIndex == hit.chapterIndex },
             markerRadius = markerRadius,
-            markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.ANNOTATION_MARKER_GAP_RATIO,
+            markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.INLINE_MARKER_GAP_RATIO,
             maxRight = currentStyle.contentWidth
         )
-        val hitRadius = (currentStyle.tipSizePx * 1.35f).coerceAtLeast(18f)
-        geometry.markers.firstOrNull { marker ->
-            if (marker.annotationIds.isEmpty()) return@firstOrNull false
-            val dx = hit.local.x - marker.centerX
-            val dy = hit.local.y - marker.centerY
-            dx * dx + dy * dy <= hitRadius * hitRadius
-        }?.let { return it.annotationIds }
-        return geometry.highlights
-            .filter { rect ->
-                hit.local.x in rect.left..rect.right && hit.local.y in rect.top..rect.bottom
-            }
-            .map { it.annotationId }
-            .distinct()
+        return geometry.annotationIdsAt(hit.local.x, hit.local.y)
     }
 
     fun illustrationIdsAt(position: Offset): List<Long> {
@@ -930,7 +940,7 @@ internal class ScrollPaneHolder(private val controller: ReaderContentController)
             annotations = annotations.filter { it.chapterIndex == hit.chapterIndex },
             illustrations = illustrations.filter { it.chapterIndex == hit.chapterIndex },
             markerRadius = markerRadius,
-            markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.ANNOTATION_MARKER_GAP_RATIO,
+            markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.INLINE_MARKER_GAP_RATIO,
             maxRight = currentStyle.contentWidth
         )
         val hitRadius = (currentStyle.tipSizePx * 1.35f).coerceAtLeast(18f)

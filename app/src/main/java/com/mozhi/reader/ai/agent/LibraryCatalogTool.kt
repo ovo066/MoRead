@@ -19,7 +19,7 @@ internal class LibraryCatalogTool(private val library: LibraryRepository, privat
         }
     })
 
-    override suspend fun execute(arguments: JsonObject): String {
+    override suspend fun execute(arguments: JsonObject): ToolResult {
         fun text(name: String) = (arguments[name] as? JsonPrimitive)?.contentOrNull.orEmpty().trim().take(100)
         val query = text("query")
         val tag = text("tag")
@@ -35,7 +35,7 @@ internal class LibraryCatalogTool(private val library: LibraryRepository, privat
             book.removedAt == 0L && (query.isBlank() || (listOf(book.title, book.author, groupName) + names).any { it.contains(query, true) }) &&
                 (tag.isBlank() || names.any { it.equals(tag, true) }) && (group.isBlank() || groupName.contains(group, true))
         }
-        return buildJsonObject {
+        return ToolResult.Success(buildJsonObject {
             put("total", matches.size)
             if (offset.toLong() + 20 < matches.size) put("next_offset", offset + 20)
             putJsonArray("books") {
@@ -46,6 +46,6 @@ internal class LibraryCatalogTool(private val library: LibraryRepository, privat
                     put("read_chapter", book.maxReachedChapterIndex + 1); put("read_offset", book.maxReachedCharOffset)
                 }) }
             }
-        }.toString()
+        }.toString())
     }
 }

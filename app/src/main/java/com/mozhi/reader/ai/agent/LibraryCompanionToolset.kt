@@ -65,7 +65,7 @@ internal class ScopedLibraryTool(
     private val scopes: List<LibraryBookScope>,
     private val validate: suspend (LibraryBookScope) -> Unit,
     private val resolve: (suspend (Long) -> LibraryBookScope)? = null,
-    private val read: suspend (LibraryBookScope, JsonObject) -> String
+    private val read: suspend (LibraryBookScope, JsonObject) -> ToolResult
 ) : AgentTool {
     override val displayName = template.displayName
     override val spec = template.spec.copy(
@@ -82,16 +82,17 @@ internal class ScopedLibraryTool(
         })
     )
 
-    override suspend fun execute(arguments: JsonObject): String {
+    override suspend fun execute(arguments: JsonObject): ToolResult {
         val bookId = (arguments["book_id"] as? JsonPrimitive)?.longOrNull
         val scope = bookId?.takeIf { it > 0 }?.let { resolve?.invoke(it) ?: scopes.firstOrNull { scope -> scope.bookId == it } }
-            ?: return if (resolve == null) "工具执行失败：book_id 不在指定范围内" else "工具执行失败：请先用 find_books 查找书籍编号"
+            ?: return ToolResult.Failure("OUT_OF_SCOPE", if (resolve == null) "工具执行失败：book_id 不在指定范围内" else "工具执行失败：请先用 find_books 查找书籍编号")
         validate(scope)
         val result = read(scope, JsonObject(arguments - "book_id"))
         validate(scope)
         val source = "书籍#${scope.bookId}《${scope.title}》｜本轮范围：${scope.label}"
-        // Keep the established error prefix visible to AgentLoop's status classification.
-        return if (result.isToolSuccess()) "$source\n$result" else "$result\n$source"
+        return result.mapContent { content ->
+            if (result is ToolResult.Success) "$source\n$content" else "$content\n$source"
+        }
     }
 }
 

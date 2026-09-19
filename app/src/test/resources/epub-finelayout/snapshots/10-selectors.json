@@ -6,7 +6,7 @@
             "index": 0,
             "chapterPosition": 0,
             "charLength": 59,
-            "height": 120.450005,
+            "height": 80.850006,
             "backgroundColorArgb": null,
             "backgroundImagePath": null,
             "immersive": false,
@@ -17,7 +17,7 @@
                     "left": 0.0,
                     "top": 0.0,
                     "right": 240.0,
-                    "bottom": 42.850002,
+                    "bottom": 22.050001,
                     "backgroundColorArgb": -2363173,
                     "backgroundImagePath": null,
                     "backgroundSizeMode": "AUTO",
@@ -62,9 +62,9 @@
                 {
                     "kind": "block",
                     "left": 0.0,
-                    "top": 50.850002,
+                    "top": 32.050003,
                     "right": 240.0,
-                    "bottom": 92.450005,
+                    "bottom": 52.850006,
                     "backgroundColorArgb": -2363173,
                     "backgroundImagePath": null,
                     "backgroundSizeMode": "AUTO",
@@ -110,20 +110,9 @@
             "lines": [
                 {
                     "chapterPosition": 0,
-                    "charLength": 17,
+                    "charLength": 20,
                     "lineTop": 0.0,
                     "lineBottom": 20.0,
-                    "startX": 64.0,
-                    "image": null,
-                    "images": [],
-                    "glyphImages": [],
-                    "decorations": []
-                },
-                {
-                    "chapterPosition": 17,
-                    "charLength": 3,
-                    "lineTop": 20.800001,
-                    "lineBottom": 40.800003,
                     "startX": 24.0,
                     "image": null,
                     "images": [],
@@ -132,68 +121,9 @@
                 },
                 {
                     "chapterPosition": 21,
-                    "charLength": 20,
-                    "lineTop": 50.850002,
-                    "lineBottom": 70.850006,
-                    "startX": 40.0,
-                    "image": null,
-                    "images": [],
-                    "glyphImages": [],
-                    "decorations": [
-                        {
-                            "kind": "inline",
-                            "left": 190.0,
-                            "top": 50.850002,
-                            "right": 240.0,
-                            "bottom": 70.850006,
-                            "backgroundColorArgb": null,
-                            "backgroundImagePath": null,
-                            "backgroundSizeMode": "AUTO",
-                            "backgroundSize": [
-                                0.0,
-                                0.0
-                            ],
-                            "backgroundRepeat": [
-                                true,
-                                true
-                            ],
-                            "backgroundPosition": [
-                                0.0,
-                                0.0
-                            ],
-                            "borderWidths": [
-                                0.0,
-                                0.0,
-                                0.0,
-                                0.0
-                            ],
-                            "borderColors": [
-                                null,
-                                null,
-                                null,
-                                null
-                            ],
-                            "radii": [
-                                0.0,
-                                0.0,
-                                0.0,
-                                0.0
-                            ],
-                            "shadowCount": 0,
-                            "edges": [
-                                true,
-                                false,
-                                true,
-                                true
-                            ]
-                        }
-                    ]
-                },
-                {
-                    "chapterPosition": 41,
-                    "charLength": 2,
-                    "lineTop": 71.65,
-                    "lineBottom": 91.65,
+                    "charLength": 22,
+                    "lineTop": 32.050003,
+                    "lineBottom": 52.050003,
                     "startX": 0.0,
                     "image": null,
                     "images": [],
@@ -201,10 +131,10 @@
                     "decorations": [
                         {
                             "kind": "inline",
-                            "left": 0.0,
-                            "top": 71.65,
-                            "right": 20.0,
-                            "bottom": 91.65,
+                            "left": 150.0,
+                            "top": 32.050003,
+                            "right": 220.0,
+                            "bottom": 52.050003,
                             "backgroundColorArgb": null,
                             "backgroundImagePath": null,
                             "backgroundSizeMode": "AUTO",
@@ -243,7 +173,7 @@
                                 true,
                                 true,
                                 true,
-                                false
+                                true
                             ]
                         }
                     ]
@@ -251,9 +181,9 @@
                 {
                     "chapterPosition": 44,
                     "charLength": 17,
-                    "lineTop": 100.450005,
-                    "lineBottom": 120.450005,
-                    "startX": 40.0,
+                    "lineTop": 60.850006,
+                    "lineBottom": 80.850006,
+                    "startX": 0.0,
                     "image": null,
                     "images": [],
                     "glyphImages": [],

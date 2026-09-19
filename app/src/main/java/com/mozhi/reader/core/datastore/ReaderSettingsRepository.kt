@@ -1,5 +1,6 @@
 package com.mozhi.reader.core.datastore
 
+import android.os.Build
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -11,7 +12,13 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import com.mozhi.reader.ui.theme.AccentPreset
 import com.mozhi.reader.ui.theme.AppearanceSettings
+import com.mozhi.reader.ui.theme.ColorSchemePreset
+import com.mozhi.reader.ui.theme.NavStyle
+import com.mozhi.reader.ui.theme.SemanticHarmony
+import com.mozhi.reader.ui.theme.ShapeStyle
+import com.mozhi.reader.ui.theme.SurfaceStyle
 import com.mozhi.reader.ui.theme.ThemeMode
+import com.mozhi.reader.ui.theme.availableOn
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
@@ -327,8 +334,51 @@ class ReaderSettingsRepository @Inject constructor(
                 ?.let { runCatching { AccentPreset.valueOf(it) }.getOrNull() }
                 ?: AccentPreset.Default,
             customAccentArgb = preferences[Keys.AccentCustomArgb],
-            appFont = fontLibraryFrom(preferences).firstOrNull { it.id == preferences[Keys.AppFontId] }
+            appFont = fontLibraryFrom(preferences).firstOrNull { it.id == preferences[Keys.AppFontId] },
+            colorScheme = preferences[Keys.ColorScheme].toEnumOr(ColorSchemePreset.Default).availableOn(Build.VERSION.SDK_INT),
+            semanticHarmony = preferences[Keys.SemanticHarmony].toEnumOr(SemanticHarmony.Default),
+            surfaceStyle = preferences[Keys.SurfaceStyle].toEnumOr(SurfaceStyle.Default),
+            navStyle = preferences[Keys.NavStyle].toEnumOr(NavStyle.Default),
+            shapeStyle = preferences[Keys.ShapeStyle].toEnumOr(ShapeStyle.Default)
         )
+    }
+
+    private inline fun <reified T : Enum<T>> String?.toEnumOr(fallback: T): T =
+        this?.let { runCatching { enumValueOf<T>(it) }.getOrNull() } ?: fallback
+
+    /**
+     * 选配色方案：强调色置为「随方案」，并一并套用方案推荐的质感与形状。
+     * 之后用户仍可在设置里单独改回；导航样式不在推荐范围内，保持用户所选。
+     */
+    suspend fun setColorScheme(value: ColorSchemePreset) {
+        val available = value.availableOn(Build.VERSION.SDK_INT)
+        dataStore.edit {
+            it[Keys.ColorScheme] = available.name
+            it[Keys.AccentPreset] = AccentPreset.FOLLOW.name
+            it.remove(Keys.AccentCustomArgb)
+            it[Keys.SurfaceStyle] = available.recommendedSurface.name
+            it[Keys.ShapeStyle] = available.recommendedShape.name
+            if (available == ColorSchemePreset.NEUTRAL) {
+                it[Keys.NavStyle] = NavStyle.Default.name
+                it[Keys.SemanticHarmony] = SemanticHarmony.Default.name
+            }
+        }
+    }
+
+    suspend fun setSemanticHarmony(value: SemanticHarmony) {
+        dataStore.edit { it[Keys.SemanticHarmony] = value.name }
+    }
+
+    suspend fun setSurfaceStyle(value: SurfaceStyle) {
+        dataStore.edit { it[Keys.SurfaceStyle] = value.name }
+    }
+
+    suspend fun setNavStyle(value: NavStyle) {
+        dataStore.edit { it[Keys.NavStyle] = value.name }
+    }
+
+    suspend fun setShapeStyle(value: ShapeStyle) {
+        dataStore.edit { it[Keys.ShapeStyle] = value.name }
     }
 
     suspend fun setThemeMode(value: ThemeMode) {
@@ -1039,6 +1089,22 @@ class ReaderSettingsRepository @Inject constructor(
         }
     }
 
+    /**
+     * 上次在段评讨论串里点名的角色；弹层打开时预选它，省去每次重新挑人。
+     * null = 还没点过名或上次主动取消了点名（只写想法、不叫人回复）。
+     */
+    val discussionPersonaId: Flow<Long?> = dataStore.data.map { it[Keys.DiscussionPersonaId] }
+
+    suspend fun setDiscussionPersonaId(personaId: Long?) {
+        dataStore.edit { preferences ->
+            if (personaId == null) {
+                preferences.remove(Keys.DiscussionPersonaId)
+            } else {
+                preferences[Keys.DiscussionPersonaId] = personaId
+            }
+        }
+    }
+
     /** 伴读输入区的 AI 建议回复；默认开启，关闭后不再发起建议生成请求。 */
     val suggestionRepliesEnabled: Flow<Boolean> =
         dataStore.data.map { it[Keys.SuggestionReplies] ?: true }
@@ -1079,7 +1145,7 @@ class ReaderSettingsRepository @Inject constructor(
         dataStore.edit { it[Keys.CompanionCrossBookChatSearch] = value }
     }
 
-    /** 显示 AI 批注：关闭后角色划线与「评」标记不再渲染，书籍详情仍可回顾。默认开。 */
+    /** 显示 AI 批注：关闭后角色划线与评论小点不再渲染，书籍详情仍可回顾。默认开。 */
     val showAiAnnotations: Flow<Boolean> =
         dataStore.data.map { it[Keys.ShowAiAnnotations] ?: true }
 
@@ -1298,7 +1364,13 @@ class ReaderSettingsRepository @Inject constructor(
         val AppFontId = stringPreferencesKey("app_font_id")
         val AccentPreset = stringPreferencesKey("accent_preset")
         val AccentCustomArgb = intPreferencesKey("accent_custom_argb")
+        val ColorScheme = stringPreferencesKey("color_scheme_preset")
+        val SemanticHarmony = stringPreferencesKey("semantic_harmony")
+        val SurfaceStyle = stringPreferencesKey("surface_style")
+        val NavStyle = stringPreferencesKey("nav_style")
+        val ShapeStyle = stringPreferencesKey("shape_style")
         val ActivePersonaId = longPreferencesKey("active_persona_id")
+        val DiscussionPersonaId = longPreferencesKey("companion_discussion_persona_id")
         val SuggestionReplies = booleanPreferencesKey("companion_suggestion_replies")
         val CompanionSpoilerProtection = booleanPreferencesKey("companion_spoiler_protection")
         val ShowAiAnnotations = booleanPreferencesKey("companion_show_ai_annotations")

@@ -50,6 +50,38 @@ data class TypesetSpec(
     val immersiveExtraBottomPx: Float = 0f
 )
 
+/** 「段首缩进」滑杆的出厂值，也是把原书缩进折算成用户比例时的基准。 */
+const val DEFAULT_FIRST_LINE_INDENT_CHARS = 2f
+
+/**
+ * 段首缩进归属。凡是 CSS 写过 `text-indent` 的书（含 `body { text-indent: 0 }`——该属性会继承，
+ * 一条声明就让每个段落都算「已声明」），原先一律由原书说了算，用户的滑杆就是死的。
+ *
+ * - 原书优先：完全按声明排。
+ * - 智能（默认）：与行距、段距同一套语义，把原书缩进按用户比例缩放，既跟着滑杆走，
+ *   又保留原书「引文比正文缩得多」这类相对差别；原书声明为 0 时无从缩放，直接用用户值。
+ * - 接管排版：首行缩进整个交给用户。
+ *
+ * 悬挂缩进（负值）是结构而非装饰：诗歌、列表、对话体靠它对齐，任何模式都原样保留。
+ */
+fun resolveFirstLineIndent(
+    publisherIndentPx: Float?,
+    userIndentChars: Float,
+    indentColumnWidthPx: Float,
+    publisherStyleMode: PublisherStyleMode,
+    isHeading: Boolean = false
+): Float {
+    // 标题没有「段首缩进」这回事：用户滑杆只管正文，标题只可能保留原书自己的缩进。
+    val userIndentPx = if (isHeading) 0f else userIndentChars * indentColumnWidthPx
+    return when {
+        publisherIndentPx == null -> userIndentPx
+        publisherIndentPx < 0f -> publisherIndentPx
+        publisherStyleMode == PublisherStyleMode.RESPECT -> publisherIndentPx
+        publisherStyleMode == PublisherStyleMode.TAKE_OVER || publisherIndentPx == 0f -> userIndentPx
+        else -> publisherIndentPx * (userIndentChars / DEFAULT_FIRST_LINE_INDENT_CHARS)
+    }
+}
+
 /**
  * Pure-Kotlin port of Legado's `TextChapterLayout`, reduced to the text-only single-page case.
  *
@@ -277,7 +309,7 @@ class ChapterTypesetter(
     /**
      * Legado's `addCharsToLineMiddle`: full justification distributes the residual width over
      * space clusters when the line has any (Latin/mixed text), otherwise over every inter-cluster
-     * gap (pure CJK). Overflowing lines are compressed back inside the margin (`exceed`).
+     * eligible gap (pure CJK). Small platform measurement overruns are compressed inside the margin.
      */
     private fun placeClusters(
         clusters: List<LayoutCluster>,
@@ -289,12 +321,17 @@ class ChapterTypesetter(
         val residual = spec.visibleWidth - startX - desired
         var spaceExtra = 0f
         var gapExtra = 0f
+        val expandable = BooleanArray(clusters.size) { index ->
+            index < clusters.lastIndex && clusters[index + 1].marker == null &&
+                canExpandTextGap(clusters[index].text, clusters[index + 1].text)
+        }
         if (justify && residual > 0f && clusters.size > 1 && residual <= spec.visibleWidth * MAX_JUSTIFY_FRACTION) {
             val spaceCount = clusters.count { it.text == " " && it.marker == null }
             if (spaceCount > 0) {
                 spaceExtra = residual / spaceCount
             } else {
-                gapExtra = residual / (clusters.size - 1)
+                val gaps = expandable.count { it }
+                if (gaps > 0) gapExtra = residual / gaps
             }
         }
 
@@ -306,7 +343,7 @@ class ChapterTypesetter(
             if (spaceExtra > 0f && cluster.text == " " && cluster.marker == null && index != clusters.lastIndex) {
                 width += spaceExtra
             }
-            if (gapExtra > 0f && index != clusters.lastIndex) {
+            if (gapExtra > 0f && expandable[index]) {
                 width += gapExtra
             }
             val style = cluster.sourceOffset.takeIf { it >= 0 }?.let(syntax::at)

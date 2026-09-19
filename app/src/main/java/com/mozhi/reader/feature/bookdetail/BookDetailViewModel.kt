@@ -1,6 +1,7 @@
 package com.mozhi.reader.feature.bookdetail
 
 import android.net.Uri
+import com.mozhi.reader.ui.requireBookId
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -112,12 +113,7 @@ class BookDetailViewModel @Inject constructor(
     private val embeddingProgressTracker: EmbeddingProgressTracker,
     personaDao: com.mozhi.reader.core.database.dao.PersonaDao
 ) : ViewModel() {
-    private val bookId: Long = when (val value: Any? = savedStateHandle["bookId"]) {
-        is Long -> value
-        is Int -> value.toLong()
-        is String -> value.toLongOrNull()
-        else -> null
-    } ?: error("缺少 bookId")
+    private val bookId: Long = savedStateHandle.requireBookId()
 
     private val working = MutableStateFlow(false)
     private val mutableCoverCandidates = MutableStateFlow<List<OnlineBookCover>>(emptyList())

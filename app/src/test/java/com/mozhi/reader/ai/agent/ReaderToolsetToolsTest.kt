@@ -46,7 +46,7 @@ class ReaderToolsetToolsTest {
 
         val result = searchTool(lastReadChapterIndex = 3).execute(
             buildJsonObject { put("query", "张小敬在哪里") }
-        )
+        ).content
 
         assertTrue(result.contains("本次检索范围：第 1 至 4 章"))
         assertTrue(result.contains("不超过当前阅读水位"))
@@ -62,7 +62,7 @@ class ReaderToolsetToolsTest {
 
         val result = searchTool(lastReadChapterIndex = 3).execute(
             buildJsonObject { put("query", "任意问题") }
-        )
+        ).content
 
         assertTrue(result.contains("向量索引正在后台建立"))
         assertTrue(result.contains("已自动尝试本地 BM25 关键词检索"))
@@ -84,7 +84,7 @@ class ReaderToolsetToolsTest {
                 put("query", "线索")
                 put("top_k", 2)
             }
-        )
+        ).content
 
         assertTrue(result, result.contains("已读线索"))
         assertFalse(result, result.contains("后文"))
@@ -93,7 +93,7 @@ class ReaderToolsetToolsTest {
     @Test
     fun searchBookRequiresQuery() = runTest {
         val result = searchTool(lastReadChapterIndex = 3)
-            .execute(buildJsonObject { })
+            .execute(buildJsonObject { }).content
         assertEquals("缺少检索词 query", result)
     }
 
@@ -106,7 +106,7 @@ class ReaderToolsetToolsTest {
             embedQuery = { embedded++; vector(1f, 0f) }, store = { store }, readingScope = ReadingScope.upto(3, 50),
             loadChapter = { fixtureChapter(it) }, requestIndex = { requested++ }, canRequestIndex = false
         )
-        val result = tool.execute(buildJsonObject { put("query", "线索") })
+        val result = tool.execute(buildJsonObject { put("query", "线索") }).content
         assertEquals(0, requested)
         assertEquals(0, embedded)
         assertFalse(result, result.contains("正在后台建立"))
@@ -131,7 +131,7 @@ class ReaderToolsetToolsTest {
             }
         )
 
-        val result = tool.execute(buildJsonObject { put("query", "张小敬在哪里追查狼卫") })
+        val result = tool.execute(buildJsonObject { put("query", "张小敬在哪里追查狼卫") }).content
 
         assertTrue(result, result.contains("已自动切换到本地 BM25 关键词检索"))
         assertTrue(result, result.contains("西市追查狼卫"))
@@ -153,7 +153,7 @@ class ReaderToolsetToolsTest {
             loadChapter = { index -> if (index == 3) ChapterDocument(3, "当前章", currentBody) else fixtureChapter(index) }
         )
 
-        val result = tool.execute(buildJsonObject { put("query", "凶手") })
+        val result = tool.execute(buildJsonObject { put("query", "凶手") }).content
 
         assertFalse(result, result.contains("本章结尾现身"))
         assertTrue(result, result.contains("前文只知道"))
@@ -171,7 +171,7 @@ class ReaderToolsetToolsTest {
             readingScope = ReadingScope.upto(3, Int.MAX_VALUE),
             loadChapter = { fixtureChapter(it) }
         )
-        val result = tool.execute(buildJsonObject { put("query", "任意") })
+        val result = tool.execute(buildJsonObject { put("query", "任意") }).content
         assertTrue(result.startsWith("查询向量生成失败"))
     }
 
@@ -189,7 +189,7 @@ class ReaderToolsetToolsTest {
             searchChunks = { _, _, _, _ -> error("HNSW 索引损坏") }
         )
 
-        val result = tool.execute(buildJsonObject { put("query", "西市狼卫") })
+        val result = tool.execute(buildJsonObject { put("query", "西市狼卫") }).content
 
         // 切片本身是好的：查询失败不该触发重建（那只会白花用户的 embedding 额度）。
         assertTrue(result, result.contains("本地向量索引查询失败"))
@@ -210,8 +210,8 @@ class ReaderToolsetToolsTest {
             requestIndex = { requested++ }
         )
 
-        tool.execute(buildJsonObject { put("query", "任意") })
-        tool.execute(buildJsonObject { put("query", "再来一次") })
+        tool.execute(buildJsonObject { put("query", "任意") }).content
+        tool.execute(buildJsonObject { put("query", "再来一次") }).content
 
         // 每次调用都可请求（Worker 侧 KEEP 幂等），关键是无索引时确实发出了请求
         assertEquals(2, requested)
@@ -238,7 +238,7 @@ class ReaderToolsetToolsTest {
             indexingEnabled = { false }
         )
 
-        val result = tool.execute(buildJsonObject { put("query", "张小敬追查狼卫") })
+        val result = tool.execute(buildJsonObject { put("query", "张小敬追查狼卫") }).content
 
         assertEquals(0, embedded)
         assertEquals(0, requested)
@@ -269,7 +269,7 @@ class ReaderToolsetToolsTest {
                 loadChapter = { documents.getOrNull(it) },
                 loadChaptersThrough = { last -> documents.filter { it.chapterIndex <= last } }
             )
-            val result = tool.execute(buildJsonObject { put("query", "青铜钥匙") })
+            val result = tool.execute(buildJsonObject { put("query", "青铜钥匙") }).content
             assertTrue("$state: $result", result.contains("他终于找到青铜钥匙。"))
         }
     }
@@ -290,7 +290,7 @@ class ReaderToolsetToolsTest {
             loadChapter = { document },
             loadChaptersThrough = { listOf(document) }
         )
-        val result = tool.execute(buildJsonObject { put("query", "青铜钥匙") })
+        val result = tool.execute(buildJsonObject { put("query", "青铜钥匙") }).content
         assertTrue(result, result.contains(prefix))
         assertFalse(result, result.contains("凶手现身"))
         assertFalse(result, result.contains("打开禁门"))
@@ -308,7 +308,7 @@ class ReaderToolsetToolsTest {
             readingScope = ReadingScope.upto(1, 20),
             loadChaptersThrough = { error("正文读取失败") }
         )
-        val result = tool.execute(buildJsonObject { put("query", "不存在的字面串") })
+        val result = tool.execute(buildJsonObject { put("query", "不存在的字面串") }).content
         assertTrue(result, result.contains("正文覆盖不完整"))
         assertFalse(result, result.contains("书里没有写到"))
     }
@@ -324,7 +324,7 @@ class ReaderToolsetToolsTest {
             toChapter = 3,
             startChar = 0,
             maxChars = 1_000
-        )
+        ).content
 
         assertTrue(result.contains("【第 2 章「第二章」】"))
         assertTrue(result.contains("内容未完"))
@@ -343,7 +343,7 @@ class ReaderToolsetToolsTest {
             toChapter = 1,
             startChar = start,
             maxChars = 1_000
-        )
+        ).content
 
         assertTrue(result.contains("中段和结尾"))
         assertFalse(result.contains("开头😀"))
@@ -379,7 +379,7 @@ class ReaderToolsetToolsTest {
             store = { store },
             readingScope = ReadingScope.upto(3, Int.MAX_VALUE)
         )
-        val result = tool.execute(buildJsonObject { put("query", "用户喜欢谁") })
+        val result = tool.execute(buildJsonObject { put("query", "用户喜欢谁") }).content
 
         assertTrue(result.contains("- 用户最喜欢张小敬"))
         assertFalse(result.contains("别的角色的记忆"))
@@ -395,7 +395,7 @@ class ReaderToolsetToolsTest {
         )
         assertEquals(
             "还没有与此相关的长期记忆。",
-            tool.execute(buildJsonObject { put("query", "任意") })
+            tool.execute(buildJsonObject { put("query", "任意") }).content
         )
     }
 

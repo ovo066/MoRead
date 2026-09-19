@@ -6,6 +6,9 @@ import com.mozhi.reader.core.epub.style.EpubVerticalAlignment
 import com.mozhi.reader.core.epub.style.ResolvedLength
 import com.mozhi.reader.core.epub.style.resolve
 import com.mozhi.reader.feature.reader.engine.InlineMarkerReservation
+import com.mozhi.reader.feature.reader.engine.fitPunctuationBreak
+import com.mozhi.reader.feature.reader.engine.canExpandTextGap
+import com.mozhi.reader.feature.reader.engine.resolveFirstLineIndent
 import com.mozhi.reader.feature.reader.engine.PositionedInlineImagePlacement
 import com.mozhi.reader.feature.reader.engine.TextBlockDecoration
 import com.mozhi.reader.feature.reader.engine.TextColumn
@@ -27,7 +30,8 @@ internal data class EpubSizedImage(
     val width: Float,
     val height: Float,
     val altText: String,
-    val alignment: EpubVerticalAlignment
+    val alignment: EpubVerticalAlignment,
+    val charOffset: Int
 )
 
 internal class EpubInlineLayout(private val ctx: EpubLayoutContext) {
@@ -51,11 +55,14 @@ internal class EpubInlineLayout(private val ctx: EpubLayoutContext) {
         val alignDeclared = "text-align" in blockStyle.appliedProperties
         val indentDeclared = "text-indent" in blockStyle.appliedProperties ||
             "duokan-text-indent" in blockStyle.appliedProperties
-        val firstIndent = when {
-            indentDeclared -> blockStyle.textIndent.resolve(cb.width) ?: 0f
-            isHeading -> 0f
-            else -> ctx.spec.indentCharCount * ctx.measure.indentColumnWidth()
-        }
+        val publisherIndent = if (indentDeclared) blockStyle.textIndent.resolve(cb.width) ?: 0f else null
+        val firstIndent = resolveFirstLineIndent(
+            publisherIndentPx = publisherIndent,
+            userIndentChars = ctx.spec.indentCharCount,
+            indentColumnWidthPx = ctx.measure.indentColumnWidth(),
+            publisherStyleMode = ctx.spec.publisherStyleMode,
+            isHeading = isHeading
+        )
         val singleImageOnly = clusters.count { it.image != null } == 1 &&
             clusters.none { it.image == null && it.float == null && !it.forcedBreak && it.text.isNotBlank() }
         val align = when {
@@ -312,7 +319,8 @@ internal class EpubInlineLayout(private val ctx: EpubLayoutContext) {
             width = width,
             height = height,
             altText = altText.ifBlank { source.altText },
-            alignment = style.verticalAlign
+            alignment = style.verticalAlign,
+            charOffset = textStart
         )
     }
 
@@ -346,7 +354,7 @@ internal class EpubInlineLayout(private val ctx: EpubLayoutContext) {
         horizontalEdges: Float,
         verticalEdges: Float
     ): Pair<Float, Float> {
-        val aspect = (pixelWidth.toFloat() / pixelHeight.coerceAtLeast(1)).coerceIn(MIN_IMAGE_ASPECT, MAX_IMAGE_ASPECT)
+        val aspect = pixelWidth.coerceAtLeast(1).toFloat() / pixelHeight.coerceAtLeast(1)
         val intrinsicWidth = pixelWidth.coerceAtLeast(1) *
             (ctx.spec.contentFontSizePx / CSS_ROOT_FONT_PX).coerceAtLeast(1f)
         fun contentWidth(length: ResolvedLength): Float? = length.resolve(percentBase)?.let { value ->
@@ -439,7 +447,9 @@ internal class EpubInlineLayout(private val ctx: EpubLayoutContext) {
             val style = ctx.resolveRunStyle(item.style, isHeading, inheritedBackgroundArgb, offset)
             result += Cluster(
                 text = clusterText,
-                width = ctx.measure.charWidths(clusterText, style.measureStyle).sum(),
+                // 逐簇测量拿不到 run 内部的字间距，必须自己补，否则用户的字间距对 EPUB 无效。
+                width = ctx.measure.charWidths(clusterText, style.measureStyle).sum() +
+                    ctx.measure.clusterLetterSpacing(style.measureStyle),
                 sourceOffset = offset,
                 sourceLength = clusterEnd - index,
                 marker = null,
@@ -549,12 +559,12 @@ internal class EpubInlineLayout(private val ctx: EpubLayoutContext) {
     }
 
     private fun adjustPunctuation(clusters: List<Cluster>, start: Int, proposed: Int): Int {
-        var end = proposed
-        // 中文避头尾：闭合标点不下行，起始标点不孤悬行尾。闭合标点允许轻微越界。
-        while (end < clusters.size && clusters[end].startsWithForbiddenPunctuation()) end++
-        while (end > start + 1 && clusters[end - 1].endsWithOpeningPunctuation()) end--
-        if (end <= start) end = start + 1
-        return end
+        return fitPunctuationBreak(start, proposed, clusters.size, { clusters[it].text }) { boundary ->
+            val left = clusters[boundary - 1]
+            val right = clusters[boundary]
+            (boundary == proposed || left.isBreakOpportunity()) && right.marker == null &&
+                (left.rubyKey == null || left.rubyKey != right.rubyKey)
+        }
     }
 
     private class LineMetricsResult(
@@ -645,9 +655,15 @@ internal class EpubInlineLayout(private val ctx: EpubLayoutContext) {
         }
         var spaceExtra = 0f
         var gapExtra = 0f
+        val expandable = BooleanArray(clusters.size) { index ->
+            index < clusters.lastIndex && !clusters[index + 1].forcedBreak &&
+                clusters[index + 1].marker == null &&
+                canExpandTextGap(clusters[index].text, clusters[index + 1].text)
+        }
         if (justify && residual > 0f && clusters.size > 1 && residual <= available * MAX_JUSTIFY_FRACTION) {
             val spaces = clusters.count { it.text == " " && it.marker == null }
-            if (spaces > 0) spaceExtra = residual / spaces else gapExtra = residual / (clusters.size - 1)
+            val gaps = expandable.count { it }
+            if (spaces > 0) spaceExtra = residual / spaces else if (gaps > 0) gapExtra = residual / gaps
         }
 
         val baseline = lineTop + metrics.ascent
@@ -663,7 +679,7 @@ internal class EpubInlineLayout(private val ctx: EpubLayoutContext) {
             if (spaceExtra > 0f && cluster.text == " " && cluster.marker == null && index != clusters.lastIndex) {
                 advance += spaceExtra
             }
-            if (gapExtra > 0f && index != clusters.lastIndex) advance += gapExtra
+            if (gapExtra > 0f && expandable[index]) advance += gapExtra
             val style = cluster.style
             columns += TextColumn(
                 start = glyphStart,
@@ -696,7 +712,8 @@ internal class EpubInlineLayout(private val ctx: EpubLayoutContext) {
                     topOffset = (top - lineTop).coerceAtLeast(0f),
                     width = image.width,
                     height = image.height,
-                    altText = image.altText
+                    altText = image.altText,
+                    charOffset = image.charOffset
                 )
             }
             val boxKey = cluster.boxKey
@@ -811,12 +828,6 @@ internal class EpubInlineLayout(private val ctx: EpubLayoutContext) {
         return codePoint in CJK_RANGE || codePoint in CJK_EXT_RANGE || text.last() in BREAK_PUNCTUATION
     }
 
-    private fun Cluster.startsWithForbiddenPunctuation(): Boolean =
-        image == null && text.firstOrNull() in FORBIDDEN_LINE_START
-
-    private fun Cluster.endsWithOpeningPunctuation(): Boolean =
-        image == null && text.lastOrNull() in FORBIDDEN_LINE_END
-
     private fun Char.isCombiningMark(): Boolean = when (Character.getType(this)) {
         Character.NON_SPACING_MARK.toInt(),
         Character.COMBINING_SPACING_MARK.toInt(),
@@ -831,17 +842,8 @@ internal class EpubInlineLayout(private val ctx: EpubLayoutContext) {
         const val MAX_JUSTIFY_FRACTION = 0.35f
         const val MAX_IMAGE_HEIGHT_FRACTION = 0.86f
         const val CSS_ROOT_FONT_PX = 16f
-        const val MIN_IMAGE_ASPECT = 0.15f
-        const val MAX_IMAGE_ASPECT = 7f
         val CJK_RANGE = 0x3400..0x9FFF
         val CJK_EXT_RANGE = 0x20000..0x2FA1F
         val BREAK_PUNCTUATION = setOf('，', '。', '、', '；', '：', '！', '？', '”', '’', ',', '.', ';', ':', '!', '?')
-        val FORBIDDEN_LINE_START = setOf(
-            '，', '。', '、', '；', '：', '！', '？', '）', '》', '】', '〉', '〕',
-            '」', '』', '”', '’', '…', '—', ',', '.', ';', ':', '!', '?', ')', ']', '}'
-        )
-        val FORBIDDEN_LINE_END = setOf(
-            '（', '《', '【', '〈', '〔', '「', '『', '“', '‘', '(', '[', '{'
-        )
     }
 }

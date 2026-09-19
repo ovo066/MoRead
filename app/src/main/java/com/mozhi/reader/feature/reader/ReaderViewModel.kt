@@ -1,28 +1,26 @@
 package com.mozhi.reader.feature.reader
 
 import android.net.Uri
-import androidx.annotation.StringRes
 import com.mozhi.reader.R
 import com.mozhi.reader.core.datastore.PageMode
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import com.mozhi.reader.ui.requireBookId
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mozhi.reader.ai.companion.ProactiveAnnotationScheduler
-import com.mozhi.reader.ai.companion.ProactiveAnnotationBatchResult
 import com.mozhi.reader.ai.companion.ProactiveAnnotationNoticeComposer
 import com.mozhi.reader.ai.companion.annotationNoticeEligible
+import com.mozhi.reader.ai.companion.dailyAnnotationBudgetNotice
 import com.mozhi.reader.core.database.entity.AnnotationColors
 import com.mozhi.reader.core.database.entity.AnnotationEntity
 import com.mozhi.reader.core.database.entity.AnnotationStyle
-import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.BookSourceType
 import com.mozhi.reader.core.database.entity.BookmarkEntity
 import com.mozhi.reader.core.database.entity.BookTocEntryEntity
 import com.mozhi.reader.core.database.entity.ChapterEntity
 import com.mozhi.reader.core.database.entity.IllustrationEntity
-import com.mozhi.reader.core.database.entity.ReadingDailyEntity
 import com.mozhi.reader.core.datastore.ChineseConversionMode
 import com.mozhi.reader.core.datastore.PageTurnAnimation
 import com.mozhi.reader.core.datastore.PendingReaderFont
@@ -30,7 +28,6 @@ import com.mozhi.reader.core.datastore.PublisherStyleMode
 import com.mozhi.reader.core.datastore.ReaderFont
 import com.mozhi.reader.core.datastore.ReaderFontImporter
 import com.mozhi.reader.core.datastore.ReaderImageImporter
-import com.mozhi.reader.core.datastore.ReaderSettings
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
 import com.mozhi.reader.core.datastore.ReaderTextReplacementRule
 import com.mozhi.reader.core.datastore.ReaderTheme
@@ -63,7 +60,6 @@ import com.mozhi.reader.feature.reader.engine.RenderPage
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
-import java.time.LocalDate
 import javax.inject.Inject
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -77,81 +73,6 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-
-data class ReaderUiState(
-    val book: BookEntity? = null,
-    val chapters: List<ChapterEntity> = emptyList(),
-    val tocEntries: List<BookTocEntryEntity> = emptyList(),
-    val bookmarks: List<BookmarkEntity> = emptyList(),
-    val annotations: List<AnnotationEntity> = emptyList(),
-    val illustrations: List<IllustrationEntity> = emptyList(),
-    /** 有讨论回复的批注 id：纯高亮有讨论时也要出「评」标记。 */
-    val repliedAnnotationIds: Set<Long> = emptySet(),
-    val showAiAnnotations: Boolean = true,
-    val annotationNotice: ReaderAnnotationNotice? = null,
-    /** 即划即改：上次使用的划线样式与颜色。 */
-    val lastAnnotationStyle: AnnotationStyle = AnnotationStyle.HIGHLIGHT,
-    val lastAnnotationColor: String = AnnotationColors.AMBER,
-    val settings: ReaderSettings = ReaderSettings(),
-    val currentChapterIndex: Int = 0,
-    val currentCharOffset: Int = 0,
-    val pageIndex: Int = 0,
-    val pageCount: Int = 1,
-    val readingProgress: Float = 0f,
-    val chapterProgress: Float = 0f,
-    val readingStats: ReaderStatistics = ReaderStatistics(),
-    val isLoading: Boolean = true,
-    val isPreparingText: Boolean = false,
-    /** 当前章已排完版、首页可画；进场揭示以它为准，不再掐固定表。 */
-    val isContentReady: Boolean = false,
-    val contentRevision: Int = 0,
-    val errorMessage: String? = null
-)
-
-data class ReaderAnnotationNotice(val result: ProactiveAnnotationBatchResult, val message: String)
-
-data class ReadingDayStat(
-    val epochDay: Long,
-    val durationMs: Long
-)
-
-data class ReaderSourceSelection(
-    val start: Int,
-    val end: Int,
-    val text: String,
-    val textAnchorJson: String
-)
-
-data class EpubLinkPreview(
-    val sourceChapterIndex: Int,
-    val href: String,
-    val label: String,
-    val targetChapterIndex: Int?,
-    val targetCharOffset: Int,
-    val targetTitle: String,
-    val content: String,
-    val externalUrl: String? = null,
-    val presentedMode: ChineseConversionMode? = null
-)
-
-data class ReaderStatistics(
-    val totalDurationMs: Long = 0,
-    val readingDays: Int = 0,
-    val streakDays: Int = 0,
-    val lastSevenDays: List<ReadingDayStat> = emptyList()
-)
-
-enum class PageTurnDirection {
-    PREVIOUS,
-    NEXT
-}
-
-sealed interface ReaderEvent {
-    data class ShowMessage(val message: String) : ReaderEvent
-    data class ShowLocalizedMessage(@param:StringRes val resourceId: Int) : ReaderEvent
-    data class ConfirmFontImport(val pending: PendingReaderFont) : ReaderEvent
-    data class TextReplacementRuleSuggested(val rule: ReaderTextReplacementRule) : ReaderEvent
-}
 
 @HiltViewModel
 class ReaderViewModel @Inject constructor(
@@ -172,12 +93,7 @@ class ReaderViewModel @Inject constructor(
     private val chapterPresenter: ChineseChapterPresenter,
     private val chineseTextConverter: ChineseTextConverter
 ) : ViewModel(), ReaderContentController.Listener {
-    private val bookId: Long = when (val value: Any? = savedStateHandle["bookId"]) {
-        is Long -> value
-        is Int -> value.toLong()
-        is String -> value.toLongOrNull()
-        else -> null
-    } ?: error("缺少 bookId")
+    private val bookId: Long = savedStateHandle.requireBookId()
 
     // 首帧就用热缓存里的真实设置：默认值画一帧再换纸色，进场会可见地跳一下。
     private val mutableState = MutableStateFlow(
@@ -190,7 +106,7 @@ class ReaderViewModel @Inject constructor(
 
     val contentController = ReaderContentController(
         scope = viewModelScope,
-        chapterLoader = ::loadPresentedChapter,
+        chapterLoader = { index -> loadPresentedChapter(index, conversionMode) },
         listener = this
     )
 
@@ -202,6 +118,9 @@ class ReaderViewModel @Inject constructor(
 
     private var chapterEntities: List<ChapterEntity> = emptyList()
     private var conversionMode = ChineseConversionMode.OFF
+    private val presentationResolver = ReaderPresentationResolver(::currentPresentation)
+
+    private fun currentPresentation() = ReaderPresentationSnapshot(conversionMode, contentController.sourceGeneration)
     private var rawInlineImages: Map<Int, List<InlineImageSource>> = emptyMap()
     private var rawTocEntries: List<BookTocEntryEntity> = emptyList()
     private var contentHook: ((Int) -> Unit)? = null
@@ -230,11 +149,60 @@ class ReaderViewModel @Inject constructor(
     private var hasOpenedPosition = false
 
     init {
+        observeLibraryState()
+        observeAnnotationState()
+        observeReadingPreferences()
+        observeAnnotationNotices()
+        loadBook()
+    }
+
+    private fun observeLibraryState() {
         viewModelScope.launch {
-            libraryRepository.observeBook(bookId).collect { book ->
-                if (book != null) mutableState.update { it.copy(book = book) }
+            observeReaderLibrary(libraryRepository, bookId).collect { observed ->
+                val changedToc = if (rawTocEntries != observed.tocEntries) {
+                    rawTocEntries = observed.tocEntries
+                    displayTocEntries()
+                } else null
+                mutableState.update { state -> state.copy(
+                    book = observed.book ?: state.book,
+                    bookmarks = observed.bookmarks,
+                    tocEntries = changedToc ?: state.tocEntries,
+                    readingStats = observed.statistics
+                ) }
             }
         }
+    }
+
+    private fun observeAnnotationState() {
+        viewModelScope.launch {
+            observeReaderAnnotations(annotationRepository, illustrationRepository, bookId).collect { observed ->
+                mutableState.update { it.copy(
+                    annotations = observed.annotations,
+                    illustrations = observed.illustrations,
+                    repliedAnnotationIds = observed.repliedIds
+                ) }
+            }
+        }
+    }
+
+    private fun observeReadingPreferences() {
+        viewModelScope.launch {
+            observeReaderAnnotationPreferences(settingsRepository).collect { preferences ->
+                mutableState.update { it.copy(
+                    showAiAnnotations = preferences.showAiAnnotations,
+                    lastAnnotationStyle = preferences.style,
+                    lastAnnotationColor = preferences.color
+                ) }
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.settings.collect { settings ->
+                mutableState.update { it.copy(settings = settings) }
+            }
+        }
+    }
+
+    private fun observeAnnotationNotices() {
         viewModelScope.launch {
             settingsRepository.companionAutonomySettings.collect { autonomy ->
                 if (!autonomy.noticeActive) dismissAnnotationNotice()
@@ -246,8 +214,13 @@ class ReaderViewModel @Inject constructor(
                 val epoch = readerVisibilityEpoch
                 val autonomy = settingsRepository.companionAutonomySettings.first()
                 if (result.personaId !in autonomy.annotationPersonasFor(settingsRepository.activePersonaId.first())) return@collect
-                if (!annotationNoticeEligible(autonomy, result.createdCount, readerVisible)) return@collect
-                val text = annotationNoticeComposer.compose(result, autonomy.annotationNotice) ?: return@collect
+                val text = if (result.dailyBudgetExhausted) {
+                    if (!readerVisible || !autonomy.noticeActive) return@collect
+                    dailyAnnotationBudgetNotice(autonomy.annotationLimitsFor(bookId).dailyMax)
+                } else {
+                    if (!annotationNoticeEligible(autonomy, result.createdCount, readerVisible)) return@collect
+                    annotationNoticeComposer.compose(result, autonomy.annotationNotice) ?: return@collect
+                }
                 val latest = settingsRepository.companionAutonomySettings.first()
                 if (readerVisible && readerVisibilityEpoch == epoch && latest.noticeActive &&
                     latest.annotationNotice == autonomy.annotationNotice &&
@@ -256,58 +229,6 @@ class ReaderViewModel @Inject constructor(
                 }
             }
         }
-        viewModelScope.launch {
-            libraryRepository.observeBookmarks(bookId).collect { bookmarks ->
-                mutableState.update { it.copy(bookmarks = bookmarks) }
-            }
-        }
-        viewModelScope.launch {
-            libraryRepository.observeTocEntries(bookId).collect { entries ->
-                rawTocEntries = entries
-                mutableState.update { it.copy(tocEntries = displayTocEntries()) }
-            }
-        }
-        viewModelScope.launch {
-            annotationRepository.observeForBook(bookId).collect { annotations ->
-                mutableState.update { it.copy(annotations = annotations) }
-            }
-        }
-        viewModelScope.launch {
-            illustrationRepository.observeForBook(bookId).collect { illustrations ->
-                mutableState.update { it.copy(illustrations = illustrations) }
-            }
-        }
-        viewModelScope.launch {
-            annotationRepository.observeRepliedAnnotationIds(bookId).collect { ids ->
-                mutableState.update { it.copy(repliedAnnotationIds = ids.toSet()) }
-            }
-        }
-        viewModelScope.launch {
-            settingsRepository.showAiAnnotations.collect { enabled ->
-                mutableState.update { it.copy(showAiAnnotations = enabled) }
-            }
-        }
-        viewModelScope.launch {
-            settingsRepository.lastAnnotationStyle.collect { style ->
-                mutableState.update { it.copy(lastAnnotationStyle = AnnotationStyle.fromWire(style)) }
-            }
-        }
-        viewModelScope.launch {
-            settingsRepository.lastAnnotationColor.collect { color ->
-                mutableState.update { it.copy(lastAnnotationColor = AnnotationColors.normalize(color)) }
-            }
-        }
-        viewModelScope.launch {
-            libraryRepository.observeReadingDays(bookId).collect { days ->
-                mutableState.update { it.copy(readingStats = days.toReaderStatistics()) }
-            }
-        }
-        viewModelScope.launch {
-            settingsRepository.settings.collect { settings ->
-                mutableState.update { it.copy(settings = settings) }
-            }
-        }
-        loadBook()
     }
 
     private fun loadBook() {
@@ -476,9 +397,8 @@ class ReaderViewModel @Inject constructor(
             entry.copy(title = chineseTextConverter.convert(entry.title, mode))
         }
 
-    private suspend fun loadPresentedChapter(chapterIndex: Int): ReaderChapterContent? {
+    private suspend fun loadPresentedChapter(chapterIndex: Int, mode: ChineseConversionMode): ReaderChapterContent? {
         val chapter = chapterEntities.getOrNull(chapterIndex) ?: return null
-        val mode = conversionMode
         val body = libraryRepository.readChapterText(bookId, chapter)
         val layout = layoutStore.readChapter(bookId, chapterIndex, body)
         return withContext(Dispatchers.Default) {
@@ -505,9 +425,9 @@ class ReaderViewModel @Inject constructor(
         start: Int,
         end: Int,
         sourceAnchorJson: String = ""
-    ): ResolvedTextAnchor? {
+    ): ResolvedTextAnchor? = presentationResolver.resolve { snapshot ->
         val chapter = chapterEntities.firstOrNull { it.chapterIndex == chapterIndex }
-            ?: return null
+            ?: return@resolve null
         val source = libraryRepository.readChapterText(bookId, chapter)
         val anchor = ReaderTextAnchorCodec.decode(sourceAnchorJson)
             ?.takeIf { it.mode == ChineseConversionMode.OFF }
@@ -517,7 +437,7 @@ class ReaderViewModel @Inject constructor(
                 end,
                 ChineseConversionMode.OFF
             )
-        return resolveSourceAnchor(chapterIndex, anchor, start, end, source)
+        resolveSourceAnchor(chapterIndex, anchor, start, end, source, snapshot)
     }
 
     private suspend fun resolveSourceAnchor(
@@ -526,12 +446,11 @@ class ReaderViewModel @Inject constructor(
         fallbackStart: Int,
         fallbackEnd: Int,
         sourceBody: String,
-        retryOnModeChange: Boolean = true
+        snapshot: ReaderPresentationSnapshot
     ): ResolvedTextAnchor? {
-        val mode = conversionMode
         val images = rawInlineImages[chapterIndex].orEmpty()
         val layout = layoutStore.readChapter(bookId, chapterIndex, sourceBody)
-        val resolved = withContext(Dispatchers.Default) {
+        return withContext(Dispatchers.Default) {
             val sourceStart = fallbackStart.coerceIn(0, sourceBody.length)
             val sourceRange = ReaderTextAnchors.resolveTextMatch(
                 sourceBody,
@@ -548,24 +467,9 @@ class ReaderViewModel @Inject constructor(
                 images = images,
                 sourceStart = sourceRange.start,
                 sourceEnd = sourceRange.end,
-                mode = mode
+                mode = snapshot.mode
             )
         }
-        if (mode != conversionMode) {
-            return if (retryOnModeChange) {
-                resolveSourceAnchor(
-                    chapterIndex,
-                    anchor,
-                    fallbackStart,
-                    fallbackEnd,
-                    sourceBody,
-                    false
-                )
-            } else {
-                null
-            }
-        }
-        return resolved
     }
 
     /** Converts one displayed reader boundary back to the raw source used by ListenEngine. */
@@ -858,14 +762,14 @@ class ReaderViewModel @Inject constructor(
     /** 目录项可能指向章内 fragment，不能只跳到章节首页。 */
     fun goToTocEntry(chapterIndex: Int, href: String) {
         supersedePendingNavigation()
-        val mode = conversionMode
+        val snapshot = currentPresentation()
         suspendedNavigationJob = viewModelScope.launch {
             val target = resolveEpubTarget(chapterIndex, href, chapterIndex)
             if (target == null) {
-                if (mode == conversionMode) contentController.jumpToChapter(chapterIndex)
+                if (presentationResolver.isCurrent(snapshot)) contentController.jumpToChapter(chapterIndex)
                 return@launch
             }
-            if (target.mode != conversionMode) return@launch
+            if (!presentationResolver.isCurrent(target.presentation)) return@launch
             contentController.jumpToChapter(target.chapterIndex, target.offset)
         }
     }
@@ -903,20 +807,20 @@ class ReaderViewModel @Inject constructor(
             targetTitle = mutableState.value.chapters
                 .getOrNull(target.chapterIndex)?.title.orEmpty(),
             content = content,
-            presentedMode = target.mode
+            presentation = target.presentation
         )
     }
 
     fun goToEpubLink(preview: EpubLinkPreview) {
         val chapterIndex = preview.targetChapterIndex ?: return
         supersedePendingNavigation()
-        if (preview.presentedMode == conversionMode) {
+        if (preview.presentation?.let(presentationResolver::isCurrent) == true) {
             contentController.jumpToChapter(chapterIndex, preview.targetCharOffset)
             return
         }
         suspendedNavigationJob = viewModelScope.launch {
             val target = resolveEpubTarget(preview.sourceChapterIndex, preview.href) ?: return@launch
-            if (target.mode != conversionMode) return@launch
+            if (!presentationResolver.isCurrent(target.presentation)) return@launch
             contentController.jumpToChapter(target.chapterIndex, target.offset)
         }
     }
@@ -924,8 +828,16 @@ class ReaderViewModel @Inject constructor(
     private suspend fun resolveEpubTarget(
         sourceChapterIndex: Int,
         href: String,
-        hintedChapterIndex: Int? = null,
-        retryOnModeChange: Boolean = true
+        hintedChapterIndex: Int? = null
+    ): EpubTarget? = presentationResolver.resolve { snapshot ->
+        resolveEpubTargetInPresentation(sourceChapterIndex, href, hintedChapterIndex, snapshot)
+    }
+
+    private suspend fun resolveEpubTargetInPresentation(
+        sourceChapterIndex: Int,
+        href: String,
+        hintedChapterIndex: Int?,
+        snapshot: ReaderPresentationSnapshot
     ): EpubTarget? {
         val raw = href.trim()
         if (raw.isEmpty() || raw.startsWith("http://", true) || raw.startsWith("https://", true)) {
@@ -953,29 +865,21 @@ class ReaderViewModel @Inject constructor(
                 }?.chapterIndex ?: return null
             }
         }
-        val mode = conversionMode
         val presented = contentController.chapterBody(targetChapterIndex)?.let { body ->
             ReaderChapterContent(
                 body = body,
                 epubLayout = contentController.chapterLayout(targetChapterIndex)
             )
-        } ?: loadPresentedChapter(targetChapterIndex) ?: return null
-        if (mode != conversionMode) {
-            return if (retryOnModeChange) {
-                resolveEpubTarget(sourceChapterIndex, href, hintedChapterIndex, false)
-            } else {
-                null
-            }
-        }
+        } ?: loadPresentedChapter(targetChapterIndex, snapshot.mode) ?: return null
         if (fragment == null) {
-            return EpubTarget(targetChapterIndex, 0, 0, mode, presented)
+            return EpubTarget(targetChapterIndex, 0, 0, snapshot, presented)
         }
         val bundle = presented.epubLayout
-            ?: return EpubTarget(targetChapterIndex, 0, 0, mode, presented)
+            ?: return EpubTarget(targetChapterIndex, 0, 0, snapshot, presented)
         // 片段锚点优先在 DOM 里找：新导入的书不再落盘旧引擎的块列表，只有 DOM 知道 id 在哪。
         bundle.dom?.let { dom ->
             EpubDomFragmentLocator.locate(dom.bodyNode, fragment)?.let { range ->
-                return EpubTarget(targetChapterIndex, range.first, range.last + 1, mode, presented)
+                return EpubTarget(targetChapterIndex, range.first, range.last + 1, snapshot, presented)
             }
         }
         val matches = bundle.document.blocks.filter { block ->
@@ -987,7 +891,7 @@ class ReaderViewModel @Inject constructor(
                 ?: block.textStart
         } ?: 0
         val end = matches.maxOfOrNull { it.textEnd } ?: start
-        return EpubTarget(targetChapterIndex, start, end, mode, presented)
+        return EpubTarget(targetChapterIndex, start, end, snapshot, presented)
     }
 
     fun goToPrevChapter() {
@@ -1741,7 +1645,7 @@ private data class EpubTarget(
     val chapterIndex: Int,
     val offset: Int,
     val endOffset: Int,
-    val mode: ChineseConversionMode,
+    val presentation: ReaderPresentationSnapshot,
     val presented: ReaderChapterContent
 )
 
@@ -1751,27 +1655,3 @@ private data class ReaderPositionSnapshot(
     val pageCount: Int,
     val lastPageVisible: Boolean
 )
-
-private fun List<ReadingDailyEntity>.toReaderStatistics(): ReaderStatistics {
-    val today = LocalDate.now().toEpochDay()
-    val durationByDay = associate { it.epochDay to it.durationMs }
-    val lastSevenDays = (6 downTo 0).map { offset ->
-        val epochDay = today - offset
-        ReadingDayStat(
-            epochDay = epochDay,
-            durationMs = durationByDay[epochDay] ?: 0
-        )
-    }
-    var streakCursor = if ((durationByDay[today] ?: 0) > 0) today else today - 1
-    var streakDays = 0
-    while ((durationByDay[streakCursor] ?: 0) > 0) {
-        streakDays += 1
-        streakCursor -= 1
-    }
-    return ReaderStatistics(
-        totalDurationMs = sumOf(ReadingDailyEntity::durationMs),
-        readingDays = count { it.durationMs > 0 },
-        streakDays = streakDays,
-        lastSevenDays = lastSevenDays
-    )
-}

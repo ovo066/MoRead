@@ -37,7 +37,8 @@ class TextColumn(
     val linkHref: String? = null
 )
 
-enum class InlineMarkerKind { ANNOTATION, ILLUSTRATION }
+/** Only generated illustration buttons occupy text space. Comments are paint-only decorations. */
+enum class InlineMarkerKind { ILLUSTRATION }
 
 data class InlineMarkerReservation(
     val charOffset: Int,
@@ -69,7 +70,9 @@ data class PositionedInlineImagePlacement(
     val topOffset: Float = 0f,
     val width: Float,
     val height: Float,
-    val altText: String
+    val altText: String,
+    /** Display-body anchor of this occurrence, not the first image on its line. */
+    val charOffset: Int? = null
 )
 
 data class TextBlockDecoration(

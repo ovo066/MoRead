@@ -16,7 +16,8 @@ internal data class ReadableCorpus(
     val indexedText: Map<Pair<Int, Int>, ChapterChunk>,
     val failures: List<Int>,
     val failureCount: Int,
-    val resourceLimited: Boolean
+    val resourceLimited: Boolean,
+    val diagnostics: List<ToolDiagnostic> = emptyList()
 ) {
     val complete: Boolean get() = failureCount == 0 && !resourceLimited
 
@@ -48,12 +49,14 @@ internal suspend fun loadReadableCorpus(
     firstChapterIndex: Int = 0
 ): ReadableCorpus {
     val last = scope.clampLastChapter(totalChapters)
+    val diagnostics = mutableListOf<ToolDiagnostic>()
     val bulk = try {
         // A prefix-only bulk loader would read chapters outside an explicitly narrowed query.
         if (firstChapterIndex > 0) emptyMap() else loadChaptersThrough(last).associateBy { it.chapterIndex }
     } catch (cancelled: CancellationException) {
         throw cancelled
-    } catch (_: Exception) {
+    } catch (error: Exception) {
+        diagnostics += ToolDiagnostic("BULK_READ_FAILED", error)
         emptyMap()
     }
     val bodies = LinkedHashMap<Int, String>()
@@ -74,7 +77,8 @@ internal suspend fun loadReadableCorpus(
             loadChapter(index)
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            if (diagnostics.size < 8) diagnostics += ToolDiagnostic("READ_FAILED", error)
             null
         }
         if (document == null || document.readError != null || document.chapterIndex != index) {
@@ -100,5 +104,5 @@ internal suspend fun loadReadableCorpus(
         }
     }
     if (totalChapters <= 0) failureCount++
-    return ReadableCorpus(candidates, bodies, indexedText, failures, failureCount, limited)
+    return ReadableCorpus(candidates, bodies, indexedText, failures, failureCount, limited, diagnostics)
 }

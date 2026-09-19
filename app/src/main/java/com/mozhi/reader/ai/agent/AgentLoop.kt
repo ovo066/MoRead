@@ -19,12 +19,10 @@ import com.mozhi.reader.core.library.MessageAttachment
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.builtins.ListSerializer
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.jsonObject
 
 /** What the UI sees while the agent works. */
 sealed interface AgentEvent {
@@ -81,7 +79,8 @@ class AgentLoop @Inject constructor(
     private val chatDao: ChatDao,
     private val clientFactory: dagger.Lazy<AiClientFactory>,
     private val attachmentStore: dagger.Lazy<AttachmentStore>,
-    private val rollingSummarizer: dagger.Lazy<RollingSummarizer>
+    private val rollingSummarizer: dagger.Lazy<RollingSummarizer>,
+    private val toolExecutor: AgentToolExecutor = AgentToolExecutor()
 ) {
     /**
      * Streams one agent turn for the conversation's current history.
@@ -161,32 +160,8 @@ class AgentLoop @Inject constructor(
             if (text.isNotBlank()) producedText = true
             working.add(ChatMessage(ChatRole.ASSISTANT, text.toString(), toolCalls = requested))
             for (call in requested) {
-                val tool = byName[call.name]
-                val displayName = tool?.displayName ?: "调用 ${call.name}"
-                emit(AgentEvent.ToolRun(call.id, call.name, displayName, call.arguments))
-                val result = if (tool == null) {
-                    "未知工具：${call.name}"
-                } else {
-                    try {
-                        tool.execute(call.argumentsObject())
-                    } catch (cancelled: CancellationException) {
-                        throw cancelled
-                    } catch (error: Throwable) {
-                        "工具执行失败：${error.message ?: "未知错误"}"
-                    }
-                }
-                val succeeded = result.isToolSuccess()
-                emit(
-                    AgentEvent.ToolFinished(
-                        callId = call.id,
-                        toolName = call.name,
-                        displayName = displayName,
-                        succeeded = succeeded,
-                        detail = if (succeeded) "已完成" else result.take(MAX_TOOL_STATUS_CHARS),
-                        resultPreview = result.take(MAX_TOOL_PREVIEW_CHARS)
-                    )
-                )
-                working.add(ChatMessage(ChatRole.TOOL, result, toolCallId = call.id))
+                val result = executeTool(call, byName[call.name])
+                working.add(ChatMessage(ChatRole.TOOL, result.content, toolCallId = call.id))
             }
 
             if (round == maxRounds - 1 && !producedText) {
@@ -294,50 +269,19 @@ class AgentLoop @Inject constructor(
             history.add(ChatMessage(ChatRole.ASSISTANT, text.toString(), toolCalls = requested))
 
             for (call in requested) {
-                val tool = byName[call.name]
-                val displayName = tool?.displayName ?: "调用 ${call.name}"
-                emit(
-                    AgentEvent.ToolRun(
-                        callId = call.id,
-                        toolName = call.name,
-                        displayName = displayName,
-                        arguments = call.arguments
-                    )
-                )
-                val result = if (tool == null) {
-                    "未知工具：${call.name}"
-                } else {
-                    try {
-                        tool.execute(call.argumentsObject())
-                    } catch (cancelled: CancellationException) {
-                        throw cancelled
-                    } catch (error: Throwable) {
-                        "工具执行失败：${error.message ?: "未知错误"}"
-                    }
-                }
-                val succeeded = result.isToolSuccess()
-                emit(
-                    AgentEvent.ToolFinished(
-                        callId = call.id,
-                        toolName = call.name,
-                        displayName = displayName,
-                        succeeded = succeeded,
-                        detail = if (succeeded) "已完成" else result.take(MAX_TOOL_STATUS_CHARS),
-                        resultPreview = result.take(MAX_TOOL_PREVIEW_CHARS)
-                    )
-                )
+                val result = executeTool(call, byName[call.name])
                 val toolCompletedAt = System.currentTimeMillis()
                 chatDao.insertMessage(
                     MessageEntity(
                         conversationId = conversationId,
                         role = ChatRole.TOOL.wire,
-                        content = result,
+                        content = result.content,
                         toolCallId = call.id,
                         createdAt = toolCompletedAt
                     )
                 )
                 chatDao.touchConversation(conversationId, toolCompletedAt)
-                history.add(ChatMessage(ChatRole.TOOL, result, toolCallId = call.id))
+                history.add(ChatMessage(ChatRole.TOOL, result.content, toolCallId = call.id))
             }
 
             if (round == roundLimit - 1) {
@@ -350,6 +294,24 @@ class AgentLoop @Inject constructor(
                 }
             }
         }
+    }
+
+    private suspend fun FlowCollector<AgentEvent>.executeTool(call: ToolCall, tool: AgentTool?): ToolResult {
+        val displayName = tool?.displayName ?: "调用 ${call.name}"
+        emit(AgentEvent.ToolRun(call.id, call.name, displayName, call.arguments))
+        val result = toolExecutor.execute(call, tool)
+        emit(AgentEvent.ToolFinished(
+            callId = call.id,
+            toolName = call.name,
+            displayName = displayName,
+            succeeded = result is ToolResult.Success,
+            detail = when (result) {
+                is ToolResult.Success -> if (result.partial) "部分完成" else "已完成"
+                is ToolResult.Failure -> result.content.take(MAX_TOOL_STATUS_CHARS)
+            },
+            resultPreview = result.content.take(MAX_TOOL_PREVIEW_CHARS)
+        ))
+        return result
     }
 
     private suspend fun persistAssistant(
@@ -447,23 +409,4 @@ class AgentLoop @Inject constructor(
         /** 思维链落库上限：它只服务展示，没必要为一次长推理撑大消息表。 */
         const val MAX_REASONING_CHARS = 20_000
     }
-}
-
-private fun ToolCall.argumentsObject(): JsonObject =
-    runCatching { AiJson.parseToJsonElement(arguments).jsonObject }.getOrNull()
-        ?: JsonObject(emptyMap())
-
-internal fun String.isToolSuccess(): Boolean {
-    val normalized = trimStart()
-    return !normalized.startsWith("工具执行失败") &&
-        !normalized.startsWith("未知工具") &&
-        !normalized.startsWith("缺少") &&
-        !normalized.startsWith("超出") &&
-        !normalized.startsWith("未找到") &&
-        !normalized.startsWith("章节范围无效") &&
-        !normalized.contains("无法确定") &&
-        !normalized.contains("找不到这段 quote") &&
-        !normalized.contains("检索不可用") &&
-        !normalized.contains("尚未配置") &&
-        !normalized.contains("还没有建成向量索引")
 }

@@ -1,6 +1,7 @@
 package com.mozhi.reader.feature.listen
 
 import android.content.Context
+import com.mozhi.reader.ui.bookIdOrNull
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -53,7 +54,7 @@ class AudiobookProductionViewModel @Inject constructor(
     private val libraryRepository: LibraryRepository,
     private val audiobookRepository: AudiobookRepository
 ) : ViewModel() {
-    val bookId = savedStateHandle.get<String>("bookId")?.toLongOrNull() ?: 0L
+    val bookId = savedStateHandle.bookIdOrNull() ?: 0L
     private val mutableState = MutableStateFlow(AudiobookProductionUiState())
     val uiState = mutableState
     private val eventChannel = Channel<AudiobookProductionEvent>(Channel.BUFFERED)

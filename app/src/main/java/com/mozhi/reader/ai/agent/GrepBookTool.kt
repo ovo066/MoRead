@@ -54,20 +54,20 @@ internal class GrepBookTool(
         }
     )
 
-    override suspend fun execute(arguments: JsonObject): String = withContext(Dispatchers.Default) {
+    override suspend fun execute(arguments: JsonObject): ToolResult = withContext(Dispatchers.Default) {
         try {
             withTimeoutOrNull(15_000) { executeLocal(arguments) }
                 ?: errorResult("RESOURCE_LIMIT", "达到本地扫描时间上限，请重新查询；没有完整计数")
         } catch (cancelled: CancellationException) {
             throw cancelled // cancellation is not a successful zero-match response
         } catch (error: BookTextException) {
-            errorResult(error.code, error.message ?: "规范正文不可用")
-        } catch (_: Exception) {
-            errorResult("READ_FAILED", "规范正文读取失败，不能将错误视为零命中")
+            errorResult(error.code, error.message ?: "规范正文不可用", error)
+        } catch (error: Exception) {
+            errorResult("READ_FAILED", "规范正文读取失败，不能将错误视为零命中", error)
         }
     }
 
-    private suspend fun executeLocal(args: JsonObject): String {
+    private suspend fun executeLocal(args: JsonObject): ToolResult {
         fun primitive(key: String) = args[key] as? JsonPrimitive
         val pattern = primitive("pattern")?.takeIf { it.isString }?.content
             ?: return errorResult("INVALID_ARGUMENT", "pattern 必须是非空字符串")
@@ -115,6 +115,7 @@ internal class GrepBookTool(
         val first = range.firstIndex
         val last = range.lastIndex
         var snapshot = range.scope
+        val diagnostics = mutableListOf<ToolDiagnostic>()
         suspend fun source(index: Int): GrepSource {
             if (index == snapshot.maxChapterIndex && snapshot.maxCharOffset == 0) return GrepSource(index, "")
             return try {
@@ -123,8 +124,14 @@ internal class GrepBookTool(
                     GrepSource(index, null, "SOURCE_MISSING")
                 } else GrepSource(index, snapshot.readableText(index, document.body))
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (error: BookTextException) { GrepSource(index, null, error.code) }
-            catch (_: Exception) { GrepSource(index, null, "READ_FAILED") }
+            catch (error: BookTextException) {
+                if (diagnostics.size < 8) diagnostics += ToolDiagnostic(error.code, error)
+                GrepSource(index, null, error.code)
+            }
+            catch (error: Exception) {
+                if (diagnostics.size < 8) diagnostics += ToolDiagnostic("READ_FAILED", error)
+                GrepSource(index, null, "READ_FAILED")
+            }
         }
         val boundary = source(last)
         if (page == null && boundary.body != null) snapshot = ReadingScope.upto(last, boundary.body.length)
@@ -145,7 +152,7 @@ internal class GrepBookTool(
             bookId, revision, snapshot, pattern, normalize, contextChars, skip, result.coverageSignature,
             firstChapterIndex = first, requestedToChapter = if (page != null) page.requestedToChapter else bounds.toChapter
         )) }
-        return buildJsonObject {
+        return ToolResult.Success(buildJsonObject {
             put("status", if (result.countIsExact) "complete" else "partial")
             putJsonObject("scope") {
                 put("book_revision", revision)
@@ -178,13 +185,13 @@ internal class GrepBookTool(
                 put("code", if (result.resourceLimited) "RESOURCE_LIMIT" else "SOURCE_UNAVAILABLE")
                 put("message", "扫描未完整覆盖：缺章、读取失败或资源受限；计数及章节分布仅是部分结果，不能解释为没有匹配")
             })
-        }.toString()
+        }.toString(), partial = !result.countIsExact, diagnostics = diagnostics)
     }
 
-    private fun errorResult(code: String, message: String): String = buildJsonObject {
+    private fun errorResult(code: String, message: String, cause: Throwable? = null): ToolResult.Failure = ToolResult.Failure(code, buildJsonObject {
         put("status", "error"); put("scope", JsonNull); put("count", JsonNull)
         putJsonArray("by_chapter") {}; put("by_chapter_truncated", false)
         put("samples_truncated", false); put("next_cursor", JsonNull); putJsonArray("samples") {}
         putJsonObject("error") { put("code", code); put("message", message) }
-    }.toString()
+    }.toString(), cause)
 }

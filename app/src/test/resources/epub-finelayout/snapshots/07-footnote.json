@@ -6,7 +6,7 @@
             "index": 0,
             "chapterPosition": 0,
             "charLength": 43,
-            "height": 64.068184,
+            "height": 72.25,
             "backgroundColorArgb": null,
             "backgroundImagePath": null,
             "immersive": false,
@@ -15,9 +15,9 @@
                 {
                     "kind": "block",
                     "left": 0.0,
-                    "top": 45.818184,
+                    "top": 54.0,
                     "right": 240.0,
-                    "bottom": 73.428185,
+                    "bottom": 81.61,
                     "backgroundColorArgb": null,
                     "backgroundImagePath": null,
                     "backgroundSizeMode": "AUTO",
@@ -66,13 +66,13 @@
                     "charLength": 23,
                     "lineTop": 0.0,
                     "lineBottom": 24.0,
-                    "startX": 40.0,
+                    "startX": 0.0,
                     "image": null,
                     "images": [],
                     "glyphImages": [
                         {
                             "path": "fixture://OEBPS/Images/note.png",
-                            "left": 160.0,
+                            "left": 120.0,
                             "top": 0.0,
                             "width": 20.0,
                             "height": 20.0
@@ -83,8 +83,8 @@
                 {
                     "chapterPosition": 24,
                     "charLength": 20,
-                    "lineTop": 47.068184,
-                    "lineBottom": 64.068184,
+                    "lineTop": 55.25,
+                    "lineBottom": 72.25,
                     "startX": 0.0,
                     "image": null,
                     "images": [],

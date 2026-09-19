@@ -23,7 +23,7 @@ class GrepBookToolTest {
         extra: JsonObjectBuilder.() -> Unit = {}): JsonObject = Json.parseToJsonElement(tool.execute(buildJsonObject {
         put("pattern", pattern); put("max_samples", 1)
         cursor?.let { put("cursor", it) }; extra()
-    })).jsonObject
+    }).content).jsonObject
     private fun JsonObject.cursor() = this["next_cursor"]?.jsonPrimitive?.contentOrNull
     private fun JsonObject.code() = this["error"]?.jsonObject?.get("code")?.jsonPrimitive?.content
 

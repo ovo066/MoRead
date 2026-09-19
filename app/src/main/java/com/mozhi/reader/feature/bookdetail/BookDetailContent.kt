@@ -23,11 +23,11 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import com.mozhi.reader.ui.theme.moReadMetrics
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -137,6 +137,7 @@ import com.mozhi.reader.ui.components.MoReadDropdownMenu
 import com.mozhi.reader.ui.components.MoReadMenuDivider
 import com.mozhi.reader.ui.components.MoReadMenuItem
 import com.mozhi.reader.ui.components.MoReadStableDropdownMenu
+import com.mozhi.reader.ui.components.safeTopPadding
 import com.mozhi.reader.ui.theme.MoReadTokens
 import com.mozhi.reader.ui.theme.sealColor
 import java.io.File
@@ -163,7 +164,8 @@ internal fun DetailTopBar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .statusBarsPadding()
+            // 阅读页退场后才恢复状态栏，详情页从首帧起就要保留稳定的顶部安全区。
+            .safeTopPadding()
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -311,7 +313,7 @@ internal fun DetailHero(
                     .fillMaxWidth()
                     .padding(top = 14.dp, start = 20.dp, end = 20.dp)
                     .clickable { descriptionExpanded = !descriptionExpanded },
-                shape = RoundedCornerShape(20.dp),
+                shape = RoundedCornerShape(moReadMetrics().radiusFor(20)),
                 shadowElevation = 3.dp
             ) {
                 Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
@@ -405,7 +407,7 @@ internal fun HeroCover(book: BookEntity, modifier: Modifier = Modifier) {
     }
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(moReadMetrics().radiusFor(14)),
         shadowElevation = 18.dp,
         color = com.mozhi.reader.feature.bookshelf.coverColor(book.title)
     ) {
@@ -476,7 +478,7 @@ internal fun BookAnnotationLimitsCard(
     val effective = autonomy.annotationLimitsFor(bookId)
     FrostedSurface(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
+        shape = RoundedCornerShape(moReadMetrics().radiusFor(24)),
         shadowElevation = 6.dp
     ) {
         Row(
@@ -527,7 +529,7 @@ internal fun RingRow(
     Row(modifier = modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         FrostedSurface(
             modifier = Modifier.weight(1f),
-            shape = RoundedCornerShape(24.dp),
+            shape = RoundedCornerShape(moReadMetrics().radiusFor(24)),
             shadowElevation = 6.dp
         ) {
             Column(
@@ -562,7 +564,7 @@ internal fun RingRow(
         }
         FrostedSurface(
             modifier = Modifier.weight(1f),
-            shape = RoundedCornerShape(24.dp),
+            shape = RoundedCornerShape(moReadMetrics().radiusFor(24)),
             shadowElevation = 6.dp
         ) {
             Column(
@@ -602,7 +604,7 @@ internal fun RingRow(
 internal fun MoreBookDetailsEntry(onClick: () -> Unit, modifier: Modifier = Modifier) {
     FrostedSurface(
         modifier = modifier.fillMaxWidth().clickable(onClick = onClick),
-        shape = RoundedCornerShape(22.dp),
+        shape = RoundedCornerShape(moReadMetrics().radiusFor(22)),
         shadowElevation = 4.dp
     ) {
         Row(
@@ -636,7 +638,7 @@ internal fun ReadingAssetsEntry(
 ) {
     FrostedSurface(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(22.dp),
+        shape = RoundedCornerShape(moReadMetrics().radiusFor(22)),
         shadowElevation = 5.dp
     ) {
         Row(modifier = Modifier.padding(8.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -726,7 +728,7 @@ internal fun NoteCard(note: NoteEntity, onClick: () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(moReadMetrics().radiusFor(20)),
         shadowElevation = 4.dp
     ) {
         Row(modifier = Modifier.padding(14.dp)) {

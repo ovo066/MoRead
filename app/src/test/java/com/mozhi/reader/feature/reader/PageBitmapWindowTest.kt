@@ -87,4 +87,27 @@ class PageBitmapWindowTest {
         assertFalse(PageTurnAnimation.SLIDE.usesEmbeddedPageBackground())
         assertFalse(PageTurnAnimation.NONE.usesEmbeddedPageBackground())
     }
+
+    @Test
+    fun `a burst of updates during a turn is published once against the final window`() {
+        val queue = PageWindowRefreshQueue()
+        repeat(20) {
+            assertNull(queue.request(if (it % 2 == 0) 0 else 1, true, false))
+        }
+        assertEquals(0, queue.finishTurn())
+        assertNull(queue.finishTurn())
+        assertEquals(-1, queue.request(-1, false, false))
+    }
+
+    @Test
+    fun `pending annotations never defer committed window rotation or leak into the next turn`() {
+        val queue = PageWindowRefreshQueue()
+        assertNull(queue.request(0, true, false))
+        assertEquals(0, queue.request(0, true, true))
+        assertEquals(0, queue.finishTurn())
+        assertNull(queue.finishTurn())
+        assertNull(queue.request(-1, true, false))
+        assertEquals(0, queue.finishTurn())
+        assertNull(queue.finishTurn())
+    }
 }

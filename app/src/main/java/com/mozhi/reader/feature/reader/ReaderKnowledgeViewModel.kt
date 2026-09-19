@@ -67,10 +67,10 @@ class ReaderKnowledgeViewModel @Inject constructor(
         }
     }
 
-    fun previewCharacters() {
+    fun previewCharacters(progressBounded: Boolean) {
         if (mutable.value.characterTask?.active == true) return
         prepare(null) { book ->
-            val plan = characters.preview(book)
+            val plan = characters.preview(book, progressBounded)
             update(book) { it.copy(pendingCharacters = plan) }
         }
     }

@@ -101,7 +101,26 @@ internal class EpubTypesetterV2(
         fun hasBackgroundImage(node: StyledDomNode): Boolean =
             node.style.display != EpubDisplay.NONE &&
                 (node.style.background.imageHref != null || node.children.any(::hasBackgroundImage))
-        return !hasVisibleContent(root) && hasBackgroundImage(root)
+        if (!hasVisibleContent(root) && hasBackgroundImage(root)) return true
+        // A short title card over a cover-sized body illustration is still an artwork page.
+        // Counting legacy blocks misses titles split by <br> and decorative inline images.
+        if (root.style.background.imageHref == null || root.style.background.sizeMode != "cover") return false
+        var textLength = 0
+        var textRuns = 0
+        var centeredPanel = false
+        fun inspect(node: StyledDomNode) {
+            if (node.style.display == EpubDisplay.NONE) return
+            node.node.children.filter { it.tag == "#text" && it.textStart >= 0 && it.textEnd > it.textStart }.forEach {
+                textLength += it.textEnd - it.textStart
+                textRuns++
+            }
+            val style = node.style
+            if (style.hasBorder() && style.width != ResolvedLength.Auto &&
+                style.marginLeft == ResolvedLength.Auto && style.marginRight == ResolvedLength.Auto) centeredPanel = true
+            node.children.forEach(::inspect)
+        }
+        inspect(root)
+        return centeredPanel && textLength in 1..160 && textRuns <= 8
     }
 
     /**

@@ -267,7 +267,7 @@ internal class EpubBoxLayoutBackend(
         val clusters = styledClusters(
             layoutText, start, block, isTitle, syntax, bundle, actualBackgroundArgb
         )
-        val indent = if (isTitle) 0f else (block.style.textIndentEm ?: spec.indentCharCount) * measure.indentColumnWidth()
+        val indent = firstLineIndentFor(block, isTitle)
         val lines = wrap(clusters, geometry.width, indent)
         val lineMetrics = lines.map { line -> resolveLineMetrics(line) }
         val orphanCount = min(block.style.orphans, lines.size)
@@ -376,7 +376,9 @@ internal class EpubBoxLayoutBackend(
             )
             val clusterText = if (marker == null) layoutText.text.substring(index, end) else ""
             val width = if (marker == null) {
-                measure.charWidths(clusterText, resolved.measureStyle).sum()
+                // 逐簇测量拿不到 run 内部的字间距，必须自己补。
+                measure.charWidths(clusterText, resolved.measureStyle).sum() +
+                    measure.clusterLetterSpacing(resolved.measureStyle)
             } else {
                 measure.indentColumnWidth()
             }
@@ -481,11 +483,13 @@ internal class EpubBoxLayoutBackend(
                 }
             }
             if (!keptGroup && end < clusters.size && preferredBreak > start) end = preferredBreak
-            // 中文避头尾：句号、逗号、右引号等不能落到下一行开头，左括号、左引号
-            // 不能孤零零留在行尾。闭合标点允许轻微越过测量宽度，比另起一行自然得多。
-            while (end < clusters.size && clusters[end].startsWithForbiddenPunctuation()) end++
-            while (end > start + 1 && clusters[end - 1].endsWithOpeningPunctuation()) end--
-            if (end <= start) end = start + 1
+            val proposed = end
+            end = fitPunctuationBreak(start, proposed, clusters.size, { clusters[it].text }) { boundary ->
+                val left = clusters[boundary - 1]
+                val right = clusters[boundary]
+                (boundary == proposed || left.isBreakOpportunity()) && right.marker == null &&
+                    (left.keepTogetherId == null || left.keepTogetherId != right.keepTogetherId)
+            }
             lines += clusters.subList(start, end)
             start = end
         }
@@ -509,9 +513,14 @@ internal class EpubBoxLayoutBackend(
         }
         var spaceExtra = 0f
         var gapExtra = 0f
+        val expandable = BooleanArray(clusters.size) { index ->
+            index < clusters.lastIndex && clusters[index + 1].marker == null &&
+                canExpandTextGap(clusters[index].text, clusters[index + 1].text)
+        }
         if (justify && residual > 0f && clusters.size > 1 && residual <= available * MAX_JUSTIFY_FRACTION) {
             val spaces = clusters.count { it.text == " " && it.marker == null }
-            if (spaces > 0) spaceExtra = residual / spaces else gapExtra = residual / (clusters.size - 1)
+            val gaps = expandable.count { it }
+            if (spaces > 0) spaceExtra = residual / spaces else if (gaps > 0) gapExtra = residual / gaps
         }
 
         val columns = ArrayList<TextColumn>(clusters.size)
@@ -524,7 +533,7 @@ internal class EpubBoxLayoutBackend(
             if (spaceExtra > 0f && cluster.text == " " && cluster.marker == null && index != clusters.lastIndex) {
                 advance += spaceExtra
             }
-            if (gapExtra > 0f && index != clusters.lastIndex) advance += gapExtra
+            if (gapExtra > 0f && expandable[index]) advance += gapExtra
             val style = cluster.style
             columns += TextColumn(
                 start = glyphStart,
@@ -976,12 +985,22 @@ internal class EpubBoxLayoutBackend(
         val isTitle = block.kind == EpubLayoutBlockKind.HEADING
         val layoutText = buildLayoutText(body.substring(start, end), start, inlineMarkers)
         val clusters = styledClusters(layoutText, start, block, isTitle, syntax, bundle)
-        val indent = if (isTitle) 0f else {
-            (block.style.textIndentEm ?: spec.indentCharCount) * measure.indentColumnWidth()
-        }
+        val indent = firstLineIndentFor(block, isTitle)
         return wrap(clusters, geometry.width, indent).sumOf { line ->
             resolveLineMetrics(line).lineStep.toDouble()
         }.toFloat()
+    }
+
+    /** 与 V2 后端同一套归属：原书优先照排，其余模式用户说了算，悬挂负缩进始终保留。 */
+    private fun firstLineIndentFor(block: EpubLayoutBlock, isTitle: Boolean): Float {
+        val publisher = block.style.textIndentEm?.let { it * measure.indentColumnWidth() }
+        return resolveFirstLineIndent(
+            publisherIndentPx = publisher,
+            userIndentChars = spec.indentCharCount,
+            indentColumnWidthPx = measure.indentColumnWidth(),
+            publisherStyleMode = spec.publisherStyleMode,
+            isHeading = isTitle
+        )
     }
 
     private fun resolveLineMetrics(clusters: List<StyledCluster>): ResolvedLineMetrics {
@@ -1462,12 +1481,6 @@ internal class EpubBoxLayoutBackend(
         return codePoint in CJK_RANGE || codePoint in CJK_EXT_A_RANGE || text.last() in BREAK_PUNCTUATION
     }
 
-    private fun StyledCluster.startsWithForbiddenPunctuation(): Boolean =
-        text.firstOrNull() in FORBIDDEN_LINE_START
-
-    private fun StyledCluster.endsWithOpeningPunctuation(): Boolean =
-        text.lastOrNull() in FORBIDDEN_LINE_END
-
     private fun TextColumn.shifted(delta: Float) = TextColumn(
         start = start + delta,
         end = end + delta,
@@ -1752,12 +1765,5 @@ internal class EpubBoxLayoutBackend(
         val CJK_RANGE = 0x3400..0x9FFF
         val CJK_EXT_A_RANGE = 0x20000..0x2FA1F
         val BREAK_PUNCTUATION = setOf('，', '。', '、', '；', '：', '！', '？', '”', '’', ',', '.', ';', ':', '!', '?')
-        val FORBIDDEN_LINE_START = setOf(
-            '，', '。', '、', '；', '：', '！', '？', '）', '》', '】', '〉', '〕',
-            '」', '』', '”', '’', '…', '—', ',', '.', ';', ':', '!', '?', ')', ']', '}'
-        )
-        val FORBIDDEN_LINE_END = setOf(
-            '（', '《', '【', '〈', '〔', '「', '『', '“', '‘', '(', '[', '{'
-        )
     }
 }

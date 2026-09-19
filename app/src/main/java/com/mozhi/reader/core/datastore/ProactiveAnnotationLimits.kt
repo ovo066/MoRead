@@ -21,7 +21,8 @@ data class ProactiveAnnotationLimits(
     val dailyVoiceMax: Int = 3,
     val dailyImageMax: Int = 3,
     val timing: ProactiveAnnotationTiming = ProactiveAnnotationTiming.AFTER_CHAPTER_COMPLETE,
-    val aheadChapters: Int = 0
+    val aheadChapters: Int = 0,
+    val context: ProactiveAnnotationContextSettings = ProactiveAnnotationContextSettings()
 ) {
     val chapterUnlimited: Boolean get() = maxPerChapter == UNLIMITED
     val dailyUnlimited: Boolean get() = dailyMax == UNLIMITED
@@ -37,7 +38,8 @@ data class ProactiveAnnotationLimits(
             dailyVoiceMax = if (dailyVoiceMax == UNLIMITED) UNLIMITED else dailyVoiceMax.coerceIn(0, MAX_DAILY),
             dailyImageMax = if (dailyImageMax == UNLIMITED) UNLIMITED else dailyImageMax.coerceIn(0, MAX_DAILY),
             timing = timing,
-            aheadChapters = aheadChapters.coerceIn(0, 5)
+            aheadChapters = aheadChapters.coerceIn(0, 5),
+            context = context.normalized()
         )
     }
 

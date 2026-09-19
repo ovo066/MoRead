@@ -10,19 +10,30 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Remove
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonColors
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -32,14 +43,74 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.mozhi.reader.ui.theme.MoReadRadius
+import com.mozhi.reader.ui.theme.ColorSchemePreset
+import com.mozhi.reader.ui.theme.LocalMoReadColors
+import com.mozhi.reader.ui.theme.MoReadSpacing
 import com.mozhi.reader.ui.theme.fieldContainerColor
+import com.mozhi.reader.ui.theme.isFlatSurface
+import com.mozhi.reader.ui.theme.moReadMetrics
 import com.mozhi.reader.ui.theme.onAccent
 import com.mozhi.reader.ui.theme.sectionHairline
+
+enum class MoReadButtonStyle { Filled, Tonal, Outlined }
+
+/** 共用胶囊按钮。纯图标按钮仍以 text 提供完整的无障碍标签。 */
+@Composable
+fun MoReadButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    style: MoReadButtonStyle = MoReadButtonStyle.Filled,
+    icon: ImageVector? = null,
+    iconOnly: Boolean = false,
+    enabled: Boolean = true,
+    colors: ButtonColors? = null,
+    iconSize: Dp? = null
+) {
+    val metrics = moReadMetrics()
+    val buttonModifier = modifier.heightIn(min = metrics.buttonHeight).widthIn(min = metrics.buttonHeight)
+    val padding = if (iconOnly) PaddingValues(0.dp) else PaddingValues(horizontal = MoReadSpacing.xl, vertical = MoReadSpacing.s)
+    val content: @Composable RowScope.() -> Unit = {
+        if (icon != null) {
+            Icon(icon, contentDescription = if (iconOnly) text else null,
+                modifier = Modifier.size(iconSize ?: if (iconOnly) 28.dp else metrics.iconGlyph))
+        }
+        if (!iconOnly || icon == null) {
+            Text(text, modifier = Modifier.padding(start = if (icon != null) MoReadSpacing.s else 0.dp))
+        }
+    }
+    when (style) {
+        MoReadButtonStyle.Filled -> Button(onClick, buttonModifier, enabled, shape = CircleShape,
+            colors = colors ?: ButtonDefaults.buttonColors(), contentPadding = padding, content = content)
+        MoReadButtonStyle.Tonal -> FilledTonalButton(onClick, buttonModifier, enabled, shape = CircleShape,
+            colors = colors ?: ButtonDefaults.filledTonalButtonColors(containerColor = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer), contentPadding = padding, content = content)
+        MoReadButtonStyle.Outlined -> OutlinedButton(onClick, buttonModifier, enabled, shape = CircleShape,
+            colors = colors ?: ButtonDefaults.outlinedButtonColors(), contentPadding = padding, content = content)
+    }
+}
+
+/** 深色沉浸播放器：原版保留白色主键与透明侧键，彩色方案使用各自的实色/浅色按钮。 */
+@Composable
+fun immersivePlaybackColors(primary: Boolean): ButtonColors {
+    val classic = LocalMoReadColors.current.colorScheme == ColorSchemePreset.NEUTRAL
+    val c = MaterialTheme.colorScheme
+    return ButtonDefaults.buttonColors(
+        containerColor = if (classic) {
+            if (primary) Color(0xFFF3F1EC) else Color.Transparent
+        } else if (primary) c.primary else c.primaryContainer,
+        contentColor = if (classic) {
+            if (primary) Color(0xFF17171A) else Color(0xFFF3F1EC).copy(alpha = 0.86f)
+        } else if (primary) c.onPrimary else c.onPrimaryContainer
+    )
+}
 
 /**
  * 项目里唯一的分段选择器。
@@ -56,12 +127,14 @@ fun <T> MoReadSegmented(
     selected: T,
     onSelect: (T) -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
     label: (T) -> String
 ) {
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .clip(MoReadRadius.FieldShape)
+            .selectableGroup()
+            .clip(moReadMetrics().fieldShape)
             .background(fieldContainerColor())
             .padding(3.dp),
         horizontalArrangement = Arrangement.spacedBy(3.dp)
@@ -71,6 +144,7 @@ fun <T> MoReadSegmented(
                 text = label(option),
                 selected = option == selected,
                 modifier = Modifier.weight(1f),
+                enabled = enabled,
                 onClick = { onSelect(option) }
             )
         }
@@ -82,42 +156,51 @@ private fun MoReadSegment(
     text: String,
     selected: Boolean,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
     onClick: () -> Unit
 ) {
+    // 扁平质感下选中段用淡底 + 深字（MD3 tonal），玻璃质感下维持实色强调段。
+    val flat = isFlatSurface()
+    val selectedContainer = if (flat) {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        MaterialTheme.colorScheme.primary
+    }
+    val selectedContent = if (flat) {
+        MaterialTheme.colorScheme.onPrimaryContainer
+    } else {
+        MaterialTheme.colorScheme.primary.onAccent()
+    }
     val container by animateColorAsState(
-        targetValue = if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
+        targetValue = if (selected) selectedContainer else Color.Transparent,
         animationSpec = tween(160),
         label = "segment-container"
     )
     val content by animateColorAsState(
-        targetValue = if (selected) {
-            MaterialTheme.colorScheme.primary.onAccent()
-        } else {
-            MaterialTheme.colorScheme.onSurfaceVariant
-        },
+        targetValue = if (selected) selectedContent else MaterialTheme.colorScheme.onSurfaceVariant,
         animationSpec = tween(160),
         label = "segment-content"
     )
+    val metrics = moReadMetrics()
     Box(
         modifier = modifier
-            .clip(SegmentShape)
+            .clip(RoundedCornerShape(metrics.radiusField - 3.dp))
             .background(container)
-            .clickable(onClick = onClick)
-            .padding(vertical = 9.dp),
+            .selectable(selected = selected, enabled = enabled, role = Role.RadioButton, onClick = onClick)
+            .heightIn(min = metrics.touchTarget - 6.dp)
+            .padding(vertical = metrics.segmentedVerticalPadding),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = text,
             style = MaterialTheme.typography.labelLarge,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-            color = content,
+            color = if (enabled) content else content.copy(alpha = 0.38f),
             maxLines = 1,
             textAlign = TextAlign.Center
         )
     }
 }
-
-private val SegmentShape = androidx.compose.foundation.shape.RoundedCornerShape(11.dp)
 
 /**
  * 设置页的数值滑条：一条胶囊里左 `−`、右 `＋`、中间可拖的圆钮，右侧显示当前值。
@@ -151,7 +234,7 @@ fun MoReadSlider(
         Row(
             modifier = Modifier
                 .weight(1f)
-                .height(38.dp)
+                .height(moReadMetrics().sliderHeight)
                 .clip(CircleShape)
                 .background(fieldContainerColor())
                 .border(0.5.dp, sectionHairline(), CircleShape),
@@ -193,7 +276,7 @@ private fun SliderNudge(
 ) {
     Box(
         modifier = Modifier
-            .size(36.dp)
+            .size(width = 36.dp, height = moReadMetrics().sliderHeight)
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
@@ -222,7 +305,7 @@ private fun SliderTrack(
     val thumbRing = sectionHairline()
     Box(
         modifier = modifier
-            .height(38.dp)
+            .height(moReadMetrics().sliderHeight)
             .pointerInput(Unit) {
                 val travel = (size.width - thumbDiameter.toPx()).coerceAtLeast(1f)
                 val inset = thumbDiameter.toPx() / 2f
@@ -239,7 +322,7 @@ private fun SliderTrack(
                 }
             }
     ) {
-        Canvas(modifier = Modifier.height(38.dp).fillMaxWidth()) {
+        Canvas(modifier = Modifier.height(moReadMetrics().sliderHeight).fillMaxWidth()) {
             val diameter = thumbDiameter.toPx()
             val radius = diameter / 2f
             val travel = (size.width - diameter).coerceAtLeast(1f)

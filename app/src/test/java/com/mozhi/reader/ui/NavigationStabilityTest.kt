@@ -31,6 +31,11 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.mozhi.reader.ui.components.MoReadBackdrop
 import com.mozhi.reader.ui.theme.MoReadTheme
+import com.mozhi.reader.ui.theme.AppearanceSettings
+import com.mozhi.reader.ui.theme.ColorSchemePreset
+import com.mozhi.reader.ui.theme.NavStyle
+import com.mozhi.reader.ui.theme.ShapeStyle
+import com.mozhi.reader.ui.theme.SurfaceStyle
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
 import java.io.File
@@ -59,6 +64,7 @@ class NavigationStabilityTest {
     private var revision by mutableIntStateOf(0)
     private var visibleStatusTop = -1
     private var selectionMode by mutableStateOf(false)
+    private var appearance by mutableStateOf(AppearanceSettings())
 
     private fun mount() {
         compose.setContent {
@@ -69,7 +75,7 @@ class NavigationStabilityTest {
             val localView = LocalView.current
             val statusTop = WindowInsets.statusBars.getTop(LocalDensity.current)
             SideEffect { view = localView; visibleStatusTop = statusTop }
-            MoReadTheme {
+            MoReadTheme(appearance) {
                 MoReadBackdrop {
                     MoReadWindowLayout { width ->
                         val expanded = width == MoReadWindowWidth.EXPANDED
@@ -87,7 +93,7 @@ class NavigationStabilityTest {
                             hazeState = haze,
                             vertical = expanded,
                             currentRoute = route,
-                            modifier = Modifier.align(if (expanded) Alignment.CenterStart else Alignment.BottomCenter),
+                            modifier = Modifier.align(if (expanded) Alignment.CenterStart else Alignment.BottomCenter).testTag("navigation-overlay"),
                             onSelect = { root -> selectRoot(root.route) }
                         )
                     }
@@ -302,6 +308,48 @@ class NavigationStabilityTest {
         compose.runOnIdle { selectRoot("bookshelf") }
         settle()
         assertEquals(21, lists.getValue("bookshelf").firstVisibleItemIndex)
+    }
+
+    @Test @Config(qualifiers = "w320dp-h640dp-mdpi")
+    fun fullWidthBarStaysAtBottomAndRetainsEachRootAnchorAcrossTextureChanges() {
+        appearance = AppearanceSettings(colorScheme = ColorSchemePreset.HAZE_BLUE, navStyle = NavStyle.BAR,
+            surfaceStyle = SurfaceStyle.FLAT, shapeStyle = ShapeStyle.EXPRESSIVE)
+        mount()
+        compose.onNodeWithTag("list-bookshelf").performScrollToIndex(21)
+        compose.runOnIdle { selectRoot("stats") }
+        compose.waitForIdle()
+        compose.onNodeWithTag("list-stats").performScrollToIndex(34)
+        SurfaceStyle.entries.forEach { style ->
+            compose.runOnIdle { appearance = appearance.copy(surfaceStyle = style) }
+            repeat(3) {
+                compose.runOnIdle { selectRoot("bookshelf"); revision++ }
+                compose.waitForIdle()
+                assertEquals(21, lists.getValue("bookshelf").firstVisibleItemIndex)
+                compose.runOnIdle { selectRoot("stats") }
+                compose.waitForIdle()
+                assertEquals(34, lists.getValue("stats").firstVisibleItemIndex)
+            }
+            val bar = compose.onNodeWithTag("navigation-overlay").fetchSemanticsNode().boundsInRoot
+            assertEquals(view.rootView.height.toFloat(), bar.bottom, 1f)
+            assertEquals(view.rootView.width.toFloat(), bar.width, 1f)
+            compose.onNode(hasText("统计") and isSelectable()).assertIsSelected()
+        }
+        capture("bar-small.png")
+    }
+
+    @Test @Config(qualifiers = "w1024dp-h768dp-mdpi")
+    fun choosingBarOnATabletRetainsTheSideNavigationAndViewport() {
+        appearance = AppearanceSettings(colorScheme = ColorSchemePreset.SAGE, navStyle = NavStyle.BAR,
+            surfaceStyle = SurfaceStyle.FLAT, shapeStyle = ShapeStyle.EXPRESSIVE)
+        mount()
+        val rail = compose.onNodeWithTag("navigation-overlay").fetchSemanticsNode().boundsInRoot
+        assertTrue(rail.height > rail.width)
+        assertTrue(rail.width < 160f)
+        assertEquals(sizes.getValue("host").width - 96, sizes.getValue("page-bookshelf").width)
+        compose.runOnIdle { selectRoot("settings") }
+        compose.waitForIdle()
+        assertEquals(rail, compose.onNodeWithTag("navigation-overlay").fetchSemanticsNode().boundsInRoot)
+        capture("bar-tablet-rail.png")
     }
 
     private fun capture(name: String) {

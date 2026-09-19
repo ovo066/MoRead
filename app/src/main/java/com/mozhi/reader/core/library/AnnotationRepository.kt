@@ -25,6 +25,10 @@ class AnnotationRepository @Inject constructor(
     fun observeCountForBook(bookId: Long): Flow<Int> =
         annotationDao.observeCountForBook(bookId)
 
+    /** 今日随读段评用量，给设置页解释「为什么现在不生成了」。 */
+    fun observeProactiveCreatedSince(since: Long): Flow<Int> =
+        annotationDao.observeProactiveCreatedSince(since)
+
     suspend fun getForChapter(bookId: Long, chapterIndex: Int): List<AnnotationEntity> =
         annotationDao.getForChapter(bookId, chapterIndex)
 

@@ -18,6 +18,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.mozhi.reader.core.datastore.AnnotationContextMode
+import com.mozhi.reader.core.datastore.ProactiveAnnotationContextSettings
 import com.mozhi.reader.core.datastore.BookProactiveAnnotationLimits
 import com.mozhi.reader.core.datastore.ProactiveAnnotationLimitSteps
 import com.mozhi.reader.core.datastore.ProactiveAnnotationLimits
@@ -46,10 +48,12 @@ fun ProactiveAnnotationSettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val usedToday by viewModel.todayAnnotationCount.collectAsStateWithLifecycle()
     ProactiveAnnotationSettingsContent(
         bookId, state, onBack, viewModel::setAnnotationLimits,
         viewModel::setBookAnnotationLimits, viewModel::setProactiveAnnotations,
-        viewModel::setAnnotationNotice, viewModel::setAnnotationPersonas, onOpenPrompts, viewModel::toggleAnnotationPersona
+        viewModel::setAnnotationNotice, viewModel::setAnnotationPersonas, onOpenPrompts, viewModel::toggleAnnotationPersona,
+        usedToday
     )
 }
 
@@ -64,12 +68,13 @@ internal fun ProactiveAnnotationSettingsContent(
     onSetNotice: (ProactiveAnnotationNotice) -> Unit,
     onSetPersonas: (Set<Long>) -> Unit = {},
     onOpenPrompts: () -> Unit = {},
-    onTogglePersona: (Long) -> Unit = {}
+    onTogglePersona: (Long) -> Unit = {},
+    usedToday: Int = 0
 ) {
     val global = state.autonomy.annotationLimits
     val override = bookId?.let { state.autonomy.annotationLimitsByBook[it] }
     val perBookActive = override?.enabled == true
-    val editing = if (bookId == null) global else override?.limits ?: global
+    val editing = if (bookId == null || !perBookActive) global else override.limits
 
     fun commit(next: ProactiveAnnotationLimits) {
         if (bookId == null) {
@@ -156,8 +161,10 @@ internal fun ProactiveAnnotationSettingsContent(
                     "且在你读到之前不会出现在聊天、工具或通知里。每条段评一次模型调用；使用主动段评分配，未配置时使用 cheap。提前 N 章会预先消耗 N 章的额度。"
             } else "读完一章后为刚读完的章节生成，不读取未读正文。每条段评一次模型调用，未单独分配时使用 cheap。") {
                 MoReadBlock {
+                    // 跟随全局时整组只读：静默吞掉点击会让用户以为已经改了生成方式。
                     MoReadSegmented(options = ProactiveAnnotationTiming.entries.toList(), selected = editing.timing,
-                        onSelect = { if (bookId == null || perBookActive) commit(editing.copy(timing = it)) },
+                        onSelect = { commit(editing.copy(timing = it)) },
+                        enabled = bookId == null || perBookActive,
                         label = { if (it == ProactiveAnnotationTiming.ON_CHAPTER_ENTRY) "进入章节预生成" else "读完后生成上一章" })
                 }
                 if (editing.timing == ProactiveAnnotationTiming.ON_CHAPTER_ENTRY) {
@@ -207,6 +214,33 @@ internal fun ProactiveAnnotationSettingsContent(
         }
         item {
             MoReadSection(
+                title = "前文与上下文",
+                footer = "每条段评自动查找前文章节的相关原文和已有梗概，最多读取到目标段落。" +
+                    "预算包含本章正文、前文片段和梗概，不含角色设定与写作提示词；按字符计算，实际用量可能更少。" +
+                    "本地检索不增加模型调用，提高预算会增加单次发送量。"
+            ) {
+                MoReadBlock {
+                    MoReadSegmented(options = AnnotationContextMode.entries.toList(), selected = editing.context.mode,
+                        onSelect = { commit(editing.copy(context = editing.context.copy(mode = it))) },
+                        enabled = bookId == null || perBookActive,
+                        label = { it.label })
+                }
+                MoReadValueRow(title = "阅读资料上限", value = "每次 "+ editing.context.budgetChars + " 字符")
+                if (editing.context.mode == AnnotationContextMode.CUSTOM) {
+                    MoReadBlock {
+                        MoReadSlider(label = "自定义上限", valueText = editing.context.budgetChars.toString(),
+                            value = editing.context.budgetChars.toFloat(),
+                            range = ProactiveAnnotationContextSettings.MIN_CHARS.toFloat()..ProactiveAnnotationContextSettings.MAX_CHARS.toFloat(),
+                            step = 1_000f,
+                            onValueChange = { if (bookId == null || perBookActive) {
+                                commit(editing.copy(context = editing.context.copy(customChars = it.toInt()).normalized()))
+                            } })
+                    }
+                }
+            }
+        }
+        item {
+            MoReadSection(
                 title = "每章条数",
                 footer = "下限只是写给模型的请求：本章确实没有值得回应的地方时，它仍然可以少给几条。" +
                     "上限选「不限制」时会逐个处理候选段落；长章会有更多调用，仍受每日上限约束。超长段落会分段处理。"
@@ -249,6 +283,14 @@ internal fun ProactiveAnnotationSettingsContent(
                     allowUnlimited = true,
                     enabled = bookId == null || perBookActive,
                     onValueChange = { commit(editing.copy(dailyMax = it).normalized()) }
+                )
+                MoReadRowDivider()
+                // 用完后段评会静默停下；这一行是用户唯一能自己看出原因的地方。
+                MoReadValueRow(
+                    title = "今日已生成",
+                    value = if (editing.dailyUnlimited) "$usedToday 条"
+                    else "$usedToday / ${editing.dailyMax} 条" +
+                        if (usedToday >= editing.dailyMax) "（已用完，明天恢复）" else ""
                 )
                 MoReadRowDivider()
                 LimitSlider(

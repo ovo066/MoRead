@@ -119,4 +119,4 @@ internal fun NavGraphBuilder.pushComposable(
     route: String,
     arguments: List<NamedNavArgument> = emptyList(),
     content: @Composable AnimatedContentScope.(NavBackStackEntry) -> Unit
-) = composable(route = route, arguments = arguments, content = content)
+) = composable(route = route, arguments = bookNavigationArguments(route, arguments), content = content)

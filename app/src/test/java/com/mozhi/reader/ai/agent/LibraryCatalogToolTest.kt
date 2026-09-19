@@ -21,10 +21,10 @@ class LibraryCatalogToolTest {
     @Test fun emptyQueryPagesMetadataWithoutReadingBookBodies() = runTest {
         coEvery { library.getBooks() } returns (1L..26L).map(::book)
         every { shelf.snapshot } returns flowOf(ShelfOrganizationSnapshot())
-        val first = Json.parseToJsonElement(tool.execute(buildJsonObject {})).jsonObject
+        val first = Json.parseToJsonElement(tool.execute(buildJsonObject {}).content).jsonObject
         assertEquals(26, first["total"]!!.jsonPrimitive.int)
         assertEquals(20, first["books"]!!.jsonArray.size)
-        val second = Json.parseToJsonElement(tool.execute(buildJsonObject { put("offset", first["next_offset"]!!) })).jsonObject
+        val second = Json.parseToJsonElement(tool.execute(buildJsonObject { put("offset", first["next_offset"]!!) }).content).jsonObject
         assertEquals(6, second["books"]!!.jsonArray.size)
         assertNull(second["next_offset"])
         coVerify(exactly = 2) { library.getBooks() }
@@ -39,7 +39,7 @@ class LibraryCatalogToolTest {
             tagRefs = listOf(BookTagRefEntity(1, 20))
         ))
         suspend fun ids(vararg terms: Pair<String, String>): List<Long> {
-            val result = Json.parseToJsonElement(tool.execute(buildJsonObject { terms.forEach { put(it.first, it.second) } })).jsonObject
+            val result = Json.parseToJsonElement(tool.execute(buildJsonObject { terms.forEach { put(it.first, it.second) } }).content).jsonObject
             return result["books"]!!.jsonArray.map { it.jsonObject["book_id"]!!.jsonPrimitive.long }
         }
         assertEquals(listOf(1L), ids("query" to "随笔"))

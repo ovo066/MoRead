@@ -87,17 +87,17 @@ class ChapterTypesetterTest {
     }
 
     @Test
-    fun `inline marker occupies one column and wraps following text`() {
+    fun `illustration marker occupies one column and wraps following text`() {
         val body = "天地玄黄宇宙洪荒日月"
         val chapter = ChapterTypesetter(spec.copy(justifyContent = false), FakeMeasure()).typeset(
             chapterIndex = 0,
             title = "",
             body = body,
-            inlineMarkers = listOf(InlineMarkerReservation(2, InlineMarkerKind.ANNOTATION))
+            inlineMarkers = listOf(InlineMarkerReservation(2, InlineMarkerKind.ILLUSTRATION))
         )
         val lines = chapter.pages.flatMap(TextPage::lines)
         val first = lines.first()
-        val marker = first.columns.single { it.inlineMarkerKind == InlineMarkerKind.ANNOTATION }
+        val marker = first.columns.single { it.inlineMarkerKind == InlineMarkerKind.ILLUSTRATION }
 
         assertEquals(7, first.charLength)
         assertEquals(2, marker.inlineMarkerOffset)

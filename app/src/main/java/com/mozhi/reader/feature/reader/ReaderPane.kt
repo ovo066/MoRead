@@ -89,6 +89,9 @@ import com.mozhi.reader.feature.reader.engine.annotationGeometry
 import com.mozhi.reader.feature.reader.engine.dragSelectionHandle
 import com.mozhi.reader.feature.reader.engine.hitTextPos
 import com.mozhi.reader.feature.reader.engine.inlineMarkerLayout
+import com.mozhi.reader.feature.reader.engine.ReaderPageImage
+import com.mozhi.reader.feature.reader.engine.imageAt
+import com.mozhi.reader.feature.reader.engine.ImmersiveArtworkFit
 import com.mozhi.reader.feature.reader.engine.linkAt
 import com.mozhi.reader.feature.reader.engine.ReaderVisibleReadSnapshot
 import com.mozhi.reader.feature.reader.engine.selectionBodyRange
@@ -131,6 +134,7 @@ internal fun ReaderPane(
     onAnnotationClick: (annotationIds: List<Long>) -> Unit,
     onIllustrationClick: (illustrationIds: List<Long>) -> Unit = {},
     onLinkClick: (ReaderPageLink) -> Unit = {},
+    onEpubImageLongPress: (ReaderPageImage) -> Unit = {},
     onTtsAction: (selection: String) -> Unit,
     onImageAction: (selection: String, context: String, range: IntRange) -> Unit,
     onEditText: ((selection: String, range: IntRange) -> Unit)?,
@@ -138,6 +142,7 @@ internal fun ReaderPane(
     autoRead: AutoReadSession? = null,
     onSpreadModeChanged: (Boolean) -> Unit = {},
     onVisiblePagesDrawn: (ReaderVisibleReadSnapshot) -> Unit = {},
+    readTrackingEnabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -163,12 +168,20 @@ internal fun ReaderPane(
         viewport.width.toFloat(), viewport.height.toFloat(), with(density) { SpreadLayoutPolicy.GUTTER_DP.dp.toPx() }
     ) else null
     val visiblePagesCallback by androidx.compose.runtime.rememberUpdatedState(onVisiblePagesDrawn)
+    // The first bitmap can be drawn before the entry transition/lifecycle permits read tracking.
+    // Enabling the callback alone does not invalidate drawBehind, so the read watermark (and AI
+    // notes filtered by it) used to remain stale until a page turn caused another draw.
+    LaunchedEffect(readTrackingEnabled) {
+        if (readTrackingEnabled) frameTick++
+    }
     LaunchedEffect(spreadMode) { onSpreadModeChanged(spreadMode) }
     val selection = remember(controller) {
         ReaderSelectionController(controller, holder) {
             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
         }
     }
+
+    val refreshQueue = remember(controller, holder) { PageWindowRefreshQueue() }
 
     val driver = remember(controller) {
         PageTurnDriver(
@@ -203,6 +216,13 @@ internal fun ReaderPane(
                 override fun onTurnStarted(direction: PageTurnDirection) {
                     holder.startTurn()
                 }
+
+                override fun onTurnFinished() {
+                    refreshQueue.finishTurn()?.let { relativePosition ->
+                        holder.refresh(relativePosition)
+                        frameTick++
+                    }
+                }
             }
         )
     }
@@ -221,20 +241,14 @@ internal fun ReaderPane(
     // fillPage 返回前同步轮换窗口。若也延迟到下一协程，连续第二次翻页会先拿到上一轮
     // 的 cur/next，仿真卷曲便会把新旧两页叠在一起，看起来像“重影”。
     val refreshSafely: (Int) -> Unit = { relativePosition ->
-        val refreshImmediately = shouldRefreshPageWindowImmediately(
+        val requestedPosition = refreshQueue.request(
             turnRunning = driver.isRunning,
             relativePosition = relativePosition,
             hasPreparedTurn = holder.hasPreparedTurn()
         )
-        if (refreshImmediately) {
-            holder.refresh(relativePosition)
+        if (requestedPosition != null) {
+            holder.refresh(requestedPosition)
             frameTick++
-        } else {
-            scope.launch {
-                while (driver.isRunning) delay(PAGE_REFRESH_POLL_MS)
-                holder.refresh(relativePosition)
-                frameTick++
-            }
         }
     }
 
@@ -442,6 +456,14 @@ internal fun ReaderPane(
                     enabled = enabled,
                     driver = driver,
                     selection = selection,
+                    onImageLongPress = { position ->
+                        holder.imageAt(position)?.let { image ->
+                            selection.clear()
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onEpubImageLongPress(image)
+                            true
+                        } ?: false
+                    },
                     onBookmarkPull = { progress ->
                         if (progress >= 1f && bookmarkFeedback.progress < 1f) {
                             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -507,10 +529,12 @@ internal fun ReaderPane(
                     } else {
                         holder.curBitmap?.takeUnless(Bitmap::isRecycled)?.let {
                             canvas.drawBitmap(it, 0f, 0f, null)
-                            holder.onCurrentBitmapDrawn(
-                                isSettled = { !driver.isRunning },
-                                onVisible = { visiblePagesCallback(it) }
-                            )
+                            if (readTrackingEnabled) {
+                                holder.onCurrentBitmapDrawn(
+                                    isSettled = { !driver.isRunning && readTrackingEnabled },
+                                    onVisible = { visiblePagesCallback(it) }
+                                )
+                            }
                         }
                         selection.drawHighlight(this, palette)
                     }
@@ -1045,7 +1069,6 @@ private class ReaderSelectionController(
 
 /** Owns the page bitmaps and the render pipeline; all mutation happens on the main thread. */
 private const val BACKGROUND_SWAP_POLL_MS = 16L
-private const val PAGE_REFRESH_POLL_MS = 16L
 
 internal class ReaderPaneHolder(private val controller: ReaderContentController) {
     var viewWidth = 0
@@ -1102,6 +1125,7 @@ internal class ReaderPaneHolder(private val controller: ReaderContentController)
     private val renderedSnapshots = java.util.IdentityHashMap<Bitmap, ReaderVisibleReadSnapshot>()
     private val renderedPages = java.util.IdentityHashMap<Bitmap, List<RenderPage>>()
     private val renderedRevisions = java.util.IdentityHashMap<Bitmap, Long>()
+    private val renderedAnnotations = java.util.IdentityHashMap<Bitmap, List<ReaderAnnotationMark>>()
     private var pendingDrawnSnapshot: ReaderVisibleReadSnapshot? = null
 
     private fun recordRendered(bitmap: Bitmap, pages: List<RenderPage>, replaced: Bitmap? = null) {
@@ -1109,10 +1133,12 @@ internal class ReaderPaneHolder(private val controller: ReaderContentController)
             renderedPages.remove(replaced)
             renderedSnapshots.remove(replaced)
             renderedRevisions.remove(replaced)
+            renderedAnnotations.remove(replaced)
             if (!replaced.isRecycled) replaced.recycle()
         }
         renderedPages[bitmap] = pages.toList()
         renderedRevisions[bitmap] = renderRevision
+        renderedAnnotations[bitmap] = annotations
         val snapshot = controller.captureVisibleRead(pages)
         if (snapshot == null) renderedSnapshots.remove(bitmap) else renderedSnapshots[bitmap] = snapshot
     }
@@ -1173,6 +1199,7 @@ internal class ReaderPaneHolder(private val controller: ReaderContentController)
             renderedSnapshots.clear()
             renderedPages.clear()
             renderedRevisions.clear()
+            renderedAnnotations.clear()
             pendingDrawnSnapshot = null
             this.spread = spread
             this.includeBackgroundInPages = includeBackgroundInPages
@@ -1217,7 +1244,7 @@ internal class ReaderPaneHolder(private val controller: ReaderContentController)
 
     fun setAnnotations(value: List<ReaderAnnotationMark>): Boolean {
         if (annotations == value) return false
-        annotations = value
+        annotations = value.toList()
         invalidatePages()
         return true
     }
@@ -1267,6 +1294,30 @@ internal class ReaderPaneHolder(private val controller: ReaderContentController)
         return hit.copy(local = position - contentOrigin(hit.page, hit.leaf))
     }
 
+    fun imageAt(position: Offset): ReaderPageImage? {
+        val currentStyle = style ?: return null
+        val hit = hitAt(position) ?: return null
+        val page = hit.page.page
+        val pageX = position.x - (spread?.originX(hit.leaf) ?: 0f)
+        if (pageX !in 0f..currentStyle.viewWidth.toFloat() || position.y < 0f ||
+            position.y >= currentStyle.immersiveContentBottom) return null
+        // The paged painter refits single full-page artwork to the screen, not the text box.
+        val artwork = if (page.immersive && (page.fullPageArtwork || page.lines.singleOrNull()?.inlineImage != null)) {
+            ImmersiveArtworkFit.singleArtwork(page.lines)
+        } else null
+        if (artwork != null) {
+            val rect = ImmersiveArtworkFit.fit(artwork.width, artwork.height,
+                currentStyle.viewWidth.toFloat(), currentStyle.immersiveContentBottom)
+            return if (pageX >= rect.left && pageX < rect.left + rect.width &&
+                position.y >= rect.top && position.y < rect.top + rect.height) {
+                ReaderPageImage(artwork.imagePath, hit.page.chapterIndex, page.chapterPosition, artwork.altText)
+            } else null
+        }
+        if (!page.immersive && (hit.local.x < 0f || hit.local.x >= currentStyle.contentWidth ||
+                hit.local.y < 0f || hit.local.y >= currentStyle.spec.visibleHeight)) return null
+        return page.imageAt(hit.local.x, hit.local.y, hit.page.chapterIndex)
+    }
+
     fun linkAt(position: Offset): ReaderPageLink? {
         val hit = hitAt(position) ?: return null
         val page = hit.page
@@ -1279,29 +1330,17 @@ internal class ReaderPaneHolder(private val controller: ReaderContentController)
         val hit = hitAt(position) ?: return emptyList()
         val page = hit.page
         val local = hit.local
-        // 与 PageBitmapRenderer.drawBody 的 marker 参数保持一致，否则点击热区和画出的圆点对不上
+        // 热区与实际显示的批注版本一致，异步结果在翻页落定前不能提前变成可点击入口。
+        val shownAnnotations = curBitmap?.let(renderedAnnotations::get) ?: annotations
         val markerRadius = (currentStyle.tipSizePx * 0.72f).coerceAtLeast(8f)
         val geometry = page.page.inlineMarkerLayout(
-            annotations = annotations.filter { it.chapterIndex == page.chapterIndex },
+            annotations = shownAnnotations.filter { it.chapterIndex == page.chapterIndex },
             illustrations = illustrations.filter { it.chapterIndex == page.chapterIndex },
             markerRadius = markerRadius,
-            markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.ANNOTATION_MARKER_GAP_RATIO,
+            markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.INLINE_MARKER_GAP_RATIO,
             maxRight = currentStyle.contentWidth
         )
-        val hitRadius = (currentStyle.tipSizePx * 1.35f).coerceAtLeast(18f)
-        geometry.markers.firstOrNull { marker ->
-            if (marker.annotationIds.isEmpty()) return@firstOrNull false
-            val dx = local.x - marker.centerX
-            val dy = local.y - marker.centerY
-            dx * dx + dy * dy <= hitRadius * hitRadius
-        }?.let { return it.annotationIds }
-        // 纯高亮没有「评」圆点，划线区域本身也可点开讨论串
-        return geometry.highlights
-            .filter { rect ->
-                local.x in rect.left..rect.right && local.y in rect.top..rect.bottom
-            }
-            .map { it.annotationId }
-            .distinct()
+        return geometry.annotationIdsAt(local.x, local.y)
     }
 
     fun illustrationIdsAt(position: Offset): List<Long> {
@@ -1314,7 +1353,7 @@ internal class ReaderPaneHolder(private val controller: ReaderContentController)
             annotations = annotations.filter { it.chapterIndex == page.chapterIndex },
             illustrations = illustrations.filter { it.chapterIndex == page.chapterIndex },
             markerRadius = markerRadius,
-            markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.ANNOTATION_MARKER_GAP_RATIO,
+            markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.INLINE_MARKER_GAP_RATIO,
             maxRight = currentStyle.contentWidth
         )
         val hitRadius = (currentStyle.tipSizePx * 1.35f).coerceAtLeast(18f)
@@ -1517,6 +1556,7 @@ internal class ReaderPaneHolder(private val controller: ReaderContentController)
         renderedSnapshots.clear()
         renderedPages.clear()
         renderedRevisions.clear()
+        renderedAnnotations.clear()
     }
 
     private companion object {

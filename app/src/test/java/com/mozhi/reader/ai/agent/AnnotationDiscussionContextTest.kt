@@ -92,7 +92,8 @@ class AnnotationDiscussionContextTest {
             chapterNumber = 3,
             quote = "窗外的雪下了一整夜",
             neighborhood = "……前文……窗外的雪下了一整夜……后文……",
-            transcript = "用户：这里写得真好"
+            transcript = "用户：这里写得真好",
+            readingScope = com.mozhi.reader.core.retrieval.ReadingScope.upto(11, 100)
         )
         assertTrue(prompt.contains("「观澜」"))
         assertTrue(prompt.contains("冷静的文本细读者"))
@@ -115,7 +116,8 @@ class AnnotationDiscussionContextTest {
             chapterNumber = 1,
             quote = "引文",
             neighborhood = "",
-            transcript = "用户：？"
+            transcript = "用户：？",
+            readingScope = com.mozhi.reader.core.retrieval.ReadingScope.upto(0, 100)
         )
         assertTrue(prompt.contains("阅读助手"))
     }

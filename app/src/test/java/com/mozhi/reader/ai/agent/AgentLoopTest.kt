@@ -160,7 +160,8 @@ class AgentLoopTest {
         assertEquals(1, calls)
     }
 
-    private class EchoTool(private val reply: String) : AgentTool {
+    private class EchoTool(private val reply: ToolResult) : AgentTool {
+        constructor(reply: String) : this(ToolResult.Success(reply))
         var invocations = 0
             private set
         override val displayName: String = "查询测试"
@@ -173,7 +174,7 @@ class AgentLoopTest {
             }
         )
 
-        override suspend fun execute(arguments: JsonObject): String {
+        override suspend fun execute(arguments: JsonObject): ToolResult {
             invocations++
             return reply
         }
@@ -198,8 +199,49 @@ class AgentLoopTest {
             // 这些用例的会话都没有前情提要，摘要器只会被问一次 block("")。
             rollingSummarizer = dagger.Lazy {
                 RollingSummarizer(dao, dagger.Lazy { error("summariser never calls the factory here") })
-            }
+            },
+            toolExecutor = AgentToolExecutor { }
         )
+
+    @Test
+    fun `typed tool outcomes are identical in persistent and detached rounds`() = runTest {
+        val outcomes = listOf(
+            ToolResult.Success("原文：无法确定，尚未配置。"),
+            ToolResult.Success("部分扫描结果", partial = true),
+            ToolResult.Failure("INVALID_REFERENCE", "source_ref 无效或已过期"),
+            ToolResult.Failure("INVALID_ARGUMENT", "{\"status\":\"error\"}"),
+            ToolResult.Failure("WRITE_FAILED", "Could not save annotation")
+        )
+        outcomes.forEach { outcome ->
+            listOf(false, true).forEach { detached ->
+                val dao = FakeChatDao(seed(ChatRole.USER to "test"))
+                val modelResults = mutableListOf<String>()
+                var round = 0
+                val resolve = {
+                    AgentLoop.Streamer { messages, _ ->
+                        if (round++ == 0) {
+                            flowOf(ChatDelta.ToolCalls(listOf(ToolCall("typed", "echo_tool", "{}"))))
+                        } else {
+                            modelResults += messages.last().content
+                            flowOf(ChatDelta.Text("done"))
+                        }
+                    }
+                }
+                val events = if (detached) {
+                    loop(dao).runDetachedWith(listOf(ChatMessage(ChatRole.USER, "test")),
+                        listOf(EchoTool(outcome)), maxRounds = 2, resolve = resolve).toList()
+                } else {
+                    loop(dao).runWith(1L, listOf(EchoTool(outcome)), maxRounds = 2, resolve = resolve).toList()
+                }
+                val finished = events.filterIsInstance<AgentEvent.ToolFinished>().single()
+                assertEquals(outcome is ToolResult.Success, finished.succeeded)
+                assertEquals(outcome.content, modelResults.single())
+                assertEquals(outcome.content, finished.resultPreview)
+                if (outcome is ToolResult.Success && outcome.partial) assertEquals("部分完成", finished.detail)
+                assertEquals(if (detached) 0 else 1, dao.messages.count { it.role == ChatRole.TOOL.wire })
+            }
+        }
+    }
 
     @Test
     fun `plain reply streams text and persists once`() = runTest {

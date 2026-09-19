@@ -3,6 +3,7 @@ package com.mozhi.reader.feature.reader
 import androidx.lifecycle.viewModelScope
 import com.mozhi.reader.ai.agent.AnnotationDiscussionService
 import com.mozhi.reader.core.database.entity.AnnotationEntity
+import com.mozhi.reader.core.datastore.ReaderSettingsRepository
 import com.mozhi.reader.core.library.AnnotationRepository
 import io.mockk.*
 import kotlinx.coroutines.Dispatchers
@@ -20,8 +21,10 @@ class AnnotationDiscussionViewModelTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val repository = mockk<AnnotationRepository>()
         val service = mockk<AnnotationDiscussionService>()
+        val settings = mockk<ReaderSettingsRepository>()
+        every { settings.discussionPersonaId } returns flowOf(null)
         every { service.respond(7, 8, 3) } returns flowOf(AnnotationDiscussionService.Event.Done(19))
-        val vm = AnnotationDiscussionViewModel(repository, service)
+        val vm = AnnotationDiscussionViewModel(repository, service, settings)
         try {
             vm.sendUserReply(7, annotation, "   \n", 3)
             vm.sendUserReply(7, annotation, "", 3)
@@ -38,8 +41,10 @@ class AnnotationDiscussionViewModelTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val repository = mockk<AnnotationRepository>()
         val service = mockk<AnnotationDiscussionService>()
+        val settings = mockk<ReaderSettingsRepository>()
+        every { settings.discussionPersonaId } returns flowOf(null)
         coEvery { repository.updateNote(8, "我的想法") } just Runs
-        val vm = AnnotationDiscussionViewModel(repository, service)
+        val vm = AnnotationDiscussionViewModel(repository, service, settings)
         try {
             vm.sendUserReply(7, annotation, "", null)
             vm.sendUserReply(7, annotation, " 我的想法 ", null)

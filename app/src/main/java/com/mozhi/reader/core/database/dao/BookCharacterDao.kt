@@ -28,6 +28,9 @@ interface BookCharacterDao {
     fun observeCheckpoint(bookId: Long): Flow<BookCharacterCheckpoint?>
     @Upsert suspend fun saveGuide(guide: BookCharacterGuideEntity)
     @Upsert suspend fun savePart(part: BookCharacterPartEntity)
+    /** 发布后把分段归到已发布的那一代，剩下的缓存才不会被当成「未完成的进度」。 */
+    @Query("UPDATE book_character_parts SET generationId = :generationId WHERE bookId = :bookId")
+    suspend fun stampParts(bookId: Long, generationId: String)
     @Query("DELETE FROM book_character_parts WHERE bookId = :bookId")
     suspend fun deleteParts(bookId: Long)
     @Query("DELETE FROM book_character_guides WHERE bookId = :bookId")

@@ -37,7 +37,8 @@ class ProactiveAnnotationServiceTest {
     private val factory = mockk<AiClientFactory>()
     private val client = mockk<ChatApiClient>()
     private val media = mockk<AiMediaGenerationService>()
-    private val service = ProactiveAnnotationService(factory, media)
+    private val contextRepository = mockk<ProactiveAnnotationContextRepository>()
+    private val service = ProactiveAnnotationService(factory, media, contextRepository)
     private val persona = PersonaEntity(id = 2, name = "知墨", personality = "", isRoleplay = false, createdAt = 0)
     private val first = "首段原文".repeat(15)
     private val second = "末段秘密".repeat(15)
@@ -45,7 +46,11 @@ class ProactiveAnnotationServiceTest {
     private val request = ProactiveAnnotationRequest(1, 3, body, persona, 2, emptySet())
     private val permit = ProactiveAnnotationAllowance(true, maxAnnotations = 2)
 
-    init { coEvery { factory.forRole(ModelRole.PROACTIVE_ANNOTATION) } returns ResolvedChatClient(client, ChatOptions(), mockk(), "mock") }
+    init {
+        coEvery { factory.forRole(ModelRole.PROACTIVE_ANNOTATION) } returns ResolvedChatClient(client, ChatOptions(), mockk(), "mock")
+        coEvery { contextRepository.prepare(any(), any()) } returns PreparedAnnotationContext("revision")
+        coEvery { contextRepository.isCurrent(any(), any()) } returns true
+    }
 
     @Test fun eachRequestUsesOnlyTargetPrefixAndStoresExactProvenance() = runTest {
         val requests = mutableListOf<List<ChatMessage>>()
@@ -59,6 +64,7 @@ class ProactiveAnnotationServiceTest {
         val result = service.generateForChapter(request, { permit }, { _, _ -> }, { row, end, _ -> rows += row; ends += end; true })
         assertFalse(result.failed)
         assertEquals(2, requests.size)
+        coVerify(exactly = 1) { contextRepository.prepare(1, 3) }
         assertFalse(requests.first().any { it.content.orEmpty().contains(second) })
         assertTrue(requests.last().last().content.orEmpty().endsWith(second))
         assertEquals(listOf(first.length, body.length), ends)
@@ -233,5 +239,35 @@ class ProactiveAnnotationServiceTest {
         // 超长人设按成本上限收口，而不是原样塞给 CHEAP 模型。
         val huge = proactiveAnnotationMessages(roleplay.copy(personality = "长".repeat(10_000)), "前缀").first().content.orEmpty()
         assertTrue(huge.length < PROACTIVE_PERSONA_MAX_CHARS + 1_200)
+    }
+
+    @Test fun changedPreviousChaptersStopBeforePaidCall() = runTest {
+        coEvery { contextRepository.isCurrent(any(), any()) } returns false
+        val outcome = service.generateForChapter(request, { permit }, { _, _ -> }, { _, _, _ -> error("must not commit") })
+        assertTrue(outcome.stopped)
+        coVerify(exactly = 0) { client.chat(any(), any()) }
+    }
+
+    @Test fun sourceChangedDuringGenerationCannotPublishStaleContext() = runTest {
+        coEvery { client.chat(any(), any()) } answers {
+            coEvery { contextRepository.isCurrent(any(), any()) } returns false
+            """{"quote":"$first","note":"旧版前文"}"""
+        }
+        val outcome = service.generateForChapter(request, { permit }, { _, _ -> }, { _, _, _ -> error("must not commit") })
+        assertTrue(outcome.stopped)
+    }
+
+    @Test fun previousChapterEvidenceIsSentAlongsideTargetWithoutReadingSuffix() = runTest {
+        val evidence = "首段原文的伏笔：顾衡曾许诺重回雪岭"
+        coEvery { contextRepository.prepare(any(), any()) } returns PreparedAnnotationContext("revision",
+            listOf(com.mozhi.reader.core.retrieval.RetrievalCandidate(1, 0, 0, evidence, 0, evidence.length)))
+        val messages = mutableListOf<List<ChatMessage>>()
+        coEvery { client.chat(capture(messages), any()) } returns """{"quote":"$first","note":"呼应前文"}"""
+        val result = service.generateForChapter(request.copy(candidateLimit = 1), { permit }, { _, _ -> }, { _, _, _ -> true })
+        assertFalse(result.failed)
+        val text = messages.single().last().content.orEmpty()
+        assertTrue(text.contains(evidence))
+        assertTrue(text.contains("第 1 章"))
+        assertFalse(text.contains(second))
     }
 }

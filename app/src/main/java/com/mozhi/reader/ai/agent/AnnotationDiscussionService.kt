@@ -7,7 +7,6 @@ import com.mozhi.reader.core.database.entity.AnnotationEntity
 import com.mozhi.reader.core.database.entity.AnnotationReplyEntity
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.PersonaEntity
-import com.mozhi.reader.core.database.entity.enabledTools
 import com.mozhi.reader.core.library.AnnotationRepository
 import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.retrieval.ReadingScope
@@ -32,7 +31,8 @@ class AnnotationDiscussionService @Inject constructor(
     private val libraryRepository: LibraryRepository,
     private val annotationRepository: AnnotationRepository,
     private val personaRepository: PersonaRepository,
-    private val settingsRepository: com.mozhi.reader.core.datastore.ReaderSettingsRepository
+    private val settingsRepository: com.mozhi.reader.core.datastore.ReaderSettingsRepository,
+    private val userMaskStore: com.mozhi.reader.core.datastore.UserMaskStore
 ) {
     sealed interface Event {
         data class Text(val delta: String) : Event
@@ -69,22 +69,24 @@ class AnnotationDiscussionService @Inject constructor(
                 chapterNumber = annotation.chapterIndex + 1,
                 quote = annotation.selectedText,
                 neighborhood = neighborhood,
-                transcript = transcript
+                transcript = transcript,
+                readingScope = scope
             )
             val latestUser = replies.lastOrNull { it.personaId == null }?.contentMarkdown
                 ?: annotation.note.takeIf { annotation.personaId == null && it.isNotBlank() }
-            val enabledTools = CompanionToolRouter.select(
-                userText = latestUser.orEmpty(),
-                sceneAvailable = true,
-                personaEnabledTools = persona.enabledTools().toSet(),
-                webSearchEnabled = false,
-                longTermMemoryEnabled = persona.memoryEnabled
-            )
+            val memorySettings = settingsRepository.companionMemorySettings.first()
+            val memoryEnabled = persona.memoryEnabled && memorySettings.longTermEnabled
+            val enabledTools = CompanionToolRouter.forDiscussion(memoryEnabled)
             val tools = toolset.forBook(
                 bookId = bookId,
                 personaId = personaId,
                 enabledTools = enabledTools,
-                readingScope = scope
+                readingScope = scope,
+                memoryScope = MemoryScope(
+                    longTermEnabled = memoryEnabled,
+                    crossBookChatSearch = memorySettings.crossBookChatSearchEnabled,
+                    maskId = userMaskStore.activeMask()?.id ?: 0L
+                )
             )
             val history = listOf(
                 ChatMessage(ChatRole.SYSTEM, system),
@@ -96,7 +98,7 @@ class AnnotationDiscussionService @Inject constructor(
                 )
             )
             val text = StringBuilder()
-            agentLoop.runDetached(history, tools).collect { event ->
+            agentLoop.runDetached(history, tools, maxRounds = 5).collect { event ->
                 when (event) {
                     is AgentEvent.Text -> {
                         text.append(event.text)
@@ -203,7 +205,8 @@ internal fun buildDiscussionSystemPrompt(
     chapterNumber: Int,
     quote: String,
     neighborhood: String,
-    transcript: String
+    transcript: String,
+    readingScope: ReadingScope
 ): String = buildString {
     append("你是「").append(persona.name).append("」。")
     if (persona.personality.isNotBlank()) {
@@ -213,7 +216,8 @@ internal fun buildDiscussionSystemPrompt(
         append("\n说话风格：").append(persona.speakingStyle.trim())
     }
     append("\n\n你正在和用户共读《").append(book.title).append("》")
-    append("，用户读到第 ").append(book.lastReadChapterIndex + 1).append(" 章。")
+    if (readingScope.isWholeBook) append("，用户已关闭防剧透限制。")
+    else append("，用户最远读到第 ").append(readingScope.maxChapterIndex + 1).append(" 章内，工具只提供已读部分。")
     append("你们在第 ").append(chapterNumber).append(" 章")
     chapterTitle?.takeIf(String::isNotBlank)?.let { append("「").append(it).append("」") }
     append("的一段原文旁展开段落讨论。")
@@ -225,9 +229,12 @@ internal fun buildDiscussionSystemPrompt(
     append("\n\n规则：")
     append("\n- 这是段落旁的讨论区，回复要短小、口语化、直接说观点，一般不超过 150 字")
     append("\n- 不用 Markdown 标题和列表，像聊天一样自然")
-    append("\n- 只谈用户已读到的内容，绝不涉及第 ")
-        .append(book.lastReadChapterIndex + 1)
-        .append(" 章之后的剧情；需要回忆前文细节可用 search_book 检索")
+    if (!readingScope.isWholeBook) {
+        append("\n- 只谈用户已读到的内容，绝不涉及第 ")
+            .append(readingScope.maxChapterIndex + 1)
+            .append(" 章未读部分及之后的剧情；以工具提供的可读范围为准")
+    }
+    append("\n- 涉及前文人物、承诺、伏笔或因果而当前材料不足时，先用 search_book / grep_book 查找，再用 read_book_section 核对。检索范围覆盖所有允许读取的章节，不限最近几章；不能把少量命中当作完整结论")
     if (!persona.isRoleplay) {
         append("\n- 你是阅读助手：观点务实、聚焦文本本身")
     }

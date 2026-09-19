@@ -319,6 +319,31 @@ class ProactiveAnnotationSchedulerWorkerTest {
         assertEquals(2, calls)
     }
 
+    @Test fun contextBudgetChangeRejectsStaleWorkAndRequeuesWithNewBudget() = runTest {
+        val f = Fixture(backgroundScope)
+        f.autonomy.value = f.autonomy.value.copy(annotationLimits = f.autonomy.value.annotationLimits.copy(aheadChapters = 0))
+        val budgets = mutableListOf<Int>()
+        val gate = CompletableDeferred<Unit>()
+        var stalePermit: ProactiveAnnotationAllowance? = ProactiveAnnotationAllowance(true)
+        coEvery { f.service.generateForChapter(any(), any(), any(), any()) } coAnswers {
+            budgets += arg<ProactiveAnnotationRequest>(0).contextBudgetChars
+            val allowance = arg<suspend () -> ProactiveAnnotationAllowance?>(1)
+            if (budgets.size == 1) {
+                gate.await()
+                stalePermit = allowance()
+                ProactiveAnnotationGenerationResult(false, true)
+            } else ProactiveAnnotationGenerationResult(false, false)
+        }
+        f.scheduler.onChapterEntered(1, 0); runCurrent()
+        f.autonomy.value = f.autonomy.value.copy(annotationLimits = f.autonomy.value.annotationLimits.copy(
+            context = ProactiveAnnotationContextSettings(AnnotationContextMode.ECONOMY)))
+        runCurrent(); gate.complete(Unit); runCurrent()
+        assertNull(stalePermit)
+        assertEquals(listOf(16_000, 8_000), budgets)
+        assertEquals(0, f.ledger.rows.values.single().attempts)
+        assertEquals("DONE", f.ledger.rows.values.single().status)
+    }
+
     @Test fun exhaustedDailyBudgetDoesNotReadSourceOrChurnPausedLedger() = runTest {
         val f = Fixture(backgroundScope)
         f.autonomy.value = f.autonomy.value.copy(annotationLimits = f.autonomy.value.annotationLimits.copy(aheadChapters = 0))

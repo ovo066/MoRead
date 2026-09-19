@@ -14,6 +14,9 @@ interface ChapterKnowledgeDao {
     @Query("SELECT * FROM chapter_knowledge WHERE bookId = :bookId AND chapterIndex = :chapterIndex")
     suspend fun get(bookId: Long, chapterIndex: Int): ChapterKnowledgeEntity?
 
+    @Query("SELECT * FROM chapter_knowledge WHERE bookId = :bookId AND chapterIndex < :beforeChapter ORDER BY chapterIndex")
+    suspend fun getBefore(bookId: Long, beforeChapter: Int): List<ChapterKnowledgeEntity>
+
     @Upsert
     suspend fun save(entry: ChapterKnowledgeEntity)
 

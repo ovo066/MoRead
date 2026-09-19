@@ -74,7 +74,7 @@ import com.mozhi.reader.ui.components.MoReadSegmented
 import com.mozhi.reader.ui.components.MoReadSwitchRow
 import com.mozhi.reader.ui.components.MoReadTextField
 import com.mozhi.reader.ui.components.PersonaAvatarImage
-import com.mozhi.reader.ui.theme.MoReadRadius
+import com.mozhi.reader.ui.theme.moReadMetrics
 import com.mozhi.reader.ui.theme.fieldContainerColor
 
 /**
@@ -499,7 +499,7 @@ private fun InlineBlock(
 ) = Column(
     modifier = modifier
         .fillMaxWidth()
-        .clip(MoReadRadius.RowShape)
+        .clip(moReadMetrics().rowShape)
         .background(fieldContainerColor().copy(alpha = 0.55f))
         .padding(12.dp),
     verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -512,7 +512,7 @@ private fun AddInlineButton(label: String, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(MoReadRadius.RowShape)
+            .clip(moReadMetrics().rowShape)
             .clickable(onClick = onClick)
             .padding(vertical = 11.dp),
         horizontalArrangement = Arrangement.Center,
@@ -774,7 +774,7 @@ private fun VoiceChoiceRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(MoReadRadius.FieldShape)
+            .clip(moReadMetrics().fieldShape)
             .clickable(onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically

@@ -31,9 +31,11 @@ class PageAnnotationsTest {
         assertEquals(3, geometry.highlights.size)
         assertEquals(1, geometry.markers.size)
         assertEquals(listOf(1L, 2L), geometry.markers.single().annotationIds)
-        // 两条批注都在第二字后结束，marker 紧跟划线末尾（x=20）。
-        assertEquals(20f + 4f + 8f, geometry.markers.single().centerX)
-        assertEquals((24f + 46f) / 2f, geometry.markers.single().centerY)
+        // 两条批注共用末字下沿的小点，始终留在划线范围内。
+        val dot = geometry.markers.single()
+        assertEquals(20f, dot.centerX + dot.radius, 0.001f)
+        assertEquals(46f, dot.centerY + dot.radius, 0.001f)
+        assertTrue(dot.centerX - dot.radius >= 10f)
         assertTrue(geometry.highlights.all { it.right > it.left })
     }
 
@@ -57,11 +59,13 @@ class PageAnnotationsTest {
             maxRight = 200f
         )
 
-        assertEquals(20f + 4f + 8f, geometry.markers.single().centerX)
+        val dot = geometry.markers.single()
+        assertEquals(20f, dot.centerX + dot.radius, 0.001f)
+        assertEquals(22f, dot.centerY + dot.radius, 0.001f)
     }
 
     @Test
-    fun markerFollowsTextWhenAnnotationEndsWithParagraph() {
+    fun paragraphEndDotStaysInsideTheLastCharacter() {
         val first = line(
             text = "天地玄黄",
             chapterPosition = 0,
@@ -83,11 +87,12 @@ class PageAnnotationsTest {
             maxRight = 200f
         )
 
-        assertEquals(40f + 4f + 8f, geometry.markers.single().centerX)
+        val dot = geometry.markers.single()
+        assertEquals(40f, dot.centerX + dot.radius, 0.001f)
     }
 
     @Test
-    fun markerFallbackStaysInsidePageEdge() {
+    fun fullLineDotNeedsNoSpaceBeyondThePageEdge() {
         val first = line("天地玄黄", chapterPosition = 0, top = 0f)
         val page = TextPage(
             index = 0,
@@ -96,17 +101,18 @@ class PageAnnotationsTest {
             charLength = 4,
             height = 30f
         )
-        // 排版占位尚未就绪时仍有兜底，marker 不越过右边界。
+        // 正文铺满整行时也不需要挤字或另开一行。
         val marks = listOf(ReaderAnnotationMark(1, 0, 0, 4, hasComment = true))
 
         val geometry = page.annotationGeometry(
             marks,
             markerRadius = 8f,
             markerGap = 4f,
-            maxRight = 44f
+            maxRight = 40f
         )
 
-        assertTrue(geometry.markers.single().centerX + 8f <= 44f)
+        val dot = geometry.markers.single()
+        assertTrue(dot.centerX + dot.radius <= 40f)
     }
 
     @Test
@@ -135,13 +141,13 @@ class PageAnnotationsTest {
     }
 
     @Test
-    fun inlineMarkerUsesReservedCharacterSlot() {
+    fun commentDotAndIllustrationAtTheSameAnchorUseDifferentGeometry() {
         val markerColumn = TextColumn(
             start = 20f,
             end = 30f,
             charData = "",
             sourceLength = 0,
-            inlineMarkerKind = InlineMarkerKind.ANNOTATION,
+            inlineMarkerKind = InlineMarkerKind.ILLUSTRATION,
             inlineMarkerOffset = 2
         )
         val page = TextPage(
@@ -173,15 +179,77 @@ class PageAnnotationsTest {
 
         val layout = page.inlineMarkerLayout(
             annotations = listOf(ReaderAnnotationMark(1, 0, 0, 2, hasComment = true)),
-            illustrations = emptyList(),
+            illustrations = listOf(ReaderIllustrationMark(8, 0, 0, 2)),
             markerRadius = 8f,
             markerGap = 4f,
             maxRight = 200f
         )
 
-        assertEquals(1, layout.markers.size)
-        assertEquals(25f, layout.markers.single().centerX)
+        assertEquals(2, layout.markers.size)
+        val dot = layout.markers.single { it.annotationIds.isNotEmpty() }
+        val image = layout.markers.single { it.illustrationIds.isNotEmpty() }
+        assertEquals(20f, dot.centerX + dot.radius, 0.001f)
+        assertEquals(0f, dot.occupiedWidth, 0f)
+        assertEquals(25f, image.centerX, 0f)
         assertEquals(30f, page.lines.single().columns[3].start)
+    }
+
+    @Test
+    fun highlightAreaIsClickableWithoutStealingTheNextCharacterOrLine() {
+        val page = TextPage(0, listOf(line("天地玄黄", 0, 0f)), 0, 4, 30f)
+        val marks = listOf(
+            ReaderAnnotationMark(1, 0, 0, 2, hasComment = true),
+            ReaderAnnotationMark(2, 0, 1, 2, hasComment = false)
+        )
+        val geometry = page.inlineMarkerLayout(marks, emptyList(), 8f, 4f, 40f)
+        assertEquals(listOf(1L), geometry.annotationIdsAt(5f, 10f))
+        assertEquals(listOf(1L, 2L), geometry.annotationIdsAt(15f, 10f))
+        val dot = geometry.markers.single()
+        assertEquals(listOf(1L, 2L), geometry.annotationIdsAt(dot.centerX, dot.centerY))
+        assertTrue(geometry.annotationIdsAt(21f, 10f).isEmpty())
+        assertTrue(geometry.annotationIdsAt(18f, 25f).isEmpty())
+    }
+
+    @Test
+    fun crossPageCommentOnlyMarksItsActualEndAndPureHighlightsHaveNoDot() {
+        val first = TextPage(0, listOf(line("天地玄黄", 0, 0f)), 0, 4, 30f)
+        val next = TextPage(1, listOf(line("宇宙洪荒", 4, 0f)), 4, 4, 30f)
+        val marks = listOf(ReaderAnnotationMark(1, 0, 2, 6, hasComment = true))
+        val head = first.annotationGeometry(marks, 8f, 4f, 40f)
+        val tail = next.annotationGeometry(marks, 8f, 4f, 40f)
+        assertEquals(1, head.highlights.size)
+        assertTrue(head.markers.isEmpty())
+        assertEquals(1, tail.highlights.size)
+        assertEquals(20f, tail.markers.single().let { it.centerX + it.radius }, 0.001f)
+        assertTrue(next.annotationGeometry(marks.map { it.copy(hasComment = false) }, 8f, 4f, 40f).markers.isEmpty())
+    }
+
+    @Test
+    fun repeatedCommentsNeverMoveTextSelectionOrPageBoundaries() {
+        val body = "天地玄黄宇宙洪荒日月盈昃".repeat(35)
+        val spec = TypesetSpec(visibleWidth = 100f, visibleHeight = 100f,
+            contentLineStep = 25f, titleLineStep = 34f, paragraphSpacing = 0f,
+            blankLineSpacing = 0f, titleTopSpacing = 0f, titleBottomSpacing = 0f)
+        val chapter = ChapterTypesetter(spec, FakeMeasure())
+            .typeset(0, "", body)
+        val pages = chapter.pages.toList()
+        val first = pages.first()
+        val selection = first.selectionRects(1..4)
+        repeat(20) { update ->
+            val marks = (1..update + 1).map { end -> ReaderAnnotationMark(end.toLong(), 0, 0, end, true) }
+            pages.forEach { page ->
+                val geometry = page.inlineMarkerLayout(marks, emptyList(), 8f, 4f, 100f)
+                assertTrue(geometry.markers.all { it.occupiedWidth == 0f })
+                page.lines.forEachIndexed { lineIndex, line ->
+                    line.columns.forEachIndexed { columnIndex, column ->
+                        assertEquals(column.start, geometry.startFor(lineIndex, columnIndex, column), 0f)
+                        assertEquals(column.end, geometry.endFor(lineIndex, columnIndex, column), 0f)
+                    }
+                }
+            }
+            assertEquals(selection, first.selectionRects(1..4))
+            assertEquals(pages, chapter.pages)
+        }
     }
 
     private fun line(

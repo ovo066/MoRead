@@ -77,7 +77,7 @@ internal fun ReaderTypographyCard(
     visible: Boolean,
     settings: ReaderSettings,
     palette: ReaderPalette,
-    actions: ReaderTypographyActions,
+    actions: ReaderLayoutActions,
     onBack: () -> Unit,
     onClose: () -> Unit
 ) {
@@ -257,7 +257,7 @@ private fun CardHeaderButton(
 private fun BodyTypographySection(
     settings: ReaderSettings,
     palette: ReaderPalette,
-    actions: ReaderTypographyActions
+    actions: ReaderLayoutActions
 ) {
     SheetRow(label = "EPUB 样式", palette = palette) {
         com.mozhi.reader.core.datastore.PublisherStyleMode.entries.forEach { mode ->
@@ -357,7 +357,7 @@ private fun BodyTypographySection(
 private fun TitleTypographySection(
     settings: ReaderSettings,
     palette: ReaderPalette,
-    actions: ReaderTypographyActions
+    actions: ReaderLayoutActions
 ) {
     TypographyStepper(
         label = "标题比例",
@@ -392,7 +392,7 @@ private fun TitleTypographySection(
 private fun PageMarginSection(
     settings: ReaderSettings,
     palette: ReaderPalette,
-    actions: ReaderTypographyActions
+    actions: ReaderLayoutActions
 ) {
     TypographyStepper(
         label = "左边距",
@@ -436,9 +436,9 @@ private fun PageMarginSection(
 private fun ChromeMarginSection(
     settings: ReaderSettings,
     palette: ReaderPalette,
-    actions: ReaderTypographyActions
+    actions: ReaderLayoutActions
 ) {
-    AdvancedSwitchRow(
+    TypographySwitchRow(
         "显示页眉",
         "章节标题",
         settings.showHeader,
@@ -455,7 +455,7 @@ private fun ChromeMarginSection(
         onValueChange = actions.onHeaderMarginTopChange
     )
     HorizontalDivider(color = palette.glassBorder)
-    AdvancedSwitchRow(
+    TypographySwitchRow(
         "显示页脚",
         "页码、进度、时间与电量",
         settings.showFooter,

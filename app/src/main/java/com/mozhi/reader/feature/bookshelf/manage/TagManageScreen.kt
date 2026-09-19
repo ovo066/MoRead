@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mozhi.reader.core.database.entity.BookTagEntity
+import com.mozhi.reader.ui.components.shelfTagColor
 import com.mozhi.reader.ui.components.FrostedSurface
 import com.mozhi.reader.ui.components.MoReadBackdrop
 import kotlinx.coroutines.launch
@@ -306,7 +307,7 @@ private fun TagManageRow(
             Surface(
                 modifier = Modifier.padding(start = 10.dp).size(10.dp),
                 shape = CircleShape,
-                color = tagColor(tag.colorTag)
+                color = shelfTagColor(tag.colorTag)
             ) {}
             Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
                 Text(tag.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -374,7 +375,7 @@ private fun EditTagDialog(
                     TAG_COLORS.forEach { option ->
                         Surface(
                             shape = CircleShape,
-                            color = tagColor(option),
+                            color = shelfTagColor(option),
                             border = BorderStroke(2.dp, if (option == colorTag) MaterialTheme.colorScheme.onSurface else Color.Transparent),
                             modifier = Modifier.size(24.dp).clickable { colorTag = option }
                         ) {}
@@ -405,12 +406,5 @@ private fun TextInputDialog(
     )
 }
 
-private fun tagColor(tag: String): Color = when (tag) {
-    "琥珀" -> Color(0xFFD59B2D)
-    "青竹" -> Color(0xFF4E8B62)
-    "黛蓝" -> Color(0xFF4A6785)
-    "绯红" -> Color(0xFFA84D55)
-    else -> runCatching { Color(parseColor(tag)) }.getOrDefault(Color.Gray)
-}
 
 private val TAG_COLORS = listOf("琥珀", "青竹", "黛蓝", "绯红")

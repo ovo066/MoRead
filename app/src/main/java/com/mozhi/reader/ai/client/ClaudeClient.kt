@@ -73,6 +73,7 @@ class ClaudeClient(
                         type: String?,
                         data: String
                     ) {
+                        parseChatUsage(data, ApiDialect.CLAUDE)?.let { trySend(it) }
                         when (type) {
                             "message_stop" -> finish()
                             "error" -> close(

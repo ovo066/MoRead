@@ -14,6 +14,9 @@ import com.mozhi.reader.feature.reader.engine.TextBlockDecoration
 import com.mozhi.reader.feature.reader.engine.TextColumn
 import com.mozhi.reader.feature.reader.engine.TextLine
 import com.mozhi.reader.feature.reader.engine.TextRubyPlacement
+import com.mozhi.reader.feature.reader.engine.addWordGlosses
+import com.mozhi.reader.feature.reader.engine.translationLines
+import com.mozhi.reader.feature.reader.engine.moveTranslationTo
 import kotlin.math.max
 import kotlin.math.min
 
@@ -56,15 +59,18 @@ internal class EpubInlineLayout(private val ctx: EpubLayoutContext) {
         val indentDeclared = "text-indent" in blockStyle.appliedProperties ||
             "duokan-text-indent" in blockStyle.appliedProperties
         val publisherIndent = if (indentDeclared) blockStyle.textIndent.resolve(cb.width) ?: 0f else null
-        val firstIndent = resolveFirstLineIndent(
+        val imageOnly = clusters.any { it.image != null } &&
+            clusters.none { it.image == null && it.float == null && !it.forcedBreak && it.text.isNotBlank() }
+        // Paragraph indentation belongs to prose, including paragraphs with inline glyphs.
+        // Applying it to an illustration shifts its center and can push a full-width image out.
+        val firstIndent = if (imageOnly) 0f else resolveFirstLineIndent(
             publisherIndentPx = publisherIndent,
             userIndentChars = ctx.spec.indentCharCount,
             indentColumnWidthPx = ctx.measure.indentColumnWidth(),
             publisherStyleMode = ctx.spec.publisherStyleMode,
             isHeading = isHeading
         )
-        val singleImageOnly = clusters.count { it.image != null } == 1 &&
-            clusters.none { it.image == null && it.float == null && !it.forcedBreak && it.text.isNotBlank() }
+        val singleImageOnly = imageOnly && clusters.count { it.image != null } == 1
         val align = when {
             singleImageOnly && !alignDeclared -> EpubTextAlignValue.CENTER
             else -> blockStyle.textAlign
@@ -87,6 +93,18 @@ internal class EpubInlineLayout(private val ctx: EpubLayoutContext) {
             var window = bfc.windowAt(y, probeHeight, cb)
             val indent = if (firstLine) firstIndent else 0f
             var limit = (window.second - window.first - indent).coerceAtLeast(1f)
+            // fillLine deliberately consumes at least one cluster for oversized content. Do
+            // not use that fallback in a sliver beside a float: it creates a one-letter column.
+            val requiredWidth = minimumFloatRunWidth(clusters, index).coerceAtMost((cb.width - indent).coerceAtLeast(1f))
+            fun obstructingFloatBottom(height: Float, available: Float): Float? =
+                if (available + .01f >= requiredWidth) null else bfc.bands
+                    .filter { it.top < y + height && it.bottom > y }
+                    .minOfOrNull { it.bottom }
+            val bandBottom = obstructingFloatBottom(probeHeight, limit)
+            if (bandBottom != null) {
+                y = bandBottom
+                continue
+            }
             var end = fillLine(clusters, index, limit)
             // A float band can leave no usable room; drop below the nearest band and retry.
             if (end == index) {
@@ -100,14 +118,20 @@ internal class EpubInlineLayout(private val ctx: EpubLayoutContext) {
                 end = index + 1
             }
             val lineClusters = clusters.subList(index, end).filter { it.float == null }
-            index = end
             if (lineClusters.isEmpty() || lineClusters.all { it.forcedBreak && it.text.isEmpty() }) {
+                index = end
                 if (lineClusters.isNotEmpty()) firstLine = false
                 continue
             }
             val metrics = lineMetrics(lineClusters, isHeading)
             window = bfc.windowAt(y, metrics.lineStep, cb)
             limit = (window.second - window.first - indent).coerceAtLeast(1f)
+            val tallerBandBottom = obstructingFloatBottom(metrics.lineStep, limit)
+            if (tallerBandBottom != null) {
+                y = tallerBandBottom
+                continue
+            }
+            index = end
             val lastLine = clusters.drop(index).all { it.float != null || it.forcedBreak }
             val justify = !lastLine && (align == EpubTextAlignValue.JUSTIFY ||
                 !alignDeclared && ctx.spec.justifyContent)
@@ -122,6 +146,7 @@ internal class EpubInlineLayout(private val ctx: EpubLayoutContext) {
                 isParagraphEnd = lastLine
             )
             // Lines are appended as they are produced so floats keep document order around them.
+            addWordGlosses(placed, ctx.spec, ctx.measure)
             output.lines += FlowLine(
                 line = placed,
                 paragraphId = paragraphId,
@@ -132,12 +157,30 @@ internal class EpubInlineLayout(private val ctx: EpubLayoutContext) {
                 keepWithNext = isHeading
             )
             emitted++
-            y += metrics.lineStep
+            y += max(metrics.lineStep, placed.lineBottom - placed.lineTop)
             firstLine = false
         }
         for (lineIndex in firstLineIndex until output.lines.size) {
             if (output.lines[lineIndex].paragraphId == paragraphId) {
                 output.lines[lineIndex].paragraphLineCount = emitted
+            }
+        }
+        if (ctx.spec.paragraphTranslations.isNotEmpty()) {
+            val originalLines = output.lines.drop(firstLineIndex).filter { it.paragraphId == paragraphId }.map { it.line }
+            val sourceStart = originalLines.minOfOrNull { it.chapterPosition } ?: 0
+            val sourceEnd = originalLines.maxOfOrNull { it.chapterPosition + it.charLength } ?: 0
+            ctx.spec.paragraphTranslations.filter { it.end in (sourceStart + 1)..sourceEnd }.forEach { translation ->
+                y += ctx.spec.paragraphSpacing * 0.4f
+                // Clear floats before a translation so it never paints over an illustration.
+                y = max(y, bfc.bands.maxOfOrNull { it.bottom } ?: y)
+                val translated = translationLines(translation, cb.left, cb.width, ctx.spec, ctx.measure)
+                val translatedParagraphId = output.nextParagraphId++
+                translated.forEachIndexed { index, line ->
+                    line.moveTranslationTo(y)
+                    output.lines += FlowLine(line, translatedParagraphId, 1, 1, index, translated.size, false)
+                    y = line.lineBottom
+                    emitted++
+                }
             }
         }
         return Result(y, emitted)
@@ -523,6 +566,19 @@ internal class EpubInlineLayout(private val ctx: EpubLayoutContext) {
     // Line filling and placement
     // ---------------------------------------------------------------------------------------
 
+    private fun minimumFloatRunWidth(clusters: List<Cluster>, start: Int): Float {
+        if (clusters[start].image != null) return clusters[start].advanceWidth
+        var width = 0f
+        var count = 0
+        for (index in start until clusters.size) {
+            val cluster = clusters[index]
+            if (cluster.float != null || cluster.forcedBreak || cluster.image != null) break
+            width += cluster.advanceWidth
+            if (++count == 3) break
+        }
+        return width
+    }
+
     private fun fillLine(clusters: List<Cluster>, start: Int, limit: Float): Int {
         var used = 0f
         var end = start
@@ -685,6 +741,7 @@ internal class EpubInlineLayout(private val ctx: EpubLayoutContext) {
                 start = glyphStart,
                 end = glyphStart + cluster.width,
                 charData = cluster.text,
+                syntaxPaintSpan = style.paintSpan,
                 syntaxColorArgb = style.colorArgb,
                 syntaxBackgroundArgb = style.backgroundArgb.takeIf { cluster.boxKey == null },
                 syntaxUnderline = style.underline,

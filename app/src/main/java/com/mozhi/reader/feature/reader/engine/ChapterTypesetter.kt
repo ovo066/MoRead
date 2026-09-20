@@ -47,7 +47,17 @@ data class TypesetSpec(
     val darkTheme: Boolean = false,
     /** 特殊页拿回普通页为页眉、页脚预留的纵向空间。 */
     val immersiveExtraTopPx: Float = 0f,
-    val immersiveExtraBottomPx: Float = 0f
+    val immersiveExtraBottomPx: Float = 0f,
+    val wordGlosses: Map<String, com.mozhi.reader.core.dictionary.WordGloss> = emptyMap(),
+    val glossColorArgb: Int = 0xff847561.toInt(),
+    val paragraphTranslations: List<com.mozhi.reader.core.dictionary.ParagraphTranslation> = emptyList(),
+    val readerTitleAlignment: com.mozhi.reader.core.datastore.ReaderTitleAlignment = com.mozhi.reader.core.datastore.ReaderTitleAlignment.START,
+    val readerTitleInset: Float = 0f,
+    val readerTitlePadding: Float = 0f,
+    val publisherTitleFontSizePx: Float = titleFontSizePx,
+    val publisherTitleLineStep: Float = titleLineStep,
+    val publisherTitleTopSpacing: Float = titleTopSpacing,
+    val publisherTitleBottomSpacing: Float = titleBottomSpacing
 )
 
 /** 「段首缩进」滑杆的出厂值，也是把原书缩进折算成用户比例时的基准。 */
@@ -109,21 +119,28 @@ class ChapterTypesetter(
         inlineImages: List<InlineImageSource> = emptyList(),
         inlineMarkers: List<InlineMarkerReservation> = emptyList(),
         epubLayout: EpubLayoutChapterBundle? = null,
-        cancellationCheck: () -> Unit = {}
+        cancellationCheck: () -> Unit = {},
+        translations: List<com.mozhi.reader.core.dictionary.ParagraphTranslation> = emptyList()
     ): TextChapter {
+        if (translations.isNotEmpty()) return ChapterTypesetter(spec.copy(paragraphTranslations = translations.filter { !it.hidden && it.matches(body) }), measure)
+            .typeset(chapterIndex, title, body, inlineImages, inlineMarkers, epubLayout, cancellationCheck)
         cancellationCheck()
         if (epubLayout != null && epubLayout.document.textLength == body.length) {
+            val publisherMeasure = (measure as? AndroidTextMeasure)?.forPublisherHeadings() ?: measure
+            val publisherSpec = spec.copy(titleFontSizePx = spec.publisherTitleFontSizePx,
+                titleLineStep = spec.publisherTitleLineStep,
+                titleTopSpacing = spec.publisherTitleTopSpacing, titleBottomSpacing = spec.publisherTitleBottomSpacing)
             val hasDomPath = epubLayout.dom != null &&
                 (epubLayout.stylesheets.isNotEmpty() || epubLayout.dom.embeddedStylesheets.isNotEmpty() ||
                     epubLayout.dom.bodyNode.hasInlineStyles())
             val hasLegacyBlocks = epubLayout.document.blocks.any { it.kind != EpubLayoutBlockKind.CONTAINER }
             if (hasDomPath) {
-                return EpubTypesetterV2(spec, measure, cancellationCheck).typeset(
+                return EpubTypesetterV2(publisherSpec, publisherMeasure, cancellationCheck).typeset(
                     chapterIndex, title, body, inlineImages, inlineMarkers, epubLayout
                 )
             }
             if (hasLegacyBlocks) {
-                return EpubBoxLayoutBackend(spec, measure, cancellationCheck).typeset(
+                return EpubBoxLayoutBackend(publisherSpec, publisherMeasure, cancellationCheck).typeset(
                     chapterIndex, title, body, inlineImages, inlineMarkers, epubLayout
                 )
             }
@@ -153,6 +170,7 @@ class ChapterTypesetter(
                         state, paragraph, cursor, isTitle = true, synthetic = false,
                         syntax = syntax, inlineMarkers = inlineMarkers, cancellationCheck = cancellationCheck
                     )
+                    layoutTranslation(state, cursor, end, cancellationCheck)
                     pendingGap = spec.titleBottomSpacing
                     cursor = end + 1
                     if (isLastParagraph) break
@@ -182,6 +200,7 @@ class ChapterTypesetter(
                         state, paragraph, cursor, isTitle = false, synthetic = false,
                         syntax = syntax, inlineMarkers = inlineMarkers, cancellationCheck = cancellationCheck
                     )
+                    layoutTranslation(state, cursor, end, cancellationCheck)
                     pendingGap = spec.paragraphSpacing
                 }
                 // 空行只是分段信号：抬高待结算间隙，不再占一整行正文高度。
@@ -199,6 +218,18 @@ class ChapterTypesetter(
             pages = state.pages,
             bodyLength = body.length
         )
+    }
+
+    private fun layoutTranslation(state: LayoutState, start: Int, end: Int, cancellationCheck: () -> Unit) {
+        spec.paragraphTranslations.firstOrNull { it.start == start && it.end == end }?.let { translation ->
+            state.addSpacing(spec.paragraphSpacing * 0.4f)
+            translationLines(translation, 0f, spec.visibleWidth, spec, measure).forEach { line ->
+                cancellationCheck()
+                state.prepareForLine(line.lineBottom)
+                line.moveTranslationTo(state.durY)
+                state.addLine(line, line.lineBottom - line.lineTop)
+            }
+        }
     }
 
     private fun layoutInlineImage(
@@ -258,14 +289,18 @@ class ChapterTypesetter(
         val indent = if (isTitle) 0f else indentWidth
         val layoutText = if (synthetic) LayoutText.identity(text) else buildLayoutText(text, bodyOffset, inlineMarkers)
         val widths = measure.charWidths(layoutText.text, isTitle)
-        val lineStarts = measure.breakLines(layoutText.text, isTitle, spec.visibleWidth, indent)
+        val titleInset = if (isTitle) (spec.readerTitleInset + spec.readerTitlePadding).coerceAtMost(spec.visibleWidth * 0.4f) else 0f
+        val availableWidth = spec.visibleWidth - titleInset * 2f
+        val lineStarts = measure.breakLines(layoutText.text, isTitle, availableWidth, indent)
+        if (isTitle) state.addSpacing(spec.readerTitlePadding, atPageTop = true)
 
         for (lineIndex in lineStarts.indices) {
             cancellationCheck()
             val lineStart = lineStarts[lineIndex]
             val lineEnd = if (lineIndex + 1 < lineStarts.size) lineStarts[lineIndex + 1] else layoutText.text.length
             if (lineStart >= lineEnd) continue
-            state.prepareForLine(metrics.textHeight)
+            val glossBand = spec.wordGlossBand(layoutText.text.substring(lineStart, lineEnd), isTitle)
+            state.prepareForLine(metrics.textHeight + glossBand)
 
             val clusters = layoutText.clusters(widths, lineStart, lineEnd, bodyOffset, synthetic)
             // StaticLayout keeps the trailing space of a broken line; it must not push
@@ -275,7 +310,11 @@ class ChapterTypesetter(
             }
             if (clusters.isEmpty()) continue
 
-            val startX = if (lineIndex == 0) indent else 0f
+            val startX = if (isTitle) titleInset + (availableWidth - clusters.sumOf { it.width.toDouble() }.toFloat()).coerceAtLeast(0f) * when (spec.readerTitleAlignment) {
+                com.mozhi.reader.core.datastore.ReaderTitleAlignment.START -> 0f
+                com.mozhi.reader.core.datastore.ReaderTitleAlignment.CENTER -> 0.5f
+                com.mozhi.reader.core.datastore.ReaderTitleAlignment.END -> 1f
+            } else if (lineIndex == 0) indent else 0f
             val isLastLine = lineIndex == lineStarts.lastIndex
             val justify = spec.justifyContent && !isTitle && !isLastLine
             val columns = placeClusters(
@@ -296,14 +335,16 @@ class ChapterTypesetter(
                     lineBottom = lineBottom,
                     startX = startX,
                     isTitle = isTitle,
+                    isReaderTitle = isTitle,
                     isParagraphEnd = isLastLine,
                     chapterPosition = if (synthetic) bodyOffset else bodyOffset + layoutText.sourceBoundary[lineStart],
                     charLength = if (synthetic) 0 else layoutText.sourceBoundary[lineEnd] - layoutText.sourceBoundary[lineStart],
                     justifyGapExtra = columns.second
-                ),
+                ).also { addWordGlosses(it, spec, measure) },
                 lineStep = lineStep
             )
         }
+        if (isTitle) state.addSpacing(spec.readerTitlePadding, atPageTop = false)
     }
 
     /**
@@ -352,6 +393,7 @@ class ChapterTypesetter(
                     start = x,
                     end = x + cluster.width,
                     charData = cluster.text,
+                    syntaxPaintSpan = style?.paintSpan,
                     syntaxColorArgb = style?.colorArgb,
                     syntaxBackgroundArgb = style?.backgroundArgb,
                     syntaxUnderline = style?.underline ?: false,
@@ -381,6 +423,7 @@ class ChapterTypesetter(
                         start = column.start - shift,
                         end = column.end - shift,
                         charData = column.charData,
+                        syntaxPaintSpan = column.syntaxPaintSpan,
                         syntaxColorArgb = column.syntaxColorArgb,
                         syntaxBackgroundArgb = column.syntaxBackgroundArgb,
                         syntaxUnderline = column.syntaxUnderline,
@@ -492,6 +535,7 @@ class ChapterTypesetter(
         }
 
         fun prepareForLine(textHeight: Float) {
+            if (pendingLines.isEmpty()) durY = durY.coerceAtMost((spec.visibleHeight - textHeight).coerceAtLeast(0f))
             if (pendingLines.isNotEmpty() && durY + textHeight > spec.visibleHeight + HEIGHT_EPSILON) {
                 closePage(force = false)
             }
@@ -544,6 +588,7 @@ class ChapterTypesetter(
                 lines[index].lineTop += shift
                 lines[index].lineBase += shift
                 lines[index].lineBottom += shift
+                lines[index].rubyPlacements = lines[index].rubyPlacements.map { it.copy(baseline = it.baseline + shift) }
             }
         }
     }

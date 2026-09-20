@@ -14,6 +14,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextStyle
 import coil3.compose.AsyncImage
 import com.mozhi.reader.ui.theme.ColorSchemePreset
 import com.mozhi.reader.ui.theme.LocalMoReadColors
@@ -26,17 +27,11 @@ import java.io.File
 fun PersonaAvatarImage(
     name: String,
     avatarPath: String?,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    fallbackTextStyle: TextStyle? = null
 ) {
     val file = avatarPath?.takeIf(String::isNotBlank)?.let(::File)
-    if (file != null && file.exists()) {
-        AsyncImage(
-            model = file,
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = modifier.clip(CircleShape)
-        )
-    } else {
+    run {
         // 渐变底来自当前配色方案：中性方案仍是历史的四组灰，莫兰迪方案下按语义色上色。
         val appearance = LocalMoReadColors.current
         val gradients = appearance.avatarGradients
@@ -49,11 +44,15 @@ fun PersonaAvatarImage(
         ) {
             Text(
                 text = name.firstOrNull()?.toString() ?: "角",
-                style = MaterialTheme.typography.titleLarge,
+                style = fallbackTextStyle ?: MaterialTheme.typography.titleLarge,
                 fontFamily = FontFamily.Serif,
                 fontWeight = FontWeight.SemiBold,
-                color = if (appearance.colorScheme == ColorSchemePreset.NEUTRAL && appearance.semanticHarmony == SemanticHarmony.MULTI) Color.White
-                    else end.onAccent()
+                color = end.onAccent()
+            )
+            // Keep an avatar visible while a local image loads, or when the image cannot decode.
+            if (file != null && file.exists()) AsyncImage(
+                model = file, contentDescription = null, contentScale = ContentScale.Crop,
+                modifier = Modifier.matchParentSize().clip(CircleShape)
             )
         }
     }

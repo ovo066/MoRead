@@ -50,7 +50,7 @@ internal fun LibraryChatConversation(
             AsyncImage(File(it.filePath), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             Box(Modifier.fillMaxSize().background(palette.background.copy(alpha = appearance.backgroundDim)))
         }
-        MoReadBoundedContent {
+        MoReadBoundedContent(maxWidth = if (LocalCompanionSidebarVisible.current) 880.dp else 720.dp) {
             Column(Modifier.fillMaxSize().safeTopPadding().imePadding()) {
                 CompanionChatHeader(
                     persona, catalog.personas, "书库伴读", personaMenu, messages.reply.running || session.busy, palette,

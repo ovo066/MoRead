@@ -44,12 +44,14 @@ This list describes the current source tree. For features in a packaged release,
 - **Whole-book characters:** the adjacent **Characters** tab can scan the entire book, including unread chapters, after confirmation. Stop and resume extraction, search saved character cards, and open their source passages.
 
 - **TXT and EPUB import:** automatic encoding detection, regex-based chapter splitting using Legado’s rule set, and a preview with customizable chapter rules.
-- **Native rendering:** page-curl, cover, and slide animations; EPUB parsing and layout for supported CSS, block/inline content, floats, tables, backgrounds, and images. Includes text-selection handles, paragraph annotations and comments, bookmarks, and in-book search.
+- **Native rendering:** classic and modern page-curl, cover, and slide animations; EPUB parsing and layout for supported CSS, block/inline content, floats, tables, backgrounds, and images. Includes text-selection handles, paragraph annotations and comments, bookmarks, and in-book search.
 - **Quick bookmarks:** in paginated mode, pull down until the release cue appears, then release to add a bookmark. Repeating the gesture never removes an existing bookmark. It is disabled in continuous vertical scrolling mode.
 - **Typography and themes:** font size, line spacing, margins, light/dark themes, custom three-color reading palettes, and generated vertical-text covers for books without artwork.
+- **Reading tools:** local MDX/MDD dictionaries, selection lookup, saved vocabulary, and optional bilingual reading with paragraph translation, glosses, and phonetics. Customize tap zones, physical page-turn keys, heading styles, and gradient or image highlighting; preview text cleanup before applying.
+- **Highlights and notes review:** filter by books, companions, and content; browse cards or full-screen excerpts, invite companion commentary and co-writing, and export with reusable share templates.
 - **Continuous read-aloud:** system TTS or cloud AI TTS, sentence highlighting, automatic page/chapter advancement, and notification playback controls.
 - **Library organization:** groups, collections, drag-to-reorder, pinning, and reading states. Collection targets stay in place while a book is dragged into them; long-press menus adapt to available space and appear above the bottom navigation. Simplified/Traditional Chinese conversion preserves reading position.
-- **Large-screen support:** adaptive bookshelf grids and side navigation, optional two-page spreads, and side-by-side reading and companion chat.
+- **Large-screen support:** adaptive bookshelf grids, settings and conversation sidebars, split book-detail and audiobook views, optional two-page spreads, and side-by-side reading and companion chat.
 - **Reading statistics:** all-time, yearly, monthly, weekly, and daily views with large heatmaps, a book-cover calendar, reading timelines, time-of-day analysis, and colorful tag/author clouds. See consecutive reading days for each book and open a date for its full reading record. Choose and reorder widgets; export notes as Markdown.
 
 ### AI companion · bring your own API key

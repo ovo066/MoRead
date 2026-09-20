@@ -46,7 +46,12 @@ data class ReaderLayoutActions(
     val onTitleBottomSpacingChange: (Float) -> Unit,
     val onTextJustificationChange: (Boolean) -> Unit,
     val onShowHeaderChange: (Boolean) -> Unit,
-    val onShowFooterChange: (Boolean) -> Unit
+    val onShowFooterChange: (Boolean) -> Unit,
+    val onTitleStyleChange: (com.mozhi.reader.core.datastore.ReaderTitleStyle) -> Unit = {},
+    val onImportTitleImage: () -> Unit = {},
+    val onImportTitleFont: () -> Unit = {},
+    val onSaveTitleStylePreset: (com.mozhi.reader.core.datastore.ReaderTitleStylePreset) -> Unit = {},
+    val onDeleteTitleStylePreset: (String) -> Unit = {}
 )
 
 data class ReaderThemeActions(
@@ -68,7 +73,8 @@ data class ReaderThemeActions(
 data class ReaderSyntaxActions(
     val onSyntaxHighlightEnabledChange: (Boolean) -> Unit,
     val onSaveSyntaxRule: (ReaderSyntaxRule) -> Unit,
-    val onDeleteSyntaxRule: (Long) -> Unit
+    val onDeleteSyntaxRule: (Long) -> Unit,
+    val onImportStyleImage: () -> Unit = {}
 )
 
 data class ReaderBehaviorActions(
@@ -81,5 +87,8 @@ data class ReaderBehaviorActions(
     /** [FOLLOW_SYSTEM_BRIGHTNESS] 或 0..1。 */
     val onScreenBrightnessChange: (Float) -> Unit,
     val onWidePageLayoutChange: (WidePageLayout) -> Unit = {},
-    val spreadActive: Boolean = false
+    val spreadActive: Boolean = false,
+    val onModernBackTextOpacityChange: (Float) -> Unit = {},
+    val onModernCurlRadiusScaleChange: (Float) -> Unit = {},
+    val onPhysicalKeyBindingsChange: (List<com.mozhi.reader.core.datastore.ReaderKeyBinding>) -> Unit = {}
 )

@@ -41,4 +41,41 @@ class EpubDomFragmentLocatorTest {
         assertNull(EpubDomFragmentLocator.locate(body, ""))
         assertNull(EpubDomFragmentLocator.locate(body, "#"))
     }
+
+    @Test
+    fun `preview includes the paragraph around a numbered link but navigation stays exact`() {
+        val note = EpubDomNode("body", children = listOf(
+            EpubDomNode("p", children = listOf(
+                EpubDomNode("a", id = "note1", children = listOf(text(0, 3))), text(3, 28))),
+            EpubDomNode("p", id = "note2", children = listOf(text(29, 60)))
+        ))
+        assertEquals(0 until 3, EpubDomFragmentLocator.locate(note, "note1"))
+        assertEquals(0 until 28, EpubDomFragmentLocator.previewRange(note, "note1"))
+        assertEquals(29 until 60, EpubDomFragmentLocator.previewRange(note, "note2"))
+    }
+
+    @Test
+    fun `semantic note preview includes continuation paragraphs but not next note`() {
+        listOf(mapOf("epub:type" to "footnote"), mapOf("role" to "doc-endnote")).forEach { attributes ->
+            val note = EpubDomNode("body", children = listOf(
+                EpubDomNode("aside", attributes = attributes, children = listOf(
+                    EpubDomNode("p", children = listOf(EpubDomNode("a", id = "n", children = listOf(text(0, 3))), text(3, 30))),
+                    EpubDomNode("p", children = listOf(text(31, 55)))
+                )),
+                EpubDomNode("p", children = listOf(text(56, 90)))
+            ))
+            assertEquals(0 until 55, EpubDomFragmentLocator.previewRange(note, "n"))
+        }
+    }
+
+    @Test
+    fun `preview follows empty anchors and does not expand unknown fragments`() {
+        val note = EpubDomNode("body", children = listOf(
+            EpubDomNode("a", id = "n"),
+            EpubDomNode("p", children = listOf(text(10, 35))),
+            EpubDomNode("p", children = listOf(text(36, 70)))
+        ))
+        assertEquals(10 until 35, EpubDomFragmentLocator.previewRange(note, "n"))
+        assertNull(EpubDomFragmentLocator.previewRange(note, "missing"))
+    }
 }

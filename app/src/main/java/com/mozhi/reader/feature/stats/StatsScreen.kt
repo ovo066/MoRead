@@ -3,7 +3,9 @@ package com.mozhi.reader.feature.stats
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -57,12 +59,18 @@ internal fun StatsDashboard(
     var calendarDay by rememberSaveable { mutableStateOf<Long?>(null) }
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background,
         contentColor = MaterialTheme.colorScheme.onBackground) {
-    LazyColumn(
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+    val columns = if (maxWidth >= 880.dp) 2 else 1
+    val tablet = com.mozhi.reader.ui.rememberMoReadWindowWidth() == com.mozhi.reader.ui.MoReadWindowWidth.EXPANDED
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(columns),
+        horizontalArrangement = Arrangement.spacedBy(24.dp),
         modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(contentPadding).testTag("stats-list"),
-        contentPadding = PaddingValues(start = 20.dp, top = 18.dp, end = 20.dp, bottom = 124.dp),
+        contentPadding = PaddingValues(start = if (tablet) 40.dp else 20.dp, top = if (tablet) 28.dp else 18.dp,
+            end = if (tablet) 40.dp else 20.dp, bottom = if (tablet) 32.dp else 124.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
-        item(key = "header") {
+        item(key = "header", span = { GridItemSpan(maxLineSpan) }) {
             Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text("统计", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.SemiBold,
@@ -71,7 +79,7 @@ internal fun StatsDashboard(
                         IconButton(onClick = { settings = true }) { Icon(Icons.Outlined.Tune, "调整统计组件") }
                     }
                 }
-                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surfaceContainer)
+                Row(Modifier.widthIn(max = 520.dp).fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surfaceContainer)
                     .padding(4.dp).selectableGroup().testTag("stats-periods")) {
                     listOf(StatsPeriod.TOTAL, StatsPeriod.YEAR, StatsPeriod.MONTH, StatsPeriod.WEEK, StatsPeriod.DAY).forEach { period ->
                         val selected = state.period == period
@@ -85,7 +93,7 @@ internal fun StatsDashboard(
                         }
                     }
                 }
-                Row(Modifier.fillMaxWidth().testTag("stats-date-range"), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.widthIn(max = 520.dp).fillMaxWidth().testTag("stats-date-range"), verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = onPrevious, enabled = state.period != StatsPeriod.TOTAL) { Icon(Icons.Outlined.ChevronLeft, "上一周期") }
                     Surface(onClick = { datePicker = true }, enabled = state.period != StatsPeriod.TOTAL,
                         modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp),
@@ -100,7 +108,7 @@ internal fun StatsDashboard(
                 }
             }
         }
-        item(key = "overview") { StatsOverview(state) }
+        item(key = "overview", span = { GridItemSpan(maxLineSpan) }) { StatsOverview(state) }
         state.widgets.visible.forEach { widget ->
             item(key = widget.name, contentType = widget) {
                 when (widget) {
@@ -115,6 +123,7 @@ internal fun StatsDashboard(
                 }
             }
         }
+    }
     }
     }
     if (settings) StatsWidgetsSheet(state.widgets, onWidgetVisible, onMoveWidget, onResetWidgets) { settings = false }

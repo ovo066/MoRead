@@ -12,6 +12,8 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import com.mozhi.reader.feature.reader.engine.ReaderPageImage
 import com.mozhi.reader.ui.theme.MoReadTheme
+import com.mozhi.reader.ui.theme.*
+import androidx.compose.ui.graphics.toArgb
 import java.io.File
 import org.junit.Assert.*
 import org.junit.Rule
@@ -30,7 +32,7 @@ class ReaderEpubImageDialogTest {
     @get:Rule val compose = createComposeRule()
     private var located = 0
     private var dismissed = 0
-    private fun show(imagePath: String? = null) {
+    private fun show(imagePath: String? = null, appearance: () -> AppearanceSettings = { AppearanceSettings() }) {
         val file = File(RuntimeEnvironment.getApplication().cacheDir, "dialog-fixture.png")
         val bitmap = Bitmap.createBitmap(600, 300, Bitmap.Config.ARGB_8888)
         Canvas(bitmap).apply {
@@ -43,7 +45,7 @@ class ReaderEpubImageDialogTest {
         file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }; bitmap.recycle()
         compose.setContent {
             var open by remember { mutableStateOf(true) }
-            MoReadTheme {
+            MoReadTheme(appearance()) {
                 if (open) ReaderEpubImageDialog(ReaderPageImage(imagePath ?: file.path, 3, 120, "测试书内图片"),
                     onDismiss = { dismissed++; open = false }, onLocate = { located++; open = false })
             }
@@ -54,6 +56,16 @@ class ReaderEpubImageDialogTest {
     }
     private fun image() = compose.onNodeWithContentDescription("测试书内图片")
     private fun state() = image().fetchSemanticsNode().config[SemanticsProperties.StateDescription]
+
+    @Test fun imageActionsFollowLiveApplicationAccentAndDarkMode() {
+        val appearance = mutableStateOf(AppearanceSettings(themeMode = ThemeMode.LIGHT, accent = AccentPreset.AMBER))
+        show(appearance = { appearance.value })
+        capture("epub-image-editor-orange.png", AccentPreset.AMBER.light.toArgb())
+        compose.runOnIdle { appearance.value = AppearanceSettings(themeMode = ThemeMode.LIGHT, colorScheme = ColorSchemePreset.ROSE_DUST) }
+        capture("epub-image-editor-rose.png", MoReadSchemes.side(ColorSchemePreset.ROSE_DUST, false).colors.primary.toArgb())
+        compose.runOnIdle { appearance.value = AppearanceSettings(themeMode = ThemeMode.DARK, colorScheme = ColorSchemePreset.HAZE_BLUE) }
+        capture("epub-image-editor-blue-dark.png", MoReadSchemes.side(ColorSchemePreset.HAZE_BLUE, true).colors.primary.toArgb())
+    }
 
     @Test fun realDialogSupportsZoomPanRotationResetAndLocate() {
         show()
@@ -121,7 +133,7 @@ class ReaderEpubImageDialogTest {
         show(com.mozhi.reader.core.library.EpubArchiveAsset(File(book), asset).encode())
         capture("epub-image-editor-real.png")
     }
-    private fun capture(name: String) {
+    private fun capture(name: String, expectedAccent: Int? = null) {
         compose.waitForIdle()
         compose.runOnIdle {
             val root = requireNotNull(ShadowDialog.getLatestDialog().window).decorView
@@ -129,6 +141,11 @@ class ReaderEpubImageDialogTest {
             root.draw(Canvas(bitmap))
             File("build/reports/ui-qa/$name").apply { parentFile?.mkdirs() }.outputStream().use {
                 bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
+            }
+            if (expectedAccent != null) {
+                val pixels = IntArray(bitmap.width * bitmap.height)
+                bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+                assertTrue("保存按钮必须使用当前主题主色", pixels.count { it == expectedAccent } > 1000)
             }
             bitmap.recycle()
         }

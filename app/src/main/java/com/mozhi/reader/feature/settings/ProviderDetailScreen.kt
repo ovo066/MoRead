@@ -52,8 +52,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
+import com.mozhi.reader.ui.components.MoReadPageDialog
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mozhi.reader.ai.client.ApiDialect
@@ -351,7 +350,7 @@ internal fun ModelEditorDialog(
     provider: AiProviderEntity, model: AiModelEntity?, onDismiss: () -> Unit,
     onConfirm: (AiModelDraft) -> Unit, onDelete: (() -> Unit)?
 ) {
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+    MoReadPageDialog(onDismissRequest = onDismiss) {
         ModelEditorContent(provider, model, onDismiss, onConfirm, onDelete)
     }
 }

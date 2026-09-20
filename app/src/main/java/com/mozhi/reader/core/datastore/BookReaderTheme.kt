@@ -64,7 +64,7 @@ fun ReaderSettings.withBookThemeSelection(bookId: Long): ReaderSettings {
 
 /**
  * 五层样式管线中的“本书设置”：全局设置先作为基准，再覆盖本书选中的主题预设。
- * 内置主题只换色；自定义主题是一整套方案，因此同时带入字号、行距、边距、字体和背景。
+ * 内置主题恢复各自保存的排版；自定义主题同时带入字号、行距、边距、字体和背景。
  */
 fun ReaderSettings.resolveForBook(bookId: Long, slot: ReaderThemeSlot): ReaderSettings {
     val override = bookThemes[bookId]?.takeIf(BookReaderTheme::enabled)
@@ -73,20 +73,21 @@ fun ReaderSettings.resolveForBook(bookId: Long, slot: ReaderThemeSlot): ReaderSe
         ?.takeIf { id -> customThemes.any { it.id == id } }
     val selected = customId?.let { id -> customThemes.firstOrNull { it.id == id } }
     if (selected == null) {
-        return resolveThemeSlot(slot).copy(
+        val base = builtinThemeTypography[override.themeFor(slot).name]?.let { applyThemeSnapshot(it) } ?: this
+        return base.copy(
             theme = override.themeFor(slot),
             activeCustomThemeId = null,
             selectedBackgroundImageId = null,
             backgroundImagePath = null
-        )
+        ).resolveTitleStylePreset()
     }
     return applyThemeSnapshot(selected).copy(
         theme = override.themeFor(slot),
         activeCustomThemeId = selected.id
-    )
+    ).resolveTitleStylePreset()
 }
 
-private fun ReaderSettings.applyThemeSnapshot(theme: CustomReaderTheme): ReaderSettings {
+internal fun ReaderSettings.applyThemeSnapshot(theme: CustomReaderTheme): ReaderSettings {
     val fontId = theme.customFontId ?: theme.customFontPath?.let(ReaderFontLibraryCodec::legacyId)
     val fontAsset = fontLibrary.firstOrNull { it.id == fontId }
     val imageId = theme.backgroundImageId
@@ -111,6 +112,8 @@ private fun ReaderSettings.applyThemeSnapshot(theme: CustomReaderTheme): ReaderS
         titleScale = theme.titleScale.coerceIn(1f, 2f),
         titleTopSpacing = theme.titleTopSpacing.coerceIn(0f, 3f),
         titleBottomSpacing = theme.titleBottomSpacing.coerceIn(0f, 3f),
+        titleStyle = theme.titleStyle,
+        publisherStyleMode = theme.publisherStyleMode,
         headerMarginTop = theme.headerMarginTop.coerceIn(0f, 2f),
         footerMarginBottom = theme.footerMarginBottom.coerceIn(0f, 2f),
         textJustification = theme.textJustification,

@@ -17,14 +17,22 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -34,6 +42,8 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.TouchApp
+import androidx.compose.material.icons.outlined.Translate
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.filled.Bookmark
@@ -44,8 +54,11 @@ import androidx.compose.material.icons.outlined.ChevronLeft
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.FormatSize
 import androidx.compose.material.icons.outlined.Headphones
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.FormatColorText
+import androidx.compose.runtime.key
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -72,6 +85,7 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -122,6 +136,19 @@ fun readerPalette(theme: ReaderTheme, systemDark: Boolean): ReaderPalette = read
 fun readerPalette(settings: ReaderSettings, systemDark: Boolean): ReaderPalette {
     val custom = settings.activeCustomTheme()
     return if (custom != null) customReaderPalette(custom) else readerPalette(settings.theme, systemDark)
+}
+
+/** 纸色与正文仍由阅读主题控制；操作界面始终跟随当前应用强调色。 */
+@Composable
+internal fun readerControlsPalette(content: ReaderPalette): ReaderPalette {
+    val accent = com.mozhi.reader.ui.theme.accentColorFor(content.isDark)
+    if (content.accent == accent) return content
+    return content.copy(
+        accent = accent,
+        accentContainer = accent.copy(alpha = if (content.isDark) 0.26f else 0.16f)
+            .compositeOver(content.background),
+        onAccent = accent.onAccentColor()
+    )
 }
 
 /**
@@ -261,9 +288,15 @@ fun ReaderChrome(
     onReidentifyChapters: () -> Unit,
     onTextReplacementRules: () -> Unit,
     onAutoRead: () -> Unit = {},
-    pageLabel: String? = null
+    onTapZones: () -> Unit = {},
+    onEnglishLearning: () -> Unit = {},
+    onBilingual: () -> Unit = {},
+    onSyntaxHighlight: () -> Unit = {},
+    pageLabel: String? = null,
+    onTitleStyle: () -> Unit = {}
 ) {
-    Box(modifier = Modifier.fillMaxSize()) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val tablet = com.mozhi.reader.ui.rememberMoReadWindowWidth() != com.mozhi.reader.ui.MoReadWindowWidth.COMPACT && maxWidth >= 600.dp
         AnimatedVisibility(
             visible = visible,
             enter = fadeIn() + slideInVertically { -it / 2 },
@@ -271,6 +304,16 @@ fun ReaderChrome(
             modifier = Modifier.align(Alignment.TopCenter)
         ) {
             ReaderTopBar(
+                tablet = tablet,
+                showTabletTitle = maxWidth >= 840.dp,
+                tabletActions = {
+                    TabletReaderAction(Icons.AutoMirrored.Outlined.MenuBook, "目录", palette, onContents)
+                    TabletReaderAction(Icons.Outlined.Bookmarks, "书签", palette, onBookmarks)
+                    TabletReaderAction(Icons.Outlined.FormatSize, "排版", palette, onSettings)
+                    TabletReaderAction(Icons.Outlined.Headphones, "听书", palette, onTts)
+                    TabletReaderAction(Icons.Outlined.AutoAwesome, "伴读", palette, onCompanion)
+                    TabletReaderAction(Icons.Outlined.Search, "书内搜索", palette, onSearch)
+                },
                 bookTitle = bookTitle,
                 chapterTitle = chapterTitle,
                 palette = palette,
@@ -280,6 +323,11 @@ fun ReaderChrome(
                 onToggleBookmark = onToggleBookmark,
                 onSearch = onSearch,
                 onAutoRead = onAutoRead,
+                onTapZones = onTapZones,
+                onEnglishLearning = onEnglishLearning,
+                onBilingual = onBilingual,
+                onSyntaxHighlight = onSyntaxHighlight,
+                onTitleStyle = onTitleStyle,
                 onReidentifyChapters = onReidentifyChapters,
                 onTextReplacementRules = onTextReplacementRules
             )
@@ -293,7 +341,13 @@ fun ReaderChrome(
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
         ) {
-            ReaderBottomBar(
+            if (tablet) {
+                Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 24.dp, start = 32.dp, end = 32.dp), contentAlignment = Alignment.Center) {
+                    Box(Modifier.widthIn(max = 520.dp).fillMaxWidth()) {
+                        ChapterHelm(chapterProgress, pageLabel, palette, onPrevChapter, onNextChapter, onSeekChapter)
+                    }
+                }
+            } else ReaderBottomBar(
                 chapterProgress = chapterProgress,
                 pageLabel = pageLabel,
                 palette = palette,
@@ -313,6 +367,9 @@ fun ReaderChrome(
 @Composable
 @OptIn(ExperimentalLayoutApi::class)
 private fun ReaderTopBar(
+    tablet: Boolean,
+    showTabletTitle: Boolean,
+    tabletActions: @Composable RowScope.() -> Unit,
     bookTitle: String,
     chapterTitle: String,
     palette: ReaderPalette,
@@ -322,29 +379,38 @@ private fun ReaderTopBar(
     onToggleBookmark: () -> Unit,
     onSearch: () -> Unit,
     onAutoRead: () -> Unit,
+    onTapZones: () -> Unit,
+    onEnglishLearning: () -> Unit,
+    onBilingual: () -> Unit,
+    onSyntaxHighlight: () -> Unit,
+    onTitleStyle: () -> Unit,
     onReidentifyChapters: () -> Unit,
     onTextReplacementRules: () -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .windowInsetsPadding(WindowInsets.statusBarsIgnoringVisibility)
-            .padding(horizontal = 14.dp, vertical = 8.dp),
+            .windowInsetsPadding(WindowInsets.statusBarsIgnoringVisibility.union(
+                WindowInsets.displayCutout.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
+            ))
+            .padding(horizontal = if (tablet && showTabletTitle) 28.dp else if (tablet) 16.dp else 14.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        GlassIconButton(
+        if (tablet) TabletReaderAction(Icons.AutoMirrored.Outlined.ArrowBack, "返回书架", palette, onBack)
+        else GlassIconButton(
             icon = Icons.AutoMirrored.Outlined.ArrowBack,
             contentDescription = "返回书架",
             palette = palette,
             onClick = onBack
         )
-        Surface(
-            modifier = Modifier
-                .weight(1f)
-                .shadow(12.dp, RoundedCornerShape(17.dp), clip = false)
+        if (tablet && !showTabletTitle) {
+            TabletReaderAction(Icons.Outlined.Info, "书籍详情", palette, onOpenDetails)
+        } else Surface(
+            modifier = (if (tablet) Modifier.widthIn(max = 240.dp).heightIn(min = 48.dp) else Modifier.weight(1f))
+                .shadow(if (tablet) 8.dp else 12.dp, if (tablet) CircleShape else RoundedCornerShape(17.dp), clip = false)
                 .clickable(onClick = onOpenDetails),
-            shape = RoundedCornerShape(17.dp),
+            shape = if (tablet) CircleShape else RoundedCornerShape(17.dp),
             color = palette.glass,
             border = BorderStroke(1.dp, palette.glassBorder)
         ) {
@@ -353,15 +419,15 @@ private fun ReaderTopBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center
             ) {
-                Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(modifier = Modifier.weight(1f), horizontalAlignment = if (tablet) Alignment.Start else Alignment.CenterHorizontally) {
                     Text(
                         text = bookTitle,
-                        style = MaterialTheme.typography.labelLarge,
+                        style = if (tablet) MaterialTheme.typography.titleMedium else MaterialTheme.typography.labelLarge,
                         color = palette.onBackground,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    Text(
+                    if (!tablet) Text(
                         text = chapterTitle,
                         style = MaterialTheme.typography.labelSmall,
                         color = palette.muted,
@@ -369,7 +435,7 @@ private fun ReaderTopBar(
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-                Icon(
+                if (!tablet) Icon(
                     imageVector = Icons.Outlined.ChevronRight,
                     contentDescription = null,
                     tint = palette.muted,
@@ -377,71 +443,74 @@ private fun ReaderTopBar(
                 )
             }
         }
+        if (tablet) {
+            // Only the individual controls paint a surface; the gap remains readable and tappable.
+            Spacer(Modifier.weight(1f))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.testTag("tablet-reader-tools"), content = tabletActions)
+        }
         // 右上角三点菜单：收纳添加书签/书内搜索等低频操作，给未来入口留位
         Box {
             var menuExpanded by remember { mutableStateOf(false) }
-            GlassIconButton(
+            var moreTools by remember { mutableStateOf(false) }
+            if (tablet) TabletReaderAction(Icons.Outlined.MoreVert, "更多操作", palette,
+                onClick = { moreTools = false; menuExpanded = true })
+            else GlassIconButton(
                 icon = Icons.Outlined.MoreVert,
                 contentDescription = "更多操作",
                 palette = palette,
-                onClick = { menuExpanded = true }
+                onClick = { moreTools = false; menuExpanded = true }
             )
             MoReadDropdownMenu(
                 expanded = menuExpanded,
-                onDismissRequest = { menuExpanded = false },
+                onDismissRequest = { if (moreTools) moreTools = false else menuExpanded = false },
                 containerColor = palette.glass,
                 contentColor = palette.onBackground,
                 borderColor = palette.glassBorder,
                 offset = androidx.compose.ui.unit.DpOffset(0.dp, 11.dp),
-                minWidth = 160.dp,
-                maxWidth = 160.dp
+                minWidth = 220.dp,
+                maxWidth = 260.dp
             ) {
-                MoReadMenuItem(
-                    text = if (isCurrentPositionBookmarked) "取消书签" else "添加书签",
-                    icon = if (isCurrentPositionBookmarked) {
-                        Icons.Filled.Bookmark
+                key(moreTools) {
+                    if (moreTools) {
+                        MoReadMenuItem(text = "返回常用操作", icon = Icons.AutoMirrored.Outlined.ArrowBack,
+                            onClick = { moreTools = false })
+                        MoReadMenuItem(text = "操作区域", icon = Icons.Outlined.TouchApp,
+                            onClick = { menuExpanded = false; onTapZones() })
+                        MoReadMenuItem(text = "TXT 净化 / 替换规则", icon = Icons.Outlined.AutoAwesome,
+                            onClick = { menuExpanded = false; onTextReplacementRules() })
+                        MoReadMenuItem(text = "重新识别章节", icon = Icons.AutoMirrored.Outlined.MenuBook,
+                            onClick = { menuExpanded = false; onReidentifyChapters() })
                     } else {
-                        Icons.Outlined.BookmarkAdd
-                    },
-                    onClick = {
-                        menuExpanded = false
-                        onToggleBookmark()
+                        MoReadMenuItem(text = "自动阅读", icon = Icons.AutoMirrored.Outlined.MenuBook,
+                            onClick = { menuExpanded = false; onAutoRead() })
+                        MoReadMenuItem(text = if (isCurrentPositionBookmarked) "取消书签" else "添加书签",
+                            icon = if (isCurrentPositionBookmarked) Icons.Filled.Bookmark else Icons.Outlined.BookmarkAdd,
+                            onClick = { menuExpanded = false; onToggleBookmark() })
+                        MoReadMenuItem(text = "书内搜索", icon = Icons.Outlined.Search,
+                            onClick = { menuExpanded = false; onSearch() })
+                        MoReadMenuItem(text = "中英对照", icon = Icons.Outlined.Translate,
+                            onClick = { menuExpanded = false; onBilingual() })
+                        MoReadMenuItem(text = "阅读辅助 / 生词本", icon = Icons.Outlined.Translate,
+                            onClick = { menuExpanded = false; onEnglishLearning() })
+                        MoReadMenuItem(text = "标题样式", icon = Icons.AutoMirrored.Outlined.MenuBook,
+                            onClick = { menuExpanded = false; onTitleStyle() })
+                        MoReadMenuItem(text = "语法高亮", icon = Icons.Outlined.FormatColorText,
+                            onClick = { menuExpanded = false; onSyntaxHighlight() })
+                        MoReadMenuItem(text = "更多工具", icon = Icons.Outlined.ChevronRight,
+                            onClick = { moreTools = true })
                     }
-                )
-                MoReadMenuItem(
-                    text = "自动阅读",
-                    icon = Icons.AutoMirrored.Outlined.MenuBook,
-                    onClick = {
-                        menuExpanded = false
-                        onAutoRead()
-                    }
-                )
-                MoReadMenuItem(
-                    text = "书内搜索",
-                    icon = Icons.Outlined.Search,
-                    onClick = {
-                        menuExpanded = false
-                        onSearch()
-                    }
-                )
-                MoReadMenuItem(
-                    text = "重新识别章节",
-                    icon = Icons.AutoMirrored.Outlined.MenuBook,
-                    onClick = {
-                        menuExpanded = false
-                        onReidentifyChapters()
-                    }
-                )
-                MoReadMenuItem(
-                    text = "文本清洗规则",
-                    icon = Icons.Outlined.AutoAwesome,
-                    onClick = {
-                        menuExpanded = false
-                        onTextReplacementRules()
-                    }
-                )
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun TabletReaderAction(icon: ImageVector, label: String, palette: ReaderPalette, onClick: () -> Unit) {
+    Surface(shape = CircleShape, color = palette.glass, border = BorderStroke(1.dp, palette.glassBorder),
+        modifier = Modifier.size(48.dp).shadow(8.dp, CircleShape, clip = false)) {
+        IconButton(onClick = onClick) { Icon(icon, label, tint = palette.onBackground, modifier = Modifier.size(21.dp)) }
     }
 }
 
@@ -566,6 +635,7 @@ private fun ChapterHelm(
                     palette = palette,
                     modifier = Modifier
                         .weight(1f)
+                        .testTag("reader-chapter-progress")
                         .height(30.dp),
                     onDrag = { fraction ->
                         dragging = true

@@ -244,7 +244,9 @@ internal fun DetailHero(
     ) {
         HeroCover(
             book = book,
-            modifier = Modifier.size(width = 116.dp, height = 164.dp)
+            modifier = if (com.mozhi.reader.ui.rememberMoReadWindowWidth() == com.mozhi.reader.ui.MoReadWindowWidth.EXPANDED)
+                Modifier.padding(top = 24.dp).size(width = 180.dp, height = 254.dp)
+            else Modifier.size(width = 116.dp, height = 164.dp)
         )
         Text(
             text = book.title,

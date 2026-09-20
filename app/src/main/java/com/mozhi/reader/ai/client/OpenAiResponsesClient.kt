@@ -40,7 +40,10 @@ class OpenAiResponsesClient(
 ) : ChatApiClient {
 
     private val base = normalizeBase(baseUrl)
-    private val streamingClient = httpClient.newBuilder()
+    private val chatClient = httpClient.newBuilder().apply {
+        interceptors().add(0, ResponsesParameterCompatibility())
+    }.build()
+    private val streamingClient = chatClient.newBuilder()
         .readTimeout(120, TimeUnit.SECONDS)
         .build()
     private val plainClient = httpClient
@@ -123,6 +126,7 @@ class OpenAiResponsesClient(
                     type: String?,
                     data: String
                 ) {
+                    parseChatUsage(data, ApiDialect.OPENAI_RESPONSES)?.let { trySend(it) }
                     when (type) {
                         "response.output_text.delta" -> {
                             val event = decodeEvent(data) ?: return
@@ -170,7 +174,7 @@ class OpenAiResponsesClient(
     }
 
     override suspend fun chat(messages: List<ChatMessage>, options: ChatOptions): String {
-        val body = execute(plainClient, buildRequest(messages, emptyList(), options, stream = false))
+        val body = execute(chatClient, buildRequest(messages, emptyList(), options, stream = false))
         val response = AiJson.decodeFromString(ResponsesResponse.serializer(), body)
         return response.output
             .filter { it.type == "message" }

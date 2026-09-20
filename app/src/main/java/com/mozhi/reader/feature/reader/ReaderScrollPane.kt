@@ -70,6 +70,9 @@ import com.mozhi.reader.feature.reader.engine.selectionBodyRange
 import com.mozhi.reader.feature.reader.engine.selectionRects
 import com.mozhi.reader.feature.reader.engine.textPosAtBodyOffset
 import com.mozhi.reader.feature.reader.engine.wordSelectionAt
+import com.mozhi.reader.feature.reader.engine.translationAt
+import com.mozhi.reader.feature.reader.engine.ReaderParagraphTranslation
+import com.mozhi.reader.feature.reader.engine.charOffsetOf
 import com.mozhi.reader.feature.reader.render.PageBitmapRenderer
 import com.mozhi.reader.feature.reader.render.ReaderPageStyle
 import java.text.SimpleDateFormat
@@ -98,6 +101,10 @@ internal fun ReaderScrollPane(
     registerContentHook: (((Int) -> Unit)?) -> Unit,
     onScrollSupersedesNavigation: () -> Unit,
     onCenterTap: () -> Unit,
+    onTapAction: (com.mozhi.reader.core.datastore.ReaderTapAction) -> Unit = {},
+    onDictionaryLookup: (com.mozhi.reader.core.dictionary.DictionaryLookupHit) -> Unit = {},
+    onParagraphTranslation: (chapterIndex: Int, offset: Int) -> Unit = { _, _ -> },
+    onTranslationLongPress: (ReaderParagraphTranslation) -> Unit = {},
     onBoundary: (PageTurnDirection) -> Unit,
     onNotice: (String) -> Unit,
     annotations: List<ReaderAnnotationMark>,
@@ -119,6 +126,7 @@ internal fun ReaderScrollPane(
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
+    val controlsPalette = readerControlsPalette(palette)
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
     val clipboard = LocalClipboardManager.current
@@ -364,7 +372,7 @@ internal fun ReaderScrollPane(
                     elevation = 8.dp,
                     zoom = 2f
                 )
-                .pointerInput(enabled, holder, selection) {
+                .pointerInput(enabled, holder, selection, settings.tapZones, settings.englishLearningEnabled) {
                     if (!enabled) return@pointerInput
                     val slop = viewConfiguration.touchSlop
                     val handleGrabRadius = 24.dp.toPx()
@@ -399,11 +407,15 @@ internal fun ReaderScrollPane(
                             }
                             if (event == null) {
                                 longPressFired = true
+                                val translation = holder.resolve(upPosition)?.let { hit ->
+                                    hit.page.translationAt(hit.local.x, hit.local.y, hit.chapterIndex)
+                                }
                                 val image = holder.imageAt(upPosition)
-                                if (image != null) {
+                                if (translation != null || image != null) {
                                     selection.clear()
                                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    onEpubImageLongPress(image)
+                                    if (translation != null) onTranslationLongPress(translation)
+                                    else if (image != null) onEpubImageLongPress(image)
                                     while (true) {
                                         val tail = awaitPointerEvent()
                                         tail.changes.forEach { it.consume() }
@@ -480,8 +492,24 @@ internal fun ReaderScrollPane(
                             onLinkClick(link)
                             return@awaitEachGesture
                         }
-                        val fraction = upPosition.x / size.width.coerceAtLeast(1)
+                        if (settings.englishLearningEnabled && settings.wordAnnotationMode == com.mozhi.reader.core.dictionary.WordAnnotationMode.POPUP && !interruptedFling) {
+                            holder.englishWordAt(upPosition)?.takeIf { hit -> settings.vocabulary.any {
+                                !it.learned && it.word == com.mozhi.reader.core.dictionary.EnglishWords.normalize(hit.word)
+                            } }?.let { onDictionaryLookup(it); return@awaitEachGesture }
+                        }
                         val pageStep = holder.viewportHeight * PAGE_STEP_FRACTION
+                        val customAction = settings.tapZones?.actionAt(upPosition.x, upPosition.y,
+                            size.width.toFloat(), size.height.toFloat())
+                        if (customAction != null) {
+                            when (customAction) {
+                                com.mozhi.reader.core.datastore.ReaderTapAction.PREVIOUS_PAGE -> animateScrollBy(-pageStep)
+                                com.mozhi.reader.core.datastore.ReaderTapAction.NEXT_PAGE -> animateScrollBy(pageStep)
+                                com.mozhi.reader.core.datastore.ReaderTapAction.NONE -> Unit
+                                else -> if (!interruptedFling) onTapAction(customAction)
+                            }
+                            return@awaitEachGesture
+                        }
+                        val fraction = upPosition.x / size.width.coerceAtLeast(1)
                         when {
                             fraction < PREV_TAP_ZONE -> animateScrollBy(-pageStep)
                             fraction > NEXT_TAP_ZONE -> animateScrollBy(pageStep)
@@ -495,15 +523,27 @@ internal fun ReaderScrollPane(
                     holder.anchorY // 滚动逐帧值同样只在 draw phase 读
                     val canvas = drawContext.canvas.nativeCanvas
                     holder.drawFrame(canvas, size.width, size.height)
-                    selection.drawHighlight(this, palette)
+                    selection.drawHighlight(this, controlsPalette)
                 }
         )
 
         selection.active?.takeIf { !it.dragging }?.let { active ->
             val toolbarTopPx = selection.toolbarTop(active, density)
             SelectionToolbar(
-                palette = palette,
+                palette = controlsPalette,
                 topPx = toolbarTopPx,
+                onDictionary = {
+                    val text = selection.selectedText()
+                    selection.bodyRange()?.let { range ->
+                        onDictionaryLookup(com.mozhi.reader.core.dictionary.DictionaryLookupHit(
+                            text, controller.contextAround(range), active.chapterIndex, range.first))
+                    }
+                    selection.clear()
+                },
+                onParagraphTranslation = {
+                    selection.bodyRange()?.let { onParagraphTranslation(active.chapterIndex, it.first) }
+                    selection.clear()
+                },
                 onAi = { action ->
                     val text = selection.selectedText()
                     val range = selection.bodyRange()
@@ -881,6 +921,13 @@ internal class ScrollPaneHolder(private val controller: ReaderContentController)
 
     fun chapterBody(chapterIndex: Int): String? = controller.chapterBody(chapterIndex)
 
+    fun englishWordAt(position: Offset): com.mozhi.reader.core.dictionary.DictionaryLookupHit? {
+        val hit = resolve(position) ?: return null
+        val pos = hit.page.hitTextPos(hit.local.x, hit.local.y, exact = true) ?: return null
+        val body = chapterBody(hit.chapterIndex) ?: return null
+        return com.mozhi.reader.core.dictionary.EnglishWords.at(body, hit.page.charOffsetOf(pos), hit.chapterIndex)
+    }
+
     fun visiblePages(chapterIndex: Int): List<VisibleScrollPage> {
         val currentStyle = style ?: return emptyList()
         val block = visibleBlocks().firstOrNull { it.chapterIndex == chapterIndex } ?: return emptyList()
@@ -895,6 +942,14 @@ internal class ScrollPaneHolder(private val controller: ReaderContentController)
                 )
             )
         }
+    }
+
+    fun visibleSourceRange(chapterIndex: Int): IntRange? {
+        val lines = visiblePages(chapterIndex).flatMap { page -> page.page.lines.filter { line ->
+            line.charLength > 0 && page.origin.y + line.lineBottom > contentTop && page.origin.y + line.lineTop < contentBottom
+        } }
+        val first = lines.minOfOrNull { it.chapterPosition } ?: return null
+        return first until lines.maxOf { it.chapterPosition + it.charLength }
     }
 
     /** 选区/绘制用：页的内容原点（视图坐标）；该页当前不可见时返回 null。 */

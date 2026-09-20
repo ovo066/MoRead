@@ -12,8 +12,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import com.mozhi.reader.feature.reader.LocalShowCompanionTokenUsage
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -28,6 +31,9 @@ import androidx.core.content.IntentCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
+import com.mozhi.reader.core.dictionary.LocalDictionaryRepository
+import com.mozhi.reader.feature.reader.DictionaryManagerDialog
+import com.mozhi.reader.feature.reader.EnglishLearningViewModel
 import com.mozhi.reader.core.datastore.PendingReaderFont
 import com.mozhi.reader.core.datastore.ReaderFontImporter
 import com.mozhi.reader.core.backup.BackupSettingsStore
@@ -53,32 +59,32 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var readerFontImporter: ReaderFontImporter
 
+    @Inject
+    lateinit var dictionaries: LocalDictionaryRepository
+
+    private val dictionaryViewModel: EnglishLearningViewModel by viewModels()
+    private val externalDictionaryVisible = MutableStateFlow(false)
+    private var externalDictionaryConsumed = false
+
     private val incomingBookUri = MutableStateFlow<Uri?>(null)
     private val pendingExternalFont = MutableStateFlow<PendingReaderFont?>(null)
-    private var volumeKeyPageTurnHandler: ((previous: Boolean) -> Unit)? = null
+    private var readerHardwareKeyHandler: ((KeyEvent) -> Boolean)? = null
 
-    /** 阅读页可见且开关启用时注册；离开阅读页立即清空，恢复系统音量语义。 */
-    fun setVolumeKeyPageTurnHandler(handler: ((previous: Boolean) -> Unit)?) {
-        volumeKeyPageTurnHandler = handler
+    /** 阅读页注册事件处理；未匹配或当前不可翻页的按键交还系统。 */
+    fun setReaderHardwareKeyHandler(handler: ((KeyEvent) -> Boolean)?) {
+        readerHardwareKeyHandler = handler
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        val handler = volumeKeyPageTurnHandler
-        val isVolumeKey = event.keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
-            event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
-        if (handler != null && isVolumeKey) {
-            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-                handler(event.keyCode == KeyEvent.KEYCODE_VOLUME_UP)
-            }
-            // DOWN/UP 都消费，避免翻页后系统音量面板又被抬起。
-            return true
-        }
+        if (readerHardwareKeyHandler?.invoke(event) == true) return true
         return super.dispatchKeyEvent(event)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        acceptBookIntent(intent)
+        externalDictionaryVisible.value = savedInstanceState?.getBoolean("external-dictionary-visible") ?: false
+        externalDictionaryConsumed = savedInstanceState?.getBoolean("external-dictionary-consumed") ?: false
+        if (!externalDictionaryConsumed) acceptFileIntent(intent)
         // 导航栏一律真透明：默认的 auto 样式会给三键/手势条垫半透明对比底，
         // 在浅色页面上就是 dock 胶囊底下那条白色横条。
         enableEdgeToEdge(
@@ -113,45 +119,54 @@ class MainActivity : ComponentActivity() {
             val current by appearance.collectAsStateWithLifecycle()
             val incoming by incomingBookUri.collectAsStateWithLifecycle()
             val externalFont by pendingExternalFont.collectAsStateWithLifecycle()
+            val showDictionary by externalDictionaryVisible.collectAsStateWithLifecycle()
+            val showTokenUsage by settingsRepository.companionTokenUsageEnabled.collectAsStateWithLifecycle(initialValue = false)
             MoReadTheme(appearance = current) {
-                MoReadApp(
-                    incomingBookUri = incoming,
-                    onIncomingBookConsumed = {
-                        incomingBookUri.value = null
-                        clearIncomingIntent()
-                    }
-                )
-                externalFont?.let { pending ->
-                    ExternalFontImportDialog(
-                        pending = pending,
-                        onConfirm = { displayName ->
-                            pendingExternalFont.value = null
+                CompositionLocalProvider(LocalShowCompanionTokenUsage provides showTokenUsage) {
+                    MoReadApp(
+                        incomingBookUri = incoming,
+                        onIncomingBookConsumed = {
+                            incomingBookUri.value = null
                             clearIncomingIntent()
-                            lifecycleScope.launch {
-                                runCatching { readerFontImporter.confirm(pending, displayName) }
-                                    .onSuccess {
-                                        Toast.makeText(
-                                            this@MainActivity,
-                                            "字体已导入并应用",
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                    }
-                                    .onFailure { error ->
-                                        readerFontImporter.discard(pending)
-                                        Toast.makeText(
-                                            this@MainActivity,
-                                            "字体导入失败：${error.message ?: "文件格式不受支持"}",
-                                            Toast.LENGTH_LONG
-                                        ).show()
-                                    }
-                            }
-                        },
-                        onDismiss = {
-                            pendingExternalFont.value = null
-                            clearIncomingIntent()
-                            lifecycleScope.launch { readerFontImporter.discard(pending) }
                         }
                     )
+                    if (showDictionary) {
+                        DictionaryManagerDialog(
+                            onDismiss = { externalDictionaryVisible.value = false }, viewModel = dictionaryViewModel
+                        )
+                    }
+                    externalFont?.let { pending ->
+                        ExternalFontImportDialog(
+                            pending = pending,
+                            onConfirm = { displayName ->
+                                pendingExternalFont.value = null
+                                clearIncomingIntent()
+                                lifecycleScope.launch {
+                                    runCatching { readerFontImporter.confirm(pending, displayName) }
+                                        .onSuccess {
+                                            Toast.makeText(
+                                                this@MainActivity,
+                                                "字体已导入并应用",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                        .onFailure { error ->
+                                            readerFontImporter.discard(pending)
+                                            Toast.makeText(
+                                                this@MainActivity,
+                                                "字体导入失败：${error.message ?: "文件格式不受支持"}",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                        }
+                                }
+                            },
+                            onDismiss = {
+                                pendingExternalFont.value = null
+                                clearIncomingIntent()
+                                lifecycleScope.launch { readerFontImporter.discard(pending) }
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -160,10 +175,17 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        acceptBookIntent(intent)
+        externalDictionaryConsumed = false
+        acceptFileIntent(intent)
     }
 
-    private fun acceptBookIntent(intent: Intent?) {
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean("external-dictionary-visible", externalDictionaryVisible.value)
+        outState.putBoolean("external-dictionary-consumed", externalDictionaryConsumed)
+        super.onSaveInstanceState(outState)
+    }
+
+    private fun acceptFileIntent(intent: Intent?) {
         val uri = when (intent?.action) {
             Intent.ACTION_VIEW -> intent.data
             Intent.ACTION_SEND -> IntentCompat.getParcelableExtra(
@@ -182,7 +204,15 @@ class MainActivity : ComponentActivity() {
             )
         }
         lifecycleScope.launch {
-            if (readerFontImporter.supports(uri)) {
+            if (dictionaries.supportsMdx(uri, intent?.type)) {
+                // Keep this route separate from book import: a dictionary must never become a TXT book.
+                clearIncomingIntent()
+                externalDictionaryConsumed = true
+                externalDictionaryVisible.value = true
+                if (dictionaryViewModel.state.value.importing) {
+                    Toast.makeText(this@MainActivity, "词典正在导入，请完成后再打开另一个文件", Toast.LENGTH_LONG).show()
+                } else dictionaryViewModel.importMdx(uri, intent?.type)
+            } else if (readerFontImporter.supports(uri)) {
                 runCatching { readerFontImporter.prepare(uri) }
                     .onSuccess { pendingExternalFont.value = it }
                     .onFailure { error ->

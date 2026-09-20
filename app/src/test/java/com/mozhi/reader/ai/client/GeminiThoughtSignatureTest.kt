@@ -187,6 +187,7 @@ class GeminiThoughtSignatureTest {
                 is ChatDelta.Text -> it.text
                 is ChatDelta.Reasoning -> it.text
                 is ChatDelta.ToolCalls -> null
+                is ChatDelta.Usage -> null
             }
         }.joinToString("")
         assertFalse("Signatures are protocol data, not visible reasoning", visible.contains("c2lnL0"))

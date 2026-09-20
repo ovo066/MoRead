@@ -41,7 +41,7 @@ import com.mozhi.reader.ui.components.MoReadIcons
  * 之前伴读页是「圆钮 ＋ | 胶囊 | 圆钮发送」三块分离，三个独立描边容器并排像三颗按钮，
  * 而不像一个输入框；选词 AI 则直接裸用 `OutlinedTextField`，与全局玻璃语言完全不搭。
  *
- * 发送图标统一为 [MoReadIcons.PaperPlane]（机头朝右上 45°），不再用旋转过的 Material `Send`。
+ * 发送图标统一为 [MoReadIcons.Send]，圆形底上的居中向上箭头。
  *
  * 导航栏内边距在这里统一处理（包在 Surface **外面**，胶囊本体不能被拉进导航栏区域）：
  * 键盘弹出时 `navigationBars.exclude(ime)` 归零，避免与调用点的 `imePadding()` 叠出一条空隙
@@ -125,12 +125,12 @@ internal fun ReaderComposerBar(
                     )
                 } else {
                     ComposerRoundAction(
-                        icon = MoReadIcons.PaperPlane,
+                        icon = MoReadIcons.Send,
                         description = "发送",
                         tint = if (canSend) palette.onAccent else palette.muted,
-                        background = if (canSend) palette.accent else Color.Transparent,
-                        border = if (canSend) palette.accent else palette.glassBorder,
-                        iconSize = 16.dp,
+                        background = if (canSend) palette.accent else palette.onBackground.copy(alpha = .07f),
+                        border = Color.Transparent,
+                        iconSize = 20.dp,
                         enabled = canSend,
                         onClick = onSend
                     )

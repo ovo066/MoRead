@@ -135,6 +135,7 @@ class GeminiClient(
                         type: String?,
                         data: String
                     ) {
+                        parseChatUsage(data, ApiDialect.GEMINI)?.let { trySend(it) }
                         val chunk = runCatching {
                             AiJson.decodeFromString(GenerateResponse.serializer(), data)
                         }.getOrNull() ?: return

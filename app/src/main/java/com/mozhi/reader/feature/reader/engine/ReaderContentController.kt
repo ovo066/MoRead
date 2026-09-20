@@ -25,7 +25,8 @@ data class ReaderChapterContent(
     val epubLayout: EpubLayoutChapterBundle? = null,
     val inlineImages: List<InlineImageSource> = emptyList(),
     /** Original coordinates travel with the displayed chapter through reloads and window changes. */
-    val source: ReaderChapterSource? = null
+    val source: ReaderChapterSource? = null,
+    val translations: List<com.mozhi.reader.core.dictionary.ParagraphTranslation> = emptyList()
 )
 
 data class ReaderChapterSource(
@@ -109,7 +110,7 @@ class ReaderContentController(
 
     private class Slot(
         val index: Int,
-        val content: ReaderChapterContent,
+        var content: ReaderChapterContent,
         var chapter: TextChapter?
     )
 
@@ -192,6 +193,23 @@ class ReaderContentController(
         inlineMarkersByChapter = markers.mapValues { it.value.toList() }
         changed.forEach { markerVersions[it] = (markerVersions[it] ?: 0) + 1 }
         relayoutVisibleSlots(slots = listOfNotNull(curSlot, nextSlot, prevSlot).filter { it.index in changed })
+    }
+
+    private var translationsVisible = false
+
+    fun setTranslationsVisible(visible: Boolean) {
+        if (translationsVisible == visible) return
+        translationsVisible = visible
+        environmentVersion++
+        layoutGeneration++
+        relayoutVisibleSlots()
+    }
+
+    fun setParagraphTranslations(index: Int, translations: List<com.mozhi.reader.core.dictionary.ParagraphTranslation>) {
+        val slot = slotFor(index) ?: return
+        slot.content = slot.content.copy(translations = translations)
+        markerVersions[index] = (markerVersions[index] ?: 0) + 1
+        relayoutVisibleSlots(slots = listOf(slot))
     }
 
     fun setChapters(list: List<ChapterMeta>) {
@@ -655,6 +673,7 @@ class ReaderContentController(
                         inlineImages = content.inlineImages,
                         inlineMarkers = inlineMarkersByChapter[index].orEmpty(),
                         epubLayout = content.epubLayout,
+                        translations = if (translationsVisible) content.translations else emptyList(),
                         cancellationCheck = cancellationCheck
                     )
                 } catch (cancelled: CancellationException) {
@@ -668,6 +687,7 @@ class ReaderContentController(
                         inlineImages = content.inlineImages,
                         inlineMarkers = inlineMarkersByChapter[index].orEmpty(),
                         epubLayout = null,
+                        translations = if (translationsVisible) content.translations else emptyList(),
                         cancellationCheck = cancellationCheck
                     )
                 }

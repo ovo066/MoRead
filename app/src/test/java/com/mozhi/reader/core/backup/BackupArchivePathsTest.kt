@@ -6,8 +6,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BackupArchivePathsTest {
-    @Test fun backupVersionIncludesHourlyReadingMigration() {
-        org.junit.Assert.assertEquals(30, BackupArchiveManager.CURRENT_DATABASE_VERSION)
+    @Test fun backupVersionIncludesCompanionUsageMigration() {
+        assertTrue(BackupArchiveManager.CURRENT_DATABASE_VERSION >= 31)
         org.junit.Assert.assertEquals(com.mozhi.reader.core.database.MoReadDatabase.VERSION,
             BackupArchiveManager.CURRENT_DATABASE_VERSION)
     }

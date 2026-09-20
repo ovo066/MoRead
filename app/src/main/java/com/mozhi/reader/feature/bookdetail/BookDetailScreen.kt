@@ -222,12 +222,35 @@ fun BookDetailScreen(
             ?.title
             .orEmpty()
 
+        com.mozhi.reader.ui.components.MoReadDetailLayout(
+            header = {
+                DetailTopBar(
+                    onBack = onBack,
+                    onEditInfo = { showEditor = true },
+                    onChangeCover = { showCoverPicker = true },
+                    onPickGroup = { showGroupPicker = true },
+                    onPickTags = { showTagPicker = true },
+                    groupName = state.selectedGroupName,
+                    tagCount = state.selectedTags.size,
+                    onBookmarks = { showBookmarks = true }
+                )
+            }, summary = {
+                DetailHero(
+                    book = book,
+                    tags = state.selectedTags.map(BookTagEntity::name),
+                    description = state.description,
+                    onEditReadState = viewModel::setReadState,
+                    onListen = { onListen(book.id) },
+                    onContinueReading = { onContinueReading(book.id) }
+                )
+            }
+        ) { split ->
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 24.dp),
+            contentPadding = PaddingValues(top = if (split) 24.dp else 0.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            item {
+            if (!split) item(key = "detail-header") {
                 DetailTopBar(
                     onBack = onBack,
                     onEditInfo = { showEditor = true },
@@ -239,7 +262,7 @@ fun BookDetailScreen(
                     onBookmarks = { showBookmarks = true }
                 )
             }
-            item {
+            if (!split) item(key = "detail-hero") {
                 DetailHero(
                     book = book,
                     tags = state.selectedTags.map(BookTagEntity::name),
@@ -249,7 +272,7 @@ fun BookDetailScreen(
                     onContinueReading = { onContinueReading(book.id) }
                 )
             }
-            item {
+            item(key = "detail-progress") {
                 RingRow(
                     book = book,
                     streakDays = state.streakDays,
@@ -257,7 +280,7 @@ fun BookDetailScreen(
                     modifier = Modifier.padding(horizontal = 20.dp)
                 )
             }
-            item {
+            item(key = "detail-totals") {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -270,7 +293,7 @@ fun BookDetailScreen(
                     StatCell("${state.notes.size}", "笔记", Modifier.weight(1f))
                 }
             }
-            item {
+            item(key = "detail-assets") {
                 ReadingAssetsEntry(
                     noteCount = state.notes.size,
                     annotationCount = state.annotations.size,
@@ -283,7 +306,7 @@ fun BookDetailScreen(
                     modifier = Modifier.padding(horizontal = 20.dp)
                 )
             }
-            item {
+            item(key = "detail-index") {
                 state.embeddingProgress?.let { progress ->
                     BookIndexCard(
                         progress = progress,
@@ -294,7 +317,7 @@ fun BookDetailScreen(
                     )
                 }
             }
-            item {
+            item(key = "detail-annotation-settings") {
                 BookAnnotationLimitsCard(
                     autonomy = state.autonomy,
                     bookId = bookId,
@@ -302,7 +325,7 @@ fun BookDetailScreen(
                     modifier = Modifier.padding(horizontal = 20.dp)
                 )
             }
-            item {
+            item(key = "detail-notes") {
                 NotesSection(
                     notes = state.notes,
                     onNoteClick = { selectedNote = it },
@@ -314,12 +337,13 @@ fun BookDetailScreen(
                     modifier = Modifier.padding(horizontal = 20.dp)
                 )
             }
-            item {
+            item(key = "detail-more") {
                 MoreBookDetailsEntry(
                     onClick = { showMoreInfo = true },
                     modifier = Modifier.padding(horizontal = 20.dp)
                 )
             }        }
+        }
 
         if (showMoreInfo) {
             ModalBottomSheet(

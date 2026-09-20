@@ -79,6 +79,8 @@ sealed interface ChatPart {
 
 /** Streaming increments. A stream is a sequence of [Text] optionally terminated by [ToolCalls]. */
 sealed interface ChatDelta {
+    /** Provider-reported cumulative usage; null means absent, never an estimate. */
+    data class Usage(val inputTokens: Long? = null, val outputTokens: Long? = null, val totalTokens: Long? = null) : ChatDelta
     data class Text(val text: String) : ChatDelta
 
     /**
@@ -140,7 +142,8 @@ internal data class ChatCompletionRequest(
     @SerialName("max_tokens") val maxTokens: Int? = null,
     @SerialName("reasoning_effort") val reasoningEffort: String? = null,
     val tools: List<WireToolCall>? = null,
-    val stream: Boolean = false
+    val stream: Boolean = false,
+    @SerialName("stream_options") val streamOptions: JsonObject? = null
 )
 
 @Serializable

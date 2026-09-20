@@ -58,7 +58,16 @@ class ProactiveAnnotationSettingsScreenTest {
     @Test fun presetsAndCustomBudgetUpdateGlobalSettings() {
         state = SettingsUiState(isLoaded = true)
         mount()
+        compose.runOnIdle {
+            val bitmap = Bitmap.createBitmap(rootView.width, rootView.height, Bitmap.Config.ARGB_8888)
+            rootView.draw(Canvas(bitmap))
+            File("build/reports/ui-qa/annotation-overview.png").apply { parentFile!!.mkdirs() }.outputStream().use {
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
+            }
+            bitmap.recycle()
+        }
         compose.onNode(hasScrollAction()).performScrollToNode(hasText("前文与上下文"))
+        compose.onNodeWithText("前文与上下文").performClick()
         compose.onNodeWithText("充分").performScrollTo().performClick()
         compose.runOnIdle { assertEquals(32_000, state.autonomy.annotationLimits.context.budgetChars) }
         compose.onNodeWithText("每次 32000 字符").assertExists()
@@ -85,12 +94,15 @@ class ProactiveAnnotationSettingsScreenTest {
             annotationLimits = global, annotationLimitsByBook = mapOf(7L to book)))
         mount(7)
         compose.onNode(hasScrollAction()).performScrollToNode(hasText("前文与上下文"))
+        compose.onNodeWithText("前文与上下文").performClick()
         compose.onNodeWithText("每次 32000 字符").assertExists()
         compose.onNodeWithText("均衡").performScrollTo().performClick()
         compose.runOnIdle { assertEquals(book, state.autonomy.annotationLimitsByBook[7]) }
+        compose.onNodeWithText("开启本书单独设置后可修改").performScrollTo().performClick()
         compose.onNode(hasScrollAction()).performScrollToNode(hasText("本书单独设置"))
         compose.onNodeWithText("本书单独设置").performClick()
         compose.onNode(hasScrollAction()).performScrollToNode(hasText("前文与上下文"))
+        compose.onNodeWithText("前文与上下文").performClick()
         compose.onNodeWithText("每次 32000 字符").assertExists()
         compose.onNodeWithText("均衡").performScrollTo().performClick()
         compose.runOnIdle {
@@ -112,7 +124,8 @@ class ProactiveAnnotationSettingsScreenTest {
         state = SettingsUiState(isLoaded = true,
             autonomy = CompanionAutonomySettings(annotationNotice = ProactiveAnnotationNotice.FAST_MODEL))
         mount()
-        compose.onNode(hasScrollAction()).performScrollToNode(hasText("还挺有意思，你怎么看？"))
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText("伴读弹幕"))
+        compose.onNodeWithText("伴读弹幕").performClick()
         compose.onNodeWithText("还挺有意思，你怎么看？").assertExists()
         compose.onNodeWithText("知墨 写了 3 条段评").assertDoesNotExist()
     }

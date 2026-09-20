@@ -68,7 +68,7 @@ class BookCharactersRepository @Inject constructor(
                 val revision = if (guide != null || checkpoint != null) library.bookTextRevision(book.id) else ""
                 val visible = BookCharactersCodec.visible(guide, revision)
                 val resumable = checkpoint?.takeIf { it.generationId != guide?.generationId && it.sourceRevision == revision && it.promptVersion == BookCharactersCodec.PROMPT_VERSION }
-                BookCharactersSnapshot(visible, guide != null && visible == null, resumable?.completedParts ?: 0)
+                BookCharactersSnapshot(visible, guide != null && (guide.sourceRevision != revision || visible == null), resumable?.completedParts ?: 0)
             } } }
 
     /**
@@ -149,12 +149,15 @@ class BookCharactersRepository @Inject constructor(
                 System.currentTimeMillis())
             return withContext(Dispatchers.IO) { BookContentMutation.withBook(plan.bookId) {
                 validateLocked(plan)
+                val previous = BookCharactersCodec.visible(dao.getGuide(plan.bookId), plan.revision)?.guide
+                val published = entry.copy(contentJson = AiJson.encodeToString(BookCharactersCodec.mergeManual(
+                    accumulator.guide(plan.chapterCount, plan.sourceCharacters, plan.progressBounded), previous)))
                 // 已核对的分段留着当缓存；清空是破坏性动作，只由调用方（删除资料）显式做一次。
                 database.withTransaction {
-                    dao.saveGuide(entry)
+                    dao.saveGuide(published)
                     dao.stampParts(plan.bookId, generationId)
                 }
-                entry
+                published
             } }
         } finally { generating.remove(plan.bookId) }
     }
@@ -162,7 +165,7 @@ class BookCharactersRepository @Inject constructor(
     suspend fun locate(entry: BookCharacterGuideEntity, evidence: CharacterEvidence): Pair<Int, Int> = withContext(Dispatchers.IO) {
         BookContentMutation.withBook(entry.bookId) {
             library.getBook(entry.bookId)?.takeIf { it.removedAt == 0L } ?: error("原书已移除，无法核对")
-            require(BookCharactersCodec.visible(entry, library.bookTextRevision(entry.bookId)) != null) { "正文已变化，请重新提取人物" }
+            require(entry.sourceRevision == library.bookTextRevision(entry.bookId)) { "正文已变化，请重新提取人物" }
             val chapter = library.getChapter(entry.bookId, evidence.chapterIndex) ?: error("原章节不存在")
             val text = library.readChapterTextStrict(entry.bookId, chapter)
             val fact = evidence.fact
@@ -177,12 +180,31 @@ class BookCharactersRepository @Inject constructor(
         finally { generating.remove(bookId) }
     }
 
+    suspend fun saveCharacter(bookId: Long, originalIdentity: String?, name: String, description: String) = withContext(Dispatchers.IO) {
+        BookContentMutation.withBook(bookId) {
+            library.getBook(bookId)?.takeIf { it.removedAt == 0L } ?: error("书籍已移除")
+            val revision = library.bookTextRevision(bookId)
+            val previous = dao.getGuide(bookId)
+            val guide = BookCharactersCodec.visible(previous, revision)?.guide ?: BookCharacterGuide(emptyList(), 0, 0, true)
+            val edited = BookCharactersCodec.edit(guide, originalIdentity, name, description)
+            val entry = previous?.copy(sourceRevision = revision, promptVersion = BookCharactersCodec.PROMPT_VERSION,
+                contentJson = AiJson.encodeToString(edited), createdAt = System.currentTimeMillis())
+                ?: BookCharacterGuideEntity(bookId, UUID.randomUUID().toString(), revision, "manual", "手动整理",
+                    BookCharactersCodec.PROMPT_VERSION, AiJson.encodeToString(edited), System.currentTimeMillis())
+            dao.saveGuide(entry)
+        }
+    }
+
     private fun cachedCharacters(raw: String, part: KnowledgePart): List<KnowledgeCharacter>? = runCatching {
         AiJson.decodeFromString<List<KnowledgeCharacter>>(raw).also { people ->
             require(people.size <= 24)
             people.forEach { person ->
                 require(person.name.isNotBlank() && part.text.contains(person.name) && person.facts.size in 1..4)
-                person.facts.forEach { fact ->
+                require(person.attributes.size <= 12 && person.relationships.size <= 12)
+                person.attributes.forEach { require(it.value.isNotBlank() && it.fact.quote.contains(person.name)) }
+                person.relationships.forEach { require(it.target.isNotBlank() && it.relation.isNotBlank() &&
+                    it.fact.quote.contains(person.name) && it.fact.quote.contains(it.target)) }
+                (person.facts + person.attributes.map { it.fact } + person.relationships.map { it.fact }).forEach { fact ->
                     val start = fact.start - part.start
                     val end = fact.end - part.start
                     require(fact.text.isNotBlank() && fact.quote.length in 4..300 && start >= 0 && end <= part.text.length && end > start &&

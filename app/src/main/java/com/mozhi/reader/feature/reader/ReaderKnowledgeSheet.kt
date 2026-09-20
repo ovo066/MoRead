@@ -40,7 +40,9 @@ internal data class ReaderKnowledgeActions(
     val preview: (Int) -> Unit = {}, val cancel: (Int) -> Unit = {}, val delete: (Int) -> Unit = {},
     val locate: (ChapterKnowledgeEntity, KnowledgeFact) -> Unit = { _, _ -> },
     val previewCharacters: (Boolean) -> Unit = {}, val cancelCharacters: () -> Unit = {}, val deleteCharacters: () -> Unit = {},
-    val locateCharacter: (BookCharacterGuideEntity, CharacterEvidence) -> Unit = { _, _ -> }
+    val locateCharacter: (BookCharacterGuideEntity, CharacterEvidence) -> Unit = { _, _ -> },
+    val saveCharacterCard: (ExtractedCharacterCard) -> Unit = {},
+    val saveCharacter: (String?, String, String) -> Unit = { _, _, _ -> }
 )
 
 @Composable
@@ -56,7 +58,8 @@ internal fun ReaderKnowledgeContentsSheet(
     LaunchedEffect(viewModel) { viewModel.locateEvents.collect { (chapter, offset) -> locate(chapter, offset) } }
     ReaderKnowledgePages(state, chapters, tocEntries, currentChapterIndex, palette, onChapterClick, onDismiss,
         ReaderKnowledgeActions(viewModel::preview, viewModel::cancel, viewModel::delete, viewModel::locate,
-            viewModel::previewCharacters, viewModel::cancelCharacters, viewModel::deleteCharacters, viewModel::locateCharacter))
+            viewModel::previewCharacters, viewModel::cancelCharacters, viewModel::deleteCharacters, viewModel::locateCharacter,
+            viewModel::saveCharacterCard, viewModel::saveCharacter))
     state.pending?.let { plan -> AlertDialog(
         onDismissRequest = viewModel::dismissPreview,
         title = { Text("生成章节大纲？") },
@@ -286,117 +289,158 @@ internal fun ChapterKnowledgePanel(
 internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<ChapterEntity>, palette: ReaderPalette, actions: ReaderKnowledgeActions) {
     val saved = state.characters.saved
     val people = saved?.guide?.characters.orEmpty()
+    var card by remember(state.bookId) { mutableStateOf<ExtractedCharacterCard?>(null) }
+    var editing by remember(state.bookId) { mutableStateOf<BookCharacter?>(null) }
+    var editorVisible by rememberSaveable(state.bookId) { mutableStateOf(false) }
     var query by rememberSaveable(state.bookId) { mutableStateOf("") }
+    var searching by rememberSaveable { mutableStateOf(false) }
+    var options by rememberSaveable { mutableStateOf(false) }
     var information by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
     val task = state.characterTask
     val busy = task?.active == true
     val listState = rememberLazyListState()
-    val filtered = remember(people, query) { people.filter { it.name.contains(query.trim(), ignoreCase = true) } }
+    val filtered = remember(people, query) { people.filter { person ->
+        (listOf(person.name, person.identity) + person.aliases).any { it.contains(query.trim(), ignoreCase = true) }
+    } }
     val titles = remember(chapters) { chapters.associate { it.chapterIndex to it.title } }
-    // 默认「读到此处」：第一次点进来的人不该被未读情节剧透，全书要自己选。
-    // 已有资料时跟随它的范围（资料在加载完才到，所以把它算进 key，避免停在错误的档位）。
-    var progressBounded by rememberSaveable(state.bookId, saved?.guide?.progressBounded) {
-        mutableStateOf(saved?.guide?.progressBounded ?: true)
-    }
+    var progressBounded by rememberSaveable(state.bookId, saved?.guide?.progressBounded) { mutableStateOf(saved?.guide?.progressBounded ?: true) }
     Column(Modifier.fillMaxSize()) {
-        KnowledgeHeading("书中人物", when {
-            saved == null -> "扫描已读章节，汇集人物与关系"
-            saved.guide.progressBounded -> "${people.size} 位人物 · 读到第 ${saved.guide.scannedChapters} 章为止"
-            else -> "${people.size} 位人物 · 已扫描全书 ${saved.guide.scannedChapters} 章"
-        }, palette) { information = true }
-        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp).height(44.dp)
-            .clip(RoundedCornerShape(14.dp)).background(palette.glass).padding(3.dp)
-            .selectableGroup().testTag("character-scope"), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-            listOf(true to "读到此处", false to "全书").forEach { (bounded, label) ->
-                val selected = bounded == progressBounded
-                val background by animateColorAsState(
-                    if (selected) palette.accentContainer else Color.Transparent, label = "character-scope-tab")
-                Row(Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(11.dp)).background(background)
-                    .selectable(selected, enabled = !busy, role = Role.RadioButton, onClick = { progressBounded = bounded }),
-                    horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                    Text(label, style = MaterialTheme.typography.labelLarge,
-                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                        color = if (selected) palette.accent else palette.muted)
+        Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 20.dp).testTag("character-tools"),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(Modifier.weight(1f)) {
+                Text("${people.size} 位人物", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = palette.onBackground)
+                if (query.isNotBlank()) Text("${filtered.size} 位匹配 · $query", style = MaterialTheme.typography.labelSmall,
+                    color = palette.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Surface(shape = CircleShape, color = palette.glass) {
+                IconButton(onClick = { searching = true }) { Icon(Icons.Outlined.Search, "查找书中人物", tint = palette.muted, modifier = Modifier.size(20.dp)) }
+            }
+            Surface(shape = CircleShape, color = palette.glass) {
+                IconButton(onClick = { editing = null; editorVisible = true }, enabled = !state.loading) {
+                    Icon(Icons.Outlined.Add, "新增人物", tint = palette.accent, modifier = Modifier.size(20.dp))
                 }
             }
-        }
-        Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
-            FilledTonalButton(onClick = { if (busy) actions.cancelCharacters() else actions.previewCharacters(progressBounded) },
-                enabled = !state.loading && !state.preparingCharacters,
+            FilledTonalButton(onClick = { options = true }, shape = CircleShape, contentPadding = PaddingValues(horizontal = 14.dp),
                 colors = ButtonDefaults.filledTonalButtonColors(containerColor = palette.accentContainer, contentColor = palette.accent)) {
-                Icon(if (busy) Icons.Outlined.Stop else Icons.Outlined.AutoAwesome, null, Modifier.size(16.dp))
-                Spacer(Modifier.width(6.dp))
-                Text(when {
-                    busy -> "停止提取"
-                    state.preparingCharacters -> "准备中…"
-                    state.characters.checkpointParts > 0 -> "继续提取"
-                    saved != null -> if (progressBounded) "更新到当前进度" else "更新全书人物"
-                    else -> if (progressBounded) "提取读过的人物" else "提取全书人物"
-                })
-            }
-            Spacer(Modifier.weight(1f))
-            if (saved != null || state.characters.checkpointParts > 0) IconButton(onClick = { deleting = true }, enabled = !busy) {
-                Icon(Icons.Outlined.DeleteOutline, "删除人物资料", tint = palette.muted, modifier = Modifier.size(20.dp))
+                Text(if (busy) "提取中" else "提取")
             }
         }
-        Box(Modifier.fillMaxWidth().height(40.dp).padding(horizontal = 20.dp), contentAlignment = Alignment.CenterStart) {
+        // Fixed status line: progress changes never move the list or its scroll anchor.
+        Box(Modifier.fillMaxWidth().height(32.dp).padding(horizontal = 20.dp), contentAlignment = Alignment.CenterStart) {
             Text(task?.error ?: when {
                 busy -> task.progress + " · 可离开此页"
-                state.characters.checkpointParts > 0 -> "已保存 ${state.characters.checkpointParts} 段进度，可继续提取"
-                state.characters.outdated -> "正文已变化，请重新提取"
-                progressBounded -> "只扫描读过的正文 · 不会剧透后续情节"
-                else -> "覆盖未读章节 · 资料可能涉及后续情节"
-            }, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall,
+                state.characters.checkpointParts > 0 -> "已有提取进度，点击「提取」继续"
+                state.characters.outdated -> "正文已变化，可重新提取；手动资料保留"
+                saved?.guide?.scannedChapters == 0 -> "手动整理"
+                saved != null -> if (saved.guide.progressBounded) "已扫描到第 ${saved.guide.scannedChapters} 章" else "已扫描全书 ${saved.guide.scannedChapters} 章"
+                else -> "可从正文提取，也可手动添加"
+            }, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall,
                 color = if (task?.error != null) MaterialTheme.colorScheme.error else palette.muted)
         }
-        OutlinedTextField(query, { query = it }, placeholder = { Text("查找书中人物") }, singleLine = true,
-            leadingIcon = { Icon(Icons.Outlined.Search, null, tint = palette.muted) },
-            colors = OutlinedTextFieldDefaults.colors(focusedTextColor = palette.onBackground, unfocusedTextColor = palette.onBackground,
-                focusedBorderColor = palette.accent, unfocusedBorderColor = palette.glassBorder,
-                focusedPlaceholderColor = palette.muted, unfocusedPlaceholderColor = palette.muted),
-            shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp))
         LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth().blockSheetDrag(listState).testTag("characters-list"),
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (filtered.isEmpty()) item(key = "empty") {
-                KnowledgeEmpty(if (query.isNotBlank()) "没有找到这个人物" else if (saved != null) "本书未提取到人物" else "人物，一处看清",
-                    if (query.isNotBlank()) "试试原文中的姓名或称呼。" else if (saved != null) "这一轮扫描没有发现可核对的人物资料。" else
-                        "「读到此处」只看读过的章节，不会剧透；「全书」会扫描整本书。完成后随时查看，也能回到原文。", palette)
+                KnowledgeEmpty(if (query.isNotBlank()) "没有找到这个人物" else "还没有人物",
+                    if (query.isNotBlank()) "试试其他姓名，或清除搜索。" else "点击「提取」汇集书中人物，或用 + 手动添加。", palette)
             }
-            items(filtered, key = { it.name }, contentType = { "character" }) { person ->
-                var expanded by rememberSaveable(person.name) { mutableStateOf(false) }
-                Surface(shape = RoundedCornerShape(18.dp), color = palette.glass,
-                    modifier = Modifier.fillMaxWidth().testTag("person-${person.name}")) {
+            items(filtered, key = { it.identity }, contentType = { "character" }) { person ->
+                var expanded by rememberSaveable(person.identity) { mutableStateOf(false) }
+                var menu by remember { mutableStateOf(false) }
+                Surface(shape = RoundedCornerShape(18.dp), color = palette.glass, modifier = Modifier.fillMaxWidth().testTag("person-${person.name}")) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Surface(Modifier.size(36.dp), shape = CircleShape, color = palette.accentContainer) {
-                                Box(contentAlignment = Alignment.Center) { Text(person.name.take(1), color = palette.accent, style = MaterialTheme.typography.titleSmall) }
+                            Surface(Modifier.size(42.dp), shape = CircleShape, color = palette.accentContainer) {
+                                Box(contentAlignment = Alignment.Center) { Text(person.name.take(1), color = palette.accent, style = MaterialTheme.typography.titleMedium) }
                             }
-                            Text(person.name, Modifier.weight(1f).padding(start = 10.dp), style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold, color = palette.onBackground)
-                            Text("${person.evidence.map { it.chapterIndex }.distinct().size} 章", color = palette.muted, style = MaterialTheme.typography.labelSmall)
-                        }
-                        (if (expanded) person.evidence else person.evidence.take(1)).forEach { evidence ->
-                            key(evidence.chapterIndex, evidence.fact.start, evidence.fact.text) {
-                                KnowledgeFactRow(evidence.fact, titles[evidence.chapterIndex] ?: "第 ${evidence.chapterIndex + 1} 章", palette) {
-                                    saved?.let { actions.locateCharacter(it.entry, evidence) }
+                            Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                                Text(person.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = palette.onBackground)
+                                Text(if (person.manualDescription != null) "手动整理" else "${person.evidence.map { it.chapterIndex }.distinct().size} 章原文依据",
+                                    color = palette.muted, style = MaterialTheme.typography.labelSmall)
+                            }
+                            Box {
+                                IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreHoriz, "${person.name}的人物操作", tint = palette.muted) }
+                                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                                    DropdownMenuItem(text = { Text("编辑人物") }, onClick = { menu = false; editing = person; editorVisible = true })
+                                    DropdownMenuItem(text = { Text("提取角色卡") }, onClick = { menu = false; card = ExtractedCharacterCard.from(person) })
                                 }
                             }
                         }
-                        if (person.evidence.size > 1) TextButton(onClick = { expanded = !expanded }, contentPadding = PaddingValues(horizontal = 0.dp)) {
-                            Text(if (expanded) "收起人物资料" else "展开 ${person.evidence.size - 1} 条资料", color = palette.accent)
+                        CharacterProfileDetails(person, expanded, palette) { evidence ->
+                            saved?.let { actions.locateCharacter(it.entry, evidence) }
+                        }
+                        person.manualDescription?.takeIf(String::isNotBlank)?.let {
+                            Text(it, color = palette.onBackground, style = MaterialTheme.typography.bodyMedium,
+                                maxLines = if (expanded) Int.MAX_VALUE else 4, overflow = TextOverflow.Ellipsis)
+                        }
+                        val evidence = if (expanded) person.evidence else if (person.manualDescription == null) person.evidence.take(1) else emptyList()
+                        evidence.forEach { item -> key(item.chapterIndex, item.fact.start, item.fact.text) {
+                            KnowledgeFactRow(item.fact, titles[item.chapterIndex] ?: "第 ${item.chapterIndex + 1} 章", palette) {
+                                saved?.let { actions.locateCharacter(it.entry, item) }
+                            }
+                        } }
+                        if (person.evidence.size > 1 || person.manualDescription != null || person.attributes.isNotEmpty() || person.relationships.isNotEmpty()) TextButton(onClick = { expanded = !expanded }, contentPadding = PaddingValues(0.dp)) {
+                            Text(if (expanded) "收起人物资料" else if (person.manualDescription != null || person.attributes.isNotEmpty() || person.relationships.isNotEmpty()) "展开资料与原文依据" else "展开 ${person.evidence.size - 1} 条资料", color = palette.accent)
                         }
                     }
                 }
             }
         }
     }
-    if (information) KnowledgeInfoDialog("书中人物", "由 AI 逐章扫描正文，提取人物、身份与关系。\n\n「读到此处」只发送已经读过的内容，最后一章截到当前进度，资料不会剧透；「全书」会扫描整本书，包括还没读到的章节，资料可能涉及后续情节。\n\n每条资料保留原文依据；仅合并相同姓名，不擅自猜测别名，以免认错人物。长篇中优先保留人物最初的介绍和后续的重要事实。\n\n核对过的段落会留作缓存：读了几章之后再点「更新到当前进度」，只有新读的章节需要重新计费。随时停止会保留进度，再次提取时可继续，更新期间仍能查看上次完成的资料。", { information = false })
-    if (deleting) ConfirmKnowledgeDelete("删除人物资料？", "删除这本书的人物资料及未完成的提取进度。", { deleting = false }) {
+    if (searching) {
+        var draft by rememberSaveable { mutableStateOf(query) }
+        androidx.compose.ui.window.Dialog(onDismissRequest = { searching = false },
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
+            // A bounded window also keeps IME and text-field remeasurement away from the sheet.
+            Box(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(24.dp), contentAlignment = Alignment.Center) {
+                Surface(Modifier.widthIn(max = 400.dp).fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
+                    Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Text("查找书中人物", style = MaterialTheme.typography.titleLarge)
+                        OutlinedTextField(draft, { draft = it.take(80) }, label = { Text("姓名或称呼") }, singleLine = true,
+                            modifier = Modifier.fillMaxWidth().testTag("character-search"))
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            TextButton(onClick = { query = ""; searching = false }) { Text("清除搜索") }
+                            TextButton(onClick = { searching = false }) { Text("取消") }
+                            TextButton(onClick = { query = draft.trim(); searching = false }) { Text("查找") }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (options) AlertDialog(onDismissRequest = { options = false }, title = { Text("人物提取") }, text = {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(Modifier.fillMaxWidth().selectableGroup().testTag("character-scope"), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(true to "读到此处", false to "全书").forEach { (bounded, label) ->
+                    FilterChip(selected = progressBounded == bounded, onClick = { progressBounded = bounded }, enabled = !busy, label = { Text(label) })
+                }
+            }
+            Text(if (progressBounded) "只扫描读过的正文。" else "包含未读章节，资料可能涉及后续情节。", style = MaterialTheme.typography.bodySmall)
+            TextButton(onClick = { options = false; information = true }) { Icon(Icons.Outlined.Info, "书籍资料说明"); Spacer(Modifier.width(6.dp)); Text("提取说明") }
+            if (saved != null || state.characters.checkpointParts > 0) TextButton(onClick = { options = false; deleting = true }, enabled = !busy) { Text("删除人物资料") }
+        }
+    }, confirmButton = {
+        TextButton(onClick = { options = false; if (busy) actions.cancelCharacters() else actions.previewCharacters(progressBounded) },
+            enabled = !state.loading && !state.preparingCharacters) {
+            Text(when {
+                busy -> "停止提取"
+                state.preparingCharacters -> "准备中…"
+                state.characters.checkpointParts > 0 -> "继续提取"
+                saved != null -> if (progressBounded) "更新到当前进度" else "更新全书人物"
+                else -> if (progressBounded) "提取读过的人物" else "提取全书人物"
+            })
+        }
+    }, dismissButton = { TextButton(onClick = { options = false }) { Text("关闭") } })
+    if (editorVisible) BookCharacterEditorDialog(editing, people, onDismiss = { editorVisible = false }, onSave = { key, name, description ->
+        actions.saveCharacter(key, name, description); editorVisible = false
+    })
+    card?.let { draft -> ExtractedCharacterCardDialog(draft, onDismiss = { card = null }, onSave = { actions.saveCharacterCard(it); card = null }) }
+    if (information) KnowledgeInfoDialog("书中人物", "由 AI 逐章扫描正文，提取人物、身份与关系。\n\n「读到此处」只发送已经读过的内容，最后一章截到当前进度；「全书」包括还没读到的章节，可能涉及后续情节。\n\nAI 资料保留原文依据，可随时核对；手动新增或编辑的资料会标注为「手动整理」，后续提取不会覆盖。\n\n已核对的段落保留缓存，更新只为新内容计费。停止后可继续，更新期间仍能查看已有资料。", { information = false })
+    if (deleting) ConfirmKnowledgeDelete("删除人物资料？", "删除这本书的人物资料（包括手动整理）及未完成的提取进度。", { deleting = false }) {
         deleting = false; actions.deleteCharacters()
     }
 }
+
 
 @Composable
 private fun KnowledgeEmpty(title: String, description: String, palette: ReaderPalette) {

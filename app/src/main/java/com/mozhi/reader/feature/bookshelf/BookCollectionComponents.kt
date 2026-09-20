@@ -205,7 +205,7 @@ internal fun ListCollectionItem(
     DisposableEffect(entry.key) {
         onDispose { collectionDragState.unregister(entry.key, registrationOwner) }
     }
-    FrostedSurface(
+    Column(
         modifier = modifier
             .fillMaxWidth()
             .graphicsLayer { alpha = if (selectionMode && !selected) 0.55f else 1f }
@@ -213,7 +213,7 @@ internal fun ListCollectionItem(
                 if (collectionDragState.activeDrop?.target == target) Modifier.border(
                     2.dp,
                     MaterialTheme.colorScheme.primary,
-                    RoundedCornerShape(moReadMetrics().radiusFor(24))
+                    RoundedCornerShape(4.dp)
                 ) else Modifier
             )
             .clickable(onClick = onOpen)
@@ -222,12 +222,10 @@ internal fun ListCollectionItem(
             }
             .onGloballyPositioned {
                 collectionDragState.register(target, it.boundsInRoot(), registrationOwner)
-            },
-        shape = RoundedCornerShape(moReadMetrics().radiusFor(24)),
-        shadowElevation = 4.dp
+            }
     ) {
         Row(
-            modifier = Modifier.padding(13.dp),
+            modifier = Modifier.padding(vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             CollectionArtwork(
@@ -262,6 +260,8 @@ internal fun ListCollectionItem(
                 )
             }
         }
+        androidx.compose.material3.HorizontalDivider(Modifier.padding(start = 82.dp),
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .45f))
     }
 }
 

@@ -328,32 +328,55 @@ class LibraryRepository @Inject constructor(
         return (start + replacement.length).coerceIn(0, updated.length)
     }
 
-    /** Applies enabled regex rules in list order. The text is only rewritten when a match exists. */
+    suspend fun previewTextReplacementRules(bookId: Long, rules: List<ReaderTextReplacementRule>): TextCleanupPreview = withContext(Dispatchers.Default) {
+        val active = rules.filter { it.enabled && !it.forListenOnly }
+        active.forEach { require(it.validationError() == null) { "规则「${it.name}」无效" } }
+        val chapters = bookDao.getChapters(bookId)
+        val sources = chapters.map { it.chapterIndex to readChapterText(bookId, it) }
+        var matches = 0
+        var changed = 0
+        val examples = mutableListOf<TextCleanupChange>()
+        sources.zip(chapters).forEach { (source, chapter) ->
+            val (after, count) = cleanText(source.second, active)
+            matches += count
+            if (after != source.second) {
+                changed++
+                if (examples.size < 12) {
+                    val first = (0 until minOf(source.second.length, after.length)).firstOrNull { source.second[it] != after[it] }
+                        ?: minOf(source.second.length, after.length)
+                    val start = (first - 80).coerceAtLeast(0)
+                    examples += TextCleanupChange(chapter.chapterIndex, chapter.title,
+                        source.second.drop(start).take(700), after.drop(start).take(700))
+                }
+            }
+        }
+        TextCleanupPreview(active, cleanupRevision(sources), matches, changed, examples)
+    }
+
+    /** Recheck the preview revision before writing; listening-only rules never rewrite book text. */
     suspend fun applyTextReplacementRules(
         bookId: Long,
-        rules: List<ReaderTextReplacementRule>
-    ): Int {
-        val activeRules = rules.filter(ReaderTextReplacementRule::enabled)
+        rules: List<ReaderTextReplacementRule>,
+        expectedRevision: String? = null
+    ): Int = withContext(Dispatchers.Default) {
+        val activeRules = rules.filter { it.enabled && !it.forListenOnly }
         activeRules.forEach { rule ->
             require(rule.validationError() == null) { "规则「${rule.name}」无效" }
         }
-        if (activeRules.isEmpty()) return 0
-        val compiled = activeRules.map { it to it.compileRegex() }
+        if (activeRules.isEmpty()) return@withContext 0
         val chapters = bookDao.getChapters(bookId)
         var matches = 0
-        val inputs = chapters.map { chapter ->
-            var body = readChapterText(bookId, chapter)
-            compiled.forEach { (rule, regex) ->
-                val count = regex.findAll(body).count()
-                if (count > 0) {
-                    matches += count
-                    body = regex.replace(body, rule.replacement)
-                }
-            }
-            ChapterTextInput(index = chapter.chapterIndex, body = body)
+        val sources = chapters.map { it.chapterIndex to readChapterText(bookId, it) }
+        require(expectedRevision == null || expectedRevision == cleanupRevision(sources)) { "正文已变化，请重新预览后应用" }
+        var changed = false
+        val inputs = sources.map { (index, body) ->
+            val (cleaned, count) = cleanText(body, activeRules)
+            matches += count
+            changed = changed || cleaned != body
+            ChapterTextInput(index = index, body = cleaned)
         }
-        if (matches > 0) materializeBookText(bookId, inputs)
-        return matches
+        if (changed) materializeBookText(bookId, inputs)
+        matches
     }
 
     /** Replaces the chapter table and text blob together after TXT chapter recognition changes. */

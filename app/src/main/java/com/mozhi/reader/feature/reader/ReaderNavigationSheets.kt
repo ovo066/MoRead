@@ -28,6 +28,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.ExpandMore
@@ -329,10 +330,12 @@ internal fun BookmarksSheet(
     bookmarks: List<BookmarkEntity>,
     palette: ReaderPalette,
     onBookmarkClick: (BookmarkEntity) -> Unit,
-    onDeleteBookmark: (Long) -> Unit
+    onDeleteBookmark: (Long) -> Unit,
+    onDismiss: () -> Unit = {}
 ) {
     Column(modifier = Modifier.fillMaxHeight()) {
-        Column(modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 10.dp)) {
+        Row(modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+          Column(Modifier.weight(1f)) {
             Text(
                 text = "书签",
                 style = MaterialTheme.typography.headlineSmall,
@@ -344,6 +347,8 @@ internal fun BookmarksSheet(
                 color = palette.muted,
                 modifier = Modifier.padding(top = 2.dp)
             )
+          }
+          IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, "关闭书签", tint = palette.muted) }
         }
         if (bookmarks.isEmpty()) {
             Text(
@@ -358,7 +363,7 @@ internal fun BookmarksSheet(
                 modifier = Modifier
                     .weight(1f)
                     .navigationBarsPadding()
-                    .blockSheetDrag(listState),
+                    .blockSheetDrag(listState).testTag("bookmarks-list"),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(
                     start = 10.dp,
                     end = 10.dp,

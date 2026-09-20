@@ -91,6 +91,7 @@ import com.mozhi.reader.core.datastore.ReaderFont
 import com.mozhi.reader.core.datastore.PendingReaderFont
 import com.mozhi.reader.core.datastore.ReaderSettings
 import com.mozhi.reader.core.datastore.ReaderTextReplacementRule
+import com.mozhi.reader.core.datastore.ReaderTapAction
 import com.mozhi.reader.core.datastore.ReaderTheme
 import com.mozhi.reader.core.datastore.activeThemeSlot
 import com.mozhi.reader.core.datastore.chineseConversionModeFor
@@ -194,7 +195,8 @@ fun ReaderScreen(
     val themeSlot = state.settings.activeThemeSlot(systemDark)
     val bookThemeSettings = state.settings.withBookThemeSelection(bookId)
     val readerSettings = state.settings.resolveForBook(bookId, themeSlot)
-    val palette = readerPalette(readerSettings, systemDark)
+    val contentPalette = readerPalette(readerSettings, systemDark)
+    val palette = readerControlsPalette(contentPalette)
     val listeningThisBook = listenState?.bookId == bookId
     val conversionMode = state.settings.chineseConversionModeFor(bookId)
     var presentedListenRange by remember { mutableStateOf<PresentedListenRange?>(null) }
@@ -244,6 +246,12 @@ fun ReaderScreen(
     // 导入背景图落到哪一槽（日/夜），由发起入口指定；launcher 回调时已经离开那次点击。
     var backgroundImportSlot by remember {
         mutableStateOf(com.mozhi.reader.core.datastore.ReaderThemeSlot.DAY)
+    }
+    val titleImageLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) {
+        it?.let(viewModel::importTitleImage)
+    }
+    val titleFontLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) {
+        it?.let(viewModel::importTitleFont)
     }
     val backgroundImageLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -435,25 +443,26 @@ fun ReaderScreen(
             contentVisible -> autoRead.onReady(state.settings.pageMode)
         }
     }
-    val canTurnWithVolume by rememberUpdatedState(pageInputAllowed)
-    DisposableEffect(activity, state.settings.volumeKeysPageTurn) {
+    val hardwareKeys = remember(bookId) { ReaderHardwareKeyDispatcher() }
+    val hardwareKeySettings by rememberUpdatedState(state.settings)
+    val canTurnWithHardwareKey by rememberUpdatedState(pageInputAllowed && readerResumed && !companionPaneVisible && screenState.dictionaryHit == null)
+    DisposableEffect(activity, bookId) {
         val host = activity as? MainActivity
-        if (state.settings.volumeKeysPageTurn) {
-            host?.setVolumeKeyPageTurnHandler { previous ->
-                if (canTurnWithVolume) {
+        host?.setReaderHardwareKeyHandler { event ->
+            hardwareKeys.dispatch(event, hardwareKeySettings.volumeKeysPageTurn, canTurnWithHardwareKey,
+                hardwareKeySettings.physicalKeyBindings) { action ->
                     autoRead.pause(AutoReadPauseReason.TOUCH)
                     hardwarePageTurnRequest = ReaderPageTurnRequest(
                         sequence = (hardwarePageTurnRequest?.sequence ?: 0) + 1,
-                        direction = if (previous) {
+                        direction = if (action == com.mozhi.reader.core.datastore.ReaderKeyAction.PREVIOUS_PAGE) {
                             PageTurnDirection.PREVIOUS
                         } else {
                             PageTurnDirection.NEXT
                         }
                     )
-                }
             }
         }
-        onDispose { host?.setVolumeKeyPageTurnHandler(null) }
+        onDispose { host?.setReaderHardwareKeyHandler(null); hardwareKeys.clear() }
     }
     // 本地书秒开是常态，加载圈闪一下反而像卡顿；只有真慢（导入准备/超长章排版）才转圈。
     var showLoadingHint by remember { mutableStateOf(false) }
@@ -657,30 +666,35 @@ fun ReaderScreen(
     // 半屏弹层与悬浮排版卡片共用同一份回调，所以提到两者之上装配一次。
     val typographyActions = ReaderTypographyActions(
         font = ReaderFontActions(
-            onFontChange = viewModel::setFont,
-            onCustomFontSelect = viewModel::selectCustomFont,
+            onFontChange = { viewModel.setFont(it, themeSlot) },
+            onCustomFontSelect = { viewModel.selectCustomFont(it, themeSlot) },
             onImportFont = { customFontLauncher.launch("*/*") }
         ),
         layout = ReaderLayoutActions(
-            onFontScaleChange = viewModel::setFontScale,
-            onLineHeightChange = viewModel::setLineHeight,
-            onPublisherStyleModeChange = viewModel::setPublisherStyleMode,
-            onPageMarginLeftChange = viewModel::setPageMarginLeft,
-            onPageMarginRightChange = viewModel::setPageMarginRight,
-            onPageMarginTopChange = viewModel::setPageMarginTop,
-            onPageMarginBottomChange = viewModel::setPageMarginBottom,
-            onHeaderMarginTopChange = viewModel::setHeaderMarginTop,
-            onFooterMarginBottomChange = viewModel::setFooterMarginBottom,
-            onFontWeightChange = viewModel::setFontWeight,
-            onLetterSpacingChange = viewModel::setLetterSpacing,
-            onParagraphSpacingChange = viewModel::setParagraphSpacing,
-            onFirstLineIndentChange = viewModel::setFirstLineIndent,
-            onTitleScaleChange = viewModel::setTitleScale,
-            onTitleTopSpacingChange = viewModel::setTitleTopSpacing,
-            onTitleBottomSpacingChange = viewModel::setTitleBottomSpacing,
-            onTextJustificationChange = viewModel::setTextJustification,
-            onShowHeaderChange = viewModel::setShowHeader,
-            onShowFooterChange = viewModel::setShowFooter
+            onFontScaleChange = { viewModel.setFontScale(it, themeSlot) },
+            onLineHeightChange = { viewModel.setLineHeight(it, themeSlot) },
+            onPublisherStyleModeChange = { viewModel.setPublisherStyleMode(it, themeSlot) },
+            onPageMarginLeftChange = { viewModel.setPageMarginLeft(it, themeSlot) },
+            onPageMarginRightChange = { viewModel.setPageMarginRight(it, themeSlot) },
+            onPageMarginTopChange = { viewModel.setPageMarginTop(it, themeSlot) },
+            onPageMarginBottomChange = { viewModel.setPageMarginBottom(it, themeSlot) },
+            onHeaderMarginTopChange = { viewModel.setHeaderMarginTop(it, themeSlot) },
+            onFooterMarginBottomChange = { viewModel.setFooterMarginBottom(it, themeSlot) },
+            onFontWeightChange = { viewModel.setFontWeight(it, themeSlot) },
+            onLetterSpacingChange = { viewModel.setLetterSpacing(it, themeSlot) },
+            onParagraphSpacingChange = { viewModel.setParagraphSpacing(it, themeSlot) },
+            onFirstLineIndentChange = { viewModel.setFirstLineIndent(it, themeSlot) },
+            onTitleScaleChange = { viewModel.setTitleScale(it, themeSlot) },
+            onTitleTopSpacingChange = { viewModel.setTitleTopSpacing(it, themeSlot) },
+            onTitleBottomSpacingChange = { viewModel.setTitleBottomSpacing(it, themeSlot) },
+            onTextJustificationChange = { viewModel.setTextJustification(it, themeSlot) },
+            onShowHeaderChange = { viewModel.setShowHeader(it, themeSlot) },
+            onShowFooterChange = { viewModel.setShowFooter(it, themeSlot) },
+            onTitleStyleChange = { viewModel.setTitleStyle(it, themeSlot) },
+            onImportTitleImage = { titleImageLauncher.launch(arrayOf("image/*")) },
+            onImportTitleFont = { titleFontLauncher.launch(arrayOf("*/*")) },
+            onSaveTitleStylePreset = viewModel::saveTitleStylePreset,
+            onDeleteTitleStylePreset = viewModel::deleteTitleStylePreset
         ),
         theme = ReaderThemeActions(
             onThemeChange = viewModel::setTheme,
@@ -703,14 +717,18 @@ fun ReaderScreen(
         syntax = ReaderSyntaxActions(
             onSyntaxHighlightEnabledChange = viewModel::setSyntaxHighlightEnabled,
             onSaveSyntaxRule = viewModel::saveSyntaxHighlightRule,
-            onDeleteSyntaxRule = viewModel::deleteSyntaxHighlightRule
+            onDeleteSyntaxRule = viewModel::deleteSyntaxHighlightRule,
+            onImportStyleImage = { titleImageLauncher.launch(arrayOf("image/*")) }
         ),
         behavior = ReaderBehaviorActions(
             onAnimationChange = viewModel::setPageTurnAnimation,
+            onModernBackTextOpacityChange = viewModel::setModernBackTextOpacity,
+            onModernCurlRadiusScaleChange = viewModel::setModernCurlRadiusScale,
             onPageModeChange = viewModel::setPageMode,
             onKeepScreenOnChange = viewModel::setKeepScreenOn,
             onImmersiveReadingChange = viewModel::setImmersiveReading,
             onVolumeKeysPageTurnChange = viewModel::setVolumeKeysPageTurn,
+            onPhysicalKeyBindingsChange = viewModel::setPhysicalKeyBindings,
             onChineseConversionModeChange = viewModel::setChineseConversionMode,
             onScreenBrightnessChange = viewModel::setScreenBrightness,
             onWidePageLayoutChange = viewModel::setWidePageLayout,
@@ -804,6 +822,16 @@ fun ReaderScreen(
                     }
                 }
                 val paneTtsAction: (String) -> Unit = { selection -> screenState.ttsDraft = selection }
+                val paneParagraphTranslation: (Int, Int) -> Unit = { chapter, offset ->
+                    coroutineScope.launch {
+                        val cached = viewModel.paragraphTranslationAt(chapter, offset)
+                        if (cached != null) screenState.paragraphTranslation = cached
+                        else {
+                            viewModel.toggleParagraphTranslation(chapter, offset)
+                            screenState.activeSheet = ReaderSheet.BILINGUAL
+                        }
+                    }
+                }
                 val paneEditText: ((String, IntRange) -> Unit)? =
                     if (state.settings.chineseConversionModeFor(bookId) == ChineseConversionMode.OFF) {
                         { selection, range ->
@@ -839,11 +867,15 @@ fun ReaderScreen(
                         controller = viewModel.contentController,
                         holder = viewModel.scrollPaneHolder,
                         settings = readerSettings,
-                        palette = palette,
+                        palette = contentPalette,
                         enabled = paneEnabled,
                         registerContentHook = viewModel::setContentHook,
                         onScrollSupersedesNavigation = viewModel::supersedePendingNavigation,
                         onCenterTap = { screenState.chromeVisible = !screenState.chromeVisible },
+                        onTapAction = { action -> handleReaderTapAction(action, screenState, viewModel) },
+                        onParagraphTranslation = paneParagraphTranslation,
+                        onTranslationLongPress = { screenState.paragraphTranslation = it },
+                        onDictionaryLookup = { screenState.dictionaryHit = it; screenState.activeSheet = ReaderSheet.DICTIONARY },
                         onBoundary = viewModel::onBoundaryHit,
                         onNotice = paneNotice,
                         annotations = annotationMarks,
@@ -868,7 +900,7 @@ fun ReaderScreen(
                         controller = viewModel.contentController,
                         holder = viewModel.paneHolder,
                         settings = readerSettings,
-                        palette = palette,
+                        palette = contentPalette,
                         enabled = paneEnabled,
                         registerContentHook = viewModel::setContentHook,
                         onNotice = paneNotice,
@@ -893,6 +925,10 @@ fun ReaderScreen(
                             if (contentVisible && readerResumed) viewModel.markVisiblePageRead(snapshot)
                         },
                         onCenterTap = { screenState.chromeVisible = !screenState.chromeVisible },
+                        onTapAction = { action -> handleReaderTapAction(action, screenState, viewModel) },
+                        onParagraphTranslation = paneParagraphTranslation,
+                        onTranslationLongPress = { screenState.paragraphTranslation = it },
+                        onDictionaryLookup = { screenState.dictionaryHit = it; screenState.activeSheet = ReaderSheet.DICTIONARY },
                         onBoundary = viewModel::onBoundaryHit,
                         modifier = Modifier.fillMaxSize()
                     )
@@ -969,6 +1005,11 @@ fun ReaderScreen(
                 onCompanion = openCompanion,
                 onSearch = { screenState.activeSheet = ReaderSheet.SEARCH },
                 onAutoRead = { screenState.activeSheet = ReaderSheet.AUTO_READ },
+                onTapZones = { screenState.activeSheet = ReaderSheet.TAP_ZONES },
+                onSyntaxHighlight = { screenState.activeSheet = ReaderSheet.SYNTAX },
+                onTitleStyle = { screenState.activeSheet = ReaderSheet.TITLE_STYLE },
+                onBilingual = { screenState.activeSheet = ReaderSheet.BILINGUAL },
+                onEnglishLearning = { screenState.dictionaryHit = null; screenState.activeSheet = ReaderSheet.ENGLISH_LEARNING },
                 onReidentifyChapters = { screenState.activeSheet = ReaderSheet.REIDENTIFY_CHAPTERS },
                 onTextReplacementRules = { screenState.activeSheet = ReaderSheet.TEXT_REPLACEMENT_RULES }
             )
@@ -1078,7 +1119,7 @@ fun ReaderScreen(
 
         ReaderTypographyCard(
             visible = screenState.typographyCardVisible,
-            settings = state.settings,
+            settings = readerSettings,
             palette = palette,
             actions = typographyActions.layout,
             onBack = {
@@ -1086,6 +1127,29 @@ fun ReaderScreen(
             },
             onClose = { screenState.typographyCardVisible = false }
         )
+
+        screenState.paragraphTranslation?.let { target ->
+            ParagraphTranslationActionsDialog(
+                translation = target.translation,
+                visible = bookId in state.settings.bilingualBooks,
+                busy = state.translation.busy,
+                onRetranslate = {
+                    viewModel.retranslateParagraph(target)
+                    screenState.paragraphTranslation = null
+                    screenState.activeSheet = ReaderSheet.BILINGUAL
+                },
+                onDelete = {
+                    viewModel.deleteParagraphTranslation(target)
+                    screenState.paragraphTranslation = null
+                    screenState.activeSheet = ReaderSheet.BILINGUAL
+                },
+                onToggle = {
+                    viewModel.toggleParagraphTranslation(target.chapterIndex, target.translation.start)
+                    screenState.paragraphTranslation = null
+                },
+                onDismiss = { screenState.paragraphTranslation = null }
+            )
+        }
 
         screenState.linkPreview?.let { preview ->
             Surface(
@@ -1207,11 +1271,29 @@ fun ReaderScreen(
             },
             onStop = { autoRead.stop(); screenState.activeSheet = null }
         )
+        ReaderSheet.BILINGUAL -> BilingualReadingDialog(
+            visible = bookId in state.settings.bilingualBooks, state = state.translation,
+            onVisible = viewModel::setBilingualVisible, onPage = viewModel::translateCurrentPage,
+            onChapter = viewModel::translateCurrentChapter, onStop = viewModel::stopTranslation,
+            onDismiss = { screenState.activeSheet = null }
+        )
+        ReaderSheet.DICTIONARY -> screenState.dictionaryHit?.let { hit ->
+            DictionaryLookupDialog(bookId, hit, state.settings, palette,
+                onDismiss = { screenState.activeSheet = null; screenState.dictionaryHit = null })
+        }
+        ReaderSheet.ENGLISH_LEARNING -> EnglishLearningDialog(bookId, state.settings, palette,
+            onDismiss = { screenState.activeSheet = null })
+        ReaderSheet.TAP_ZONES -> ReaderTapZonesDialog(
+            saved = state.settings.tapZones,
+            onDismiss = { screenState.activeSheet = null },
+            onSave = { viewModel.setTapZones(it); screenState.activeSheet = null }
+        )
         ReaderSheet.CONTENTS -> com.mozhi.reader.ui.components.NavigationSheet(
             onDismissRequest = { screenState.activeSheet = null },
             containerColor = palette.glassStrong,
             contentColor = palette.onBackground,
-            scrimColor = palette.scrim
+            scrimColor = palette.scrim.copy(alpha = if (wideWindow) 0.08f else palette.scrim.alpha),
+            expandedEdge = com.mozhi.reader.ui.components.NavigationSheetEdge.START
         ) {
             ReaderKnowledgeContentsSheet(
                 bookId = bookId,
@@ -1231,15 +1313,16 @@ fun ReaderScreen(
                 }
             )
         }
-        ReaderSheet.BOOKMARKS -> ModalBottomSheet(
+        ReaderSheet.BOOKMARKS -> com.mozhi.reader.ui.components.NavigationSheet(
             onDismissRequest = { screenState.activeSheet = null },
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false),
             containerColor = palette.glassStrong,
             contentColor = palette.onBackground,
-            scrimColor = palette.scrim
+            scrimColor = palette.scrim.copy(alpha = if (wideWindow) 0.08f else palette.scrim.alpha),
+            expandedEdge = com.mozhi.reader.ui.components.NavigationSheetEdge.START
         ) {
             BookmarksSheet(
                 bookmarks = state.bookmarks,
+                onDismiss = { screenState.activeSheet = null },
                 palette = palette,
                 onBookmarkClick = { bookmark ->
                     screenState.activeSheet = null
@@ -1248,16 +1331,9 @@ fun ReaderScreen(
                 onDeleteBookmark = viewModel::deleteBookmark
             )
         }
-        ReaderSheet.SETTINGS -> ModalBottomSheet(
-            onDismissRequest = { screenState.activeSheet = null },
-            // 无遮罩＝正文透出来的只该是面板「外面」那部分；面板本体要不透明，
-            // 否则 5% 的玻璃透明度会在深色纸上透出一层幽灵正文。
-            containerColor = palette.glassStrong.compositeOver(palette.background),
-            contentColor = palette.onBackground,
-            // 不加遮罩：调字号/行距时正文必须看得见，否则「改完什么样」要关掉面板才知道。
-            // 半高吸附让正文留在视野里，重排当场可见。
-            scrimColor = Color.Transparent,
-            sheetState = rememberModalBottomSheetState()
+        ReaderSheet.SETTINGS -> ReaderSettingsSheet(
+            palette = palette,
+            onDismiss = { screenState.activeSheet = null }
         ) {
             ReaderTypographySheet(
                 settings = bookThemeSettings,
@@ -1269,6 +1345,11 @@ fun ReaderScreen(
                     screenState.openTypographyCard()
                 }
             )
+        }
+        ReaderSheet.TITLE_STYLE -> ReaderTitleStyleSheet(readerSettings, palette,
+            { screenState.activeSheet = null }, typographyActions.layout)
+        ReaderSheet.SYNTAX -> ReaderSyntaxSheet(state.settings, palette, typographyActions.syntax) {
+            screenState.activeSheet = null
         }
         ReaderSheet.REIDENTIFY_CHAPTERS -> ModalBottomSheet(
             onDismissRequest = { screenState.activeSheet = null },
@@ -1308,7 +1389,8 @@ fun ReaderScreen(
                     viewModel.saveTextReplacementRule(rule.copy(enabled = enabled))
                 },
                 onRequestAi = { screenState.aiTextRuleDialogVisible = true },
-                onApply = viewModel::applyTextReplacementRules
+                onApply = viewModel::previewTextReplacementRules,
+                busy = state.cleanupBusy
             )
         }
         ReaderSheet.SEARCH -> {
@@ -1347,6 +1429,9 @@ fun ReaderScreen(
         null -> Unit
     }
 
+    state.cleanupPreview?.let { preview ->
+        TextCleanupPreviewDialog(preview, viewModel::dismissCleanupPreview, viewModel::applyTextReplacementRules)
+    }
     screenState.textRuleDraft?.let { rule ->
         TextReplacementRuleEditorDialog(
             initial = rule,
@@ -1495,7 +1580,7 @@ fun ReaderScreen(
             screenState.pendingFont = null
         },
         onConfirm = { font, name ->
-            viewModel.confirmCustomFont(font, name)
+            viewModel.confirmCustomFont(font, name, themeSlot)
             screenState.pendingFont = null
         }
     )

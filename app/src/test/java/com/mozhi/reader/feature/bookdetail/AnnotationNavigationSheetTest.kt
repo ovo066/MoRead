@@ -96,6 +96,16 @@ class AnnotationNavigationSheetTest {
         assertEquals(40, located?.startCharOffset)
     }
 
+    @Test @Config(qualifiers = "w1400dp-h960dp-mdpi")
+    fun tabletNotesStayAnchoredInTheirRealSidePanel() {
+        realParentStaysAtWindowBottomDuringBoundaryFlingsAndTabSwitches()
+    }
+
+    @Test @Config(qualifiers = "w900dp-h1200dp-mdpi")
+    fun tabletNotesRememberTheirIndependentTabPositions() {
+        independentTabAnchorsSurviveProgressRefreshAndReturn()
+    }
+
     private fun capture() = compose.runOnIdle {
         val root = requireNotNull(ShadowDialog.getLatestDialog().window).decorView
         val bitmap = Bitmap.createBitmap(root.width, root.height, Bitmap.Config.ARGB_8888)

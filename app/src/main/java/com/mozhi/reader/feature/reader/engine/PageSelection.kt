@@ -102,7 +102,7 @@ fun TextPage.selectionRects(start: TextPos, end: TextPos): List<SelectionRect> {
     val rects = ArrayList<SelectionRect>()
     for (lineIndex in from.lineIndex..to.lineIndex) {
         val line = lines.getOrNull(lineIndex) ?: continue
-        if (line.columns.isEmpty()) continue
+        if (line.columns.none { it.sourceLength > 0 }) continue
         val firstColumn = if (lineIndex == from.lineIndex) {
             from.columnIndex.coerceIn(line.columns.indices)
         } else {
@@ -152,10 +152,10 @@ fun TextPage.selectedText(start: TextPos, end: TextPos): String {
     val builder = StringBuilder()
     for (lineIndex in from.lineIndex..to.lineIndex) {
         val line = lines.getOrNull(lineIndex) ?: continue
-        if (line.columns.isEmpty()) continue
+        if (line.columns.none { it.sourceLength > 0 }) continue
         val first = if (lineIndex == from.lineIndex) from.columnIndex.coerceIn(line.columns.indices) else 0
         val last = if (lineIndex == to.lineIndex) to.columnIndex.coerceIn(line.columns.indices) else line.columns.lastIndex
-        for (column in first..last) builder.append(line.columns[column].charData)
+        for (column in first..last) if (line.columns[column].sourceLength > 0) builder.append(line.columns[column].charData)
         if (line.isParagraphEnd && lineIndex < to.lineIndex) builder.append('\n')
     }
     return builder.toString()

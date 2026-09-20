@@ -1075,7 +1075,8 @@ class ReaderCompanionViewModel @Inject constructor(
                         readingScope = readingScope,
                         conversationShape = ConversationShape(
                             multiBubble = multiBubble,
-                            voiceEnabled = voiceEnabled
+                            voiceEnabled = voiceEnabled,
+                            imageEnabled = autonomy.imageRepliesEnabled && tools.any { it.spec.name == "generate_image" }
                         )
                     )
                     tools to systemPrompt

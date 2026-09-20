@@ -2,6 +2,7 @@ package com.mozhi.reader.feature.reader
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -21,7 +22,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /**
- * Legado's `ReadView` + `HorizontalPageDelegate` touch state machine, verbatim in semantics:
+ * Legacy modes retain Legado's ReadView / HorizontalPageDelegate touch semantics:
  *
  * - The page-turn slop is a squared distance including the Y component.
  * - Once the direction is decided the start point is reset to the crossing point, so the offset
@@ -34,6 +35,8 @@ import kotlinx.coroutines.launch
  *   duration = 300ms × |remaining Δx| / width.
  * - Data advances only when the animation finishes or is aborted mid-commit ([Callbacks.fillPage]),
  *   which is why the final frame and the freshly filled page are pixel-identical.
+ * MODERN_CURL retains the down anchor and fits recent velocity. A new press finishes an
+ * accepted turn immediately; only a returning, cancelled curl remains available to grab.
  */
 @Stable
 class PageTurnDriver(
@@ -83,18 +86,23 @@ class PageTurnDriver(
     private var tapSuppressedByAbort = false
     private var settleJob: Job? = null
     private val settle = Animatable(0f)
+    private val modernVelocity = ModernCurlVelocity()
+    private var modernDragOffset = Offset.Zero
+    private var releaseVelocity = 0f
+    var pixelsPerDp = 1f
 
     /**
      * SIMULATION settles the absolute touch point to ±width (the curl geometry is absolute);
      * FLAT (cover/slide) settles the offset `touchX - startX` to ±width; INSTANT skips the settle
      * entirely (Legado's no-animation delegate).
      */
-    enum class Mode { SIMULATION, FLAT, INSTANT }
+    enum class Mode { SIMULATION, FLAT, MODERN_CURL, INSTANT }
 
     var mode: Mode = Mode.SIMULATION
     /** A spine hinge settles after one leaf width; cover/slide retain full-viewport travel. */
     var hingeLeafWidth: Float? = null
-    private val settleWidth: Float get() = hingeLeafWidth?.coerceAtLeast(1f) ?: viewWidth
+    private val settleWidth: Float get() = hingeLeafWidth?.coerceAtLeast(1f)
+        ?: if (mode == Mode.MODERN_CURL) viewWidth * 2f else viewWidth
 
     fun setViewport(width: Float, height: Float) {
         viewWidth = width.coerceAtLeast(1f)
@@ -105,7 +113,19 @@ class PageTurnDriver(
 
     // ---- gesture entry points ----
 
-    fun onDown(x: Float, y: Float) {
+    fun onDown(x: Float, y: Float, timeMillis: Long = android.os.SystemClock.uptimeMillis()) {
+        modernVelocity.reset(timeMillis, x)
+        releaseVelocity = 0f
+        if (mode == Mode.MODERN_CURL && isAnimating && isCancel && direction != null) {
+            settleJob?.cancel()
+            settleJob = null
+            modernDragOffset = Offset(touchX - x, touchY - y)
+            isMoved = true
+            isCancel = false
+            tapSuppressedByAbort = false
+            return
+        }
+        modernDragOffset = Offset.Zero
         // Legado clears isAbortAnim on every DOWN that doesn't abort anything; abortAnimation()
         // re-arms the flag only when it actually interrupted a live settle.
         tapSuppressedByAbort = false
@@ -121,12 +141,15 @@ class PageTurnDriver(
         downY = y
     }
 
-    fun onMove(x: Float, y: Float, touchSlop: Float) {
+    fun onMove(x: Float, y: Float, touchSlop: Float, timeMillis: Long = android.os.SystemClock.uptimeMillis()) {
         if (noNext) return
+        if (mode == Mode.MODERN_CURL) modernVelocity.add(timeMillis, x)
         if (!isMoved) {
             val deltaX = x - startX
             val deltaY = y - startY
-            if (deltaX * deltaX + deltaY * deltaY <= touchSlop * touchSlop) return
+            if (mode == Mode.MODERN_CURL) {
+                if (kotlin.math.abs(deltaX) <= touchSlop) return
+            } else if (deltaX * deltaX + deltaY * deltaY <= touchSlop * touchSlop) return
             isMoved = true
             val dir = if (deltaX > 0) PageTurnDirection.PREVIOUS else PageTurnDirection.NEXT
             if (!callbacks.hasPage(dir)) {
@@ -138,25 +161,35 @@ class PageTurnDriver(
             resolveCorner(dir)
             callbacks.onTurnStarted(dir)
             // Legado resets the start point to the slop-crossing point: zero-jump engagement.
-            startX = x
-            startY = y
+            if (mode != Mode.MODERN_CURL) {
+                startX = x
+                startY = y
+            }
             lastX = x
         }
         val dir = direction ?: return
         isCancel = if (dir == PageTurnDirection.NEXT) x > lastX else x < lastX
         lastX = x
         isRunning = true
-        touchX = x
-        touchY = antiJitterY(y, dir)
+        touchX = x + modernDragOffset.x
+        touchY = if (mode == Mode.MODERN_CURL) y + modernDragOffset.y else antiJitterY(y, dir)
     }
 
-    fun onUp(): UpResult {
+    fun onUp(timeMillis: Long = android.os.SystemClock.uptimeMillis()): UpResult {
         if (!isMoved) {
             val suppressed = tapSuppressedByAbort
             tapSuppressedByAbort = false
             return if (suppressed) UpResult.ABORT_TAP else UpResult.TAP
         }
-        if (direction != null) startSettle(FULL_PAGE_SETTLE_MS) else clearTurn()
+        if (direction != null) {
+            if (mode == Mode.MODERN_CURL) {
+                releaseVelocity = modernVelocity.velocity(timeMillis)
+                val sign = if (direction == PageTurnDirection.NEXT) -1f else 1f
+                val progress = ((touchX - startX) * sign / settleWidth).coerceIn(0f, 1f)
+                isCancel = !modernCurlShouldComplete(progress, releaseVelocity * sign, settleWidth, pixelsPerDp)
+            }
+            startSettle(FULL_PAGE_SETTLE_MS)
+        } else clearTurn()
         return UpResult.DRAG_END
     }
 
@@ -171,6 +204,8 @@ class PageTurnDriver(
             return
         }
         direction = dir
+        releaseVelocity = 0f
+        modernDragOffset = Offset.Zero
         isCancel = false
         isMoved = true
         // Legado starts programmatic turns from (0.9w, 0.9h) — or the top for an upper-corner curl.
@@ -231,19 +266,23 @@ class PageTurnDriver(
             return
         }
         val targetX = settleTargetX(dir, committing)
-        val targetY = if (cornerAtTop) 1f else viewHeight
-        val fromX = if (hingeLeafWidth != null && mode == Mode.FLAT) {
+        // Restore the grab height smoothly. Extending a steep drag ray off-screen makes a
+        // short flick rotate the fold wildly, then snap the remaining corner at completion.
+        val targetY = if (mode == Mode.MODERN_CURL) startY else if (cornerAtTop) 1f else viewHeight
+        val fromX = if (mode == Mode.MODERN_CURL || (hingeLeafWidth != null && mode == Mode.FLAT)) {
             clampHingeTouchX(dir, touchX, startX, settleWidth)
         } else touchX
         val fromY = touchY
         val distance = kotlin.math.abs(targetX - fromX)
-        val duration = (speedMillis * distance / settleWidth).roundToInt().coerceAtLeast(1)
+        val duration = if (mode == Mode.MODERN_CURL) modernCurlSettleDuration(distance, releaseVelocity, settleWidth)
+            else (speedMillis * distance / settleWidth).roundToInt().coerceAtLeast(1)
         if (committing) callbacks.onTurnCommitted()
         settleJob = scope.launch {
             settle.snapTo(0f)
             settle.animateTo(
                 targetValue = 1f,
-                animationSpec = tween(durationMillis = duration, easing = LinearEasing)
+                animationSpec = tween(durationMillis = duration,
+                    easing = if (mode == Mode.MODERN_CURL) MODERN_SETTLE_EASING else LinearEasing)
             ) {
                 touchX = fromX + (targetX - fromX) * value
                 touchY = fromY + (targetY - fromY) * value
@@ -267,7 +306,7 @@ class PageTurnDriver(
                 committing -> viewWidth
                 else -> -viewWidth
             }
-            Mode.FLAT -> flatPageTurnTargetX(dir, committing, startX, settleWidth)
+            Mode.FLAT, Mode.MODERN_CURL -> flatPageTurnTargetX(dir, committing, startX, settleWidth)
         }
 
     /** Legado `abortAnim`: a DOWN during the settle snaps to the end state immediately. */
@@ -300,6 +339,10 @@ class PageTurnDriver(
 
     private companion object {
         const val FULL_PAGE_SETTLE_MS = 300
+        val MODERN_SETTLE_EASING = Easing { fraction ->
+            val remaining = 1f - fraction
+            1f - remaining * remaining * remaining
+        }
     }
 }
 
@@ -353,14 +396,16 @@ fun Modifier.readerPageTouch(
             selecting = selection?.grabHandle(down.position, handleGrabRadius) == true
             if (!selecting) selection?.clear()
         }
-        driver.onDown(down.position.x, down.position.y)
-        var bookmarkGesture = if (!hadSelection && onAddBookmark != null) {
+        driver.pixelsPerDp = density
+        driver.onDown(down.position.x, down.position.y, down.uptimeMillis)
+        val resumedCurl = driver.mode == PageTurnDriver.Mode.MODERN_CURL && driver.isRunning
+        var bookmarkGesture = if (!hadSelection && !resumedCurl && onAddBookmark != null) {
             PullBookmarkGesture(slop, bookmarkDistance, minimumDurationMs = BOOKMARK_PULL_MIN_DURATION_MS)
         } else null
         val pointerId = down.id
         var upPosition = down.position
         var longPressFired = false
-        var slopCrossed = false
+        var slopCrossed = resumedCurl
         var lastUptime = down.uptimeMillis
         var released = false
         try {
@@ -422,7 +467,7 @@ fun Modifier.readerPageTouch(
                     if (bookmarkGesture?.ownsGesture == true) {
                         onBookmarkPull?.invoke(bookmarkGesture.progress)
                     } else {
-                        driver.onMove(change.position.x, change.position.y, slop)
+                        driver.onMove(change.position.x, change.position.y, slop, change.uptimeMillis)
                     }
                     change.consume()
                 }
@@ -430,7 +475,7 @@ fun Modifier.readerPageTouch(
             if (!released) return@awaitEachGesture
             if (selecting) {
                 selection?.end()
-                driver.onUp()
+                driver.onUp(lastUptime)
                 return@awaitEachGesture
             }
             if (bookmarkGesture?.ownsGesture == true) {
@@ -439,7 +484,7 @@ fun Modifier.readerPageTouch(
                 return@awaitEachGesture
             }
             val suppressTap = hadSelection || longPressFired
-            when (driver.onUp()) {
+            when (driver.onUp(lastUptime)) {
                 PageTurnDriver.UpResult.TAP -> if (!suppressTap) onTap(upPosition, false)
                 PageTurnDriver.UpResult.ABORT_TAP -> if (!suppressTap) onTap(upPosition, true)
                 else -> Unit

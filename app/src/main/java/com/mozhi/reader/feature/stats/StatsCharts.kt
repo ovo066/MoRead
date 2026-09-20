@@ -109,22 +109,7 @@ internal fun StatsCloud(title: String, subtitle: String, values: List<StatsCloud
     StatsCard(title, subtitle) {
         if (values.isEmpty()) StatsEmpty(empty)
         else {
-            val maximum = values.maxOf { it.durationMs }.coerceAtLeast(1L)
-            val colors = if (MaterialTheme.colorScheme.surface.luminance() < .5f) {
-                listOf(Color(0xFF93BFEA), Color(0xFFC3B0E8), Color(0xFFE4BA85), Color(0xFF91CEC0), Color(0xFFE8AABB))
-            } else {
-                listOf(Color(0xFF346BA8), Color(0xFF79609A), Color(0xFFA3612F), Color(0xFF327D70), Color(0xFFA95165))
-            }
-            FlowRow(Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterHorizontally),
-                verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                values.forEach { value ->
-                    val ratio = sqrt(value.durationMs.toFloat() / maximum)
-                    Text(value.label, fontSize = (13f + ratio * 14f).sp, fontWeight = if (ratio >= .6f) FontWeight.SemiBold else FontWeight.Normal,
-                        color = colors[Math.floorMod(value.label.hashCode(), colors.size)],
-                        modifier = Modifier.widthIn(max = 240.dp).semantics { contentDescription = "${value.label}，${value.bookCount}本书，阅读${formatDuration(value.durationMs)}" },
-                        maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            }
+            PackedStatsCloud(values)
         }
     }
 }

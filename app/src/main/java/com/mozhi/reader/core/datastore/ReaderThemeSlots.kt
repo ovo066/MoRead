@@ -1,12 +1,6 @@
 package com.mozhi.reader.core.datastore
 
-/**
- * 阅读纸色的日/夜两个槽位。
- *
- * 「日间方案 / 夜间方案」要名副其实：日、夜各记一套配色与背景图，跟随应用日夜模式自动换。
- * 只换外观（纸色、正文色、强调色、背景图与强度），字号行距边距这些排版两边共用——
- * 排版跟着模式跳变会让人以为设置丢了（Legado / 微信读书同样只切外观）。
- */
+/** 日夜主题各自保存配色、字体与排版；自动切换应用所选预设的整套设置。 */
 enum class ReaderThemeSlot {
     DAY,
     NIGHT
@@ -58,10 +52,11 @@ fun ReaderSettings.backgroundOpacityFor(slot: ReaderThemeSlot): Float = when (sl
 
 /**
  * 把指定槽的外观提到顶层字段，调色板与渲染只认这份结果——下游（readerPalette /
- * ReaderPageStyle）不必知道槽的存在。排版字段原样保留。
+ * ReaderPageStyle）不必知道槽的存在。自定义主题同时带入绑定的字体、正文排版与标题样式。
  */
-fun ReaderSettings.resolveThemeSlot(slot: ReaderThemeSlot): ReaderSettings =
-    if (slot == ReaderThemeSlot.DAY) {
+fun ReaderSettings.resolveThemeSlot(slot: ReaderThemeSlot): ReaderSettings {
+    val selected = customThemeFor(slot) ?: builtinThemeTypography[themeFor(slot).name]
+    val resolved = if (slot == ReaderThemeSlot.DAY) {
         this
     } else {
         copy(
@@ -72,3 +67,10 @@ fun ReaderSettings.resolveThemeSlot(slot: ReaderThemeSlot): ReaderSettings =
             backgroundImageOpacity = nightBackgroundImageOpacity
         )
     }
+    return (if (selected == null) resolved else resolved.applyThemeSnapshot(selected).copy(
+        // Background selection remains editable independently of the saved typography.
+        selectedBackgroundImageId = resolved.selectedBackgroundImageId,
+        backgroundImagePath = resolved.backgroundImagePath,
+        backgroundImageOpacity = resolved.backgroundImageOpacity
+    )).resolveTitleStylePreset()
+}

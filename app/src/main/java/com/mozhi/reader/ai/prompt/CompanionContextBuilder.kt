@@ -42,9 +42,11 @@ data class BookProgress(
 data class ConversationShape(
     val multiBubble: Boolean = false,
     /** 语音开关已开 **且** 当前角色绑定了音色，两者缺一都是 false。 */
-    val voiceEnabled: Boolean = false
+    val voiceEnabled: Boolean = false,
+    /** 自主生图已开且本轮实际提供 generate_image；显式生图请求不等于自主授权。 */
+    val imageEnabled: Boolean = false
 ) {
-    val active: Boolean get() = multiBubble || voiceEnabled
+    val active: Boolean get() = multiBubble || voiceEnabled || imageEnabled
 }
 
 /**
@@ -357,6 +359,11 @@ class CompanionContextBuilder @Inject constructor(
                 if (shape.voiceEnabled) {
                     append("\n- 想用语音说的那一行，在行首加 [语音]，它会合成为语音消息。")
                     append("整段回复最多两行这样标记，情绪浓、适合说出口的短句才用，分析和罗列一律用文字。")
+                }
+                if (shape.imageEnabled) {
+                    append("\n- 用户已开启自主生图：聊到有画面感的场景、人物或氛围时，可以主动调用 generate_image 配一张插图，无需等用户明确要求画图。")
+                    append("先依据当前场景或书籍工具确认原文，遵守本轮阅读范围；按对话需要决定，不必每轮生图，不要重复生成同一画面。")
+                    append("实际调用工具成功后再说图片已生成，不要只用文字假装发图。")
                 }
             }
         }

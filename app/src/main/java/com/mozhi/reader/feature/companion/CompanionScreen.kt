@@ -59,7 +59,12 @@ fun CompanionScreen(
     viewModel: CompanionViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    if (com.mozhi.reader.ui.rememberMoReadWindowWidth() == com.mozhi.reader.ui.MoReadWindowWidth.EXPANDED) {
+        TabletCompanionHome(state, contentPadding, viewModel::activate, onEditPersona, onCreatePersona, onOpenLibraryChat, onOpenStats)
+        return
+    }
 
+    val compact = com.mozhi.reader.ui.rememberMoReadWindowWidth() == com.mozhi.reader.ui.MoReadWindowWidth.COMPACT
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -67,7 +72,7 @@ fun CompanionScreen(
     ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 20.dp, top = 18.dp, end = 20.dp, bottom = 172.dp),
+            contentPadding = PaddingValues(start = 20.dp, top = 18.dp, end = 20.dp, bottom = if (compact) 172.dp else 104.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             item {
@@ -118,7 +123,7 @@ fun CompanionScreen(
             onClick = onOpenLibraryChat,
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = 20.dp, bottom = 96.dp)
+                .padding(end = 20.dp, bottom = if (compact) 96.dp else 24.dp)
                 .semantics { contentDescription = "书库伴读" },
             shape = RoundedCornerShape(22.dp),
             containerColor = MaterialTheme.colorScheme.primary,

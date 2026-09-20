@@ -214,6 +214,8 @@ internal fun ReaderSettings.toCustomReaderTheme(
         titleScale = titleScale,
         titleTopSpacing = titleTopSpacing,
         titleBottomSpacing = titleBottomSpacing,
+        titleStyle = titleStyle,
+        publisherStyleMode = publisherStyleMode,
         headerMarginTop = headerMarginTop,
         footerMarginBottom = footerMarginBottom,
         textJustification = textJustification,
@@ -244,6 +246,7 @@ internal fun CustomThemeEditorDialog(
     onDelete: (() -> Unit)?
 ) {
     var name by remember { mutableStateOf(initial.name) }
+    var typography by remember { mutableStateOf(initial) }
     var background by remember { mutableStateOf(Color(initial.backgroundArgb)) }
     var text by remember { mutableStateOf(Color(initial.textArgb)) }
     var accent by remember { mutableStateOf(Color(initial.accentArgb)) }
@@ -308,6 +311,15 @@ internal fun CustomThemeEditorDialog(
                     )
                 }
 
+                Text("主题绑定字体与排版，切换日夜或本书主题时一起应用。", style = MaterialTheme.typography.bodySmall)
+                TextButton(onClick = {
+                    typography = settings.toCustomReaderTheme(initial.id, initial.name, initial.backgroundArgb,
+                        initial.textArgb, initial.accentArgb, isDark, ReaderThemeSlot.DAY)
+                    selectedFont = settings.font
+                    selectedCustomFontId = settings.selectedCustomFontId
+                }) { Text("用当前排版更新主题（含标题样式）") }
+                Text("字号 ${typography.fontScale}× · 行距 ${typography.lineHeight}× · 段距 ${typography.paragraphSpacingEm}em",
+                    style = MaterialTheme.typography.labelSmall)
                 Text("字体", style = MaterialTheme.typography.labelMedium)
                 LazyRow(
                     modifier = Modifier.fillMaxWidth(),
@@ -446,7 +458,7 @@ internal fun CustomThemeEditorDialog(
             TextButton(
                 onClick = {
                     onSave(
-                        initial.copy(
+                        typography.copy(
                             name = name.trim().ifBlank { "自定义主题" },
                             backgroundArgb = background.toArgb(),
                             textArgb = text.toArgb(),

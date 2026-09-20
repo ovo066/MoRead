@@ -16,6 +16,9 @@ data class AnnotationVisibleCounts(val total: Int, val currentChapter: Int)
 
 @Dao
 interface AnnotationDao {
+    @Query("SELECT * FROM annotations ORDER BY createdAt DESC, id DESC")
+    fun observeAll(): Flow<List<AnnotationEntity>>
+
     @Insert
     suspend fun insert(annotation: AnnotationEntity): Long
 

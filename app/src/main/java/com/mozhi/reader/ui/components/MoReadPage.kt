@@ -32,6 +32,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -76,6 +77,7 @@ fun MoReadSecondaryPage(
     listState: LazyListState = rememberLazyListState(),
     actions: @Composable RowScope.() -> Unit = {},
     bottomBar: @Composable (() -> Unit)? = null,
+    applyTopInset: Boolean = true,
     content: LazyListScope.() -> Unit
 ) {
     val collapsedAlpha by remember(listState) {
@@ -84,26 +86,31 @@ fun MoReadSecondaryPage(
         }
     }
 
+    val settingsPane = com.mozhi.reader.ui.LocalSettingsPane.current
+    val inDialog = androidx.compose.ui.platform.LocalView.current.parent is androidx.compose.ui.window.DialogWindowProvider
+    val detailRoot = com.mozhi.reader.ui.LocalSettingsDetailRoot.current && !inDialog
     MoReadBackdrop(modifier = modifier) {
         Box(Modifier.fillMaxSize()) {
             Column(
                 Modifier.align(Alignment.TopCenter)
-                    .widthIn(max = MoReadLayoutPolicy.FormMaxWidthDp.dp)
+                    .widthIn(max = if (settingsPane) 920.dp else MoReadLayoutPolicy.FormMaxWidthDp.dp)
                     .fillMaxSize()
             ) {
                 MoReadTopBar(
                     title = title,
                     titleAlpha = collapsedAlpha,
                     onBack = onBack,
-                    actions = actions
+                    actions = actions,
+                    applyTopInset = applyTopInset,
+                    showBack = !detailRoot
                 )
                 Box(Modifier.fillMaxWidth().weight(1f)) {
                     LazyColumn(
                         state = listState,
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.fillMaxSize().testTag("secondary-page-list"),
                         contentPadding = PaddingValues(
-                            start = MoReadTokens.PageGutter,
-                            end = MoReadTokens.PageGutter,
+                            start = if (settingsPane) 40.dp else MoReadTokens.PageGutter,
+                            end = if (settingsPane) 40.dp else MoReadTokens.PageGutter,
                             top = 4.dp,
                             bottom = if (bottomBar == null) 32.dp else 12.dp
                         ),
@@ -178,15 +185,17 @@ fun MoReadRootPage(
     }
 }
 
-/** 顶栏：状态栏内边距由 [MoReadBackdrop] 之外的 safeTopPadding 语义统一处理。 */
+/** 顶栏在 [MoReadBackdrop] 内避让状态栏，背景持续延伸至窗口边缘。 */
 @Composable
 private fun MoReadTopBar(
     title: String,
     titleAlpha: Float,
     onBack: () -> Unit,
-    actions: @Composable RowScope.() -> Unit
+    actions: @Composable RowScope.() -> Unit,
+    applyTopInset: Boolean,
+    showBack: Boolean = true
 ) {
-    Column(Modifier.safeTopPadding()) {
+    Column(if (applyTopInset) Modifier.safeTopPadding() else Modifier) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -194,7 +203,7 @@ private fun MoReadTopBar(
                 .padding(horizontal = MoReadSpacingSmall),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = onBack, modifier = Modifier.size(moReadMetrics().touchTarget)) {
+            if (showBack) IconButton(onClick = onBack, modifier = Modifier.size(moReadMetrics().touchTarget)) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
                     contentDescription = "返回"

@@ -18,7 +18,10 @@ class AndroidTextMeasure(
     contentSizePx: Float,
     titleSizePx: Float,
     typeface: Typeface,
-    letterSpacingEm: Float = 0f
+    letterSpacingEm: Float = 0f,
+    titleTypeface: Typeface? = null,
+    titleBold: Boolean = true,
+    private val publisherTitleSizePx: Float = titleSizePx
 ) : TextMeasure {
 
     private val styledPaints = HashMap<MeasuredTextStyle, TextPaint>()
@@ -32,13 +35,17 @@ class AndroidTextMeasure(
 
     val titlePaint = TextPaint(TextPaint.ANTI_ALIAS_FLAG).apply {
         textSize = titleSizePx
-        this.typeface = Typeface.create(typeface, Typeface.BOLD)
+        this.typeface = Typeface.create(titleTypeface ?: typeface, if (titleBold) Typeface.BOLD else Typeface.NORMAL)
         letterSpacing = letterSpacingEm
     }
 
     private val contentMetrics = contentPaint.lineMetrics()
     private val titleMetrics = titlePaint.lineMetrics()
     private val indentWidth = StaticLayout.getDesiredWidth(INDENT_CHAR, contentPaint)
+
+    fun forPublisherHeadings(): AndroidTextMeasure = AndroidTextMeasure(
+        contentPaint.textSize, publisherTitleSizePx, contentPaint.typeface, contentPaint.letterSpacing
+    )
 
     override fun metrics(isTitle: Boolean): LineMetrics =
         if (isTitle) titleMetrics else contentMetrics

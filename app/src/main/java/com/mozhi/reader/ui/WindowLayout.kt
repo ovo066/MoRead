@@ -20,6 +20,7 @@ object MoReadLayoutPolicy {
     const val FormMaxWidthDp = 720f
     const val SheetMaxWidthDp = 640f
     const val NavigationRailWidthDp = 96f
+    const val TabletSidebarWidthDp = 224f
     const val CompanionPaneWidthDp = 400f
     const val MinReaderPaneWidthDp = 720f
 
@@ -37,7 +38,7 @@ object MoReadLayoutPolicy {
         allowsCompanionPane(windowWidthDp) && readerPaneWidthDp >= MinReaderPaneWidthDp
 
     fun rootBottomPaddingDp(width: MoReadWindowWidth): Float =
-        if (width == MoReadWindowWidth.EXPANDED) 32f else 124f
+        if (width != MoReadWindowWidth.COMPACT) 32f else 124f
 }
 
 /** Supplied once by the app root, before rail or reader side-pane space is removed. */

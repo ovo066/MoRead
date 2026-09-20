@@ -3,6 +3,8 @@ package com.mozhi.reader.feature.reader
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import com.mozhi.reader.ai.media.AiMediaGenerationService
+import com.mozhi.reader.ai.client.*
+import com.mozhi.reader.core.dictionary.*
 import com.mozhi.reader.core.database.dao.AnnotationDao
 import com.mozhi.reader.core.database.dao.BookDao
 import com.mozhi.reader.core.database.entity.AnnotationEntity
@@ -54,6 +56,50 @@ import org.junit.Test
 class ReaderViewModelPersistenceTest {
     private val source = "網際網路與程式碼。" + "甲".repeat(40) + "主機板。後文。"
     private val regionalSource = "網際網路".repeat(12) + "主機板" + "資料庫".repeat(12)
+
+    @Test
+    fun epubNotePreviewContainsNoteTextAfterNumberAndPreservesJumpAnchor() {
+        val parsed = com.mozhi.reader.feature.importer.EpubLayoutDocumentParser().parseWithText(
+            """<html><body><p>Some text.</p><p><a id="note1">[1]</a> A complete explanation.</p><p id="note2">[2] Another note.</p></body></html>""".toByteArray(),
+            0, "chapter.xhtml", emptyMap())
+        val layout = com.mozhi.reader.core.library.EpubLayoutChapterBundle(parsed.document, emptyMap(), emptyMap(), dom = parsed.dom)
+        withReader(parsed.text, layout = layout) { reader ->
+            val preview = reader.viewModel.previewEpubLink(com.mozhi.reader.feature.reader.engine.ReaderPageLink(0, "#note1", "[1]"))!!
+            assertEquals("[1] A complete explanation.", preview.content)
+            assertEquals(parsed.text.indexOf("[1]"), preview.targetCharOffset)
+            assertEquals(0, preview.targetChapterIndex)
+        }
+    }
+
+    @Test
+    fun retranslationReplacesOnlySelectedParagraphAndDeletionDoesNotCallAi() {
+        val body = "A reader opens a book.\nAnother reader leaves."
+        val initial = englishParagraphs(body).map { ParagraphTranslation(it.start, it.end, it.key, "旧译文${it.start}") }
+        withReader(body, translations = initial) { reader ->
+            coEvery { reader.translationClient.chat(any(), any()) } returns "新的译文"
+            val target = reader.viewModel.paragraphTranslationAt(0, 3)!!
+            reader.viewModel.retranslateParagraph(target)
+            reader.viewModel.uiState.first { !it.translation.busy && it.translation.message == "译文已缓存，可随时隐藏或显示" }
+            assertEquals(setOf(initial.first().copy(chinese = "新的译文"), initial.last()), reader.cachedTranslations.toSet())
+            val callsBeforeDelete = reader.translationCalls
+            reader.viewModel.deleteParagraphTranslation(reader.viewModel.paragraphTranslationAt(0, 3)!!)
+            reader.viewModel.uiState.first { !it.translation.busy && it.translation.message == "已删除本段译文" }
+            assertEquals(listOf(initial.last()), reader.cachedTranslations)
+            assertEquals(callsBeforeDelete, reader.translationCalls)
+        }
+    }
+
+    @Test
+    fun failedRetranslationPreservesThePreviousCachedResult() {
+        val body = "A reader opens a book."
+        val initial = englishParagraphs(body).map { ParagraphTranslation(it.start, it.end, it.key, "原有译文") }
+        withReader(body, translations = initial) { reader ->
+            coEvery { reader.translationClient.chat(any(), any()) } throws IllegalStateException("网络不可用")
+            reader.viewModel.retranslateParagraph(reader.viewModel.paragraphTranslationAt(0, 3)!!)
+            reader.viewModel.uiState.first { !it.translation.busy && it.translation.message == "网络不可用" }
+            assertEquals(initial, reader.cachedTranslations)
+        }
+    }
 
     @Test
     fun regionalSelectionPersistsTheEntireOriginalPhrase() = withReader(regionalSource) { reader ->
@@ -309,9 +355,12 @@ class ReaderViewModelPersistenceTest {
         }
     }
 
-    private fun withReader(body: String, pageMode: PageMode = PageMode.PAGINATED, test: suspend (ReaderFixture) -> Unit) = runTest {
+    private fun withReader(body: String, pageMode: PageMode = PageMode.PAGINATED,
+        layout: com.mozhi.reader.core.library.EpubLayoutChapterBundle? = null,
+        translations: List<ParagraphTranslation> = emptyList(),
+        test: suspend (ReaderFixture) -> Unit) = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
-        val reader = ReaderFixture(body, pageMode)
+        val reader = ReaderFixture(body, pageMode, layout, translations)
         try {
             reader.viewModel.uiState.first { it.isContentReady }
             while (reader.progress.tryReceive().isSuccess) { /* Discard progress from opening the fixture. */ }
@@ -326,7 +375,12 @@ class ReaderViewModelPersistenceTest {
     private data class SavedProgress(val locator: String, val offset: Int)
 
     /** Real ViewModel/controller/presenter/repositories; only storage and unrelated services are doubled. */
-    private class ReaderFixture(body: String, pageMode: PageMode = PageMode.PAGINATED) {
+    private class ReaderFixture(body: String, pageMode: PageMode = PageMode.PAGINATED,
+        layout: com.mozhi.reader.core.library.EpubLayoutChapterBundle? = null,
+        translations: List<ParagraphTranslation> = emptyList()) {
+        var cachedTranslations = translations
+        var translationCalls = 0
+        val translationClient = mockk<ChatApiClient>()
         val annotations = Channel<AnnotationEntity>(Channel.UNLIMITED)
         val bookmarks = Channel<BookmarkEntity>(Channel.UNLIMITED)
         val progress = Channel<SavedProgress>(Channel.UNLIMITED)
@@ -383,7 +437,7 @@ class ReaderViewModelPersistenceTest {
                 coEvery { read(1) } returns emptyList()
             }
             val layoutStore = mockk<BookLayoutStore> {
-                coEvery { readChapter(1, 0, any()) } returns null
+                coEvery { readChapter(1, 0, any()) } returns layout
             }
             val settings = ReaderSettings(pageMode = pageMode, bookChineseConversions = mapOf(1L to ChineseConversionMode.TW2SP))
             val settingsRepository = mockk<ReaderSettingsRepository> {
@@ -394,6 +448,7 @@ class ReaderViewModelPersistenceTest {
                 every { lastAnnotationStyle } returns flowOf("highlight")
                 every { lastAnnotationColor } returns flowOf("")
                 coEvery { setBookChineseConversionMode(1, any()) } returns Unit
+                coEvery { setBilingual(1, any()) } returns Unit
             }
             val libraryRepository = LibraryRepository(
                 mockk(), mockk(), bookDao, textStore, mockk(), mediaStore, layoutStore, mockk()
@@ -405,7 +460,25 @@ class ReaderViewModelPersistenceTest {
                 SavedStateHandle(mapOf("bookId" to 1L)), libraryRepository,
                 AnnotationRepository(annotationDao), illustrations, mediaStore, layoutStore,
                 settingsRepository, mockk(), mockk(), mockk(), mockk(), mockk(),
-                annotationScheduler, mockk(), ChineseChapterPresenter(converter), converter
+                annotationScheduler, mockk(), ChineseChapterPresenter(converter), converter,
+                mockk {
+                    coEvery { load(any(), any(), any()) } answers { cachedTranslations }
+                    coEvery { save(any(), any(), any(), any()) } answers {
+                        val record = arg<ParagraphTranslation>(3)
+                        cachedTranslations = cachedTranslations.filterNot { it.start == record.start } + record
+                        cachedTranslations
+                    }
+                    coEvery { delete(any(), any(), any(), any()) } answers {
+                        val record = arg<ParagraphTranslation>(3)
+                        cachedTranslations = cachedTranslations.filterNot { it.start == record.start }
+                        cachedTranslations
+                    }
+                }, mockk {
+                    coEvery { forRole(com.mozhi.reader.core.database.entity.ModelRole.TRANSLATION) } answers {
+                        translationCalls++
+                        ResolvedChatClient(translationClient, ChatOptions(), mockk(), "translation")
+                    }
+                }
             )
             viewModel.contentController.updateEnvironment(
                 TypesetSpec(100f, 200f, 25f, 34f, 9f, 9f, 10f, 25f),

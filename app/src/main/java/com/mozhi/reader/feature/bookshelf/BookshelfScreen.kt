@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -45,7 +46,7 @@ import androidx.compose.foundation.lazy.items as listItems
 import androidx.compose.foundation.shape.CircleShape
 import com.mozhi.reader.ui.theme.moReadMetrics
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
+import com.mozhi.reader.ui.components.MoReadSearchCapsule
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.Add
@@ -84,6 +85,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -105,6 +107,7 @@ import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
@@ -133,6 +136,7 @@ import com.mozhi.reader.core.library.BookReadSpan
 import com.mozhi.reader.core.library.readFraction
 import com.mozhi.reader.core.library.readPercent
 import com.mozhi.reader.ui.MoReadLayoutPolicy
+import com.mozhi.reader.ui.MoReadWindowWidth
 import com.mozhi.reader.ui.rememberMoReadWindowWidth
 import com.mozhi.reader.ui.components.FrostedSurface
 import com.mozhi.reader.ui.components.MoReadMenuDivider
@@ -173,6 +177,7 @@ fun BookshelfScreen(
     viewModel: BookshelfViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val tablet = rememberMoReadWindowWidth() != MoReadWindowWidth.COMPACT
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var deleteTarget by remember { mutableStateOf<BookEntity?>(null) }
@@ -349,14 +354,12 @@ fun BookshelfScreen(
         Box(
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .widthIn(max = MoReadLayoutPolicy.LibraryMaxWidthDp.dp)
+                .widthIn(max = if (tablet) 1600.dp else MoReadLayoutPolicy.LibraryMaxWidthDp.dp)
                 .fillMaxSize()
                 .blur(blurRadius, BlurredEdgeTreatment.Unbounded)
                 .padding(contentPadding)
         ) {
-            if (state.totalBooks == 0) {
-                EmptyBookshelfFeed(onImport = requestImport)
-            } else {
+            run {
                 val onLongPress: (BookEntity, Rect) -> Unit = { book, bounds ->
                     if (state.isSelectionMode) viewModel.toggleSelection(book.id)
                     else longPressTarget = BookLongPressTarget(book, bounds)
@@ -696,22 +699,7 @@ private fun ImportMethodRow(
 }
 
 @Composable
-private fun EmptyBookshelfFeed(onImport: () -> Unit) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(
-            start = 20.dp, top = 18.dp, end = 20.dp,
-            bottom = MoReadLayoutPolicy.rootBottomPaddingDp(rememberMoReadWindowWidth()).dp
-        ),
-        verticalArrangement = Arrangement.spacedBy(24.dp)
-    ) {
-        item { GreetingHeader() }
-        item { EmptyBookshelf(onImport = onImport) }
-    }
-}
-
-@Composable
-private fun BookGrid(
+internal fun BookGrid(
     entries: List<ShelfEntry>,
     bookCount: Int,
     state: BookshelfUiState,
@@ -736,6 +724,10 @@ private fun BookGrid(
     onImport: () -> Unit
 ) {
     val gridState = rememberLazyGridState()
+    val tablet = rememberMoReadWindowWidth() != MoReadWindowWidth.COMPACT
+    val searchFloating by remember(tablet, searchQuery.isBlank()) {
+        derivedStateOf { gridState.firstVisibleItemIndex >= if (tablet && searchQuery.isBlank()) 2 else 1 }
+    }
     ShelfAutoScrollEffect(collectionDragState, gridState) {
         gridState.requestScrollToItem(
             gridState.firstVisibleItemIndex,
@@ -743,25 +735,43 @@ private fun BookGrid(
         )
     }
     LazyVerticalGrid(
-        columns = ShelfGridCells,
+        columns = if (tablet) TabletShelfGridCells else ShelfGridCells,
         state = gridState,
         modifier = Modifier
             .fillMaxSize()
-            .onGloballyPositioned { collectionDragState.setViewport(it.boundsInRoot()) },
+            .background(if (tablet) MaterialTheme.colorScheme.background else Color.Transparent)
+            .onGloballyPositioned { collectionDragState.setViewport(it.boundsInRoot()) }.testTag("shelf-scroll"),
         contentPadding = PaddingValues(
-            start = 20.dp, top = 18.dp, end = 20.dp,
+            start = if (tablet) 48.dp else 20.dp, top = if (tablet) 30.dp else 18.dp, end = if (tablet) 48.dp else 20.dp,
             bottom = MoReadLayoutPolicy.rootBottomPaddingDp(rememberMoReadWindowWidth()).dp
         ),
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp)
+        horizontalArrangement = Arrangement.spacedBy(if (tablet) 24.dp else 14.dp),
+        verticalArrangement = Arrangement.spacedBy(if (tablet) 26.dp else 20.dp)
     ) {
+        item(key = "shelf-top", span = { GridItemSpan(maxLineSpan) }) {
+            Row(Modifier.fillMaxWidth().heightIn(min = 64.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f)) { if (tablet) TabletLibraryTitle(state) else GreetingHeader() }
+                ShelfHeaderActions(state, onSetLayout, onSetReadStateFilter, onSetTagMatchMode,
+                    onSetReadingOrderAffectsShelf, onClearFilter, onStartSelection, onOpenShelfTags, onImport)
+            }
+        }
+        if (tablet && searchQuery.isBlank()) {
+            item(key = "shelf-continue", span = { GridItemSpan(maxLineSpan) }) {
+                TabletContinueReading(state, onOpenBook)
+            }
+        }
+        stickyHeader(key = "shelf-search-header") {
+            // Only the capsule is painted: books scroll behind its rounded edges and shadow.
+            if (tablet) TabletLibraryToolbar(state, bookCount, searchQuery, onSearchChange, onClearFilter, floating = searchFloating)
+            else Box(Modifier.fillMaxWidth().padding(vertical = 6.dp)) { MoReadSearchCapsule(searchQuery, onSearchChange, searchFloating, testTagPrefix = "shelf") }
+        }
+        if (!tablet) {
         item(span = { GridItemSpan(maxLineSpan) }) {
             BookshelfHeader(
                 recentBook = state.recentBook,
                 recentChapterTitle = state.recentChapterTitle,
                 recentReadSpan = state.recentBook?.let { state.readSpans[it.id] },
                 searchQuery = searchQuery,
-                onSearchChange = onSearchChange,
                 onOpenBook = onOpenBook
             )
         }
@@ -770,22 +780,15 @@ private fun BookGrid(
                 bookCount = bookCount,
                 searching = searchQuery.isNotBlank(),
                 state = state,
-                onSetLayout = onSetLayout,
-                onSetReadStateFilter = onSetReadStateFilter,
                 onSelectGroup = onSelectGroup,
                 onToggleTagFilter = onToggleTagFilter,
-                onSetTagMatchMode = onSetTagMatchMode,
-                onSetReadingOrderAffectsShelf = onSetReadingOrderAffectsShelf,
-                onClearFilter = onClearFilter,
-                onStartSelection = onStartSelection,
                 onOpenShelfGroups = onOpenShelfGroups,
-                onOpenShelfTags = onOpenShelfTags,
-                onImport = onImport
             )
+        }
         }
         if (entries.isEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }) {
-                NoShelfResults(query = searchQuery, filter = state.filter)
+                if (state.totalBooks == 0) EmptyBookshelf(onImport) else NoShelfResults(query = searchQuery, filter = state.filter)
             }
         }
         gridItems(entries, key = ShelfEntry::key) { entry ->
@@ -814,7 +817,7 @@ private fun BookGrid(
 }
 
 @Composable
-private fun BookList(
+internal fun BookList(
     entries: List<ShelfEntry>,
     bookCount: Int,
     state: BookshelfUiState,
@@ -839,6 +842,10 @@ private fun BookList(
     onImport: () -> Unit
 ) {
     val listState = rememberLazyListState()
+    val tablet = rememberMoReadWindowWidth() != MoReadWindowWidth.COMPACT
+    val searchFloating by remember(tablet, searchQuery.isBlank()) {
+        derivedStateOf { listState.firstVisibleItemIndex >= if (tablet && searchQuery.isBlank()) 2 else 1 }
+    }
     ShelfAutoScrollEffect(collectionDragState, listState) {
         listState.requestScrollToItem(
             listState.firstVisibleItemIndex,
@@ -849,20 +856,35 @@ private fun BookList(
         state = listState,
         modifier = Modifier
             .fillMaxSize()
-            .onGloballyPositioned { collectionDragState.setViewport(it.boundsInRoot()) },
+            .background(if (tablet) MaterialTheme.colorScheme.background else Color.Transparent)
+            .onGloballyPositioned { collectionDragState.setViewport(it.boundsInRoot()) }.testTag("shelf-scroll"),
         contentPadding = PaddingValues(
-            start = 20.dp, top = 18.dp, end = 20.dp,
+            start = if (tablet) 48.dp else 20.dp, top = if (tablet) 30.dp else 18.dp, end = if (tablet) 48.dp else 20.dp,
             bottom = MoReadLayoutPolicy.rootBottomPaddingDp(rememberMoReadWindowWidth()).dp
         ),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
+        item(key = "shelf-top") {
+            Row(Modifier.fillMaxWidth().heightIn(min = 64.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f)) { if (tablet) TabletLibraryTitle(state) else GreetingHeader() }
+                ShelfHeaderActions(state, onSetLayout, onSetReadStateFilter, onSetTagMatchMode,
+                    onSetReadingOrderAffectsShelf, onClearFilter, onStartSelection, onOpenShelfTags, onImport)
+            }
+        }
+        if (tablet && searchQuery.isBlank()) {
+            item(key = "shelf-continue") { TabletContinueReading(state, onOpenBook) }
+        }
+        stickyHeader(key = "shelf-search-header") {
+            if (tablet) TabletLibraryToolbar(state, bookCount, searchQuery, onSearchChange, onClearFilter, floating = searchFloating)
+            else Box(Modifier.fillMaxWidth().padding(vertical = 6.dp)) { MoReadSearchCapsule(searchQuery, onSearchChange, searchFloating, testTagPrefix = "shelf") }
+        }
+        if (!tablet) {
         item {
             BookshelfHeader(
                 recentBook = state.recentBook,
                 recentChapterTitle = state.recentChapterTitle,
                 recentReadSpan = state.recentBook?.let { state.readSpans[it.id] },
                 searchQuery = searchQuery,
-                onSearchChange = onSearchChange,
                 onOpenBook = onOpenBook
             )
         }
@@ -872,21 +894,14 @@ private fun BookList(
                 bookCount = bookCount,
                 searching = searchQuery.isNotBlank(),
                 state = state,
-                onSetLayout = onSetLayout,
-                onSetReadStateFilter = onSetReadStateFilter,
                 onSelectGroup = onSelectGroup,
                 onToggleTagFilter = onToggleTagFilter,
-                onSetTagMatchMode = onSetTagMatchMode,
-                onSetReadingOrderAffectsShelf = onSetReadingOrderAffectsShelf,
-                onClearFilter = onClearFilter,
-                onStartSelection = onStartSelection,
                 onOpenShelfGroups = onOpenShelfGroups,
-                onOpenShelfTags = onOpenShelfTags,
-                onImport = onImport
             )
         }
+        }
         if (entries.isEmpty()) {
-            item { NoShelfResults(query = searchQuery, filter = state.filter) }
+            item { if (state.totalBooks == 0) EmptyBookshelf(onImport) else NoShelfResults(query = searchQuery, filter = state.filter) }
         }
         listItems(entries, key = ShelfEntry::key) { entry ->
             when (entry) {
@@ -920,12 +935,9 @@ private fun BookshelfHeader(
     recentChapterTitle: String,
     recentReadSpan: BookReadSpan?,
     searchQuery: String,
-    onSearchChange: (String) -> Unit,
     onOpenBook: (Long) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
-        GreetingHeader()
-        SearchCapsule(query = searchQuery, onQueryChange = onSearchChange)
         // 搜索时让位给结果：此刻用户找的是别的书，不是手头这本。
         if (searchQuery.isBlank()) {
             ReadingNowCard(
@@ -964,54 +976,6 @@ private fun GreetingHeader() {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 4.dp)
         )
-    }
-}
-
-@Composable
-private fun SearchCapsule(query: String, onQueryChange: (String) -> Unit) {
-    val textStyle = MaterialTheme.typography.bodyMedium
-    FrostedSurface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = MoReadTokens.CapsuleShape,
-        shadowElevation = 3.dp
-    ) {
-        Row(
-            modifier = Modifier
-                .height(46.dp)
-                .padding(horizontal = 18.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = Icons.Outlined.Search,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp)
-            )
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(start = 10.dp),
-                contentAlignment = Alignment.CenterStart
-            ) {
-                if (query.isEmpty()) {
-                    Text(
-                        text = "搜索书名、作者或想法",
-                        style = textStyle,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                    )
-                }
-                BasicTextField(
-                    value = query,
-                    onValueChange = onQueryChange,
-                    singleLine = true,
-                    textStyle = textStyle.copy(color = MaterialTheme.colorScheme.onSurface),
-                    cursorBrush = androidx.compose.ui.graphics.SolidColor(
-                        MaterialTheme.colorScheme.primary
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-        }
     }
 }
 
@@ -1186,70 +1150,22 @@ private fun ReadingNowCard(
 }
 
 @Composable
-private fun LibraryToolbar(
-    bookCount: Int,
-    searching: Boolean,
+private fun ShelfHeaderActions(
     state: BookshelfUiState,
     onSetLayout: (ShelfLayout) -> Unit,
     onSetReadStateFilter: (BookReadState?) -> Unit,
-    onSelectGroup: (Long?, Boolean) -> Unit,
-    onToggleTagFilter: (Long) -> Unit,
     onSetTagMatchMode: (TagMatchMode) -> Unit,
     onSetReadingOrderAffectsShelf: (Boolean) -> Unit,
     onClearFilter: () -> Unit,
     onStartSelection: () -> Unit,
-    onOpenShelfGroups: () -> Unit,
     onOpenShelfTags: () -> Unit,
     onImport: () -> Unit
 ) {
     var viewMenuExpanded by remember { mutableStateOf(false) }
-    var groupMenuExpanded by remember { mutableStateOf(false) }
     var availableMenuHeight by remember { mutableStateOf(SHELF_MENU_MAX_HEIGHT) }
     val density = LocalDensity.current
     val localView = LocalView.current
     val filter = state.filter
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box {
-                Column(modifier = Modifier.clickable { groupMenuExpanded = true }) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(state.selectedGroupName, style = MaterialTheme.typography.headlineSmall)
-                        Icon(Icons.Outlined.ExpandMore, contentDescription = "选择分组")
-                    }
-                    Text(
-                        text = buildString {
-                            if (searching) append("找到 $bookCount 本") else append("$bookCount 本")
-                            filter.readState?.let { append(" · ").append(it.label()) }
-                            if (!searching && !filter.isActive) {
-                                append(
-                                    if (state.readingOrderAffectsShelf) " · 阅读后前移"
-                                    else " · 手动排序"
-                                )
-                            }
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 2.dp)
-                    )
-                }
-                ShelfGroupDropdown(
-                    expanded = groupMenuExpanded,
-                    onDismiss = { groupMenuExpanded = false },
-                    groups = state.groups,
-                    groupCounts = state.groupCounts,
-                    selectedGroupId = filter.groupId,
-                    ungroupedOnly = filter.ungroupedOnly,
-                    onSelect = onSelectGroup,
-                    onCreate = { groupMenuExpanded = false; onOpenShelfGroups() },
-                    onManage = { groupMenuExpanded = false; onOpenShelfGroups() }
-                )
-            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Box(
                 modifier = Modifier.onGloballyPositioned { coordinates ->
@@ -1318,6 +1234,61 @@ private fun LibraryToolbar(
                 }
             }
         }
+}
+
+@Composable
+private fun LibraryToolbar(
+    bookCount: Int,
+    searching: Boolean,
+    state: BookshelfUiState,
+    onSelectGroup: (Long?, Boolean) -> Unit,
+    onToggleTagFilter: (Long) -> Unit,
+    onOpenShelfGroups: () -> Unit,
+) {
+    var groupMenuExpanded by remember { mutableStateOf(false) }
+    val filter = state.filter
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box {
+                Column(modifier = Modifier.clickable { groupMenuExpanded = true }) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(state.selectedGroupName, style = MaterialTheme.typography.headlineSmall)
+                        Icon(Icons.Outlined.ExpandMore, contentDescription = "选择分组")
+                    }
+                    Text(
+                        text = buildString {
+                            if (searching) append("找到 $bookCount 本") else append("$bookCount 本")
+                            filter.readState?.let { append(" · ").append(it.label()) }
+                            if (!searching && !filter.isActive) {
+                                append(
+                                    if (state.readingOrderAffectsShelf) " · 阅读后前移"
+                                    else " · 手动排序"
+                                )
+                            }
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+                ShelfGroupDropdown(
+                    expanded = groupMenuExpanded,
+                    onDismiss = { groupMenuExpanded = false },
+                    groups = state.groups,
+                    groupCounts = state.groupCounts,
+                    selectedGroupId = filter.groupId,
+                    ungroupedOnly = filter.ungroupedOnly,
+                    onSelect = onSelectGroup,
+                    onCreate = { groupMenuExpanded = false; onOpenShelfGroups() },
+                    onManage = { groupMenuExpanded = false; onOpenShelfGroups() }
+                )
+            }
         }
         ShelfQuickFilters(
             tags = state.tags,
@@ -1577,6 +1548,7 @@ private fun ListBookItem(
     reorderActions: List<CustomAccessibilityAction>
 ) {
     val book = entry.book
+    val tablet = rememberMoReadWindowWidth() != MoReadWindowWidth.COMPACT
     val pinnableContainer = LocalPinnableContainer.current
     var bounds by remember { mutableStateOf(Rect.Zero) }
     var coverBounds by remember { mutableStateOf(Rect.Zero) }
@@ -1586,7 +1558,7 @@ private fun ListBookItem(
     DisposableEffect(entry.key) {
         onDispose { collectionDragState.unregister(entry.key, registrationOwner) }
     }
-    FrostedSurface(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .graphicsLayer {
@@ -1606,7 +1578,7 @@ private fun ListBookItem(
                 if (collectionDragState.activeDrop?.target == target) Modifier.border(
                     2.dp,
                     MaterialTheme.colorScheme.primary,
-                    RoundedCornerShape(moReadMetrics().radiusFor(24))
+                    RoundedCornerShape(4.dp)
                 ) else Modifier
             )
             .clickable(onClick = onOpen)
@@ -1622,12 +1594,10 @@ private fun ListBookItem(
                 onDrop = onShelfDrop,
                 onLongPressOnly = onLongPress,
                 reorderActions = reorderActions
-            ),
-        shape = RoundedCornerShape(moReadMetrics().radiusFor(24)),
-        shadowElevation = 4.dp
+            )
     ) {
         Row(
-            modifier = Modifier.padding(13.dp),
+            modifier = Modifier.padding(vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             CompactBookArtwork(
@@ -1675,8 +1645,11 @@ private fun ListBookItem(
                     book.author.ifBlank { "未知作者" },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(top = 4.dp)
                 )
+                if (!tablet) {
                 Text(
                     progressText(book, readSpan),
                     style = MaterialTheme.typography.labelMedium,
@@ -1695,8 +1668,19 @@ private fun ListBookItem(
                     gapSize = 0.dp,
                     drawStopIndicator = {}
                 )
+                }
+            }
+            if (tablet) {
+                Column(Modifier.width(180.dp).padding(end = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(progressText(book, readSpan), style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth().height(3.dp),
+                        trackColor = MaterialTheme.colorScheme.surfaceContainerHighest, gapSize = 0.dp, drawStopIndicator = {})
+                }
             }
         }
+        androidx.compose.material3.HorizontalDivider(Modifier.padding(start = 82.dp),
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .45f))
     }
 }
 
@@ -1706,6 +1690,7 @@ private fun BookCover(
     readSpan: BookReadSpan?,
     modifier: Modifier
 ) {
+    val tablet = rememberMoReadWindowWidth() != MoReadWindowWidth.COMPACT
     val coverFile = remember(book.coverPath) {
         book.coverPath?.let(::File)?.takeIf(File::isFile)
     }
@@ -1717,7 +1702,7 @@ private fun BookCover(
     )
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(moReadMetrics().radiusFor(12)),
+        shape = RoundedCornerShape(if (tablet) 4.dp else moReadMetrics().radiusFor(12)),
         color = coverColor(book.title),
         shadowElevation = 10.dp
     ) {

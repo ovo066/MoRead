@@ -23,6 +23,9 @@ import com.mozhi.reader.feature.reader.render.Leaf
  */
 class PageTurnCompositor {
 
+    private val modern = if (android.os.Build.VERSION.SDK_INT >= 33) ModernPageCurl() else null
+    fun release() { if (android.os.Build.VERSION.SDK_INT >= 33) modern?.clear() }
+
     private val geometry = PageFoldGeometry()
     private val foldPath = Path()
     private val backFacePath = Path()
@@ -56,16 +59,25 @@ class PageTurnCompositor {
         width: Float,
         height: Float,
         backgroundColor: Int,
-        spread: SpreadGeometry? = null
+        spread: SpreadGeometry? = null,
+        startY: Float = height / 2f,
+        modernBackTextOpacity: Float = .18f,
+        modernRadiusScale: Float = 1f
     ) {
-        if (animation == PageTurnAnimation.SIMULATION && spread != null) {
+        if (animation == PageTurnAnimation.MODERN_SIMULATION && android.os.Build.VERSION.SDK_INT >= 33) {
+            modern!!.draw(canvas, direction, front, under, touchX - startX, touchY, width, height, backgroundColor, spread,
+                modernBackTextOpacity, modernRadiusScale, startX, startY)
+            return
+        }
+        val effective = if (animation == PageTurnAnimation.MODERN_SIMULATION) PageTurnAnimation.SIMULATION else animation
+        if (effective == PageTurnAnimation.SIMULATION && spread != null) {
             // Existing flat compositor contract supplies (prev,cur) for a backward turn.
             val current = if (direction == PageTurnDirection.NEXT) front else under
             val target = if (direction == PageTurnDirection.NEXT) under else front
             drawSpreadSimulation(canvas, direction, current, target, touchX, startX, spread, backgroundColor)
             return
         }
-        when (animation) {
+        when (effective) {
             PageTurnAnimation.SIMULATION -> drawSimulation(
                 canvas, direction, front, under, touchX, touchY, cornerAtTop,
                 width, height, backgroundColor
@@ -76,7 +88,7 @@ class PageTurnCompositor {
             PageTurnAnimation.SLIDE -> drawSlide(
                 canvas, direction, front, under, touchX - startX, width, height
             )
-            PageTurnAnimation.NONE -> drawFullBitmap(canvas, front, width, height)
+            PageTurnAnimation.NONE, PageTurnAnimation.MODERN_SIMULATION -> drawFullBitmap(canvas, front, width, height)
         }
     }
 

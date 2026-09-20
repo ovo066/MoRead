@@ -35,13 +35,7 @@ internal fun BehaviorPage(
         palette,
         actions.onImmersiveReadingChange
     )
-    TypographySwitchRow(
-        "音量键翻页",
-        "音量加上一页，音量减下一页",
-        settings.volumeKeysPageTurn,
-        palette,
-        actions.onVolumeKeysPageTurnChange
-    )
+    ReaderKeySettingsControl(settings, palette, actions)
 }
 
 /**
@@ -77,14 +71,20 @@ internal fun PageTurnPage(
         palette = palette
     ) { actions.onPageModeChange(PageMode.SCROLL) }
 
+    if (paginated && settings.pageTurnAnimation == PageTurnAnimation.MODERN_SIMULATION) {
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            TypographyStepper("背面文字透明度", "${((1f - settings.modernBackTextOpacity) * 100).toInt()}%",
+                1f - settings.modernBackTextOpacity, 0f..1f, .05f, palette,
+                onValueChange = { actions.onModernBackTextOpacityChange(1f - it) })
+            TypographyStepper("卷曲半径", "${(settings.modernCurlRadiusScale * 100).toInt()}%",
+                settings.modernCurlRadiusScale, .6f..1.8f, .1f, palette,
+                onValueChange = actions.onModernCurlRadiusScaleChange)
+        } else Text("GPU 着色器需要 Android 13 及以上；当前设备使用原有仿真。",
+            style = MaterialTheme.typography.bodySmall, color = palette.muted)
+    }
+
     HorizontalDivider(color = palette.glassBorder)
-    TypographySwitchRow(
-        "音量键翻页",
-        "音量加上一页，音量减下一页",
-        settings.volumeKeysPageTurn,
-        palette,
-        actions.onVolumeKeysPageTurnChange
-    )
+    ReaderKeySettingsControl(settings, palette, actions)
 }
 
 @Composable
@@ -168,20 +168,11 @@ internal fun MoreSettingsPage(
         palette = palette
     ) { onOpenPage(TypographySecondaryPage.CHINESE_CONVERSION) }
     TypographyNavRow(
-        title = "语法高亮",
-        summary = if (settings.syntaxHighlightEnabled) {
-            "已开启 · ${settings.syntaxHighlightRules.count { it.enabled }} 条规则生效"
-        } else {
-            "已关闭"
-        },
-        palette = palette
-    ) { onOpenPage(TypographySecondaryPage.SYNTAX) }
-    TypographyNavRow(
         title = "阅读交互",
         summary = listOfNotNull(
             "保持亮屏".takeIf { settings.keepScreenOn },
             "完全沉浸".takeIf { settings.immersiveReading },
-            "音量键翻页".takeIf { settings.volumeKeysPageTurn }
+            "按键翻页".takeIf { settings.volumeKeysPageTurn }
         ).joinToString(" · ").ifBlank { "全部关闭" },
         palette = palette
     ) { onOpenPage(TypographySecondaryPage.BEHAVIOR) }
@@ -215,6 +206,7 @@ internal fun ChineseConversionPage(
 }
 
 private fun PageTurnAnimation.turnDescription(): String = when (this) {
+    PageTurnAnimation.MODERN_SIMULATION -> "随手势斜向卷页、背面透字、纸边高光与书脊阴影"
     PageTurnAnimation.SIMULATION -> "带折页与投影的翻书效果"
     PageTurnAnimation.COVER -> "新页从边缘覆盖上来"
     PageTurnAnimation.SLIDE -> "两页一起横向平移"
@@ -222,6 +214,7 @@ private fun PageTurnAnimation.turnDescription(): String = when (this) {
 }
 
 internal fun PageTurnAnimation.shortLabel(): String = when (this) {
+    PageTurnAnimation.MODERN_SIMULATION -> "现代仿真"
     PageTurnAnimation.SIMULATION -> "仿真"
     PageTurnAnimation.COVER -> "覆盖"
     PageTurnAnimation.SLIDE -> "平移"

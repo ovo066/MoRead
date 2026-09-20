@@ -68,4 +68,4 @@ internal class PageWindowRefreshQueue {
 
 /** 只有卷曲几何需要一张包含纸面的完整快照；其余模式复用静态背景层。 */
 internal fun PageTurnAnimation.usesEmbeddedPageBackground(): Boolean =
-    this == PageTurnAnimation.SIMULATION
+    this == PageTurnAnimation.SIMULATION || this == PageTurnAnimation.MODERN_SIMULATION

@@ -282,7 +282,7 @@ internal class EpubBoxLayoutBackend(
             if (widowCount > 1 && lineIndex == lines.size - widowCount) {
                 state.keepTogether(lineMetrics.takeLast(widowCount).sumOf { it.lineStep.toDouble() }.toFloat())
             }
-            state.prepareForLine(metrics.textHeight)
+            state.prepareForLine(metrics.textHeight + spec.wordGlossBand(lineClusters.joinToString("") { it.text }, isTitle))
 
             val firstLine = lineIndex == 0
             val lastLine = lineIndex == lines.lastIndex
@@ -315,9 +315,17 @@ internal class EpubBoxLayoutBackend(
                     justifyGapExtra = placed.justifyGapExtra,
                     inlineDecorations = inlineDecorations(placed.inlineFragments, lineTop, lineBottom, bundle),
                     rubyPlacements = rubyPlacements(placed.rubyFragments, lineTop, metrics)
-                ),
+                ).also { addWordGlosses(it, spec, measure) },
                 lineStep = metrics.lineStep
             )
+        }
+        spec.paragraphTranslations.filter { it.end in (start + 1)..end }.forEach { translation ->
+            translationLines(translation, geometry.left, geometry.width, spec, measure).forEach { line ->
+                cancellationCheck()
+                state.prepareForLine(line.lineBottom)
+                line.moveTranslationTo(state.durY)
+                state.addLine(line, line.lineBottom - line.lineTop)
+            }
         }
     }
 
@@ -539,6 +547,7 @@ internal class EpubBoxLayoutBackend(
                 start = glyphStart,
                 end = glyphStart + cluster.width,
                 charData = cluster.text,
+                syntaxPaintSpan = style.paintSpan,
                 syntaxColorArgb = style.colorArgb,
                 syntaxBackgroundArgb = style.backgroundArgb.takeIf { cluster.inlineBoxId == null },
                 syntaxUnderline = style.underline,
@@ -1303,6 +1312,7 @@ internal class EpubBoxLayoutBackend(
             ),
             // Publisher styling wins property-by-property. User syntax highlighting only fills
             // unspecified slots, so dialogue rules cannot repaint an EPUB badge/font/background.
+            paintSpan = syntax?.paintSpan?.let { it.copy(paint = it.paint.respectingPublisher(adaptedColor != null, adaptedBackground != null || epub.backgroundImageHref != null)) },
             colorArgb = adaptedColor ?: syntax?.colorArgb,
             backgroundArgb = adaptedBackground ?: syntax?.backgroundArgb,
             underline = epub.underline || syntax?.underline == true,
@@ -1485,6 +1495,7 @@ internal class EpubBoxLayoutBackend(
         start = start + delta,
         end = end + delta,
         charData = charData,
+        syntaxPaintSpan = syntaxPaintSpan,
         syntaxColorArgb = syntaxColorArgb,
         syntaxBackgroundArgb = syntaxBackgroundArgb,
         syntaxUnderline = syntaxUnderline,
@@ -1560,6 +1571,7 @@ internal class EpubBoxLayoutBackend(
         val syntaxFontAssetId: String?,
         val baselineShiftPx: Float,
         val lineHeightEm: Float?,
+        val paintSpan: com.mozhi.reader.core.datastore.ReaderPaintSpan? = null,
         val opacity: Float
     )
 

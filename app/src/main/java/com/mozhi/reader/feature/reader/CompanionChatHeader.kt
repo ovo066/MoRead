@@ -49,7 +49,7 @@ internal fun CompanionChatHeader(
             .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        IconButton(onClick = onBack, modifier = Modifier.size(44.dp)) {
+        if (!LocalCompanionSidebarVisible.current) IconButton(onClick = onBack, modifier = Modifier.size(44.dp)) {
             Icon(
                 if (embedded) Icons.Outlined.Close else Icons.AutoMirrored.Outlined.ArrowBack,
                 contentDescription = if (embedded) "关闭伴读面板" else "返回",
@@ -111,14 +111,14 @@ internal fun CompanionChatHeader(
                 }
             }
         }
-        IconButton(
+        if (!LocalCompanionSidebarVisible.current) IconButton(
             onClick = onNewConversation,
             enabled = !isStreaming,
             modifier = Modifier.size(44.dp)
         ) {
             Icon(Icons.Outlined.Add, contentDescription = "新会话", tint = palette.accent)
         }
-        IconButton(onClick = onShowConversations, modifier = Modifier.size(44.dp)) {
+        if (!LocalCompanionSidebarVisible.current) IconButton(onClick = onShowConversations, modifier = Modifier.size(44.dp)) {
             Icon(
                 Icons.Outlined.History,
                 contentDescription = "会话历史",

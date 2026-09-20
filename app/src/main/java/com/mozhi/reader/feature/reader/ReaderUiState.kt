@@ -41,8 +41,13 @@ data class ReaderUiState(
     /** 当前章已排完版、首页可画；进场揭示以它为准，不再掐固定表。 */
     val isContentReady: Boolean = false,
     val contentRevision: Int = 0,
+    val cleanupPreview: com.mozhi.reader.core.library.TextCleanupPreview? = null,
+    val cleanupBusy: Boolean = false,
+    val translation: ReaderTranslationState = ReaderTranslationState(),
     val errorMessage: String? = null
 )
+
+data class ReaderTranslationState(val busy: Boolean = false, val done: Int = 0, val total: Int = 0, val message: String? = null)
 
 data class ReaderAnnotationNotice(val result: ProactiveAnnotationBatchResult, val message: String)
 

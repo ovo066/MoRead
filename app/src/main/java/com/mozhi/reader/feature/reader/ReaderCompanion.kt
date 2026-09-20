@@ -287,6 +287,7 @@ internal fun CompanionChatBubble(
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
     val style = chatBubbleStyleFor(appearance, fromUser, palette)
+    val showTokenUsage = LocalShowCompanionTokenUsage.current
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val bubbleMaxWidth = maxWidth * BUBBLE_MAX_WIDTH_FRACTION
         Column(modifier = Modifier.fillMaxWidth()) {
@@ -386,6 +387,14 @@ internal fun CompanionChatBubble(
                             onReroll = onReroll,
                             onBranch = onBranch,
                             onDelete = onDelete
+                        )
+                    }
+                    if (showTokenUsage && !fromUser && message != null && entry.isLastMessagePart) {
+                        Text(
+                            text = companionTokenUsageLabel(message),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = palette.muted,
+                            modifier = Modifier.padding(top = 4.dp, start = 4.dp, end = 4.dp)
                         )
                     }
                     entry.timestamp?.takeIf { !showActions }?.let { timestamp ->

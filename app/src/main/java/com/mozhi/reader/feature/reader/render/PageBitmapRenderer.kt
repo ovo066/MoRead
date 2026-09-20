@@ -354,9 +354,27 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         val contentPaint = pageStyle.measure.contentPaint
         val titlePaint = pageStyle.measure.titlePaint
         contentPaint.color = pageStyle.textColor
-        titlePaint.color = pageStyle.textColor
+        titlePaint.color = pageStyle.titleStyle.colorArgb ?: pageStyle.textColor
+        val publisherTitlePaint = pageStyle.publisherMeasure.titlePaint.apply { color = pageStyle.textColor }
         contentPaint.alpha = 255
-        titlePaint.alpha = 255
+        drawReaderTitleDecoration(canvas, page)
+        // Bounds cover the visible portion of a complete match, including wrapped lines.
+        // Paints are shared within this draw, and never cached per character or left on TextPaint.
+        val paintBounds = mutableMapOf<com.mozhi.reader.core.datastore.ReaderPaintSpan, RectF>()
+        val titleBounds = RectF()
+        page.page.lines.forEachIndexed { li, row -> row.columns.forEachIndexed { ci, column ->
+            if (column.inlineMarkerKind == null && (column.syntaxPaintSpan != null ||
+                    (row.isReaderTitle && pageStyle.titleStyle.paint.textGradient != null))) {
+                val box = RectF(geometry.startFor(li, ci, column), row.lineTop,
+                    geometry.endFor(li, ci, column), row.lineBottom)
+                if (row.isReaderTitle) titleBounds.union(box)
+                column.syntaxPaintSpan?.let { span -> paintBounds.getOrPut(span) { RectF(box) }.union(box) }
+            }
+        } }
+        val textShaders = paintBounds.mapValues { (span, box) -> span.paint.textGradient?.shader(box) }
+        val backgroundShaders = paintBounds.mapValues { (span, box) -> span.paint.backgroundGradient?.shader(box) }
+        val titleShader = pageStyle.titleStyle.paint.textGradient?.shader(titleBounds)
+        val effectPaint = Paint(Paint.ANTI_ALIAS_FLAG)
         for ((lineIndex, line) in page.page.lines.withIndex()) {
             if (line.lineBottom < clipTop || line.lineTop > clipBottom) continue
             val rule = line.rule
@@ -418,26 +436,7 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
                     )
                 )
             }
-            val paint = if (line.isTitle) titlePaint else contentPaint
-            line.rubyPlacements.forEach { ruby ->
-                val rubyPaint = syntaxPaint(
-                    base = paint,
-                    color = ruby.colorArgb ?: pageStyle.textColor,
-                    underline = false,
-                    title = line.isTitle,
-                    font = ReaderSyntaxFont.INHERIT,
-                    fontAssetId = null,
-                    bold = ruby.bold,
-                    italic = ruby.italic,
-                    strikethrough = false,
-                    textSizeScale = ruby.textSizeScale,
-                    fontFilePath = ruby.fontFilePath,
-                    fontFamily = ruby.fontFamily,
-                    opacity = ruby.opacity
-                )
-                val rubyX = ruby.left + (ruby.right - ruby.left - rubyPaint.measureText(ruby.text)) / 2f
-                canvas.drawText(ruby.text, rubyX, ruby.baseline, rubyPaint)
-            }
+            val paint = if (line.isReaderTitle) titlePaint else if (line.isTitle) publisherTitlePaint else contentPaint
             for ((columnIndex, column) in line.columns.withIndex()) {
                 if (column.inlineMarkerKind != null) continue
                 val columnStart = geometry.startFor(lineIndex, columnIndex, column)
@@ -454,6 +453,25 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
                         line.lineBottom,
                         backgroundPaint
                     )
+                }
+                column.syntaxPaintSpan?.let { span ->
+                    val bounds = paintBounds[span] ?: return@let
+                    // Fill justification gaps only when the following glyph belongs to this match.
+                    val next = line.columns.getOrNull(columnIndex + 1)
+                    val right = if (next?.syntaxPaintSpan == span && next.inlineMarkerKind == null)
+                        maxOf(columnEnd, geometry.startFor(lineIndex, columnIndex + 1, next)) else columnEnd
+                    backgroundShaders[span]?.let { shader ->
+                        effectPaint.shader = shader
+                        effectPaint.alpha = (column.opacity * 255).toInt().coerceIn(0, 255)
+                        canvas.drawRect(columnStart, line.lineTop, right, line.lineBottom, effectPaint)
+                        effectPaint.shader = null
+                    }
+                    span.paint.backgroundImageId?.let(pageStyle.styleImagePaths::get)?.let { path ->
+                        val saved = canvas.save()
+                        canvas.clipRect(columnStart, line.lineTop, right, line.lineBottom)
+                        drawCoverImage(canvas, path, bounds, column.opacity)
+                        canvas.restoreToCount(saved)
+                    }
                 }
                 val resolvedPaint = if (
                     column.syntaxColorArgb != null ||
@@ -487,12 +505,41 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
                 } else {
                     paint
                 }
-                canvas.drawText(
-                    column.charData,
-                    columnStart,
-                    line.lineBase + column.baselineShiftPx,
-                    resolvedPaint
+                val shader = if (line.isReaderTitle) titleShader else column.syntaxPaintSpan?.let(textShaders::get)
+                val oldAlpha = resolvedPaint.alpha
+                val oldShader = resolvedPaint.shader
+                if (shader != null) {
+                    resolvedPaint.shader = shader
+                    // color: transparent is conventional with background-clip:text. Gradient stops
+                    // own their alpha; the solid fallback must not hide the shader.
+                    resolvedPaint.alpha = (column.opacity * 255).toInt().coerceIn(0, 255)
+                }
+                try {
+                    canvas.drawText(column.charData, columnStart,
+                        line.lineBase + column.baselineShiftPx, resolvedPaint)
+                } finally {
+                    resolvedPaint.shader = oldShader
+                    resolvedPaint.alpha = oldAlpha
+                }
+            }
+            line.rubyPlacements.forEach { ruby ->
+                val rubyPaint = syntaxPaint(
+                    base = paint,
+                    color = ruby.colorArgb ?: pageStyle.textColor,
+                    underline = false,
+                    title = line.isTitle,
+                    font = ReaderSyntaxFont.INHERIT,
+                    fontAssetId = null,
+                    bold = ruby.bold,
+                    italic = ruby.italic,
+                    strikethrough = false,
+                    textSizeScale = ruby.textSizeScale,
+                    fontFilePath = ruby.fontFilePath,
+                    fontFamily = ruby.fontFamily,
+                    opacity = ruby.opacity
                 )
+                val rubyX = ruby.left + (ruby.right - ruby.left - rubyPaint.measureText(ruby.text)) / 2f
+                canvas.drawText(ruby.text, rubyX, ruby.baseline, rubyPaint)
             }
         }
         geometry.markers.forEach { marker ->
@@ -593,6 +640,41 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
                     paint
                 )
             }
+        }
+    }
+
+    private fun drawReaderTitleDecoration(canvas: Canvas, page: RenderPage.Laid) {
+        val lines = page.page.lines.filter { it.isReaderTitle }
+        if (lines.isEmpty()) return
+        val style = pageStyle.titleStyle
+        val em = pageStyle.contentSizePx
+        val inset = (style.insetEm * em).coerceAtMost(pageStyle.contentWidth * 0.35f)
+        val padding = (style.paddingEm + style.borderWidthEm) * em
+        val bounds = RectF(inset, (lines.first().lineTop - padding).coerceAtLeast(0f),
+            pageStyle.contentWidth - inset, lines.last().lineBottom + padding)
+        val radius = style.cornerRadiusEm * em
+        style.backgroundArgb?.let {
+            epubDecorationPaint.color = it
+            canvas.drawRoundRect(bounds, radius, radius, epubDecorationPaint)
+        }
+        style.paint.backgroundGradient?.let { gradient ->
+            epubDecorationPaint.shader = gradient.shader(bounds)
+            epubDecorationPaint.alpha = 255
+            canvas.drawRoundRect(bounds, radius, radius, epubDecorationPaint)
+            epubDecorationPaint.shader = null
+        }
+        pageStyle.titleImagePath?.let { path ->
+            val saved = canvas.save()
+            val clip = Path().apply { addRoundRect(bounds, radius, radius, Path.Direction.CW) }
+            canvas.clipPath(clip)
+            drawCoverImage(canvas, path, bounds, 1f)
+            canvas.restoreToCount(saved)
+        }
+        if (style.borderWidthEm > 0f) {
+            epubBorderPaint.color = style.borderColorArgb ?: style.colorArgb ?: pageStyle.textColor
+            epubBorderPaint.strokeWidth = style.borderWidthEm * em
+            bounds.inset(epubBorderPaint.strokeWidth / 2f, epubBorderPaint.strokeWidth / 2f)
+            canvas.drawRoundRect(bounds, radius, radius, epubBorderPaint)
         }
     }
 
@@ -1008,11 +1090,15 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         val svg = runCatching {
             (bytes?.inputStream() ?: File(path).inputStream()).buffered().use { input -> SVG.getFromInputStream(input) }
         }.getOrNull() ?: return null
-        val viewBox = svg.documentViewBox
-        val intrinsicWidth = svg.documentWidth.takeIf { it.isFinite() && it > 0f }
+        // AndroidSVG can return an empty document for a zero-byte/corrupt image, whose
+        // dimension getters throw. A broken custom background must leave its fallback visible.
+        val dimensions = runCatching { Triple(svg.documentViewBox, svg.documentWidth, svg.documentHeight) }
+            .getOrNull() ?: return null
+        val viewBox = dimensions.first
+        val intrinsicWidth = dimensions.second.takeIf { it.isFinite() && it > 0f }
             ?: viewBox?.width()?.takeIf { it.isFinite() && it > 0f }
             ?: targetWidth.coerceAtLeast(1).toFloat()
-        val intrinsicHeight = svg.documentHeight.takeIf { it.isFinite() && it > 0f }
+        val intrinsicHeight = dimensions.third.takeIf { it.isFinite() && it > 0f }
             ?: viewBox?.height()?.takeIf { it.isFinite() && it > 0f }
             ?: targetHeight.coerceAtLeast(1).toFloat()
         val requestedScale = kotlin.math.max(

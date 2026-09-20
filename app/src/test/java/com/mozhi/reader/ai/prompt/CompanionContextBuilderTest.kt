@@ -385,6 +385,7 @@ class CompanionContextBuilderTest {
         )
 
         assertFalse(prompt.contains("【对话形态】"))
+        assertFalse(prompt.contains("generate_image"))
     }
 
     @Test
@@ -405,6 +406,7 @@ class CompanionContextBuilderTest {
         assertTrue(prompt.contains("《长安十二时辰》"))
         // 语音关着还教模型打 [语音]，只会让它输出永远兑现不了的标记。
         assertFalse(prompt.contains("[语音]"))
+        assertFalse(prompt.contains("generate_image"))
     }
 
     @Test
@@ -420,6 +422,23 @@ class CompanionContextBuilderTest {
 
         assertTrue(prompt.contains("[语音]"))
         assertFalse(prompt.contains("一行 = 一个气泡"))
+        assertFalse(prompt.contains("generate_image"))
+    }
+
+    @Test
+    fun imageAutonomyIsExplicitWithoutEnablingVoiceOrBubblesAndSurvivesBudgetPressure() {
+        val prompt = CompanionContextBuilder.assemble(
+            readingScope = readingScope, persona = null, progress = progress,
+            scene = "景".repeat(3_000), memories = listOf("记忆".repeat(2_000)),
+            conversationShape = ConversationShape(imageEnabled = true), budgetChars = 800
+        )
+        assertTrue(prompt.contains("用户已开启自主生图"))
+        assertTrue(prompt.contains("可以主动调用 generate_image"))
+        assertTrue(prompt.contains("无需等用户明确要求画图"))
+        assertTrue(prompt.contains("遵守本轮阅读范围"))
+        assertFalse(prompt.contains("[语音]"))
+        assertFalse(prompt.contains("一行 = 一个气泡"))
+        assertFalse(prompt.contains("【长期记忆】"))
     }
 
     /** 形态说明与人设同级：预算再紧也不能裁，否则开关会时灵时不灵。 */

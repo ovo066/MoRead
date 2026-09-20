@@ -51,6 +51,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.mozhi.reader.core.database.entity.MessageEntity
 import com.mozhi.reader.ui.components.MoReadBackdrop
+import com.mozhi.reader.ui.components.MoReadBoundedContent
 import com.mozhi.reader.ui.components.rememberChatFontFamily
 import com.mozhi.reader.ui.components.safeTopPadding
 import java.io.File
@@ -280,6 +281,9 @@ fun CompanionChatPane(
         )
     }
 
+    CompanionWorkspace(state.conversations, state.conversationId, "阅读伴读", !state.isStreaming,
+        onBack, companionViewModel::newConversation, companionViewModel::selectConversation,
+        onManage = { showConversations = true }, embedded = embedded) {
     MoReadBackdrop {
         // 角色自定义的聊天背景：铺在最底，上面压一层主题底色做蒙版，
         // 蒙版强度由用户拉——图看得见和字看得清之间的取舍只有他自己知道。
@@ -296,11 +300,13 @@ fun CompanionChatPane(
                     .background(palette.background.copy(alpha = state.appearance.backgroundDim))
             )
         }
+        MoReadBoundedContent(maxWidth = if (LocalCompanionSidebarVisible.current) 880.dp else 720.dp) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                // 同书籍详情：沉浸阅读隐藏状态栏后不能让顶栏贴到屏幕上沿。
-                .then(if (embedded) Modifier else Modifier.safeTopPadding())
+                // The reader side pane also reaches the window edge. Keep its header below the
+                // stable status-bar/cutout inset, including while immersive reading hides the bars.
+                .safeTopPadding()
                 .imePadding()
         ) {
             CompanionChatHeader(
@@ -498,6 +504,8 @@ fun CompanionChatPane(
                 onStop = companionViewModel::stop
             )
         }
+        }
+    }
     }
 
     if (showConversations) {

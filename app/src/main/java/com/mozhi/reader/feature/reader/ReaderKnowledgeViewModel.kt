@@ -29,7 +29,8 @@ data class KnowledgeUiState(
 class ReaderKnowledgeViewModel @Inject constructor(
     private val repository: ChapterKnowledgeRepository,
     private val characters: BookCharactersRepository,
-    private val runner: KnowledgeGenerationRunner
+    private val runner: KnowledgeGenerationRunner,
+    private val personas: com.mozhi.reader.ai.persona.PersonaRepository
 ) : ViewModel() {
     private val mutable = MutableStateFlow(KnowledgeUiState())
     val state = mutable.asStateFlow()
@@ -96,6 +97,16 @@ class ReaderKnowledgeViewModel @Inject constructor(
 
     fun delete(chapterIndex: Int) = localAction { book -> repository.delete(book, chapterIndex) }
     fun deleteCharacters() = localAction { book -> characters.delete(book) }
+    fun saveCharacter(originalIdentity: String?, name: String, description: String) = localAction { book ->
+        characters.saveCharacter(book, originalIdentity, name, description)
+    }
+    fun saveCharacterCard(card: ExtractedCharacterCard) = localAction {
+        personas.save(com.mozhi.reader.core.database.entity.PersonaEntity(
+            name = card.name, personality = card.description, subtitle = "从书中提取的角色", isRoleplay = true,
+            createdAt = System.currentTimeMillis()
+        ))
+        mutable.update { it.copy(error = "已保存为伴读角色，可在伴读页继续编辑") }
+    }
     fun locate(entry: ChapterKnowledgeEntity, fact: KnowledgeFact) = localAction { locations.send(repository.locate(entry, fact)) }
     fun locateCharacter(entry: BookCharacterGuideEntity, evidence: CharacterEvidence) = localAction { locations.send(characters.locate(entry, evidence)) }
 

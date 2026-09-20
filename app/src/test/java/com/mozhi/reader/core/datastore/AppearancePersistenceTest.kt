@@ -103,6 +103,26 @@ class AppearancePersistenceTest {
         finally { nextScope.coroutineContext.job.cancelAndJoin() }
     }
 
+    @Test fun builtinTypographyEditsMergeAndSurviveRestartWithoutChangingAnotherTheme() = runTest {
+        val firstScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        try {
+            val repo = ReaderSettingsRepository(store(firstScope))
+            repo.updateBoundTypography(9, ReaderThemeSlot.DAY) { it.copy(fontScale = 1.5f) }
+            repo.updateBoundTypography(9, ReaderThemeSlot.DAY) { it.copy(lineHeight = 1.8f) }
+            repo.updateBoundTypography(9, ReaderThemeSlot.NIGHT) { it.copy(font = ReaderFont.MONOSPACE) }
+        } finally { firstScope.coroutineContext.job.cancelAndJoin() }
+        val nextScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        try {
+            val settings = ReaderSettingsRepository(store(nextScope)).settings.first()
+            val day = settings.resolveForBook(9, ReaderThemeSlot.DAY)
+            val night = settings.resolveForBook(9, ReaderThemeSlot.NIGHT)
+            assertEquals(1.5f, day.fontScale, .001f)
+            assertEquals(1.8f, day.lineHeight, .001f)
+            assertEquals(ReaderFont.MONOSPACE, night.font)
+            assertEquals(settings.fontScale, night.fontScale, .001f)
+        } finally { nextScope.coroutineContext.job.cancelAndJoin() }
+    }
+
     @Test fun originalPresetRestoresTheWholeClassicInterface() = runTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         try {

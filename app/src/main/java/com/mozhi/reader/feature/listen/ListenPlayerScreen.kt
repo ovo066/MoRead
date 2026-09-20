@@ -227,15 +227,8 @@ fun ListenPlayerScreen(
         )
 
         CompositionLocalProvider(LocalContentColor provides Color(0xFFF3F1EC)) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .statusBarsPadding()
-                    .navigationBarsPadding()
-                    .padding(horizontal = 22.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                // ── 顶栏：收起 + 目录；避免与左上角返回正文的入口重复。
+            com.mozhi.reader.ui.components.MoReadDetailLayout(centerSummary = true, header = {
+                Box(Modifier.statusBarsPadding().padding(horizontal = 22.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -249,9 +242,40 @@ fun ListenPlayerScreen(
                     )
                 }
 
-                Spacer(Modifier.weight(0.6f))
+                }
+            }, summary = {
+                Column(Modifier.fillMaxWidth().padding(vertical = 32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    CoverArtwork(book = book, playing = playing)
+                }
+            }) { split ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .then(if (split) Modifier else Modifier.statusBarsPadding())
+                    .navigationBarsPadding()
+                    .padding(horizontal = 22.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = if (split) Arrangement.Center else Arrangement.Top
+            ) {
+                // ── 顶栏：收起 + 目录；避免与左上角返回正文的入口重复。
+                if (!split) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    GlassCircleButton(Icons.Outlined.ExpandMore, "收起播放页", onBack)
+                    Spacer(Modifier.weight(1f))
+                    GlassPill(
+                        icon = Icons.AutoMirrored.Outlined.MenuBook,
+                        label = "目录",
+                        onClick = { showChapters = true }
+                    )
+                }
 
-                CoverArtwork(book = book, playing = playing)
+                }
+                if (!split) Spacer(Modifier.weight(0.6f))
+
+                if (!split) CoverArtwork(book = book, playing = playing)
 
                 Spacer(Modifier.height(28.dp))
 
@@ -341,7 +365,7 @@ fun ListenPlayerScreen(
                     }
                 }
 
-                Spacer(Modifier.weight(1f))
+                if (split) Spacer(Modifier.height(40.dp)) else Spacer(Modifier.weight(1f))
 
                 // ── 本章进度
                 Slider(
@@ -415,6 +439,7 @@ fun ListenPlayerScreen(
                         }
                     )
                 }
+            }
             }
         }
     }

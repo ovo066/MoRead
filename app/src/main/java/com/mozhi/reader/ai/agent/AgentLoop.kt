@@ -4,6 +4,7 @@ import com.mozhi.reader.ai.client.AiClientException
 import com.mozhi.reader.ai.client.AiClientFactory
 import com.mozhi.reader.ai.client.AiJson
 import com.mozhi.reader.ai.client.ChatDelta
+import com.mozhi.reader.ai.client.ChatUsageAccumulator
 import com.mozhi.reader.ai.client.ChatMessage
 import com.mozhi.reader.ai.client.ChatOptions
 import com.mozhi.reader.ai.client.ChatPart
@@ -149,6 +150,7 @@ class AgentLoop @Inject constructor(
                     }
                     is ChatDelta.Reasoning -> emit(AgentEvent.Reasoning(delta.text))
                     is ChatDelta.ToolCalls -> requested = delta.calls
+                    is ChatDelta.Usage -> Unit
                 }
             }
 
@@ -221,6 +223,7 @@ class AgentLoop @Inject constructor(
             val text = StringBuilder()
             // 思维链按轮累积：它属于「这一条回复是怎么想出来的」，跟着该轮的 assistant 消息落库。
             val reasoning = StringBuilder()
+            val usage = ChatUsageAccumulator()
             var requested: List<ToolCall> = emptyList()
             streamer.stream(history, specs).collect { delta ->
                 when (delta) {
@@ -233,6 +236,7 @@ class AgentLoop @Inject constructor(
                         emit(AgentEvent.Reasoning(delta.text))
                     }
                     is ChatDelta.ToolCalls -> requested = delta.calls
+                    is ChatDelta.Usage -> usage.accept(delta)
                 }
             }
 
@@ -247,7 +251,8 @@ class AgentLoop @Inject constructor(
                         content = reply,
                         toolCalls = emptyList(),
                         reasoning = reasoning.toString(),
-                        clientRoundId = roundId
+                        clientRoundId = roundId,
+                        usage = usage
                     )?.let { message ->
                         emit(AgentEvent.RoundCommitted(message))
                     }
@@ -261,7 +266,8 @@ class AgentLoop @Inject constructor(
                 content = text.toString(),
                 toolCalls = requested,
                 reasoning = reasoning.toString(),
-                clientRoundId = roundId
+                clientRoundId = roundId,
+                usage = usage
             )
             if (committedMessage != null) {
                 emit(AgentEvent.RoundCommitted(committedMessage))
@@ -319,7 +325,8 @@ class AgentLoop @Inject constructor(
         content: String,
         toolCalls: List<ToolCall>,
         reasoning: String = "",
-        clientRoundId: String
+        clientRoundId: String,
+        usage: ChatUsageAccumulator? = null
     ): MessageEntity? {
         if (content.isBlank() && toolCalls.isEmpty()) return null
         val now = System.currentTimeMillis()
@@ -332,7 +339,11 @@ class AgentLoop @Inject constructor(
             // 空串存 null：界面据「是否为 null」决定整条思维链条要不要出现。
             reasoningContent = reasoning.takeIf(String::isNotBlank)?.take(MAX_REASONING_CHARS),
             createdAt = now,
-            clientRoundId = clientRoundId
+            clientRoundId = clientRoundId,
+            tokenUsage = usage?.totalTokens,
+            inputTokens = usage?.inputTokens,
+            outputTokens = usage?.outputTokens,
+            generationTimeMs = usage?.elapsedMillis()
         )
         val messageId = chatDao.insertMessage(message)
         chatDao.touchConversation(conversationId, now)

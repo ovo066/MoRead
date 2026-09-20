@@ -8,6 +8,51 @@ package com.mozhi.reader.core.epub.dom
  * （零长度范围），与浏览器把视口滚到锚点处的行为一致。找不到 id 返回 null，由调用方决定回退。
  */
 object EpubDomFragmentLocator {
+    /** Preview the note containing an inline marker, without changing its navigation anchor. */
+    fun previewRange(body: EpubDomNode, fragment: String): IntRange? {
+        val id = fragment.trim().removePrefix("#").takeIf(String::isNotEmpty) ?: return null
+        val path = mutableListOf<EpubDomNode>()
+        fun find(node: EpubDomNode): Boolean {
+            path += node
+            if (node.id == id || node.children.any(::find)) return true
+            path.removeAt(path.lastIndex)
+            return false
+        }
+        if (!find(body)) return null
+        fun range(node: EpubDomNode): IntRange? {
+            var start = Int.MAX_VALUE
+            var end = -1
+            fun collect(current: EpubDomNode) {
+                if (current.textStart in 0 until current.textEnd) {
+                    start = minOf(start, current.textStart)
+                    end = maxOf(end, current.textEnd)
+                }
+                current.children.forEach(::collect)
+            }
+            collect(node)
+            return if (end >= 0) start until end else null
+        }
+        // A semantic note can contain several paragraphs. Do not include adjacent notes.
+        path.asReversed().firstOrNull { node ->
+            node.attributes["epub:type"].orEmpty().split(Regex("\\s+")).any { it == "footnote" || it == "endnote" } ||
+                node.attributes["role"] in setOf("doc-footnote", "doc-endnote")
+        }?.let { note -> range(note)?.let { return it } }
+        path.asReversed().firstOrNull { it.tag.lowercase() in PREVIEW_BLOCKS }
+            ?.let { block -> range(block)?.let { return it } }
+        val anchor = locate(body, fragment) ?: return null
+        if (!anchor.isEmpty()) return anchor
+        // Standalone empty anchors before a paragraph have no containing text block.
+        fun followingBlock(node: EpubDomNode): IntRange? {
+            if (node.tag.lowercase() in PREVIEW_BLOCKS) {
+                range(node)?.takeIf { it.first == anchor.first }?.let { return it }
+            }
+            return node.children.firstNotNullOfOrNull(::followingBlock)
+        }
+        return followingBlock(body) ?: anchor
+    }
+
+    private val PREVIEW_BLOCKS = setOf("p", "li", "dd", "dt", "div", "aside", "section", "blockquote", "td", "th", "h1", "h2", "h3", "h4", "h5", "h6")
+
     fun locate(body: EpubDomNode, fragment: String): IntRange? {
         val id = fragment.trim().removePrefix("#").takeIf(String::isNotEmpty) ?: return null
         var targetFound = false

@@ -61,7 +61,9 @@ internal sealed interface ChatEntry {
         val streaming: Boolean = false,
         /** 多气泡流式组尚可能继续长出新条目，期间冻结所有尖角避免旧气泡改形。 */
         val freezeGroupTail: Boolean = false,
-        val canReroll: Boolean = false
+        val canReroll: Boolean = false,
+        /** Usage belongs to the whole model message, even when displayed as several bubbles. */
+        val isLastMessagePart: Boolean = true
     ) : ChatEntry {
         override val key: String = "bubble-$id"
         override val contentType: String =
@@ -146,6 +148,7 @@ internal fun buildCompanionChatEntries(
                                 part = part,
                                 fromUser = fromUser,
                                 message = item.message,
+                                isLastMessagePart = index == parts.lastIndex,
                                 timestamp = item.message.createdAt,
                                 canReroll = !fromUser &&
                                     item.message.id == lastAssistantMessageId &&

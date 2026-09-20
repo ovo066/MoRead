@@ -237,7 +237,7 @@ class NavigationStabilityTest {
         freeze()
         val host = sizes.getValue("host")
         val root = sizes.getValue("page-bookshelf")
-        assertEquals(host.width - 96, root.width)
+        assertEquals(host.width - MoReadLayoutPolicy.TabletSidebarWidthDp.toInt(), root.width)
         repeat(3) {
             measuredSizes.clear()
             compose.runOnIdle { nav.navigate("reader/1") }
@@ -345,7 +345,7 @@ class NavigationStabilityTest {
         val rail = compose.onNodeWithTag("navigation-overlay").fetchSemanticsNode().boundsInRoot
         assertTrue(rail.height > rail.width)
         assertTrue(rail.width < 160f)
-        assertEquals(sizes.getValue("host").width - 96, sizes.getValue("page-bookshelf").width)
+        assertEquals(sizes.getValue("host").width - MoReadLayoutPolicy.TabletSidebarWidthDp.toInt(), sizes.getValue("page-bookshelf").width)
         compose.runOnIdle { selectRoot("settings") }
         compose.waitForIdle()
         assertEquals(rail, compose.onNodeWithTag("navigation-overlay").fetchSemanticsNode().boundsInRoot)

@@ -126,12 +126,18 @@ fun SettingsScreen(
     onOpenBackup: () -> Unit,
     onOpenData: () -> Unit,
     onOpenAbout: () -> Unit,
-    viewModel: SettingsViewModel = hiltViewModel()
+    viewModel: SettingsViewModel = hiltViewModel(),
+    onOpenDictionaries: () -> Unit = {},
+    onOpenVocabulary: () -> Unit = {},
+    onOpenReadingReview: () -> Unit = {}
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     MoReadRootPage(title = "设置", contentPadding = contentPadding) {
         item {
             MoReadSection(title = "阅读体验", icon = Icons.AutoMirrored.Outlined.MenuBook, tone = SemanticSlot.READING) {
+                MoReadRow(icon = Icons.Outlined.BorderColor, title = "划线与笔记",
+                    subtitle = "重读摘录、回顾想法与伴读批注", onClick = onOpenReadingReview)
+                MoReadRowDivider()
                 MoReadRow(
                     icon = Icons.Outlined.Palette,
                     title = "阅读与外观",
@@ -145,6 +151,12 @@ fun SettingsScreen(
                     subtitle = "朗读引擎、参数、音色与缓存",
                     onClick = onOpenTts
                 )
+                MoReadRowDivider()
+                MoReadRow(icon = Icons.AutoMirrored.Outlined.MenuBook, title = "词典管理",
+                    subtitle = "多本 MDX / MDD · 英文、中文与文言文", onClick = onOpenDictionaries)
+                MoReadRowDivider()
+                MoReadRow(icon = Icons.Outlined.Bookmarks, title = "生词本",
+                    subtitle = "收藏的字词、释义与阅读语境", onClick = onOpenVocabulary)
             }
         }
         item {
@@ -241,6 +253,14 @@ fun AiAndCompanionSettingsScreen(
                     subtitle = "让角色像真人一样分条发消息",
                     checked = state.multiBubbleEnabled,
                     onCheckedChange = viewModel::setMultiBubble
+                )
+                MoReadRowDivider()
+                MoReadSwitchRow(
+                    icon = Icons.Outlined.Bolt,
+                    title = "显示伴读 Token 用量",
+                    subtitle = "气泡下显示输入、输出与平均速度（含首字等待）",
+                    checked = state.companionTokenUsageEnabled,
+                    onCheckedChange = viewModel::setCompanionTokenUsage
                 )
             }
         }

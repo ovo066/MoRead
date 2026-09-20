@@ -11,7 +11,16 @@ import kotlinx.serialization.encodeToString
 data class KnowledgeFact(val text: String, val quote: String, val start: Int, val end: Int)
 
 @Serializable
-data class KnowledgeCharacter(val name: String, val facts: List<KnowledgeFact>)
+data class KnowledgeCharacter(val name: String, val facts: List<KnowledgeFact>,
+    val attributes: List<KnowledgeCharacterAttribute> = emptyList(),
+    val relationships: List<KnowledgeCharacterRelationship> = emptyList())
+
+@Serializable
+enum class CharacterAttributeKind { ALIAS, AGE, GENDER, IDENTITY }
+@Serializable
+data class KnowledgeCharacterAttribute(val kind: CharacterAttributeKind, val value: String, val fact: KnowledgeFact)
+@Serializable
+data class KnowledgeCharacterRelationship(val target: String, val relation: String, val fact: KnowledgeFact)
 
 @Serializable
 data class ChapterKnowledge(val summary: List<KnowledgeFact>, val characters: List<KnowledgeCharacter> = emptyList(), val outline: String = "") {
@@ -28,7 +37,10 @@ internal object ChapterKnowledgeCodec {
     const val PART_CHARS = 10_000
 
     @Serializable private data class DraftFact(val text: String, val quote: String)
-    @Serializable private data class DraftCharacter(val name: String, val facts: List<DraftFact>)
+    @Serializable private data class DraftAttribute(val kind: CharacterAttributeKind, val value: String, val quote: String)
+    @Serializable private data class DraftRelationship(val target: String, val relation: String, val quote: String)
+    @Serializable private data class DraftCharacter(val name: String, val facts: List<DraftFact>,
+        val attributes: List<DraftAttribute> = emptyList(), val relationships: List<DraftRelationship> = emptyList())
     @Serializable private data class Draft(val outline: String, val summary: List<DraftFact>, val characters: List<DraftCharacter> = emptyList())
     @Serializable private data class CharacterDraft(val characters: List<DraftCharacter>)
 
@@ -88,14 +100,29 @@ internal object ChapterKnowledgeCodec {
             require(name.length in 1..60 && character.facts.size in 1..4) { "人物资料格式无效" }
             require(name !in setOf("他", "她", "我", "你", "他们", "她们", "旁白")) { "请使用人名或稳定称呼" }
             require(part.text.contains(name)) { "人物名称未出现在提供的原文中" }
-            KnowledgeCharacter(name, character.facts.map { verify(it, part) })
+            require(character.attributes.size <= 12 && character.relationships.size <= 12) { "单个人物属性或关系过多" }
+            val attributes = character.attributes.map { attribute ->
+                val value = attribute.value.trim()
+                require(value.length in 1..80) { "人物属性格式无效" }
+                require(attribute.quote.contains(name)) { "属性引文需包含人物称呼" }
+                if (attribute.kind == CharacterAttributeKind.ALIAS) require(attribute.quote.contains(value) && value != name) { "别名需在同一段原文中明确关联" }
+                KnowledgeCharacterAttribute(attribute.kind, value, verify(DraftFact(value, attribute.quote), part))
+            }.distinctBy { it.kind to it.value }
+            val relationships = character.relationships.map { relationship ->
+                val target = relationship.target.trim()
+                val relation = relationship.relation.trim()
+                require(target.length in 1..60 && relation.length in 1..80 && target != name) { "人物关系格式无效" }
+                require(relationship.quote.contains(name) && relationship.quote.contains(target)) { "关系引文需包含双方姓名或稳定称呼" }
+                KnowledgeCharacterRelationship(target, relation, verify(DraftFact("$name → $target：$relation", relationship.quote), part))
+            }.distinctBy { it.target to it.relation }
+            KnowledgeCharacter(name, character.facts.map { verify(it, part) }, attributes, relationships)
         }
     }
 
     fun merge(parts: List<ChapterKnowledge>): ChapterKnowledge = ChapterKnowledge(
         parts.flatMap { it.summary }.distinct(),
         parts.flatMap { it.characters }.groupBy { it.name }.map { (name, rows) ->
-            KnowledgeCharacter(name, rows.flatMap { it.facts }.distinct())
+            KnowledgeCharacter(name, rows.flatMap { it.facts }.distinct(), rows.flatMap { it.attributes }.distinct(), rows.flatMap { it.relationships }.distinct())
         }, parts.joinToString("\n\n") { it.readableOutline }
     )
 

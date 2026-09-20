@@ -34,6 +34,8 @@ data class CustomReaderTheme(
     val titleScale: Float = 1.35f,
     val titleTopSpacing: Float = 0.4f,
     val titleBottomSpacing: Float = 1f,
+    val titleStyle: ReaderTitleStyle = ReaderTitleStyle(),
+    val publisherStyleMode: PublisherStyleMode = PublisherStyleMode.SMART,
     val headerMarginTop: Float = 0f,
     val footerMarginBottom: Float = 0f,
     val textJustification: Boolean = true,

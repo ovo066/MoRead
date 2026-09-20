@@ -34,7 +34,8 @@ class TextColumn(
     val inlineMarkerKind: InlineMarkerKind? = null,
     val inlineMarkerOffset: Int? = null,
     /** EPUB 内部超链接；保留原 href（含 fragment），点击时再解析到章节坐标。 */
-    val linkHref: String? = null
+    val linkHref: String? = null,
+    val syntaxPaintSpan: com.mozhi.reader.core.datastore.ReaderPaintSpan? = null
 )
 
 /** Only generated illustration buttons occupy text space. Comments are paint-only decorations. */
@@ -167,7 +168,10 @@ class TextLine(
     /** CSS inline boxes such as badges, danmaku pills, and chat labels. */
     var inlineDecorations: List<TextBlockDecoration> = emptyList(),
     /** Ruby annotations drawn in a compact baseline above their source text. */
-    var rubyPlacements: List<TextRubyPlacement> = emptyList()
+    var rubyPlacements: List<TextRubyPlacement> = emptyList(),
+    val isReaderTitle: Boolean = false,
+    /** Synthetic translation rows retain their owner while consuming no source characters. */
+    val paragraphTranslation: com.mozhi.reader.core.dictionary.ParagraphTranslation? = null
 )
 
 class TextPage(

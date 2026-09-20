@@ -10,9 +10,10 @@ import androidx.compose.runtime.setValue
 import com.mozhi.reader.core.datastore.PendingReaderFont
 import com.mozhi.reader.core.datastore.ReaderTextReplacementRule
 import com.mozhi.reader.feature.reader.engine.TransientHighlightSpan
+import com.mozhi.reader.feature.reader.engine.ReaderParagraphTranslation
 
 internal enum class ReaderSheet {
-    AUTO_READ, CONTENTS, BOOKMARKS, SETTINGS, SEARCH, REIDENTIFY_CHAPTERS, TEXT_REPLACEMENT_RULES
+    AUTO_READ, CONTENTS, BOOKMARKS, SETTINGS, SEARCH, REIDENTIFY_CHAPTERS, TEXT_REPLACEMENT_RULES, TAP_ZONES, ENGLISH_LEARNING, DICTIONARY, BILINGUAL, SYNTAX, TITLE_STYLE
 }
 
 internal data class AnnotationInkFloater(val annotationId: Long, val topPx: Int)
@@ -52,6 +53,7 @@ internal class ReaderScreenState(chromeVisible: Boolean = true, detailsVisible: 
     var annotationThread by mutableStateOf<AnnotationThreadKey?>(null)
     var epubImage by mutableStateOf<com.mozhi.reader.feature.reader.engine.ReaderPageImage?>(null)
     var linkPreview by mutableStateOf<EpubLinkPreview?>(null)
+    var paragraphTranslation by mutableStateOf<ReaderParagraphTranslation?>(null)
     var returnPosition by mutableStateOf<ReaderReturnPosition?>(null)
     var ttsDraft by mutableStateOf<String?>(null)
     var locateHighlight by mutableStateOf<TransientHighlightSpan?>(null)
@@ -61,10 +63,11 @@ internal class ReaderScreenState(chromeVisible: Boolean = true, detailsVisible: 
     var pendingFont by mutableStateOf<PendingReaderFont?>(null)
     var pendingFontName by mutableStateOf("")
     var listenTimerVisible by mutableStateOf(false)
+    var dictionaryHit by mutableStateOf<com.mozhi.reader.core.dictionary.DictionaryLookupHit?>(null)
 
     private val modalVisible: Boolean
         get() = panel != null || detailsVisible || aiRequest != null || inkFloater != null ||
-            annotationThread != null || epubImage != null || linkPreview != null || ttsDraft != null ||
+            annotationThread != null || epubImage != null || linkPreview != null || paragraphTranslation != null || ttsDraft != null ||
             textEditDraft != null || textRuleDraft != null || aiTextRuleDialogVisible ||
             pendingFont != null || listenTimerVisible
 

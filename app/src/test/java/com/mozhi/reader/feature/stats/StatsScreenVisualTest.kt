@@ -222,6 +222,14 @@ class StatsScreenVisualTest {
         capture("stats-clouds-dark-small.png")
     }
 
+    @Test @Config(qualifiers = "w1176dp-h960dp-mdpi")
+    fun tabletDashboardPlacesChartsInTwoColumnsAndKeepsNavigationStable() {
+        show()
+        capture("tablet-stats.png")
+        scrollTo("阅读趋势")
+        capture("tablet-stats-charts.png")
+    }
+
     private fun scrollTo(title: String) = compose.onNodeWithTag("stats-list").performScrollToNode(hasTestTag("stats-card-$title"))
     private fun capture(name: String, tag: String? = null) {
         compose.waitForIdle()

@@ -19,6 +19,8 @@ import kotlinx.coroutines.flow.flowOf
 class AnnotationRepository @Inject constructor(
     private val annotationDao: AnnotationDao
 ) {
+    fun observeAll(): Flow<List<AnnotationEntity>> = annotationDao.observeAll()
+
     fun observeForBook(bookId: Long): Flow<List<AnnotationEntity>> =
         annotationDao.observeForBook(bookId)
 

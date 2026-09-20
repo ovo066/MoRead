@@ -130,7 +130,7 @@ internal fun ModelAssignmentCard(providers: List<AiProviderEntity>, models: List
     assignments: Map<ModelRole, Long?>, onSelect: (ModelRole, Long?) -> Unit) {
     val providersById = providers.associateBy { it.id }
     val groups = listOf(
-        "阅读与伴读" to listOf(ModelRole.CHAT, ModelRole.CHEAP, ModelRole.PROACTIVE_ANNOTATION, ModelRole.SUGGESTION),
+        "阅读与伴读" to listOf(ModelRole.CHAT, ModelRole.TRANSLATION, ModelRole.CHEAP, ModelRole.PROACTIVE_ANNOTATION, ModelRole.SUGGESTION),
         "检索与媒体" to listOf(ModelRole.EMBEDDING, ModelRole.RERANK, ModelRole.TTS, ModelRole.IMAGE)
     )
     Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
@@ -141,6 +141,7 @@ internal fun ModelAssignmentCard(providers: List<AiProviderEntity>, models: List
                     val eligible = models.filter { model -> model.type == role.requiredModelType() &&
                         providersById[model.providerId]?.let { ProviderProtocolPolicy.isSupported(it, model) } == true }
                     val fallback = when (role) {
+                        ModelRole.TRANSLATION -> eligible.firstOrNull { it.id == assignments[ModelRole.CHAT] }
                         ModelRole.PROACTIVE_ANNOTATION -> eligible.firstOrNull { it.id == assignments[ModelRole.CHEAP] }
                         ModelRole.SUGGESTION -> eligible.firstOrNull { it.id == assignments[ModelRole.CHEAP] }
                             ?: eligible.firstOrNull { it.id == assignments[ModelRole.CHAT] }
@@ -154,13 +155,13 @@ internal fun ModelAssignmentCard(providers: List<AiProviderEntity>, models: List
 }
 
 @Composable
-private fun ModelAssignmentRow(role: ModelRole, models: List<AiModelEntity>, providersById: Map<Long, AiProviderEntity>,
-    selectedModelId: Long?, fallback: AiModelEntity?, onSelect: (Long?) -> Unit) {
+internal fun ModelAssignmentRow(role: ModelRole, models: List<AiModelEntity>, providersById: Map<Long, AiProviderEntity>,
+    selectedModelId: Long?, fallback: AiModelEntity?, enabled: Boolean = true, onSelect: (Long?) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     val selected = models.firstOrNull { it.id == selectedModelId }
     val invalidAssignment = selectedModelId != null && selected == null
     val effective = if (selectedModelId == null) fallback else selected
-    Row(Modifier.fillMaxWidth().clickable(onClickLabel = "选择${role.label()}模型") { expanded = true }.padding(16.dp),
+    Row(Modifier.fillMaxWidth().clickable(enabled = enabled, onClickLabel = "选择${role.label()}模型") { expanded = true }.padding(16.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
         if (effective != null) ModelIdentityIcon(effective.modelName, effective.type)
         else AiIdentityIcon(null, role.icon())
@@ -186,6 +187,7 @@ private fun ModelAssignmentRow(role: ModelRole, models: List<AiModelEntity>, pro
 }
 
 private fun ModelRole.unassignedLabel(): String = when (this) {
+    ModelRole.TRANSLATION -> "跟随主对话模型"
     ModelRole.PROACTIVE_ANNOTATION -> "跟随批量任务（cheap）"
     ModelRole.SUGGESTION -> "跟随默认模型"
     ModelRole.RERANK -> "使用本地排序"
@@ -193,6 +195,7 @@ private fun ModelRole.unassignedLabel(): String = when (this) {
 }
 
 private fun ModelRole.icon(): ImageVector = when (this) {
+    ModelRole.TRANSLATION -> Icons.Outlined.Translate
     ModelRole.CHAT -> Icons.Outlined.ChatBubbleOutline
     ModelRole.CHEAP -> Icons.Outlined.Bolt
     ModelRole.PROACTIVE_ANNOTATION -> Icons.Outlined.EditNote
@@ -278,6 +281,7 @@ private fun EmbeddingLibraryStatusCard(
 }
 
 internal fun ModelRole.label(): String = when (this) {
+    ModelRole.TRANSLATION -> "阅读翻译"
     ModelRole.CHAT -> "主对话"
     ModelRole.CHEAP -> "批量任务"
     ModelRole.SUGGESTION -> "建议回复"
@@ -289,6 +293,7 @@ internal fun ModelRole.label(): String = when (this) {
 }
 
 private fun ModelRole.purpose(): String = when (this) {
+    ModelRole.TRANSLATION -> "中英对照与选文翻译；未分配时使用主对话模型"
     ModelRole.CHAT -> "角色对话与问答"
     ModelRole.CHEAP -> "摘要、索引等后台任务"
     ModelRole.SUGGESTION -> "输入框上方的快捷回复，不选就用批量任务模型"
@@ -300,7 +305,7 @@ private fun ModelRole.purpose(): String = when (this) {
 }
 
 private fun ModelRole.requiredModelType(): AiModelType = when (this) {
-    ModelRole.CHAT, ModelRole.CHEAP, ModelRole.SUGGESTION, ModelRole.PROACTIVE_ANNOTATION -> AiModelType.CHAT
+    ModelRole.CHAT, ModelRole.TRANSLATION, ModelRole.CHEAP, ModelRole.SUGGESTION, ModelRole.PROACTIVE_ANNOTATION -> AiModelType.CHAT
     ModelRole.EMBEDDING -> AiModelType.EMBEDDING
     ModelRole.RERANK -> AiModelType.RERANK
     ModelRole.TTS -> AiModelType.TTS

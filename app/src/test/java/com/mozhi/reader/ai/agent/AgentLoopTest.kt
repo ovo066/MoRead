@@ -28,6 +28,19 @@ import org.junit.Test
 
 class AgentLoopTest {
 
+    @Test fun providerUsageIsPersistedWithTheCompletedReply() = runTest {
+        val dao = FakeChatDao(seed(ChatRole.USER to "hello"))
+        val events = loop(dao).runWith(1, emptyList()) {
+            AgentLoop.Streamer { _, _ -> flowOf(ChatDelta.Text("hello"), ChatDelta.Usage(150, 20, 170)) }
+        }.toList()
+        val saved = dao.messages.last()
+        assertEquals(150L, saved.inputTokens)
+        assertEquals(20L, saved.outputTokens)
+        assertEquals(170, saved.tokenUsage)
+        assertTrue(saved.generationTimeMs!! > 0)
+        assertEquals(saved, events.filterIsInstance<AgentEvent.RoundCommitted>().single().message)
+    }
+
     private class FakeChatDao(seed: List<MessageEntity>) : ChatDao {
         val messages = seed.toMutableList()
         private var nextId = seed.size + 1L

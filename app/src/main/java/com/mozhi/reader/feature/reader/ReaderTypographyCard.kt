@@ -103,8 +103,8 @@ internal fun ReaderTypographyCard(
                 modifier = Modifier
                     .align(Alignment.Center)
                     .offset { IntOffset(offset.x.roundToInt(), offset.y.roundToInt()) }
-                    .fillMaxWidth(0.92f)
                     .widthIn(max = 400.dp)
+                    .fillMaxWidth(0.92f)
                     .onSizeChanged { cardSize = it }
                     .shadow(22.dp, RoundedCornerShape(26.dp), clip = false)
                     // 吞掉落在卡片上的点击，否则会穿到外层的「点外部收起」。
@@ -359,6 +359,9 @@ private fun TitleTypographySection(
     palette: ReaderPalette,
     actions: ReaderLayoutActions
 ) {
+    var editor by remember { mutableStateOf(false) }
+    androidx.compose.material3.TextButton(onClick = { editor = true }) { Text("字体、颜色、边框、图片与 CSS") }
+    if (editor) ReaderTitleStyleSheet(settings, palette, { editor = false }, actions)
     TypographyStepper(
         label = "标题比例",
         valueText = String.format(java.util.Locale.ROOT, "%.2f×", settings.titleScale),

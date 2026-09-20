@@ -41,6 +41,11 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:mimeType="application/epub+zip" />
                 <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="application/x-mdx" />
+                <data android:mimeType="application/x-mdict" />
+                <data android:mimeType="application/x-mdict-mdx" />
+                <data android:mimeType="application/mdx" />
+                <data android:mimeType="application/mdict" />
                 <data android:mimeType="text/plain" />
                 <data android:mimeType="font/ttf" />
                 <data android:mimeType="font/otf" />
@@ -52,12 +57,119 @@
                 <data android:mimeType="application/vnd.ms-opentype" />
                 <data android:mimeType="application/x-font-opentype" />
             </intent-filter>
+            <!-- MDX has no universal MIME type. Filename filters cover local URIs with absent or arbitrary types. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:host="*" />
+                <data android:pathPattern=".*\\.mdx" />
+                <data android:pathPattern=".*\\.mdX" />
+                <data android:pathPattern=".*\\.mDx" />
+                <data android:pathPattern=".*\\.mDX" />
+                <data android:pathPattern=".*\\.Mdx" />
+                <data android:pathPattern=".*\\.MdX" />
+                <data android:pathPattern=".*\\.MDx" />
+                <data android:pathPattern=".*\\.MDX" />
+                <!-- Android 12+ suffix matching also handles dots in directories and filenames. -->
+                <data android:pathSuffix=".mdx" />
+                <data android:pathSuffix=".mdX" />
+                <data android:pathSuffix=".mDx" />
+                <data android:pathSuffix=".mDX" />
+                <data android:pathSuffix=".Mdx" />
+                <data android:pathSuffix=".MdX" />
+                <data android:pathSuffix=".MDx" />
+                <data android:pathSuffix=".MDX" />
+                <!-- Legacy simple-glob matching does not backtrack; cover common dotted names. -->
+                <data android:pathPattern=".*\\..*\\.mdx" />
+                <data android:pathPattern=".*\\..*\\.mdX" />
+                <data android:pathPattern=".*\\..*\\.mDx" />
+                <data android:pathPattern=".*\\..*\\.mDX" />
+                <data android:pathPattern=".*\\..*\\.Mdx" />
+                <data android:pathPattern=".*\\..*\\.MdX" />
+                <data android:pathPattern=".*\\..*\\.MDx" />
+                <data android:pathPattern=".*\\..*\\.MDX" />
+                <data android:pathPattern=".*\\..*\\..*\\.mdx" />
+                <data android:pathPattern=".*\\..*\\..*\\.mdX" />
+                <data android:pathPattern=".*\\..*\\..*\\.mDx" />
+                <data android:pathPattern=".*\\..*\\..*\\.mDX" />
+                <data android:pathPattern=".*\\..*\\..*\\.Mdx" />
+                <data android:pathPattern=".*\\..*\\..*\\.MdX" />
+                <data android:pathPattern=".*\\..*\\..*\\.MDx" />
+                <data android:pathPattern=".*\\..*\\..*\\.MDX" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.mdx" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.mdX" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.mDx" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.mDX" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.Mdx" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.MdX" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.MDx" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.MDX" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:host="*" />
+                <data android:mimeType="*/*" />
+                <data android:pathPattern=".*\\.mdx" />
+                <data android:pathPattern=".*\\.mdX" />
+                <data android:pathPattern=".*\\.mDx" />
+                <data android:pathPattern=".*\\.mDX" />
+                <data android:pathPattern=".*\\.Mdx" />
+                <data android:pathPattern=".*\\.MdX" />
+                <data android:pathPattern=".*\\.MDx" />
+                <data android:pathPattern=".*\\.MDX" />
+                <!-- Android 12+ suffix matching also handles dots in directories and filenames. -->
+                <data android:pathSuffix=".mdx" />
+                <data android:pathSuffix=".mdX" />
+                <data android:pathSuffix=".mDx" />
+                <data android:pathSuffix=".mDX" />
+                <data android:pathSuffix=".Mdx" />
+                <data android:pathSuffix=".MdX" />
+                <data android:pathSuffix=".MDx" />
+                <data android:pathSuffix=".MDX" />
+                <!-- Legacy simple-glob matching does not backtrack; cover common dotted names. -->
+                <data android:pathPattern=".*\\..*\\.mdx" />
+                <data android:pathPattern=".*\\..*\\.mdX" />
+                <data android:pathPattern=".*\\..*\\.mDx" />
+                <data android:pathPattern=".*\\..*\\.mDX" />
+                <data android:pathPattern=".*\\..*\\.Mdx" />
+                <data android:pathPattern=".*\\..*\\.MdX" />
+                <data android:pathPattern=".*\\..*\\.MDx" />
+                <data android:pathPattern=".*\\..*\\.MDX" />
+                <data android:pathPattern=".*\\..*\\..*\\.mdx" />
+                <data android:pathPattern=".*\\..*\\..*\\.mdX" />
+                <data android:pathPattern=".*\\..*\\..*\\.mDx" />
+                <data android:pathPattern=".*\\..*\\..*\\.mDX" />
+                <data android:pathPattern=".*\\..*\\..*\\.Mdx" />
+                <data android:pathPattern=".*\\..*\\..*\\.MdX" />
+                <data android:pathPattern=".*\\..*\\..*\\.MDx" />
+                <data android:pathPattern=".*\\..*\\..*\\.MDX" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.mdx" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.mdX" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.mDx" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.mDX" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.Mdx" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.MdX" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.MDx" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.MDX" />
+            </intent-filter>
             <!-- 让文件管理器的“分享文件”目标列表显示墨知。 -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="application/epub+zip" />
                 <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="application/x-mdx" />
+                <data android:mimeType="application/x-mdict" />
+                <data android:mimeType="application/x-mdict-mdx" />
+                <data android:mimeType="application/mdx" />
+                <data android:mimeType="application/mdict" />
                 <data android:mimeType="text/plain" />
                 <data android:mimeType="font/ttf" />
                 <data android:mimeType="font/otf" />

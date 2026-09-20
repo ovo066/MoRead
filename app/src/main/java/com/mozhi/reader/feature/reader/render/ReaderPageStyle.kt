@@ -61,7 +61,15 @@ class ReaderPageStyle(
     val paragraphSpacingEm: Float,
     val firstLineIndentEm: Float,
     val textJustification: Boolean,
-    val letterSpacingEm: Float
+    val letterSpacingEm: Float,
+    val wordGlosses: Map<String, com.mozhi.reader.core.dictionary.WordGloss> = emptyMap(),
+    val titleStyle: com.mozhi.reader.core.datastore.ReaderTitleStyle = com.mozhi.reader.core.datastore.ReaderTitleStyle(),
+    val titleImagePath: String? = null,
+    val titleTypeface: Typeface? = null,
+    val publisherTitleSizePx: Float = titleSizePx,
+    val publisherTitleTopSpacingLines: Float = titleTopSpacingLines,
+    val publisherTitleBottomSpacingLines: Float = titleBottomSpacingLines,
+    val styleImagePaths: Map<String, String> = emptyMap()
 ) {
     // Pagination geometry uses whole physical pixels. Fractional viewport dimensions accumulate
     // at page boundaries and can expose a clipped half-line or let chrome overlap the last row.
@@ -81,11 +89,18 @@ class ReaderPageStyle(
         blankLineSpacing = contentSizePx * paragraphSpacingEm * BLANK_LINE_FACTOR,
         titleTopSpacing = lineStep * titleTopSpacingLines,
         titleBottomSpacing = lineStep * titleBottomSpacingLines,
+        readerTitleAlignment = titleStyle.alignment,
+        readerTitleInset = titleStyle.insetEm * contentSizePx,
+        readerTitlePadding = (titleStyle.paddingEm + titleStyle.borderWidthEm) * contentSizePx,
         syntaxHighlightRules = syntaxHighlightRules,
         indentCharCount = firstLineIndentEm,
         justifyContent = textJustification,
         contentFontSizePx = contentSizePx,
         titleFontSizePx = titleSizePx,
+        publisherTitleFontSizePx = publisherTitleSizePx,
+        publisherTitleLineStep = publisherTitleSizePx * TITLE_LINE_HEIGHT,
+        publisherTitleTopSpacing = lineStep * publisherTitleTopSpacingLines,
+        publisherTitleBottomSpacing = lineStep * publisherTitleBottomSpacingLines,
         // Match mature EPUB readers: custom reader artwork owns the viewport instead of being
         // covered by an inset publisher body/wrapper canvas.
         preferReaderBackground = preferReaderBackground,
@@ -94,15 +109,21 @@ class ReaderPageStyle(
         themeTextArgb = textColor,
         darkTheme = isDark,
         immersiveExtraTopPx = (contentTop - immersiveContentTop).coerceAtLeast(0f),
-        immersiveExtraBottomPx = (immersiveContentBottom - contentBottom).coerceAtLeast(0f)
+        immersiveExtraBottomPx = (immersiveContentBottom - contentBottom).coerceAtLeast(0f),
+        wordGlosses = wordGlosses,
+        glossColorArgb = mutedColor
     )
 
     val measure: AndroidTextMeasure = AndroidTextMeasure(
         contentSizePx = contentSizePx,
         titleSizePx = titleSizePx,
         typeface = typeface,
-        letterSpacingEm = letterSpacingEm
+        letterSpacingEm = letterSpacingEm,
+        titleTypeface = titleTypeface,
+        titleBold = titleStyle.bold,
+        publisherTitleSizePx = publisherTitleSizePx
     )
+    val publisherMeasure = measure.forPublisherHeadings()
 
     companion object {
         const val BASE_CONTENT_SP = 17f
@@ -164,8 +185,27 @@ class ReaderPageStyle(
             }
             val syntaxRules = settings.syntaxHighlightRules.takeIf {
                 settings.syntaxHighlightEnabled
-            }.orEmpty()
+            }.orEmpty() + if (settings.englishBionicEnabled || settings.englishLearningEnabled) listOf(
+                com.mozhi.reader.core.datastore.ReaderSyntaxRule(
+                    id = Long.MIN_VALUE, name = "英语学习", startDelimiter = "", endDelimiter = "", colorArgb = palette.onBackground.toArgb(),
+                    backgroundArgb = palette.accent.copy(alpha = 0.16f).toArgb(),
+                    englishPrefixes = settings.englishBionicEnabled,
+                    englishWords = if (settings.englishLearningEnabled && settings.wordAnnotationMode == com.mozhi.reader.core.dictionary.WordAnnotationMode.POPUP)
+                        settings.vocabulary.filterNot { it.learned }.map { it.word }.toSet() else emptySet()
+                )
+            ) else emptyList()
             val baseTypeface = settings.resolveTypeface()
+            val title = settings.titleStyle.resolved()
+            val css = com.mozhi.reader.core.datastore.ReaderStyleCss.parse(settings.titleStyle.css, title = true)
+            val titleFont = when (title.font) {
+                com.mozhi.reader.core.datastore.ReaderSyntaxFont.INHERIT -> baseTypeface
+                com.mozhi.reader.core.datastore.ReaderSyntaxFont.SYSTEM -> Typeface.DEFAULT
+                com.mozhi.reader.core.datastore.ReaderSyntaxFont.SERIF -> Typeface.SERIF
+                com.mozhi.reader.core.datastore.ReaderSyntaxFont.SANS_SERIF -> Typeface.SANS_SERIF
+                com.mozhi.reader.core.datastore.ReaderSyntaxFont.MONOSPACE -> Typeface.MONOSPACE
+                com.mozhi.reader.core.datastore.ReaderSyntaxFont.CUSTOM -> settings.fontLibrary.firstOrNull { it.id == title.fontAssetId }
+                    ?.filePath?.let { runCatching { Typeface.createFromFile(it) }.getOrNull() } ?: baseTypeface
+            }
             val immersiveTop = statusBarPx.coerceAtLeast(headerPadding) + top
             val bottomSafeInset = navigationBarPx.coerceAtLeast(footerPadding) + footerPadding * 0.35f
             val immersiveBottom = (viewHeight - bottomSafeInset - bottom)
@@ -192,7 +232,14 @@ class ReaderPageStyle(
                 headerOffset = headerOffset,
                 footerOffset = footerOffset,
                 contentSizePx = contentSize,
-                titleSizePx = contentSize * settings.titleScale,
+                titleSizePx = contentSize * (css.sizeEm ?: settings.titleScale),
+                publisherTitleSizePx = contentSize * settings.titleScale,
+                publisherTitleTopSpacingLines = settings.titleTopSpacing,
+                publisherTitleBottomSpacingLines = settings.titleBottomSpacing,
+                titleStyle = title,
+                titleTypeface = titleFont,
+                styleImagePaths = settings.imageLibrary.associate { it.id to it.filePath },
+                titleImagePath = settings.imageLibrary.firstOrNull { it.id == title.imageAssetId }?.filePath,
                 tipSizePx = tipSize,
                 lineStep = contentSize * settings.lineHeight,
                 backgroundColor = palette.background.toArgb(),
@@ -214,8 +261,10 @@ class ReaderPageStyle(
                     settings.activeCustomThemeId != null,
                 publisherStyleMode = settings.publisherStyleMode,
                 syntaxHighlightRules = syntaxRules,
-                titleTopSpacingLines = settings.titleTopSpacing,
-                titleBottomSpacingLines = settings.titleBottomSpacing,
+                wordGlosses = if (settings.englishLearningEnabled && settings.wordAnnotationMode == com.mozhi.reader.core.dictionary.WordAnnotationMode.INLINE)
+                    settings.vocabulary.filter { !it.learned && it.gloss.isNotBlank() }.associate { it.word to com.mozhi.reader.core.dictionary.WordGloss(it.gloss, it.phonetic) } else emptyMap(),
+                titleTopSpacingLines = css.topEm?.div(settings.lineHeight) ?: settings.titleTopSpacing,
+                titleBottomSpacingLines = css.bottomEm?.div(settings.lineHeight) ?: settings.titleBottomSpacing,
                 paragraphSpacingEm = settings.paragraphSpacingEm,
                 firstLineIndentEm = settings.firstLineIndentEm,
                 textJustification = settings.textJustification,

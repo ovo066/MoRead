@@ -43,6 +43,8 @@ enum class AiModelType {
 
 enum class ModelRole {
     CHAT,
+    /** 阅读翻译独立分配；未分配时使用 CHAT 的模型，不附加聊天预设。 */
+    TRANSLATION,
     CHEAP,
     /** 伴读输入区的 AI 建议回复；未分配时回落 CHEAP → CHAT。 */
     SUGGESTION,
@@ -379,7 +381,11 @@ data class MessageEntity(
     /** Stable identity shared with the streaming entry before Room publishes the row. */
     val clientRoundId: String? = null,
     /** Books associated with this user turn. Null = legacy unknown; [] = explicitly no books. */
-    val sourceBookIdsJson: String? = null
+    val sourceBookIdsJson: String? = null,
+    val inputTokens: Long? = null,
+    val outputTokens: Long? = null,
+    /** End-to-end stream duration, including first-token latency and network transfer. */
+    val generationTimeMs: Long? = null
 )
 
 /** RikkaHub-style assignment: a role points at one concrete model, not a whole provider. */

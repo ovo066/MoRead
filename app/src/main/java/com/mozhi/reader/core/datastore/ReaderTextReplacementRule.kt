@@ -13,7 +13,8 @@ data class ReaderTextReplacementRule(
     val replacement: String = "",
     val enabled: Boolean = true,
     val ignoreCase: Boolean = false,
-    val forListenOnly: Boolean = false
+    val forListenOnly: Boolean = false,
+    val isRegex: Boolean = true
 )
 
 object ReaderTextReplacementRuleCodec {
@@ -29,7 +30,7 @@ object ReaderTextReplacementRuleCodec {
 }
 
 fun ReaderTextReplacementRule.compileRegex(): Regex = Regex(
-    pattern = pattern,
+    pattern = if (isRegex) pattern else Regex.escape(pattern),
     options = buildSet {
         add(RegexOption.MULTILINE)
         if (ignoreCase) add(RegexOption.IGNORE_CASE)
@@ -64,7 +65,7 @@ fun purifyForListening(
         .asSequence()
         .filter { it.enabled && it.forListenOnly }
         .fold(body.substring(safeStart, safeEnd)) { text, rule ->
-            runCatching { rule.compileRegex().replace(text, rule.replacement) }.getOrDefault(text)
+            runCatching { rule.compileRegex().replace(text, if (rule.isRegex) rule.replacement else Regex.escapeReplacement(rule.replacement)) }.getOrDefault(text)
         }
         .trim()
     return ListenTextSlice(safeStart, safeEnd, purified)
@@ -75,7 +76,7 @@ fun audiobookRevision(body: String, rules: List<ReaderTextReplacementRule>): Int
     val ruleFingerprint = rules.asSequence()
         .filter { it.enabled && it.forListenOnly }
         .joinToString("\u0000") { rule ->
-            listOf(rule.id, rule.pattern, rule.replacement, rule.ignoreCase).joinToString("\u0001")
+            listOf(rule.id, rule.pattern, rule.replacement, rule.ignoreCase, rule.isRegex).joinToString("\u0001")
         }
     return 31 * body.hashCode() + ruleFingerprint.hashCode()
 }

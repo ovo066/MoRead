@@ -169,7 +169,7 @@ class ReaderAiViewModel @Inject constructor(
                 agentLoop.run(
                     conversationId = conversationId,
                     tools = emptyList(),
-                    modelRole = ModelRole.CHEAP
+                    modelRole = if (startedRequest?.action == SelectionAiAction.TRANSLATE) ModelRole.TRANSLATION else ModelRole.CHEAP
                 ).collect { event ->
                     when (event) {
                         is AgentEvent.Text -> {

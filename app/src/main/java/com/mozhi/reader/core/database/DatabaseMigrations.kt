@@ -796,6 +796,14 @@ object DatabaseMigrations {
         }
     }
 
+    val Migration30To31 = object : Migration(30, 31) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `messages` ADD COLUMN `inputTokens` INTEGER")
+            db.execSQL("ALTER TABLE `messages` ADD COLUMN `outputTokens` INTEGER")
+            db.execSQL("ALTER TABLE `messages` ADD COLUMN `generationTimeMs` INTEGER")
+        }
+    }
+
     val Migration29To30 = object : Migration(29, 30) {
         override fun migrate(db: SupportSQLiteDatabase) {
             db.execSQL("""

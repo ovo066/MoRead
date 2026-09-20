@@ -88,7 +88,8 @@ fun TextReplacementRulesSheet(
     onDelete: (ReaderTextReplacementRule) -> Unit,
     onToggle: (ReaderTextReplacementRule, Boolean) -> Unit,
     onRequestAi: () -> Unit,
-    onApply: () -> Unit
+    onApply: () -> Unit,
+    busy: Boolean = false
 ) {
     Column(
         modifier = Modifier
@@ -165,10 +166,10 @@ fun TextReplacementRulesSheet(
         }
         Button(
             onClick = onApply,
-            enabled = rules.any(ReaderTextReplacementRule::enabled),
+            enabled = !busy && rules.any { it.enabled && !it.forListenOnly },
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("应用启用规则到本书")
+            Text(if (busy) "正在处理…" else "预览本书净化效果")
         }
     }
 }
@@ -183,11 +184,13 @@ fun TextReplacementRuleEditorDialog(
     var pattern by remember(initial) { mutableStateOf(initial.pattern) }
     var replacement by remember(initial) { mutableStateOf(initial.replacement) }
     var ignoreCase by remember(initial) { mutableStateOf(initial.ignoreCase) }
+    var isRegex by remember(initial) { mutableStateOf(initial.isRegex) }
     val candidate = initial.copy(
         name = name,
         pattern = pattern,
         replacement = replacement,
-        ignoreCase = ignoreCase
+        ignoreCase = ignoreCase,
+        isRegex = isRegex
     )
     val validationError = candidate.validationError()
     AlertDialog(
@@ -208,7 +211,7 @@ fun TextReplacementRuleEditorDialog(
                 OutlinedTextField(
                     value = pattern,
                     onValueChange = { pattern = it.take(1_000) },
-                    label = { Text("匹配正则") },
+                    label = { Text(if (isRegex) "匹配正则" else "匹配原文") },
                     minLines = 3,
                     maxLines = 6,
                     modifier = Modifier.fillMaxWidth()
@@ -221,6 +224,10 @@ fun TextReplacementRuleEditorDialog(
                     maxLines = 5,
                     modifier = Modifier.fillMaxWidth()
                 )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("使用正则表达式", Modifier.weight(1f))
+                    Switch(checked = isRegex, onCheckedChange = { isRegex = it })
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text("忽略大小写", style = MaterialTheme.typography.bodyMedium)

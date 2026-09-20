@@ -108,7 +108,7 @@ class BookStorageAndTimeMigrationTest {
             old.version = 29
         }
         val upgraded = Room.databaseBuilder(context, MoReadDatabase::class.java, "hour-migration.db")
-            .addMigrations(DatabaseMigrations.Migration29To30).build()
+            .addMigrations(DatabaseMigrations.Migration29To30, DatabaseMigrations.Migration30To31).build()
         try {
             assertEquals(60_000L, upgraded.bookDao().getReadingDays(1).single().durationMs)
             assertTrue(upgraded.readingHourlyDao().getForBook(1).isEmpty())

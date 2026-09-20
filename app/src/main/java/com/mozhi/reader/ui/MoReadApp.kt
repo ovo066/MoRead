@@ -61,6 +61,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.mozhi.reader.feature.bookdetail.BookDetailScreen
 import com.mozhi.reader.feature.bookshelf.BookshelfScreen
+import com.mozhi.reader.feature.bookshelf.BookshelfViewModel
 import com.mozhi.reader.feature.bookshelf.manage.ShelfGroupScreen
 import com.mozhi.reader.feature.bookshelf.manage.TagManageScreen
 import com.mozhi.reader.feature.companion.CompanionScreen
@@ -165,6 +166,16 @@ fun MoReadApp(
     val showBottomBar = RootDestination.entries.any { it.route == currentRoute } &&
         !(currentRoute == RootDestination.Bookshelf.route && bookshelfSelectionActive)
     val hazeState = rememberHazeState()
+    // The permanent tablet navigator and the shelf operate on the same filter/selection state.
+    val bookshelfViewModel: BookshelfViewModel = hiltViewModel()
+    val shelfState by bookshelfViewModel.uiState.collectAsStateWithLifecycle()
+    val selectRoot: (RootDestination) -> Unit = { item ->
+        navController.navigate(item.route) {
+            popUpTo(RootDestination.Bookshelf.route) { saveState = true }
+            launchSingleTop = true
+            restoreState = true
+        }
+    }
 
     LaunchedEffect(incomingBookUri) {
         if (incomingBookUri != null && currentRoute != RootDestination.Bookshelf.route) {
@@ -178,13 +189,15 @@ fun MoReadApp(
     MoReadBackdrop {
         MoReadWindowLayout { windowWidth ->
             val expanded = windowWidth == MoReadWindowWidth.EXPANDED
+            val medium = windowWidth == MoReadWindowWidth.MEDIUM
             MoReadNavigationScaffold { padding ->
                 MoReadNavigationHost(
                     navController = navController,
                     modifier = Modifier.fillMaxSize().hazeSource(hazeState)
                 ) {
-                rootComposable(RootDestination.Bookshelf.route, expanded) {
+                rootComposable(RootDestination.Bookshelf.route, expanded, medium) {
                     BookshelfScreen(
+                        viewModel = bookshelfViewModel,
                         contentPadding = padding,
                         externalImportUri = incomingBookUri,
                         onExternalImportConsumed = onIncomingBookConsumed,
@@ -208,11 +221,11 @@ fun MoReadApp(
                         onSelectionModeChanged = { bookshelfSelectionActive = it }
                     )
                 }
-                rootComposable(RootDestination.Stats.route, expanded) {
-                    MoReadBoundedContent { StatsScreen(contentPadding = padding) }
+                rootComposable(RootDestination.Stats.route, expanded, medium) {
+                    StatsScreen(contentPadding = padding)
                 }
-                rootComposable(RootDestination.Companion.route, expanded) {
-                    MoReadBoundedContent {
+                rootComposable(RootDestination.Companion.route, expanded, medium) {
+                    Box(Modifier.fillMaxSize()) {
                         CompanionScreen(
                             contentPadding = padding,
                             onEditPersona = { personaId ->
@@ -224,8 +237,15 @@ fun MoReadApp(
                         )
                     }
                 }
-                rootComposable(RootDestination.Settings.route, expanded) { entry ->
-                    SettingsScreen(
+                rootComposable(RootDestination.Settings.route, expanded, medium) { entry ->
+                    if (expanded) SettingsDetailPane(root = true) {
+                        ReadingAppearanceSettingsScreen(
+                            onBack = { selectRoot(RootDestination.Bookshelf) },
+                            onOpenFontLibrary = { navController.navigate("font-library") },
+                            onOpenImageLibrary = { navController.navigate("image-library") },
+                            viewModel = hiltViewModel<SettingsViewModel>(entry)
+                        )
+                    } else SettingsScreen(
                         contentPadding = padding,
                         viewModel = hiltViewModel(entry),
                         onOpenReading = { navController.navigate("settings-reading") },
@@ -234,10 +254,35 @@ fun MoReadApp(
                         onOpenAi = { navController.navigate("settings-ai") },
                         onOpenBackup = { navController.navigate("backup-settings") },
                         onOpenData = { navController.navigate("settings-data") },
-                        onOpenAbout = { navController.navigate("settings-about") }
+                        onOpenAbout = { navController.navigate("settings-about") },
+                        onOpenDictionaries = { navController.navigate("settings-dictionaries") },
+                        onOpenVocabulary = { navController.navigate("settings-vocabulary") },
+                        onOpenReadingReview = { navController.navigate("settings-review") }
                     )
                 }
-                pushComposable("settings-reading") { entry ->
+                settingsComposable("settings-review", navController) {
+                    com.mozhi.reader.feature.review.ReadingReviewScreen(
+                        onBack = { navController.popBackStack() },
+                        onLocate = { item ->
+                            if (item.canLocate) {
+                                navController.navigate("reader/${item.book.id}")
+                                navController.currentBackStackEntry?.savedStateHandle?.let { handle ->
+                                    handle[LOCATE_START_KEY] = item.offset
+                                    handle[LOCATE_END_KEY] = item.annotation?.endCharOffset ?: item.offset
+                                    handle[LOCATE_ANCHOR_KEY] = item.annotation?.textAnchorJson.orEmpty()
+                                    handle[LOCATE_CHAPTER_KEY] = item.chapter
+                                }
+                            }
+                        }
+                    )
+                }
+                settingsComposable("settings-dictionaries", navController) {
+                    com.mozhi.reader.feature.reader.DictionaryManagerPage(onBack = { navController.popBackStack() })
+                }
+                settingsComposable("settings-vocabulary", navController) {
+                    com.mozhi.reader.feature.reader.VocabularyPage(onBack = { navController.popBackStack() })
+                }
+                settingsComposable("settings-reading", navController) { entry ->
                     val settingsEntry = remember(entry) {
                         navController.getBackStackEntry(RootDestination.Settings.route)
                     }
@@ -248,7 +293,7 @@ fun MoReadApp(
                         viewModel = hiltViewModel<SettingsViewModel>(settingsEntry)
                     )
                 }
-                pushComposable("settings-ai") { entry ->
+                settingsComposable("settings-ai", navController) { entry ->
                     val settingsEntry = remember(entry) {
                         navController.getBackStackEntry(RootDestination.Settings.route)
                     }
@@ -265,7 +310,7 @@ fun MoReadApp(
                         viewModel = hiltViewModel<SettingsViewModel>(settingsEntry)
                     )
                 }
-                pushComposable("annotation-limits") { entry ->
+                settingsComposable("annotation-limits", navController) { entry ->
                     val settingsEntry = remember(entry) {
                         navController.getBackStackEntry(RootDestination.Settings.route)
                     }
@@ -276,7 +321,7 @@ fun MoReadApp(
                         viewModel = hiltViewModel<SettingsViewModel>(settingsEntry)
                     )
                 }
-                pushComposable("annotation-prompts") { entry ->
+                settingsComposable("annotation-prompts", navController) { entry ->
                     val settingsEntry = remember(entry) { navController.getBackStackEntry(RootDestination.Settings.route) }
                     AnnotationPromptSettingsScreen(onBack = navController::popBackStack,
                         viewModel = hiltViewModel<SettingsViewModel>(settingsEntry))
@@ -291,7 +336,7 @@ fun MoReadApp(
                         viewModel = hiltViewModel<SettingsViewModel>(owner)
                     )
                 }
-                pushComposable("settings-data") { entry ->
+                settingsComposable("settings-data", navController) { entry ->
                     DataSettingsScreen(
                         onBack = navController::popBackStack,
                         onOpenBackup = { navController.navigate("backup-settings") },
@@ -301,13 +346,13 @@ fun MoReadApp(
                         onOpenBook = { navController.navigate("book/$it") }
                     )
                 }
-                pushComposable("settings-about") {
+                settingsComposable("settings-about", navController) {
                     AboutSettingsScreen(
                         onBack = navController::popBackStack,
                         onOpenApiLog = { navController.navigate("api-log") }
                     )
                 }
-                pushComposable("ai-services") { entry ->
+                settingsComposable("ai-services", navController) { entry ->
                     // AI 服务与设置页共用同一个热状态，避免推入二级页时重新订阅数据库，
                     // 先画一帧空列表再补内容造成的闪烁。
                     val settingsEntry = remember(entry) {
@@ -321,44 +366,44 @@ fun MoReadApp(
                         viewModel = hiltViewModel<SettingsViewModel>(settingsEntry)
                     )
                 }
-                pushComposable("tts-settings") {
+                settingsComposable("tts-settings", navController) {
                     TtsSettingsScreen(
                         onBack = navController::popBackStack,
                         onOpenSpeechCache = { navController.navigate("speech-cache") },
                         onOpenVoiceLibrary = { navController.navigate("tts-voices") }
                     )
                 }
-                pushComposable("tts-voices") {
+                settingsComposable("tts-voices", navController) {
                     TtsVoiceLibraryScreen(onBack = navController::popBackStack)
                 }
-                pushComposable("speech-cache") {
+                settingsComposable("speech-cache", navController) {
                     SpeechCacheScreen(
                         onBack = navController::popBackStack,
                         onOpenBackupSettings = { navController.navigate("backup-settings") }
                     )
                 }
-                pushComposable("web-search-settings") {
+                settingsComposable("web-search-settings", navController) {
                     WebSearchSettingsScreen(onBack = navController::popBackStack)
                 }
-                pushComposable("image-gen-settings") {
+                settingsComposable("image-gen-settings", navController) {
                     ImageGenSettingsScreen(onBack = navController::popBackStack)
                 }
-                pushComposable("font-library") {
+                settingsComposable("font-library", navController) {
                     FontLibraryScreen(onBack = navController::popBackStack)
                 }
-                pushComposable("image-library") {
+                settingsComposable("image-library", navController) {
                     ImageLibraryScreen(onBack = navController::popBackStack)
                 }
-                pushComposable("global-presets") {
+                settingsComposable("global-presets", navController) {
                     GlobalPresetSettingsScreen(onBack = navController::popBackStack)
                 }
-                pushComposable("user-masks") {
+                settingsComposable("user-masks", navController) {
                     UserMaskSettingsScreen(onBack = navController::popBackStack)
                 }
-                pushComposable("backup-settings") {
+                settingsComposable("backup-settings", navController) {
                     BackupSettingsScreen(onBack = navController::popBackStack)
                 }
-                pushComposable("api-log") {
+                settingsComposable("api-log", navController) {
                     ApiLogScreen(onBack = navController::popBackStack)
                 }
                 pushComposable("shelf-groups") {
@@ -606,7 +651,7 @@ fun MoReadApp(
                 pushComposable("persona-memory/{personaId}") {
                     PersonaMemoryScreen(onBack = navController::popBackStack)
                 }
-                pushComposable("provider/{providerId}") {
+                settingsComposable("provider/{providerId}", navController) {
                     ProviderDetailScreen(onBack = navController::popBackStack)
                 }
                 }
@@ -614,19 +659,35 @@ fun MoReadApp(
 
             // Dock 是覆盖在内容上的浮层，不占 Scaffold 的 bottomBar 布局高度。
             // 否则 Scaffold 会在整屏底部预留一条矩形空白，看起来像胶囊背后的白横条。
+            val settingsSession = settingsDestination(currentRoute) != null &&
+                runCatching { navController.getBackStackEntry("settings") }.isSuccess
+            if (expanded && settingsSession) {
+                TabletSettingsSidebar(currentRoute,
+                    onBackToLibrary = { selectRoot(RootDestination.Bookshelf) },
+                    onSelect = navController::selectSettingsDestination,
+                    modifier = Modifier.align(Alignment.CenterStart)
+                )
+            } else if (expanded && isRootRoute(currentRoute)) {
+                MoReadTabletSidebar(
+                    selectedRoute = currentRoute,
+                    shelf = shelfState,
+                    onSelect = selectRoot,
+                    onReadState = { bookshelfViewModel.setReadStateFilter(it); selectRoot(RootDestination.Bookshelf) },
+                    onGroup = { id, ungrouped -> bookshelfViewModel.selectGroup(id, ungrouped); selectRoot(RootDestination.Bookshelf) },
+                    onTag = { bookshelfViewModel.toggleTagFilter(it); selectRoot(RootDestination.Bookshelf) },
+                    onClearFilters = { bookshelfViewModel.clearFilter(); selectRoot(RootDestination.Bookshelf) },
+                    onManageGroups = { navController.navigate("shelf-groups") },
+                    onManageTags = { navController.navigate("shelf-tags") },
+                    modifier = Modifier.align(Alignment.CenterStart)
+                )
+            }
             MoReadNavigationDock(
-                visible = showBottomBar,
+                visible = showBottomBar && !expanded,
                 hazeState = hazeState,
-                vertical = expanded,
-                modifier = Modifier.align(if (expanded) Alignment.CenterStart else Alignment.BottomCenter),
+                vertical = medium,
+                modifier = Modifier.align(if (medium) Alignment.CenterStart else Alignment.BottomCenter),
                 currentRoute = currentRoute,
-                onSelect = { item ->
-                    navController.navigate(item.route) {
-                        popUpTo(RootDestination.Bookshelf.route) { saveState = true }
-                        launchSingleTop = true
-                        restoreState = true
-                    }
-                }
+                onSelect = selectRoot
             )
             AppUpdatePrompt()
         }

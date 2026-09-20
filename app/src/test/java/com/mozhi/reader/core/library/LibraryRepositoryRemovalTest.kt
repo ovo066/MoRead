@@ -105,7 +105,7 @@ class LibraryRepositoryRemovalTest {
             old.version = 28
         }
         val migrated = Room.databaseBuilder(context, MoReadDatabase::class.java, "knowledge-migration.db")
-            .addMigrations(DatabaseMigrations.Migration28To29, DatabaseMigrations.Migration29To30).build()
+            .addMigrations(DatabaseMigrations.Migration28To29, DatabaseMigrations.Migration29To30, DatabaseMigrations.Migration30To31).build()
         try {
             assertEquals("旧版章节资料", migrated.chapterKnowledgeDao().get(1, 0)?.contentJson)
             assertEquals(MoReadDatabase.VERSION, migrated.openHelper.writableDatabase.version)
@@ -134,7 +134,7 @@ class LibraryRepositoryRemovalTest {
             old.version = 25
         }
         val migrated = Room.databaseBuilder(context, MoReadDatabase::class.java, "migration.db")
-            .addMigrations(DatabaseMigrations.Migration25To26, DatabaseMigrations.Migration26To27, DatabaseMigrations.Migration27To28, DatabaseMigrations.Migration28To29, DatabaseMigrations.Migration29To30).build()
+            .addMigrations(DatabaseMigrations.Migration25To26, DatabaseMigrations.Migration26To27, DatabaseMigrations.Migration27To28, DatabaseMigrations.Migration28To29, DatabaseMigrations.Migration29To30, DatabaseMigrations.Migration30To31).build()
         try {
             val book = requireNotNull(migrated.bookDao().getBook(1))
             assertEquals("旧书", book.title)

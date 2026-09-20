@@ -13,6 +13,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.*
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
@@ -112,6 +113,23 @@ class BookDetailNavigationTest {
         compose.runOnIdle { nav.navigate("book/1") }
         compose.waitForIdle()
         assertEquals(1L, nav.currentBackStackEntry?.bookIdOrNull())
+    }
+
+    @Test @Config(qualifiers = "w1400dp-h960dp-mdpi")
+    fun tabletDetailKeepsCoverAndActionsBesideScrollableReadingMaterial() {
+        state.value = state.value.copy(book = state.value.book!!.copy(title = "雨夜里的灯塔", author = "演示作者"), description = "一封迟来的信，让灯塔里的守望变成了一段新的旅程。")
+        mount(0)
+        val before = compose.onNodeWithTag("detail-summary").fetchSemanticsNode().boundsInRoot
+        compose.onNodeWithText("继续阅读").assertIsDisplayed()
+        compose.onNodeWithTag("detail-content").onChildren().filter(hasScrollAction()).onFirst().performTouchInput { swipeUp() }
+        assertEquals(before, compose.onNodeWithTag("detail-summary").fetchSemanticsNode().boundsInRoot)
+        compose.runOnIdle {
+            val root = view.rootView
+            val bitmap = android.graphics.Bitmap.createBitmap(root.width, root.height, android.graphics.Bitmap.Config.ARGB_8888)
+            root.draw(android.graphics.Canvas(bitmap))
+            java.io.File("build/reports/tablet-ui/secondary/tablet-book-detail.png").apply { parentFile.mkdirs() }.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+            bitmap.recycle()
+        }
     }
 
     private fun dispatchInsets(visible: Boolean, cutoutTop: Int) {

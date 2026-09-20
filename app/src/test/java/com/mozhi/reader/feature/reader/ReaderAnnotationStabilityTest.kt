@@ -56,7 +56,7 @@ class ReaderAnnotationStabilityTest {
     private lateinit var root: View
     private var contentHook: ((Int) -> Unit)? = null
 
-    private fun mount() {
+    private fun mount(showFooter: Boolean = true) {
         val body = List(45) {
             "夜色渐深，河岸的灯火映在水面上。她停下脚步，听见远处传来一阵钟声，" +
                 "才发觉信里提到的渡口就在眼前。风翻动书页，而她仍记得刚才读到的那句话。"
@@ -75,7 +75,7 @@ class ReaderAnnotationStabilityTest {
             controller = reader
             holder = remember(reader) { ReaderPaneHolder(reader) }
             DisposableEffect(holder) { onDispose { holder.release() } }
-            val settings = ReaderSettings(pageTurnAnimation = animation.value)
+            val settings = ReaderSettings(pageTurnAnimation = animation.value, showFooter = showFooter)
             ReaderPane(
                 controller = reader, holder = holder, settings = settings,
                 palette = readerPalette(settings.theme, false, Color(0xff526d58)), enabled = true,
@@ -189,7 +189,8 @@ class ReaderAnnotationStabilityTest {
 
     @Test
     fun addingACommentOnlyChangesPixelsInsideTheLastMarkedCharacter() {
-        mount()
+        // The clock can cross a minute during the pixel comparison; this test owns annotation ink.
+        mount(showFooter = false)
         lateinit var page: TextPage
         compose.runOnIdle { page = (controller.curPage() as RenderPage.Laid).page }
         for (style in listOf("UNDERLINE", "WAVY", "HIGHLIGHT")) {

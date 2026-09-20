@@ -49,6 +49,13 @@ fun LibraryCompanionScreen(
         }
     }
     Box(Modifier.fillMaxSize()) {
+        com.mozhi.reader.feature.reader.CompanionWorkspace(
+            conversations, session.conversation?.id, "书库伴读", !session.busy && !messages.reply.running,
+            onBack, ::fresh, onOpen = { id ->
+                if (session.draft.isBlank()) viewModel.open(id)
+                else scope.launch { snackbar.showSnackbar("请先发送或清空草稿") }
+            }, onManage = { history = true }
+        ) {
         LibraryChatConversation(
             session = session, catalog = catalog, messages = messages,
             onBack = onBack, onHistory = { history = true }, onNew = ::fresh,
@@ -61,6 +68,7 @@ fun LibraryCompanionScreen(
             onEdit = { editing = it; editText = it.content }, onDelete = { deleting = it },
             onReroll = { rerolling = it }, onBranch = { viewModel.branchFrom(it.id) }, onRetry = viewModel::retry
         )
+        }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 88.dp))
     }
     EditCompanionMessageDialog(editing, editText, { editText = if (editing?.role == "user") it.take(8_000) else it }, { editing = null }) { message, text ->

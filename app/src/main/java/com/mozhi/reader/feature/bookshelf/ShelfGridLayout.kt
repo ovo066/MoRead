@@ -19,3 +19,12 @@ internal object ShelfGridCells : GridCells {
         return List(columns) { cellSize + if (it < remainder) 1 else 0 }
     }
 }
+
+/** Larger covers on a tablet are an intentional reading-library presentation, not scaled phone cells. */
+internal object TabletShelfGridCells : GridCells {
+    override fun Density.calculateCrossAxisCellSizes(availableSize: Int, spacing: Int): List<Int> {
+        val columns = ((availableSize + spacing) / (168f * density + spacing)).toInt().coerceIn(2, 6)
+        val contentSize = (availableSize - spacing * (columns - 1)).coerceAtLeast(0)
+        return List(columns) { contentSize / columns + if (it < contentSize % columns) 1 else 0 }
+    }
+}

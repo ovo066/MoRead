@@ -5,6 +5,10 @@
 - juniversalchardet 2.5.0（MPL-1.1）：TXT 编码探测。
 - OkHttp / okhttp-sse（Apache-2.0）：网络与 SSE 流式基础设施。
 - jsoup（MIT）：EPUB HTML 正文抽取。
+- lzo-core 1.0.6（GPL-3.0，[lzo-java](https://github.com/shevek/lzo-java)）：MDX / MDD 分块 LZO 解压。
+- Bouncy Castle 1.80（Bouncy Castle Licence，MIT 许可条款）：MDX v2 索引解密所需的 RIPEMD-128；许可随 APK assets 分发，见 `licenses/bouncycastle-LICENSE.html`。不替换系统安全提供程序。
+- MDX / MDD 文件格式参考 [writemdict 格式说明](https://github.com/zhansliu/writemdict/blob/master/fileformat.md)，读取器独立实现。测试词典是自行生成的微型样本，不含商业词典数据。
+- [Legado NG](https://github.com/joestar817/legado_NG)：操作区域、角色卡提取、净化和统一 UI 体系的产品设计参考。
 - OpenccJava 1.4.2（MIT，Copyright (c) 2025 laisuk）：本地繁简及地区词转换（`licenses/openccjava-MIT.txt`，同时随 APK assets 分发）。
 - OpenCC 词库（Apache-2.0，上游 BYVoid/OpenCC）：OpenccJava 随附的 `dicts/**` 转换数据（`licenses/opencc-dictionaries-Apache-2.0.txt`；原始 `dicts/LICENSE` 与 assets 声明均随包保留）。
 - Coil（Apache-2.0）：图片加载。

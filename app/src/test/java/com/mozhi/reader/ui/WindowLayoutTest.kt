@@ -17,9 +17,9 @@ class WindowLayoutTest {
     }
 
     @Test
-    fun compactAndMediumKeepDockSpace() {
+    fun onlyCompactKeepsBottomDockSpace() {
         assertEquals(124f, MoReadLayoutPolicy.rootBottomPaddingDp(MoReadWindowWidth.COMPACT))
-        assertEquals(124f, MoReadLayoutPolicy.rootBottomPaddingDp(MoReadWindowWidth.MEDIUM))
+        assertEquals(32f, MoReadLayoutPolicy.rootBottomPaddingDp(MoReadWindowWidth.MEDIUM))
         assertEquals(32f, MoReadLayoutPolicy.rootBottomPaddingDp(MoReadWindowWidth.EXPANDED))
     }
 

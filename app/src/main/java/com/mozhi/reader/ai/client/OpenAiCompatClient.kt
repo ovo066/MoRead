@@ -70,6 +70,7 @@ class OpenAiCompatClient(
                             finish()
                             return
                         }
+                        parseChatUsage(data, ApiDialect.OPENAI)?.let { trySend(it) }
                         val chunk = runCatching {
                             AiJson.decodeFromString(ChatCompletionChunk.serializer(), data)
                         }.getOrNull() ?: return
@@ -162,7 +163,8 @@ class OpenAiCompatClient(
                         )
                     )
                 },
-                stream = stream
+                stream = stream,
+                streamOptions = if (stream) JsonObject(mapOf("include_usage" to kotlinx.serialization.json.JsonPrimitive(true))) else null
             )
         ).jsonObject.let { encoded ->
             val withTopP = options.topP?.let {

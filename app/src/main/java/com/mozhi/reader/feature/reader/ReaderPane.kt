@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.HelpOutline
+import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.outlined.BorderColor
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
@@ -50,6 +51,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
@@ -98,6 +100,9 @@ import com.mozhi.reader.feature.reader.engine.selectionBodyRange
 import com.mozhi.reader.feature.reader.engine.selectionRects
 import com.mozhi.reader.feature.reader.engine.textPosAtBodyOffset
 import com.mozhi.reader.feature.reader.engine.wordSelectionAt
+import com.mozhi.reader.feature.reader.engine.translationAt
+import com.mozhi.reader.feature.reader.engine.ReaderParagraphTranslation
+import com.mozhi.reader.feature.reader.engine.charOffsetOf
 import com.mozhi.reader.feature.reader.render.PageBitmapRenderer
 import com.mozhi.reader.feature.reader.render.ReaderPageStyle
 import com.mozhi.reader.feature.reader.render.SpreadGeometry
@@ -123,6 +128,10 @@ internal fun ReaderPane(
     enabled: Boolean,
     registerContentHook: (((Int) -> Unit)?) -> Unit,
     onCenterTap: () -> Unit,
+    onTapAction: (com.mozhi.reader.core.datastore.ReaderTapAction) -> Unit = {},
+    onDictionaryLookup: (com.mozhi.reader.core.dictionary.DictionaryLookupHit) -> Unit = {},
+    onParagraphTranslation: (chapterIndex: Int, offset: Int) -> Unit = { _, _ -> },
+    onTranslationLongPress: (ReaderParagraphTranslation) -> Unit = {},
     onAddBookmark: () -> Unit,
     onBoundary: (PageTurnDirection) -> Unit,
     onNotice: (String) -> Unit,
@@ -147,6 +156,7 @@ internal fun ReaderPane(
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
+    val controlsPalette = readerControlsPalette(palette)
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
     val bookmarkFeedback = remember { BookmarkPullFeedback() }
@@ -230,11 +240,13 @@ internal fun ReaderPane(
         // A hinge uses relative travel, including cancellation back to startX; no corner curl.
         PageTurnAnimation.SIMULATION -> if (spreadMode) PageTurnDriver.Mode.FLAT else PageTurnDriver.Mode.SIMULATION
         PageTurnAnimation.COVER, PageTurnAnimation.SLIDE -> PageTurnDriver.Mode.FLAT
+        PageTurnAnimation.MODERN_SIMULATION -> if (android.os.Build.VERSION.SDK_INT >= 33) PageTurnDriver.Mode.MODERN_CURL
+            else if (spreadMode) PageTurnDriver.Mode.FLAT else PageTurnDriver.Mode.SIMULATION
         PageTurnAnimation.NONE -> PageTurnDriver.Mode.INSTANT
     }
 
     driver.hingeLeafWidth = spreadGeometry?.leafWidth
-        ?.takeIf { settings.pageTurnAnimation == PageTurnAnimation.SIMULATION }
+        ?.takeIf { settings.pageTurnAnimation == PageTurnAnimation.SIMULATION || settings.pageTurnAnimation == PageTurnAnimation.MODERN_SIMULATION }
 
     // 位图正被翻页合成器读取时，普通内容/批注/时钟更新等到手势落定后再发布。
     // 唯一例外是 fillPage 已登记的提交刷新：它只重画已经离窗的缓冲，而且必须在
@@ -457,7 +469,14 @@ internal fun ReaderPane(
                     driver = driver,
                     selection = selection,
                     onImageLongPress = { position ->
-                        holder.imageAt(position)?.let { image ->
+                        holder.hitAt(position)?.let { hit ->
+                            hit.page.page.translationAt(hit.local.x, hit.local.y, hit.page.chapterIndex)
+                        }?.let { translation ->
+                            selection.clear()
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onTranslationLongPress(translation)
+                            true
+                        } ?: holder.imageAt(position)?.let { image ->
                             selection.clear()
                             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                             onEpubImageLongPress(image)
@@ -487,6 +506,22 @@ internal fun ReaderPane(
                     holder.linkAt(position)?.let { link ->
                         selection.clear()
                         onLinkClick(link)
+                        return@readerPageTouch
+                    }
+                    if (settings.englishLearningEnabled && settings.wordAnnotationMode == com.mozhi.reader.core.dictionary.WordAnnotationMode.POPUP && !fromAbort) {
+                        holder.englishWordAt(position)?.takeIf { hit -> settings.vocabulary.any {
+                            !it.learned && it.word == com.mozhi.reader.core.dictionary.EnglishWords.normalize(hit.word)
+                        } }?.let { onDictionaryLookup(it); return@readerPageTouch }
+                    }
+                    val customAction = settings.tapZones?.actionAt(position.x, position.y,
+                        holder.viewWidth.toFloat(), holder.viewHeight.toFloat())
+                    if (customAction != null) {
+                        when (customAction) {
+                            com.mozhi.reader.core.datastore.ReaderTapAction.PREVIOUS_PAGE -> driver.turnByTap(PageTurnDirection.PREVIOUS)
+                            com.mozhi.reader.core.datastore.ReaderTapAction.NEXT_PAGE -> driver.turnByTap(PageTurnDirection.NEXT)
+                            com.mozhi.reader.core.datastore.ReaderTapAction.NONE -> Unit
+                            else -> if (!fromAbort) onTapAction(customAction)
+                        }
                         return@readerPageTouch
                     }
                     val tapDirection = readerTapDirection(
@@ -524,7 +559,10 @@ internal fun ReaderPane(
                             width = size.width,
                             height = size.height,
                             backgroundColor = holder.backgroundColor,
-                            spread = holder.spread
+                            spread = holder.spread,
+                            startY = driver.startY,
+                            modernBackTextOpacity = settings.modernBackTextOpacity,
+                            modernRadiusScale = settings.modernCurlRadiusScale
                         )
                     } else {
                         holder.curBitmap?.takeUnless(Bitmap::isRecycled)?.let {
@@ -536,14 +574,14 @@ internal fun ReaderPane(
                                 )
                             }
                         }
-                        selection.drawHighlight(this, palette)
+                        selection.drawHighlight(this, controlsPalette)
                     }
                 }
         )
 
         BookmarkPullIndicator(
             feedback = bookmarkFeedback,
-            palette = palette,
+            palette = controlsPalette,
             modifier = Modifier.align(Alignment.TopEnd).padding(
                 top = with(density) { statusBarPx.toDp() }, end = 20.dp
             )
@@ -552,8 +590,20 @@ internal fun ReaderPane(
         selection.active?.takeIf { !it.dragging }?.let { active ->
             val toolbarTopPx = selection.toolbarTop(active, density)
             SelectionToolbar(
-                palette = palette,
+                palette = controlsPalette,
                 topPx = toolbarTopPx,
+                onDictionary = {
+                    val text = selection.selectedText()
+                    selection.bodyRange()?.let { range ->
+                        onDictionaryLookup(com.mozhi.reader.core.dictionary.DictionaryLookupHit(
+                            text, controller.contextAround(range), active.chapterIndex, range.first))
+                    }
+                    selection.clear()
+                },
+                onParagraphTranslation = {
+                    selection.bodyRange()?.let { onParagraphTranslation(active.chapterIndex, it.first) }
+                    selection.clear()
+                },
                 onAi = { action ->
                     val text = selection.selectedText()
                     val range = selection.bodyRange()
@@ -608,19 +658,22 @@ internal fun ReaderPane(
 internal fun BoxScope.SelectionToolbar(
     palette: ReaderPalette,
     topPx: Int,
+    onParagraphTranslation: () -> Unit,
     onAi: (SelectionAiAction) -> Unit,
     onAnnotation: () -> Unit,
     onTts: () -> Unit,
     onImage: () -> Unit,
     onEdit: (() -> Unit)?,
     onCopy: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onDictionary: () -> Unit = {}
 ) {
     Surface(
         modifier = Modifier
             .align(Alignment.TopCenter)
             .fillMaxWidth(0.96f)
-            .offset { IntOffset(0, topPx) },
+            .offset { IntOffset(0, topPx) }
+            .testTag("reader-selection-toolbar"),
         shape = RoundedCornerShape(17.dp),
         color = palette.glassStrong,
         contentColor = palette.onBackground,
@@ -632,6 +685,8 @@ internal fun BoxScope.SelectionToolbar(
                 .horizontalScroll(rememberScrollState())
                 .padding(horizontal = 4.dp, vertical = 5.dp)
         ) {
+            SelectionToolItem(Icons.AutoMirrored.Outlined.MenuBook, "词典", palette.accent, palette, onDictionary)
+            SelectionToolItem(Icons.Outlined.Translate, "本段对照", palette.accent, palette, onParagraphTranslation)
             SelectionAiAction.entries.forEach { action ->
                 SelectionToolItem(
                     icon = action.toolbarIcon(),
@@ -736,6 +791,8 @@ internal fun readerRenderStyleKey(
             settings.titleScale,
             settings.titleTopSpacing,
             settings.titleBottomSpacing,
+            settings.titleStyle,
+            settings.imageLibrary,
             settings.textJustification,
             settings.showHeader,
             settings.showFooter,
@@ -743,7 +800,8 @@ internal fun readerRenderStyleKey(
             settings.footerMarginBottom
         ).hashCode(),
         syntaxHighlightEnabled = settings.syntaxHighlightEnabled,
-        syntaxRulesHash = settings.syntaxHighlightRules.hashCode(),
+        syntaxRulesHash = listOf(settings.syntaxHighlightRules, settings.englishBionicEnabled, settings.englishLearningEnabled,
+            settings.wordAnnotationMode, settings.vocabulary.map { listOf(it.word, it.learned, it.gloss, it.phonetic) }).hashCode(),
         fontLibraryHash = settings.fontLibrary.hashCode(),
         width = viewport.width,
         height = viewport.height,
@@ -1294,6 +1352,14 @@ internal class ReaderPaneHolder(private val controller: ReaderContentController)
         return hit.copy(local = position - contentOrigin(hit.page, hit.leaf))
     }
 
+    fun englishWordAt(position: Offset): com.mozhi.reader.core.dictionary.DictionaryLookupHit? {
+        val hit = hitAt(position) ?: return null
+        val pos = hit.page.page.hitTextPos(hit.local.x, hit.local.y, exact = true) ?: return null
+        val offset = hit.page.page.charOffsetOf(pos)
+        val body = controller.chapterBody(hit.page.chapterIndex) ?: return null
+        return com.mozhi.reader.core.dictionary.EnglishWords.at(body, offset, hit.page.chapterIndex)
+    }
+
     fun imageAt(position: Offset): ReaderPageImage? {
         val currentStyle = style ?: return null
         val hit = hitAt(position) ?: return null
@@ -1540,6 +1606,7 @@ internal class ReaderPaneHolder(private val controller: ReaderContentController)
 
     fun release() {
         detach()
+        compositor.release()
         renderer?.release()
         renderer = null
         style = null

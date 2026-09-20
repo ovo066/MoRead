@@ -23,7 +23,7 @@ class ReaderKnowledgeViewModelTest {
             every { outlines.observe(1) } returns results
             every { characters.observe(1) } returns MutableStateFlow(BookCharactersSnapshot())
             every { runner.states } returns MutableStateFlow(emptyMap())
-            val model = ReaderKnowledgeViewModel(outlines, characters, runner)
+            val model = ReaderKnowledgeViewModel(outlines, characters, runner, mockk(relaxed = true))
             store.put("knowledge", model)
             model.bind(1)
             runCurrent()

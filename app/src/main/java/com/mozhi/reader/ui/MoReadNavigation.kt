@@ -103,11 +103,16 @@ internal fun MoReadNavigationScaffold(
 internal fun NavGraphBuilder.rootComposable(
     route: String,
     expanded: Boolean,
+    medium: Boolean = false,
     content: @Composable AnimatedContentScope.(NavBackStackEntry) -> Unit
 ) = composable(route) { entry ->
     Box(
         Modifier.fillMaxSize().padding(
-            start = if (expanded) MoReadLayoutPolicy.NavigationRailWidthDp.dp else 0.dp
+            start = when {
+                expanded -> MoReadLayoutPolicy.TabletSidebarWidthDp.dp
+                medium -> MoReadLayoutPolicy.NavigationRailWidthDp.dp
+                else -> 0.dp
+            }
         )
     ) {
         content(entry)

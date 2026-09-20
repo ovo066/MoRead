@@ -30,4 +30,16 @@ class ShelfGridLayoutTest {
             assertTrue(cells.max() - cells.min() <= 1)
         }
     }
+
+    @Test
+    fun tabletCoversStayReadableAfterSidebarAndGuttersAreRemoved() {
+        listOf(612 to 3, 1112 to 5, 1536 to 6).forEach { (width, expectedColumns) ->
+            val cells = with(TabletShelfGridCells) {
+                with(Density(1f)) { calculateCrossAxisCellSizes(width, 24) }
+            }
+            assertEquals(expectedColumns, cells.size)
+            assertEquals(width, cells.sum() + 24 * (cells.size - 1))
+            assertTrue(cells.min() >= 168)
+        }
+    }
 }

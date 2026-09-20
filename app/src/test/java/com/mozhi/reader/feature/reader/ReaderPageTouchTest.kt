@@ -26,6 +26,7 @@ class ReaderPageTouchTest {
     private var bookmarks = 0
     private var turns = 0
     private var starts = 0
+    private val filledDirections = mutableListOf<PageTurnDirection>()
     private var taps = 0
     private val progress = mutableListOf<Float>()
     private lateinit var driver: PageTurnDriver
@@ -35,7 +36,7 @@ class ReaderPageTouchTest {
             val scope = rememberCoroutineScope()
             driver = remember { PageTurnDriver(scope, object : PageTurnDriver.Callbacks {
                 override fun hasPage(direction: PageTurnDirection) = true
-                override fun fillPage(direction: PageTurnDirection) { turns++ }
+                override fun fillPage(direction: PageTurnDirection) { turns++; filledDirections += direction }
                 override fun onBoundaryHit(direction: PageTurnDirection) = Unit
                 override fun onTurnCommitted() = Unit
                 override fun onTurnStarted(direction: PageTurnDirection) { starts++ }
@@ -116,6 +117,115 @@ class ReaderPageTouchTest {
         compose.runOnIdle {
             assertEquals(1, starts)
             assertEquals(1, turns)
+            assertEquals(0, bookmarks)
+            assertEquals(0, taps)
+        }
+    }
+
+    @Test fun modernCurlKeepsTheDownAnchorAndLandsWithoutProjectingTheFingerOffScreen() {
+        mount()
+        compose.runOnIdle { driver.mode = PageTurnDriver.Mode.MODERN_CURL; driver.setViewport(300f, 400f) }
+        compose.onNodeWithTag("page").performTouchInput {
+            down(Offset(290f, 200f))
+            moveTo(Offset(260f, 210f), delayMillis = 40)
+            moveTo(Offset(150f, 270f), delayMillis = 70)
+        }
+        compose.runOnIdle {
+            assertEquals(270f, driver.touchY, .01f)
+            assertEquals(200f, driver.startY, .01f)
+            assertEquals(290f, driver.startX, .01f)
+            assertEquals(PageTurnDirection.NEXT, driver.direction)
+        }
+        compose.mainClock.autoAdvance = false
+        compose.onNodeWithTag("page").performTouchInput { up() }
+        compose.mainClock.advanceTimeBy(64)
+        compose.runOnIdle {
+            assertTrue(driver.touchY in 200f..270f)
+            assertTrue(driver.touchX < 150f)
+        }
+        compose.mainClock.advanceTimeBy(500)
+        compose.runOnIdle { assertEquals(1, turns); assertFalse(driver.isRunning) }
+    }
+
+    @Test fun modernShortFastFlickCommitsButHoldingTheSameDistanceCancels() {
+        mount()
+        compose.runOnIdle { driver.mode = PageTurnDriver.Mode.MODERN_CURL; driver.setViewport(300f, 400f) }
+        compose.onNodeWithTag("page").performTouchInput {
+            down(Offset(270f, 200f))
+            moveTo(Offset(210f, 220f), delayMillis = 40)
+            up()
+        }
+        compose.runOnIdle { assertEquals(1, turns) }
+        compose.onNodeWithTag("page").performTouchInput {
+            down(Offset(270f, 200f))
+            moveTo(Offset(210f, 220f), delayMillis = 40)
+            advanceEventTime(180)
+            up()
+        }
+        compose.runOnIdle { assertEquals(1, turns); assertFalse(driver.isRunning) }
+    }
+
+    @Test fun modernReverseFlickCancelsAndAReturningCurlCanBeGrabbedContinuously() {
+        mount()
+        compose.runOnIdle {
+            driver.mode = PageTurnDriver.Mode.MODERN_CURL
+            driver.setViewport(300f, 400f)
+            driver.onDown(290f, 200f, 0)
+            driver.onMove(30f, 220f, 8f, 200)
+            driver.onMove(120f, 215f, 8f, 230)
+            driver.onUp(231)
+        }
+        compose.runOnIdle { assertEquals(0, turns) }
+        compose.mainClock.autoAdvance = false
+        compose.runOnIdle {
+            driver.onDown(290f, 200f, 1000)
+            driver.onMove(200f, 230f, 8f, 1040)
+            driver.onUp(1220)
+        }
+        compose.mainClock.advanceTimeBy(64)
+        compose.runOnIdle {
+            assertTrue(driver.isAnimating)
+            val x = driver.touchX
+            val y = driver.touchY
+            driver.onDown(250f, 200f, 1300)
+            assertEquals(x, driver.touchX, 0f)
+            assertEquals(y, driver.touchY, 0f)
+            assertEquals(0, turns)
+            driver.onMove(240f, 205f, 8f, 1320)
+            assertEquals(x - 10f, driver.touchX, .001f)
+            assertEquals(y + 5f, driver.touchY, .001f)
+            driver.onMove(160f, 205f, 8f, 1340)
+            driver.onUp(1341)
+        }
+        compose.mainClock.advanceTimeBy(500)
+        compose.runOnIdle { assertEquals(1, turns); assertFalse(driver.isRunning); assertEquals(2, starts) }
+    }
+
+    @Test fun modernConsecutiveFlicksEachTurnAPageWhileThePreviousAnimationIsStillRunning() {
+        mount()
+        compose.runOnIdle { driver.mode = PageTurnDriver.Mode.MODERN_CURL }
+        compose.mainClock.autoAdvance = false
+        val directions = listOf(PageTurnDirection.NEXT, PageTurnDirection.NEXT, PageTurnDirection.PREVIOUS, PageTurnDirection.PREVIOUS)
+        for ((index, direction) in directions.withIndex()) {
+            val x = if (direction == PageTurnDirection.NEXT) 270f else 30f
+            val dx = if (direction == PageTurnDirection.NEXT) -60f else 60f
+            compose.onNodeWithTag("page").performTouchInput {
+                down(Offset(x, 200f))
+                moveTo(Offset(x + dx, 220f), delayMillis = 40)
+                up()
+            }
+            compose.mainClock.advanceTimeBy(64)
+            compose.runOnIdle {
+                assertTrue(driver.isAnimating)
+                assertEquals(index, turns)
+                assertEquals(index + 1, starts)
+            }
+        }
+        compose.mainClock.advanceTimeBy(500)
+        compose.runOnIdle {
+            assertEquals(directions, filledDirections)
+            assertEquals(4, turns)
+            assertFalse(driver.isRunning)
             assertEquals(0, bookmarks)
             assertEquals(0, taps)
         }

@@ -41,7 +41,12 @@ data class ReaderSyntaxRule(
     val fontAssetId: String? = null,
     val bold: Boolean = false,
     val italic: Boolean = false,
-    val strikethrough: Boolean = false
+    val strikethrough: Boolean = false,
+    val css: String = "",
+    /** Transient reader overlays; never added to the user's syntax-rule editor. */
+    val englishPrefixes: Boolean = false,
+    val englishWords: Set<String> = emptySet(),
+    @kotlinx.serialization.Transient val paint: ReaderStylePaint = ReaderStylePaint()
 )
 
 data class ReaderSyntaxStyleSpan(
@@ -55,7 +60,8 @@ data class ReaderSyntaxStyleSpan(
     val bold: Boolean,
     val italic: Boolean,
     val strikethrough: Boolean,
-    val ruleId: Long
+    val ruleId: Long,
+    val paintSpan: ReaderPaintSpan? = null
 )
 
 object ReaderSyntaxHighlighter {
@@ -64,7 +70,13 @@ object ReaderSyntaxHighlighter {
         if (text.isEmpty()) return emptyList()
         val occupied = BooleanArray(text.length)
         val result = ArrayList<ReaderSyntaxStyleSpan>()
-        rules.filter(ReaderSyntaxRule::enabled).forEach { rule ->
+        rules.filter { it.enabled && !it.englishPrefixes && it.englishWords.isEmpty() }.map { rule ->
+            val css = ReaderStyleCss.parse(rule.css)
+            rule.copy(paint = css.paint, colorArgb = css.color ?: rule.colorArgb, backgroundArgb = if (css.clipText) null else css.background ?: rule.backgroundArgb,
+                font = css.font ?: rule.font, fontAssetId = css.fontAssetId ?: rule.fontAssetId,
+                bold = css.bold ?: rule.bold, italic = css.italic ?: rule.italic,
+                underline = css.underline ?: rule.underline, strikethrough = css.strike ?: rule.strikethrough)
+        }.forEach { rule ->
             when (rule.matchMode) {
                 ReaderSyntaxMatchMode.DELIMITED -> {
                     val open = rule.startDelimiter
@@ -105,7 +117,35 @@ object ReaderSyntaxHighlighter {
                 }
             }
         }
-        return result.sortedBy(ReaderSyntaxStyleSpan::start)
+        val english = rules.firstOrNull { it.enabled && (it.englishPrefixes || it.englishWords.isNotEmpty()) }
+            ?: return result.sortedBy(ReaderSyntaxStyleSpan::start)
+        val styles = arrayOfNulls<ReaderSyntaxStyleSpan>(text.length)
+        result.forEach { span -> for (i in span.start until span.endExclusive) styles[i] = span.copy(start = 0, endExclusive = 0) }
+        val base = ReaderSyntaxStyleSpan(0, 0, english.colorArgb, null, false, ReaderSyntaxFont.INHERIT, null, false, false, false, english.id)
+        val cache = mutableMapOf<Triple<ReaderSyntaxStyleSpan, Boolean, Boolean>, ReaderSyntaxStyleSpan>()
+        com.mozhi.reader.core.dictionary.EnglishWords.pattern.findAll(text).forEach { match ->
+            val marked = com.mozhi.reader.core.dictionary.EnglishWords.normalize(match.value) in english.englishWords
+            val prefixEnd = match.range.first + if (english.englishPrefixes) (match.value.length + 1) / 2 else 0
+            for (i in match.range) {
+                val bold = i < prefixEnd
+                if (!marked && !bold) continue
+                val previous = styles[i] ?: base
+                styles[i] = cache.getOrPut(Triple(previous, bold, marked)) {
+                    previous.copy(bold = previous.bold || bold, underline = previous.underline || marked,
+                        backgroundArgb = if (marked) english.backgroundArgb else previous.backgroundArgb)
+                }
+            }
+        }
+        val merged = mutableListOf<ReaderSyntaxStyleSpan>()
+        var start = 0
+        while (start < styles.size) {
+            val style = styles[start]
+            var end = start + 1
+            while (end < styles.size && styles[end] == style) end++
+            if (style != null) merged += style.copy(start = start, endExclusive = end)
+            start = end
+        }
+        return merged
     }
 
     private fun addSpan(
@@ -129,7 +169,9 @@ object ReaderSyntaxHighlighter {
             bold = rule.bold,
             italic = rule.italic,
             strikethrough = rule.strikethrough,
-            ruleId = rule.id
+            ruleId = rule.id,
+            paintSpan = rule.paint.takeIf { it.textGradient != null || it.backgroundGradient != null || it.backgroundImageId != null }
+                ?.let { ReaderPaintSpan(it, rule.id, safeStart, safeEnd) }
         )
         for (index in safeStart until safeEnd) occupied[index] = true
     }

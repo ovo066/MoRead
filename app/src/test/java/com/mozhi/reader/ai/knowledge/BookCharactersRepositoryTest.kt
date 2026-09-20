@@ -55,6 +55,62 @@ class BookCharactersRepositoryTest {
 
     @After fun close() { database.close() }
 
+    @Test fun laterAiAliasCannotReplaceAnExistingManualRename() {
+        val initial = BookCharacterGuide(listOf(BookCharacter("林舟", emptyList())), 1, 100)
+        val edited = BookCharactersCodec.edit(initial, "林舟", "阿舟", "用户整理的资料")
+        val generated = initial.copy(characters = listOf(BookCharacter("阿舟", emptyList()), initial.characters.single()))
+        val merged = BookCharactersCodec.mergeManual(generated, edited)
+        assertEquals(1, merged.characters.size)
+        assertEquals("林舟", merged.characters.single().identity)
+        assertEquals("用户整理的资料", merged.characters.single().manualDescription)
+    }
+
+    @Test fun manualCharactersNeedNoModelAndEditsSurviveExtractionAndSourceChanges() = runBlocking {
+        repository.saveCharacter(1, null, "船夫", "手动补充：熟悉河道。")
+        assertEquals(0, client.requests)
+        coVerify(exactly = 0) { factory.forRole(any()) }
+        repository.generate(repository.preview(1))
+        repository.saveCharacter(1, "林舟", "阿舟", "手动整理：灯塔守望者。")
+        repository.generate(repository.preview(1))
+        var people = repository.observe(1).first().saved!!.guide.characters
+        assertEquals(3, people.size)
+        val edited = people.first { it.name == "阿舟" }
+        assertEquals("林舟", edited.identity)
+        assertEquals("手动整理：灯塔守望者。", edited.manualDescription)
+        assertTrue(edited.evidence.isNotEmpty())
+        assertEquals("手动整理：灯塔守望者。", ExtractedCharacterCard.from(edited).description)
+        assertTrue(runCatching { repository.saveCharacter(1, null, "阿舟", "重复") }.isFailure)
+        revision = "b".repeat(64)
+        val snapshot = repository.observe(1).first()
+        assertTrue(snapshot.outdated)
+        people = snapshot.saved!!.guide.characters
+        assertEquals(setOf("阿舟", "船夫"), people.map { it.name }.toSet())
+        assertTrue(people.all { it.evidence.isEmpty() })
+        repository.generate(repository.preview(1))
+        assertTrue(repository.observe(1).first().saved!!.guide.characters.any { it.name == "阿舟" && it.manualDescription != null && it.evidence.isNotEmpty() })
+    }
+
+    @Test fun manualEditDuringGenerationIsMergedAtPublicationAndNeverLosesToTheAiSnapshot() = runBlocking {
+        repository.generate(repository.preview(1))
+        database.bookCharacterDao().deleteParts(1)
+        val paused = pauseAfterFirstPart()
+        repository.saveCharacter(1, "林舟", "林舟", "生成期间的手动修订")
+        paused.cancelAndJoin()
+        client.onStream = {}
+        repository.generate(repository.preview(1))
+        assertEquals("生成期间的手动修订", repository.observe(1).first().saved!!.guide.characters.first { it.name == "林舟" }.manualDescription)
+    }
+
+    @Test fun changingToReadProgressDoesNotKeepUnreadEvidenceOnManuallyEditedPeople() = runBlocking {
+        repository.generate(repository.preview(1))
+        repository.saveCharacter(1, "小满", "小满", "用户自己的资料")
+        currentBook = book.copy(maxReachedChapterIndex = 0, maxReachedCharOffset = texts[0].length)
+        repository.generate(repository.preview(1, progressBounded = true))
+        val people = repository.observe(1).first().saved!!.guide.characters
+        assertTrue(people.first { it.name == "小满" }.evidence.isEmpty())
+        assertEquals("用户自己的资料", people.first { it.name == "小满" }.manualDescription)
+    }
+
     @Test fun explicitWholeBookPreviewIsLocalAndGenerationIncludesTheUnreadLastChapter() = runBlocking {
         assertNull(repository.observe(1).first().saved)
         val plan = repository.preview(1)

@@ -44,8 +44,8 @@ android {
         minSdk = 26
         targetSdk = 37
         // 测试期曾发过仓库外的高编号包，编号跳档保证覆盖安装不降级。
-        versionCode = 76
-        versionName = "1.1.2"
+        versionCode = 77
+        versionName = "1.1.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
 
@@ -178,6 +178,12 @@ dependencies {
     implementation(libs.coil.network.okhttp)
     implementation(libs.juniversalchardet)
     implementation(libs.jsoup)
+    // MDX/MDD block compression and the format's RIPEMD-128 index decoding.
+    implementation("org.anarres.lzo:lzo-core:1.0.6") {
+        // This old artifact bundles javax.annotation classes also provided by jsr305.
+        exclude(group = "com.google.code.findbugs", module = "annotations")
+    }
+    implementation("org.bouncycastle:bcprov-jdk18on:1.80")
     implementation(libs.opencc.java)
     implementation(libs.android.svg)
     implementation(libs.zxing.core)

@@ -55,6 +55,7 @@ data class SettingsUiState(
     val showAiAnnotations: Boolean = true,
     /** 多气泡回复；默认关。 */
     val multiBubbleEnabled: Boolean = false,
+    val companionTokenUsageEnabled: Boolean = false,
     /** agent 主动调用开关矩阵；全部默认关。 */
     val autonomy: CompanionAutonomySettings = CompanionAutonomySettings(),
     val personas: List<PersonaEntity> = emptyList(),
@@ -99,7 +100,8 @@ class SettingsViewModel @Inject constructor(
         val showAiAnnotations: Boolean,
         val memory: CompanionMemorySettings,
         val multiBubbleEnabled: Boolean,
-        val autonomy: CompanionAutonomySettings
+        val autonomy: CompanionAutonomySettings,
+        val companionTokenUsageEnabled: Boolean
     )
 
     private val appPrefs = combine(
@@ -108,7 +110,8 @@ class SettingsViewModel @Inject constructor(
         readerSettingsRepository.showAiAnnotations,
         readerSettingsRepository.companionMemorySettings,
         readerSettingsRepository.companionMultiBubbleEnabled,
-        readerSettingsRepository.companionAutonomySettings
+        readerSettingsRepository.companionAutonomySettings,
+        readerSettingsRepository.companionTokenUsageEnabled
     ) { values ->
         @Suppress("UNCHECKED_CAST")
         AppPrefs(
@@ -117,7 +120,8 @@ class SettingsViewModel @Inject constructor(
             showAiAnnotations = values[2] as Boolean,
             memory = values[3] as CompanionMemorySettings,
             multiBubbleEnabled = values[4] as Boolean,
-            autonomy = values[5] as CompanionAutonomySettings
+            autonomy = values[5] as CompanionAutonomySettings,
+            companionTokenUsageEnabled = values[6] as Boolean
         )
     }
 
@@ -160,6 +164,7 @@ class SettingsViewModel @Inject constructor(
             showAiAnnotations = prefs.showAiAnnotations,
             memory = prefs.memory,
             multiBubbleEnabled = prefs.multiBubbleEnabled,
+            companionTokenUsageEnabled = prefs.companionTokenUsageEnabled,
             autonomy = prefs.autonomy,
             isWorking = isWorking,
             localStorageBytes = usage?.totalBytes
@@ -237,6 +242,10 @@ class SettingsViewModel @Inject constructor(
 
     fun setSuggestionReplies(enabled: Boolean) {
         viewModelScope.launch { readerSettingsRepository.setSuggestionRepliesEnabled(enabled) }
+    }
+
+    fun setCompanionTokenUsage(enabled: Boolean) {
+        viewModelScope.launch { readerSettingsRepository.setCompanionTokenUsageEnabled(enabled) }
     }
 
     fun setLongTermMemory(enabled: Boolean) {

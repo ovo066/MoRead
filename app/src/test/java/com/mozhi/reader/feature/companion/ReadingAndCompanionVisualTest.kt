@@ -68,6 +68,47 @@ class ReadingAndCompanionVisualTest {
         assertEquals("修改后的问题", saved)
     }
 
+    @Test @Config(qualifiers = "w1400dp-h960dp-mdpi")
+    fun tabletCompanionUsesRoleSelectionBesideProfileAndOneChatEntry() {
+        val model = mockk<CompanionViewModel>(relaxed = true)
+        val live = MutableStateFlow(CompanionUiState(listOf(persona.copy(subtitle = "陪你细读每一页", greeting = "今天读到了什么？我们可以从你划下的那句话聊起。"),
+            persona.copy(id = 4, name = "拾光", subtitle = "收藏日常的细小发现", personality = "把读到的好句子，留给以后的自己。"),
+            persona.copy(id = 5, name = "望山", subtitle = "一起走进书里的世界")), 3, mapOf(3L to 18L), loaded = true))
+        every { model.uiState } returns live
+        every { model.activate(any()) } answers { live.value = live.value.copy(activePersonaId = firstArg()) }
+        var opened = 0
+        show {
+            com.mozhi.reader.ui.MoReadWindowLayout {
+                MoReadBackdrop {
+                    Box(Modifier.fillMaxSize().padding(start = 224.dp)) { CompanionScreen(PaddingValues(), {}, {}, { opened++ }, {}, model) }
+                    com.mozhi.reader.ui.MoReadTabletSidebar("companion", com.mozhi.reader.feature.bookshelf.BookshelfUiState(), {}, {}, { _, _ -> }, {}, {}, {}, {})
+                }
+            }
+        }
+        compose.onNodeWithTag("tablet-personas").assertIsDisplayed()
+        capture("tablet-companion-home.png")
+        compose.onNode(hasText("拾光") and hasAnyAncestor(hasTestTag("tablet-personas"))).performClick()
+        compose.onNode(hasText("拾光") and hasAnyAncestor(hasTestTag("tablet-persona-detail"))).assertIsDisplayed()
+        compose.onNodeWithText("开始聊天").performClick()
+        assertEquals(1, opened)
+    }
+
+    @Test @Config(qualifiers = "w1400dp-h960dp-mdpi")
+    fun tabletChatKeepsHistoryBesideMessagesAndProtectsAnUnsentDraft() {
+        val conversation = ConversationEntity(id = 7, bookId = null, personaId = 3, title = "等待与出发", type = LibraryBookScopes.CONVERSATION_TYPE, createdAt = 1)
+        val model = vm(LibraryChatSession(conversation, scopes, setOf(1), draft = "我也很喜欢出发前的那段安静。"), LibraryChatMessages(listOf(
+            MessageEntity(id = 1, conversationId = 7, role = "user", content = "你觉得灯塔里最动人的一段是什么？", createdAt = 1),
+            MessageEntity(id = 2, conversationId = 7, role = "assistant", content = "我喜欢他们坐在窗边的那一段。没有急着解释，也没有催促彼此，只是看着暮色落下来。\n\n这样的停顿，让后面的出发有了分量。你读到这里时，想到的是等待，还是新的开始？", createdAt = 2)
+        ), conversationId = 7))
+        every { model.conversations } returns MutableStateFlow(listOf(conversation, conversation.copy(id = 8, title = "关于远行与归来"), conversation.copy(id = 9, title = "这周读过的好句子")))
+        show { LibraryCompanionScreen({}, {}, {}, model) }
+        compose.onNodeWithTag("companion-history-sidebar").assertIsDisplayed()
+        capture("tablet-companion-chat.png")
+        compose.onNodeWithText("关于远行与归来").performClick()
+        verify(exactly = 0) { model.open(any()) }
+        compose.onNodeWithText("请先发送或清空草稿").assertIsDisplayed()
+    }
+
     private fun show(content: @Composable () -> Unit) {
         compose.setContent {
             val view = LocalView.current

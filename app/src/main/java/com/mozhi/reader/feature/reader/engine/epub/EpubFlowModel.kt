@@ -193,6 +193,7 @@ internal class FlowOutput {
                         start = column.start + dx,
                         end = column.end + dx,
                         charData = column.charData,
+                        syntaxPaintSpan = column.syntaxPaintSpan,
                         syntaxColorArgb = column.syntaxColorArgb,
                         syntaxBackgroundArgb = column.syntaxBackgroundArgb,
                         syntaxUnderline = column.syntaxUnderline,
@@ -226,7 +227,9 @@ internal class FlowOutput {
                 inlineGlyphImages = line.inlineGlyphImages.map { it.copy(left = it.left + dx) },
                 rule = line.rule,
                 inlineDecorations = line.inlineDecorations,
-                rubyPlacements = line.rubyPlacements
+                rubyPlacements = line.rubyPlacements,
+                isReaderTitle = line.isReaderTitle,
+                paragraphTranslation = line.paragraphTranslation
             )
         }
     }
@@ -243,6 +246,7 @@ internal data class ResolvedRunStyle(
     val syntaxFontAssetId: String?,
     val baselineShiftPx: Float,
     val lineHeightPx: Float?,
+    val paintSpan: com.mozhi.reader.core.datastore.ReaderPaintSpan? = null,
     val opacity: Float
 )
 
@@ -349,6 +353,7 @@ internal class EpubLayoutContext(
                 letterSpacingEm = if (style.fontSizePx > 0f) style.letterSpacingPx / style.fontSizePx else 0f
             ),
             // Publisher styling wins property-by-property; user syntax rules only fill gaps.
+            paintSpan = syntaxSpan?.paintSpan?.let { it.copy(paint = it.paint.respectingPublisher(adaptedColor != null, adaptedBackground != null || style.background.imageHref != null)) },
             colorArgb = adaptedColor ?: syntaxSpan?.colorArgb,
             backgroundArgb = adaptedBackground ?: syntaxSpan?.backgroundArgb,
             underline = style.underline || syntaxSpan?.underline == true,

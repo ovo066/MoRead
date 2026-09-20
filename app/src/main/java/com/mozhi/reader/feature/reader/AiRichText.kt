@@ -13,6 +13,7 @@ import androidx.compose.ui.unit.dp
 import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
+import com.mikepenz.markdown.model.parseMarkdown
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import org.jsoup.nodes.Node
@@ -26,18 +27,17 @@ import org.jsoup.nodes.TextNode
 internal fun AiRichText(
     content: String,
     palette: ReaderPalette,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    parseSynchronously: Boolean = false
 ) {
     val safeMarkdown = remember(content) { AiRichTextNormalizer.toMarkdown(content) }
-    Markdown(
-        content = safeMarkdown,
-        colors = markdownColor(
+    val colors = markdownColor(
             text = palette.onBackground,
             codeBackground = palette.onBackground.copy(alpha = 0.08f),
             dividerColor = palette.glassBorder,
             tableBackground = palette.onBackground.copy(alpha = 0.04f)
-        ),
-        typography = markdownTypography(
+        )
+    val typography = markdownTypography(
             h1 = MaterialTheme.typography.titleMedium,
             h2 = MaterialTheme.typography.titleMedium,
             h3 = MaterialTheme.typography.titleSmall,
@@ -55,9 +55,15 @@ internal fun AiRichText(
                     .copy(color = palette.accent, textDecoration = TextDecoration.Underline)
                     .toSpanStyle()
             )
-        ),
-        modifier = modifier
-    )
+        )
+    if (parseSynchronously) {
+        // Bounded, completed dictionary entries need their full height on the first frame:
+        // an asynchronous empty/loading frame clamps a restored ScrollState back to zero.
+        val parsed = remember(safeMarkdown) { parseMarkdown(safeMarkdown) }
+        Markdown(state = parsed, colors = colors, typography = typography, modifier = modifier)
+    } else {
+        Markdown(content = safeMarkdown, colors = colors, typography = typography, modifier = modifier)
+    }
 }
 
 /**

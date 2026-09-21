@@ -3,6 +3,7 @@ package com.mozhi.reader.feature.reader
 import android.app.Application
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.os.Looper
 import android.view.View
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.DisposableEffect
@@ -16,7 +17,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
@@ -45,6 +46,8 @@ import org.robolectric.annotation.GraphicsMode
 @Config(sdk = [35], application = Application::class, qualifiers = "w411dp-h891dp-mdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ReaderAnnotationStabilityTest {
+    // The legacy rule's UnconfinedTestDispatcher resumes background pagination on its worker,
+    // racing native bitmap writes against these assertions. v2 queues publication on the UI thread.
     @get:Rule val compose = createComposeRule()
     private val marks = mutableStateOf<List<ReaderAnnotationMark>>(emptyList())
     private val animation = mutableStateOf(PageTurnAnimation.SLIDE)
@@ -67,9 +70,17 @@ class ReaderAnnotationStabilityTest {
             val scope = rememberCoroutineScope()
             val reader = remember {
                 ReaderContentController(scope, { ReaderChapterContent(body) }, object : ReaderContentController.Listener {
-                    override fun onContentChanged(relativePosition: Int) { contentHook?.invoke(relativePosition) }
+                    override fun onContentChanged(relativePosition: Int) {
+                        check(Looper.myLooper() == Looper.getMainLooper()) {
+                            "Reader publication ran on ${Thread.currentThread().name} instead of the main looper"
+                        }
+                        contentHook?.invoke(relativePosition)
+                    }
                     override fun onPositionChanged(chapterIndex: Int, charOffset: Int, pageIndex: Int,
                         pageCount: Int, bookProgress: Float) = Unit
+                    override fun onContentError(chapterIndex: Int, error: Throwable) {
+                        throw AssertionError("Reader content failed to load", error)
+                    }
                 }).also { it.setChapters(listOf(ChapterMeta(0, "河岸", body.length))) }
             }
             controller = reader
@@ -249,6 +260,8 @@ class ReaderAnnotationStabilityTest {
             under = checkNotNull(holder.bitmapFor(direction, false))
             frozenFront = checkNotNull(front.copy(Bitmap.Config.ARGB_8888, false))
             frozenUnder = checkNotNull(under.copy(Bitmap.Config.ARGB_8888, false))
+            assertFrozen(frozenFront, front, "$label-front-snapshot")
+            assertFrozen(frozenUnder, under, "$label-under-snapshot")
             save(checkNotNull(holder.curBitmap), "$label-before")
         }
         try {
@@ -262,8 +275,8 @@ class ReaderAnnotationStabilityTest {
                     assertEquals(generation, controller.layoutGeneration)
                     assertEquals(offset, controller.charOffset)
                     assertSame(source.page, (controller.curPage() as RenderPage.Laid).page)
-                    assertTrue("front changed during $label", frozenFront.sameAs(front))
-                    assertTrue("under changed during $label", frozenUnder.sameAs(under))
+                    assertFrozen(frozenFront, front, "$label-front-update-$update")
+                    assertFrozen(frozenUnder, under, "$label-under-update-$update")
                     assertTrue("unpublished comments became clickable", holder.annotationIdsAt(markPoint(source.page)).isEmpty())
                 }
             }
@@ -286,6 +299,13 @@ class ReaderAnnotationStabilityTest {
             frozenFront.recycle()
             frozenUnder.recycle()
         }
+    }
+
+    private fun assertFrozen(expected: Bitmap, actual: Bitmap, label: String) {
+        if (expected.sameAs(actual)) return
+        save(expected, "$label-expected")
+        save(actual, "$label-actual")
+        fail("$label changed while the page turn was active; see the expected/actual QA images")
     }
 
     private fun mark(page: TextPage, id: Long, update: Int): ReaderAnnotationMark {

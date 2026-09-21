@@ -58,6 +58,17 @@ jobs:
           MOREAD_RELEASE_KEY_ALIAS: ${{ secrets.MOREAD_RELEASE_KEY_ALIAS }}
           MOREAD_RELEASE_KEY_PASSWORD: ${{ secrets.MOREAD_RELEASE_KEY_PASSWORD }}
         run: ./gradlew :app:testDebugUnitTest :app:assembleRelease --console=plain
+      - name: Upload test diagnostics
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-test-diagnostics
+          path: |
+            app/build/reports/tests/testDebugUnitTest/
+            app/build/test-results/testDebugUnitTest/
+            app/build/reports/ui-qa/annotations/
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Verify official signature and prepare artifact
         shell: bash
         run: |

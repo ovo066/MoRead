@@ -43,6 +43,10 @@ import com.mozhi.reader.core.database.entity.TtsVoiceEntity
     entities = [
         com.mozhi.reader.core.database.entity.ProactiveAnnotationJobEntity::class,
         BookEntity::class,
+        com.mozhi.reader.core.database.entity.BookImageStyleEntity::class,
+        com.mozhi.reader.core.database.entity.ImageStyleTemplateEntity::class,
+        com.mozhi.reader.core.database.entity.CharacterLookEntity::class,
+        com.mozhi.reader.core.database.entity.IllustrationQueueEntity::class,
         ChapterEntity::class,
         BookmarkEntity::class,
         ReadingDailyEntity::class,
@@ -86,6 +90,7 @@ abstract class MoReadDatabase : RoomDatabase() {
     abstract fun annotationDao(): AnnotationDao
     abstract fun noteDao(): NoteDao
     abstract fun illustrationDao(): IllustrationDao
+    abstract fun imageConsistencyDao(): com.mozhi.reader.core.database.dao.ImageConsistencyDao
     abstract fun shelfOrganizationDao(): ShelfOrganizationDao
     abstract fun ttsVoiceDao(): TtsVoiceDao
     abstract fun audiobookDao(): AudiobookDao
@@ -93,6 +98,6 @@ abstract class MoReadDatabase : RoomDatabase() {
     abstract fun bookCharacterDao(): com.mozhi.reader.core.database.dao.BookCharacterDao
 
     companion object {
-        const val VERSION = 31
+        const val VERSION = 32
     }
 }

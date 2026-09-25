@@ -29,6 +29,19 @@ class LocalizationResourcesTest {
         assertEquals("Remove from shelf", context.getString(R.string.book_action_remove))
         assertEquals("Release to bookmark", context.getString(R.string.reader_bookmark_release))
         assertEquals("Generating EPUB", context.getString(R.string.import_generating_epub))
+        assertEquals("Settings", context.getString(R.string.nav_settings))
+        assertEquals("Reading & appearance", context.getString(R.string.settings_reading_appearance))
+        assertEquals("Providers: 2 · Models: 5", context.getString(R.string.settings_ai_services_counts, 2, 5))
+    }
+
+    @Test
+    fun languageNamesStayInTheirOwnLanguageInEveryLocale() {
+        listOf("en-US", "zh-CN", "fr-FR").map(::context).forEach { context ->
+            assertEquals("简体中文", context.getString(R.string.language_name_simplified_chinese))
+            assertEquals("English", context.getString(R.string.language_name_english))
+        }
+        assertEquals("界面语言", context("zh-CN").getString(R.string.settings_language))
+        assertEquals("Language", context("en").getString(R.string.settings_language))
     }
 
     @Test

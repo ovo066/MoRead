@@ -26,7 +26,8 @@ data class PendingReaderImage(
 @Singleton
 class ReaderImageImporter @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val settingsRepository: ReaderSettingsRepository
+    private val settingsRepository: ReaderSettingsRepository,
+    private val database: com.mozhi.reader.core.database.MoReadDatabase
 ) {
     suspend fun prepare(uri: Uri): PendingReaderImage = withContext(Dispatchers.IO) {
         val originalName = queryDisplayName(uri)
@@ -147,7 +148,8 @@ class ReaderImageImporter @Inject constructor(
         pending: PendingReaderImage,
         customName: String,
         selectAsBackground: Boolean = false,
-        purpose: ReaderImagePurpose = if (selectAsBackground) ReaderImagePurpose.BACKGROUND else ReaderImagePurpose.GENERAL
+        purpose: ReaderImagePurpose = if (selectAsBackground) ReaderImagePurpose.BACKGROUND else ReaderImagePurpose.GENERAL,
+        ownerBookId: Long? = null
     ): ReaderImageAsset = withContext(Dispatchers.IO) {
         val source = checkedPendingFile(pending)
         val displayName = customName.trim().take(48).ifBlank { pending.detectedName }
@@ -164,7 +166,8 @@ class ReaderImageImporter @Inject constructor(
                 width = pending.width,
                 height = pending.height,
                 importedAt = System.currentTimeMillis(),
-                purpose = purpose
+                purpose = purpose,
+                ownerBookId = ownerBookId
             )
             settingsRepository.addReaderImage(asset, selectAsBackground)
             if (source.exists()) source.delete()
@@ -178,11 +181,12 @@ class ReaderImageImporter @Inject constructor(
     suspend fun importImage(
         uri: Uri,
         selectAsBackground: Boolean = false,
-        purpose: ReaderImagePurpose = if (selectAsBackground) ReaderImagePurpose.BACKGROUND else ReaderImagePurpose.GENERAL
+        purpose: ReaderImagePurpose = if (selectAsBackground) ReaderImagePurpose.BACKGROUND else ReaderImagePurpose.GENERAL,
+        ownerBookId: Long? = null
     ): ReaderImageAsset {
         val pending = prepare(uri)
         return try {
-            confirm(pending, pending.detectedName, selectAsBackground, purpose)
+            confirm(pending, pending.detectedName, selectAsBackground, purpose, ownerBookId)
         } catch (error: Throwable) {
             discard(pending)
             throw error
@@ -195,6 +199,13 @@ class ReaderImageImporter @Inject constructor(
 
     /** 调用方须先确认没有背景或封面引用。 */
     suspend fun delete(image: ReaderImageAsset) = withContext(Dispatchers.IO) {
+        val quotedId = kotlinx.serialization.json.JsonPrimitive(image.id).toString()
+        require(database.imageConsistencyDao().referenceDocuments().none { quotedId in it }) {
+            "图片正在用作人物、画风或插图配方的参考，请先解除引用"
+        }
+        require(database.personaDao().getPersonas().none { it.avatarPath == image.filePath }) {
+            "图片正在用作伴读头像，请先更换头像后再删除"
+        }
         settingsRepository.removeReaderImage(image.id)
         val file = File(image.filePath).canonicalFile
         val legacyRoot = File(context.filesDir, "reader-custom").canonicalFile

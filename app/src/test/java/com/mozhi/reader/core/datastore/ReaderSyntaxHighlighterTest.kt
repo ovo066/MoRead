@@ -2,6 +2,7 @@ package com.mozhi.reader.core.datastore
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -69,6 +70,37 @@ class ReaderSyntaxHighlighterTest {
         assertTrue(span.underline)
         assertTrue(span.strikethrough)
         assertEquals(rule, ReaderSyntaxRuleCodec.decode(ReaderSyntaxRuleCodec.encode(listOf(rule))).single())
+    }
+
+    @Test
+    fun `uncolored delimiters still follow the rule font`() {
+        val rule = ReaderSyntaxRule(
+            id = 14,
+            name = "对白",
+            startDelimiter = "“",
+            endDelimiter = "”",
+            colorArgb = 0xFFF04B0D.toInt(),
+            includeDelimiters = false,
+            underline = true,
+            font = ReaderSyntaxFont.SANS_SERIF,
+            bold = true
+        )
+        val text = "他说：“Amset。”"
+
+        val spans = ReaderSyntaxHighlighter.spans(text, listOf(rule))
+
+        assertEquals(listOf("“", "Amset。", "”"), spans.map { text.substring(it.start, it.endExclusive) })
+        val (open, content, close) = spans
+        listOf(open, close).forEach { delimiter ->
+            assertTrue(delimiter.delimiterGlyphsOnly)
+            assertNull(delimiter.colorArgb)
+            assertFalse(delimiter.underline)
+            assertEquals(ReaderSyntaxFont.SANS_SERIF, delimiter.font)
+            assertTrue(delimiter.bold)
+        }
+        assertFalse(content.delimiterGlyphsOnly)
+        assertEquals(rule.colorArgb, content.colorArgb)
+        assertTrue(content.underline)
     }
 
     @Test

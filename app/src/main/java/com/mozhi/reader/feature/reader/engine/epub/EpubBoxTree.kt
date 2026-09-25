@@ -3,6 +3,7 @@ package com.mozhi.reader.feature.reader.engine.epub
 import com.mozhi.reader.core.epub.dom.EpubDomNode
 import com.mozhi.reader.core.epub.style.EpubDisplay
 import com.mozhi.reader.core.epub.style.EpubFloatValue
+import com.mozhi.reader.core.epub.style.EpubPosition
 import com.mozhi.reader.core.epub.style.EpubStyle
 import com.mozhi.reader.core.epub.style.ResolvedLength
 import com.mozhi.reader.core.epub.style.StyledDomNode
@@ -152,6 +153,22 @@ internal object EpubBoxTreeBuilder {
     private fun visitElement(node: StyledDomNode, builder: FlowBuilder, context: InlineContext) {
         if (node.style.display == EpubDisplay.NONE) return
         val tag = node.node.tag
+        if (node.style.position == EpubPosition.ABSOLUTE && tag != "br") {
+            // 绝对定位脱离行内流并块级化；由块布局按最近的定位祖先落位，不占文字流的位置。
+            builder.flushInline()
+            builder.boxes += if (tag in IMAGE_TAGS) {
+                val range = node.node.anchorRange() ?: return
+                EpubImageBox(
+                    node = node, style = node.style, textStart = range.first, textEnd = range.last + 1,
+                    altText = node.node.attributes["alt"] ?: node.node.attributes["aria-label"].orEmpty(),
+                    linkHref = context.link, attrWidth = node.node.attributes["width"],
+                    attrHeight = node.node.attributes["height"]
+                )
+            } else {
+                buildBlockLevel(node)
+            }
+            return
+        }
         if (tag in IMAGE_TAGS) {
             val range = node.node.anchorRange() ?: return
             val image = EpubImageBox(

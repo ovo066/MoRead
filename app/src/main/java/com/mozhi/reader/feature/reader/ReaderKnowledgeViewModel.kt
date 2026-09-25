@@ -22,7 +22,8 @@ data class KnowledgeUiState(
     val characters: BookCharactersSnapshot = BookCharactersSnapshot(),
     val tasks: Map<Int, KnowledgeTaskState> = emptyMap(), val characterTask: KnowledgeTaskState? = null,
     val pending: KnowledgeGenerationPlan? = null, val pendingCharacters: BookCharactersPlan? = null,
-    val previewingChapter: Int? = null, val preparingCharacters: Boolean = false, val error: String? = null
+    val previewingChapter: Int? = null, val preparingCharacters: Boolean = false, val error: String? = null,
+    val lookThumbnails: Map<String, String> = emptyMap()
 )
 
 @HiltViewModel

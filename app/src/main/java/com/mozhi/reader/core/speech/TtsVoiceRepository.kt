@@ -29,6 +29,23 @@ class TtsVoiceRepository @Inject constructor(
 
     suspend fun delete(voice: TtsVoiceEntity) = dao.delete(voice)
 
+    suspend fun containsGeminiVoice(voiceId: String): Boolean = dao.findVoice("GEMINI", voiceId) != null
+
+    /** User-confirmed generated identity: update a concurrently imported entry instead of duplicating it. */
+    suspend fun saveDesignedVoice(voice: TtsVoiceEntity): Long {
+        require(voice.providerHint == "GEMINI" && voice.voiceId.startsWith("voice_"))
+        val inserted = save(voice.copy(id = 0))
+        if (inserted > 0) return inserted
+        val existing = dao.findVoice("GEMINI", voice.voiceId) ?: error("保存音色失败，请重试")
+        return save(voice.copy(id = existing.id, pinned = existing.pinned, sortOrder = existing.sortOrder))
+    }
+
+    suspend fun importGeminiVoices(voices: List<TtsVoiceEntity>) {
+        val existing = dao.getVoices().filter { it.providerHint == "GEMINI" }
+            .map { it.voiceId.lowercase() }.toSet()
+        dao.insertAll(voices.distinctBy { it.voiceId.lowercase() }.filterNot { it.voiceId.lowercase() in existing })
+    }
+
     suspend fun importMiniMaxPresets() {
         dao.insertAll(
             listOf(

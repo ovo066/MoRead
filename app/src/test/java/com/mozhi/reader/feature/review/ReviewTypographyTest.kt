@@ -52,6 +52,10 @@ class ReviewTypographyTest {
             repo.setFont(ReaderFont.SERIF)
             assertEquals("", repo.settings.first().reviewFont)
             repo.setReviewFont("MONOSPACE")
+            val preferences = ReadingReviewPreferences(source = "AI", kind = "NOTE", bookIds = setOf(1L, 3L),
+                personaId = 7L, oldestFirst = true, grid = false)
+            repo.setReviewPreferences(preferences)
+            assertEquals(preferences, ReaderSettingsRepository(store).settings.first().reviewPreferences)
             assertEquals("MONOSPACE", ReaderSettingsRepository(store).settings.first().reviewFont)
             assertEquals(ReaderFont.SERIF, repo.settings.first().font)
             repo.setReviewFont("")

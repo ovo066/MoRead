@@ -1,5 +1,6 @@
 package com.mozhi.reader.feature.listen
 
+import com.mozhi.reader.ui.components.MoReadBottomSheet
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -47,7 +48,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
@@ -452,7 +452,7 @@ fun ListenPlayerScreen(
         )
     }
     if (showSpeed) {
-        ModalBottomSheet(
+        MoReadBottomSheet(
             onDismissRequest = { showSpeed = false },
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ) {
@@ -466,7 +466,7 @@ fun ListenPlayerScreen(
         }
     }
     if (showChapters) {
-        ModalBottomSheet(
+        MoReadBottomSheet(
             onDismissRequest = { showChapters = false },
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
         ) {

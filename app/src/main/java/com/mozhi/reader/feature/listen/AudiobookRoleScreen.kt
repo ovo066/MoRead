@@ -61,6 +61,12 @@ import com.mozhi.reader.core.library.AudiobookRoleKind
 import com.mozhi.reader.ui.components.MoReadMenuItem
 import com.mozhi.reader.ui.components.MoReadStableDropdownMenu
 import com.mozhi.reader.ui.theme.MoReadTokens
+import com.mozhi.reader.core.speech.SystemTtsVoiceInfo
+import com.mozhi.reader.ui.components.VoiceChoice
+import com.mozhi.reader.ui.components.VoiceChoiceDialog
+import com.mozhi.reader.ui.components.MoReadRow
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -73,6 +79,7 @@ fun AudiobookRoleScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var editing by remember { mutableStateOf<AudiobookRoleEntity?>(null) }
     var policyMenu by remember { mutableStateOf(false) }
+    var confirmCasting by remember { mutableStateOf(false) }
     PlayGeneratedPreview(state.previewPath, viewModel::consumePreview)
 
     val narrators = state.roles.filter { it.kind == AudiobookRoleKind.NARRATOR.name }
@@ -153,13 +160,18 @@ fun AudiobookRoleScreen(
                     }
                 }
             } else {
+                item {
+                    Button(onClick = { confirmCasting = true }, enabled = !state.isWorking, modifier = Modifier.fillMaxWidth()) {
+                        Text("AI 自动分配音色")
+                    }
+                }
                 item { AudiobookSectionTitle("旁白") }
                 items(narrators, key = { it.id }) { role ->
-                    RoleCard(role, state.voices, { editing = role }, viewModel::deleteRole, viewModel::preview)
+                    RoleCard(role, state.voices, state.systemVoices, { editing = role }, viewModel::deleteRole, viewModel::preview)
                 }
                 item { AudiobookSectionTitle("角色", "${characters.size} 个") }
                 items(characters, key = { it.id }) { role ->
-                    RoleCard(role, state.voices, { editing = role }, viewModel::deleteRole, viewModel::preview)
+                    RoleCard(role, state.voices, state.systemVoices, { editing = role }, viewModel::deleteRole, viewModel::preview)
                 }
                 item {
                     OutlinedButton(
@@ -180,7 +192,7 @@ fun AudiobookRoleScreen(
                             fontWeight = FontWeight.SemiBold
                         )
                         Spacer(Modifier.height(6.dp))
-                        AudiobookHint("系统 TTS 不花钱、AI TTS 更像人。可以一键把所有角色切到同一档。")
+                        AudiobookHint("可使用本地多音色或云端音色；切换策略后请检查各角色的音色。")
                         Spacer(Modifier.height(10.dp))
                         Box {
                             OutlinedButton(
@@ -230,10 +242,19 @@ fun AudiobookRoleScreen(
         }
     }
 
+    if (confirmCasting) AlertDialog(
+        onDismissRequest = { confirmCasting = false },
+        title = { Text("重新分配角色音色？") },
+        text = { Text("按语音设置中当前引擎的音色重新分配全部角色，包括手动音色。角色与分镜保留，受影响的音频需重新制作。") },
+        confirmButton = { TextButton(onClick = { confirmCasting = false; viewModel.assignVoices() }) { Text("分配") } },
+        dismissButton = { TextButton(onClick = { confirmCasting = false }) { Text("取消") } }
+    )
     editing?.let { role ->
         RoleEditDialog(
             role = role,
             voices = state.voices,
+            systemVoices = state.systemVoices,
+            onRefresh = viewModel::refreshVoices,
             onDismiss = { editing = null },
             onSave = {
                 viewModel.saveRole(it)
@@ -247,13 +268,14 @@ fun AudiobookRoleScreen(
 private fun RoleCard(
     role: AudiobookRoleEntity,
     voices: List<TtsVoiceEntity>,
+    systemVoices: List<SystemTtsVoiceInfo>,
     onEdit: () -> Unit,
     onDelete: (AudiobookRoleEntity) -> Unit,
-    onPreview: (String) -> Unit
+    onPreview: (AudiobookRoleEntity) -> Unit
 ) {
     val ai = role.engine == AudiobookEngine.AI.name
-    val voiceName = voices.firstOrNull { it.voiceId == role.voiceId }?.displayName
-        ?: role.voiceId.ifBlank { "默认音色" }
+    val voiceName = if (ai) voices.firstOrNull { it.voiceId == role.voiceId }?.displayName ?: role.voiceId.ifBlank { "默认音色" }
+        else systemVoices.firstOrNull { it.id == role.voiceId }?.name ?: SystemTtsVoiceInfo.decode(role.voiceId)?.second ?: "跟随本地默认音色"
     AudiobookCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Surface(
@@ -295,10 +317,8 @@ private fun RoleCard(
                     )
                 }
             }
-            if (ai) {
-                IconButton(onClick = { onPreview(role.voiceId) }) {
-                    AudiobookSmallIcon(Icons.Outlined.PlayArrow, "试听")
-                }
+            IconButton(onClick = { onPreview(role) }) {
+                AudiobookSmallIcon(Icons.Outlined.PlayArrow, "试听")
             }
             IconButton(onClick = onEdit) {
                 AudiobookSmallIcon(Icons.Outlined.Edit, "编辑")
@@ -316,6 +336,8 @@ private fun RoleCard(
 private fun RoleEditDialog(
     role: AudiobookRoleEntity,
     voices: List<TtsVoiceEntity>,
+    systemVoices: List<SystemTtsVoiceInfo>,
+    onRefresh: () -> Unit,
     onDismiss: () -> Unit,
     onSave: (AudiobookRoleEntity) -> Unit
 ) {
@@ -329,7 +351,7 @@ private fun RoleEditDialog(
         onDismissRequest = onDismiss,
         title = { Text("编辑角色", style = MaterialTheme.typography.titleMedium) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(
                     name,
                     { name = it },
@@ -359,53 +381,32 @@ private fun RoleEditDialog(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(
                         selected = engine == AudiobookEngine.SYSTEM.name,
-                        onClick = { engine = AudiobookEngine.SYSTEM.name },
+                        onClick = { if (engine != AudiobookEngine.SYSTEM.name) voiceId = ""; engine = AudiobookEngine.SYSTEM.name },
                         label = { Text("系统 TTS", style = MaterialTheme.typography.labelMedium) }
                     )
                     FilterChip(
                         selected = engine == AudiobookEngine.AI.name,
-                        onClick = { engine = AudiobookEngine.AI.name },
+                        onClick = { if (engine != AudiobookEngine.AI.name) voiceId = ""; engine = AudiobookEngine.AI.name },
                         label = { Text("AI TTS", style = MaterialTheme.typography.labelMedium) }
                     )
                 }
-                if (engine == AudiobookEngine.AI.name) {
-                    Box {
-                        OutlinedButton(
-                            onClick = { voiceMenu = true },
-                            shape = MoReadTokens.CapsuleShape
-                        ) {
-                            Text(
-                                voices.firstOrNull { it.voiceId == voiceId }?.displayName
-                                    ?: "选择音色",
-                                style = MaterialTheme.typography.labelLarge
-                            )
-                        }
-                        MoReadStableDropdownMenu(
-                            expanded = voiceMenu,
-                            onDismissRequest = { voiceMenu = false },
-                            width = 240.dp
-                        ) {
-                            if (voices.isEmpty()) {
-                                MoReadMenuItem(
-                                    text = "音色库还是空的",
-                                    enabled = false,
-                                    onClick = {}
-                                )
-                            }
-                            voices.forEach { voice ->
-                                MoReadMenuItem(
-                                    text = voice.displayName,
-                                    trailingText = voice.tags.takeIf(String::isNotBlank),
-                                    selected = voice.voiceId == voiceId,
-                                    onClick = {
-                                        voiceId = voice.voiceId
-                                        voiceMenu = false
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
+                MoReadRow(
+                    title = "角色音色",
+                    subtitle = if (engine == AudiobookEngine.SYSTEM.name)
+                        systemVoices.firstOrNull { it.id == voiceId }?.name ?: SystemTtsVoiceInfo.decode(voiceId)?.second ?: "跟随本地默认音色"
+                    else voices.firstOrNull { it.voiceId == voiceId }?.displayName ?: voiceId.ifBlank { "默认音色" },
+                    onClick = { voiceMenu = true }
+                )
+                if (engine == AudiobookEngine.SYSTEM.name) Button(onClick = onRefresh) { Text("刷新本地音色") }
+                if (voiceMenu) VoiceChoiceDialog(
+                    title = "选择角色音色",
+                    choices = listOf(VoiceChoice("", "默认音色")) + if (engine == AudiobookEngine.SYSTEM.name)
+                        systemVoices.map { VoiceChoice(it.id, it.name, it.description) }
+                    else voices.map { VoiceChoice(it.voiceId, it.displayName, it.tags) }.distinctBy { it.id },
+                    selectedId = voiceId,
+                    onSelect = { voiceId = it; voiceMenu = false },
+                    onDismiss = { voiceMenu = false }
+                )
             }
         },
         confirmButton = {

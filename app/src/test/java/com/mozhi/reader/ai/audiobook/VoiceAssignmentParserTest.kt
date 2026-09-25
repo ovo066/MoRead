@@ -12,4 +12,9 @@ class VoiceAssignmentParserTest {
         )
         assertEquals(mapOf("林渊" to "voice-a"), result)
     }
+    @Test fun malformedNestedValuesAreIgnoredWithoutLosingValidAssignments() {
+        assertEquals(mapOf("苏晚" to "voice-a"), VoiceAssignmentParser.parse(
+            """{"voiceAssignments":{"林渊":{"id":"voice-a"},"苏晚":"voice-a"}}""", setOf("voice-a")))
+        assertEquals(emptyMap<String, String>(), VoiceAssignmentParser.parse("""{"roles":[]}""", setOf("voice-a")))
+    }
 }

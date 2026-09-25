@@ -16,7 +16,7 @@
 
 MoRead is a local-first reading app with no account requirement or analytics. Import your own books and, optionally, connect directly to an AI provider using your own API key (BYOK)—there is no MoRead proxy server. Without a network connection or API key, it remains a fully usable offline reader.
 
-> **App language:** the interface is currently primarily Chinese. An Android string-resource foundation and partial English translations are available; a complete English UI is not yet included. See the [localization guide](docs/LOCALIZATION.md) to help translate.
+> **App language:** the interface is currently primarily Chinese. You can switch to English under Settings → Reading & appearance → Language (or the system app-language setting on Android 13+), but only part of the UI is translated so far and the rest still appears in Chinese. See the [localization guide](docs/LOCALIZATION.md) to help translate.
 
 ## Screenshots
 
@@ -45,6 +45,7 @@ This list describes the current source tree. For features in a packaged release,
 
 - **TXT and EPUB import:** automatic encoding detection, regex-based chapter splitting using Legado’s rule set, and a preview with customizable chapter rules.
 - **Native rendering:** classic and modern page-curl, cover, and slide animations; EPUB parsing and layout for supported CSS, block/inline content, floats, tables, backgrounds, and images. Includes text-selection handles, paragraph annotations and comments, bookmarks, and in-book search.
+- **EPUB typography:** right-to-left vertical writing with vertical punctuation, text selection, and page turns; supported CSS gradients, borders, text shadows, and positioned elements.
 - **Quick bookmarks:** in paginated mode, pull down until the release cue appears, then release to add a bookmark. Repeating the gesture never removes an existing bookmark. It is disabled in continuous vertical scrolling mode.
 - **Typography and themes:** font size, line spacing, margins, light/dark themes, custom three-color reading palettes, and generated vertical-text covers for books without artwork.
 - **Reading tools:** local MDX/MDD dictionaries, selection lookup, saved vocabulary, and optional bilingual reading with paragraph translation, glosses, and phonetics. Customize tap zones, physical page-turn keys, heading styles, and gradient or image highlighting; preview text cleanup before applying.
@@ -69,7 +70,9 @@ This list describes the current source tree. For features in a packaged release,
 - **Chat experience:** streaming responses, conversation history, manual scrolling, stop controls, stable positioning when opening history, and reuse of layout caches when returning to the reader.
 - **Long-term memory:** conversations are summarized into retrievable memories, scoped to the book, character, and user persona.
 - **Ask about a selection:** translation, explanations, questions, suggested replies, and one-tap plot summaries.
-- **Media generation:** OpenAI image endpoints, image output through chat endpoints, and NovelAI; speech through system engines, MiniMax, and OpenAI-compatible endpoints. Speech and image generation can also be configured independently of model assignments.
+- **Illustration studio:** save a style for each book, upload character references or generate turnaround candidates, and reuse appearance versions and generation recipes. A dedicated DIY editor creates reusable style templates with descriptions, reference images, and optional advanced parameters. Preview chapter plans, then generate a resumable illustration queue for the read portion of a book.
+- **Image providers:** OpenAI image generation and editing, image output through chat endpoints, and NovelAI reference/Vibe features where supported by the selected model. Reference support and consistency vary by provider and model.
+- **Speech and voice design:** system engines, MiniMax, OpenAI-compatible endpoints, and Gemini TTS; browse available voices, preview custom Gemini voice designs, and save selected voices to the voice library. Speech and image generation can also be configured independently of model assignments.
 
 ### Privacy
 

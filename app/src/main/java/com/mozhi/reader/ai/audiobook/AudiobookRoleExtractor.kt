@@ -13,6 +13,10 @@ import com.mozhi.reader.core.library.AudiobookRoleKind
 import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.retrieval.ReadingScope
 import com.mozhi.reader.core.speech.TtsVoiceRepository
+import com.mozhi.reader.core.speech.SystemTtsSpeaker
+import com.mozhi.reader.core.speech.SystemTtsVoiceInfo
+import com.mozhi.reader.core.speech.TtsSettingsStore
+import com.mozhi.reader.core.speech.TtsEngineMode
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.serialization.json.Json
@@ -35,32 +39,74 @@ class AudiobookRoleExtractor @Inject constructor(
     private val libraryRepository: LibraryRepository,
     private val voiceRepository: TtsVoiceRepository,
     private val agentLoop: AgentLoop,
+    private val systemTtsSpeaker: SystemTtsSpeaker,
+    private val settingsStore: TtsSettingsStore,
     private val readerToolset: ReaderToolset
 ) {
-    suspend fun extract(bookId: Long, useAi: Boolean): AudiobookRoleExtractionResult {
+    suspend fun extract(
+        bookId: Long, useAi: Boolean, chapterIndex: Int? = null,
+        existingRoles: List<AudiobookRoleEntity> = emptyList()
+    ): AudiobookRoleExtractionResult {
         val chapters = libraryRepository.getChapters(bookId)
-        val samples = representativeChapterIndices(chapters.size).mapNotNull { chapterIndex ->
-            chapters.firstOrNull { it.chapterIndex == chapterIndex }?.let { chapter ->
+        val indices = if (chapterIndex != null) listOf(chapterIndex) else {
+            listOfNotNull(libraryRepository.getBook(bookId)?.lastReadChapterIndex) + representativeChapterIndices(chapters.size)
+        }
+        val samples = indices.distinct().mapNotNull { index ->
+            chapters.firstOrNull { it.chapterIndex == index }?.let { chapter ->
                 chapter.title to libraryRepository.readChapterText(bookId, chapter)
             }
+        }.flatMap { (title, body) ->
+            if (chapterIndex != null) body.chunked(MAX_SAMPLE_CHARS_PER_CHAPTER).map { title to it }
+            else listOf(title to body.take(MAX_SAMPLE_CHARS_PER_CHAPTER))
         }
-        val voices = voiceRepository.getVoices()
+        val settings = settingsStore.current()
+        val useSystem = settings.engineMode == TtsEngineMode.SYSTEM
+        val voices = if (useSystem) {
+            systemTtsSpeaker.voices(settings.systemEnginePackage).map {
+                TtsVoiceEntity(voiceId = it.id, displayName = it.name, tags = it.description, providerHint = "SYSTEM")
+            }
+        } else voiceRepository.getVoices()
         val local = localRoles(bookId, samples.map(Pair<String, String>::second), voices)
-        if (!useAi || samples.isEmpty()) return AudiobookRoleExtractionResult(local, false)
+        if (!useAi || samples.isEmpty()) return AudiobookRoleExtractionResult(local.map { if (useSystem) it.copy(engine = AudiobookEngine.SYSTEM.name) else it }, false)
 
-        val raw = runAgent(bookId, samples, voices)
-        val parsed = parseRoles(bookId, raw, voices)
+        val parsed = samples.chunked(3).flatMap { batch ->
+            parseRoles(bookId, runAgent(bookId, batch, voices, existingRoles), voices)
+        }.distinctBy { it.name }
         return if (parsed.size > 1) {
-            AudiobookRoleExtractionResult(parsed, true)
+            AudiobookRoleExtractionResult(parsed.map { if (useSystem) it.copy(engine = AudiobookEngine.SYSTEM.name) else it }, true)
         } else {
-            AudiobookRoleExtractionResult(local, false)
+            AudiobookRoleExtractionResult(local.map { if (useSystem) it.copy(engine = AudiobookEngine.SYSTEM.name) else it }, false)
         }
+    }
+
+    /** Explicit recasting uses current engine candidates without changing role IDs or dialogue attribution. */
+    suspend fun assignVoices(roles: List<AudiobookRoleEntity>): List<AudiobookRoleEntity> {
+        val settings = settingsStore.current()
+        val system = settings.engineMode == TtsEngineMode.SYSTEM
+        val voices = if (system) systemTtsSpeaker.voices(settings.systemEnginePackage).map {
+            TtsVoiceEntity(voiceId = it.id, displayName = it.name, tags = it.description, providerHint = "SYSTEM")
+        } else voiceRepository.getVoices()
+        require(voices.isNotEmpty()) { "当前引擎没有可用音色，请先刷新本地音色或配置云端音色库" }
+        val candidates = voices.joinToString("\n") { it.voiceId+"｜"+it.displayName+"｜"+it.gender+"｜"+it.tags }
+        val characters = roles.joinToString("\n") { it.name+"｜"+it.gender+"｜"+it.extraJson }
+        val output = StringBuilder()
+        agentLoop.runDetached(
+            history = listOf(
+                ChatMessage(ChatRole.SYSTEM, "你是有声书选角导演。为给定角色含旁白选择音色，结合身份、性格、年龄、性别；主要角色尽量不同，候选不足时允许复用。只能使用提供的精确角色名和音色ID，不能编造。只输出JSON：{\"voiceAssignments\":{\"角色名\":\"voice-id\"}}"),
+                ChatMessage(ChatRole.USER, "角色：\n"+characters+"\n候选音色：\n"+candidates)
+            ), tools = emptyList(), maxRounds = 1, modelRole = ModelRole.CHEAP
+        ).collect { if (it is AgentEvent.Text) output.append(it.text) }
+        val assignments = VoiceAssignmentParser.parse(extractJsonPayload(output.toString()), voices.map { it.voiceId }.toSet())
+        require(roles.all { assignments.containsKey(it.name) }) { "AI 未完整分配音色，原分配已保留，请重试" }
+        return roles.map { it.copy(engine = if (system) AudiobookEngine.SYSTEM.name else AudiobookEngine.AI.name,
+            voiceId = assignments.getValue(it.name)) }
     }
 
     private suspend fun runAgent(
         bookId: Long,
         samples: List<Pair<String, String>>,
-        voices: List<TtsVoiceEntity>
+        voices: List<TtsVoiceEntity>,
+        existingRoles: List<AudiobookRoleEntity>
     ): String {
         val sampleText = buildString {
             samples.forEachIndexed { index, (title, body) ->
@@ -68,9 +114,10 @@ class AudiobookRoleExtractor @Inject constructor(
                 append(body.take(MAX_SAMPLE_CHARS_PER_CHAPTER)).append('\n')
             }
         }.take(MAX_SAMPLE_CHARS)
+        val existingText = existingRoles.joinToString("；") { it.name + "（" + it.aliases + "）" }
         val voiceText = voices.joinToString("\n") { voice ->
             "- ${voice.voiceId}｜${voice.displayName}｜性别=${voice.gender}｜标签=${voice.tags}"
-        }.ifBlank { "（当前没有可用 AI 音色；voiceAssignments 输出空对象）" }
+        }.ifBlank { "（当前引擎没有公开可选音色；voiceAssignments 输出空对象）" }
         val history = listOf(
             ChatMessage(
                 ChatRole.SYSTEM,
@@ -78,12 +125,12 @@ class AudiobookRoleExtractor @Inject constructor(
                 你是小说有声书角色识别专家。你可以检索整本书核对人物，但不得写批注、笔记、摘要或生成图片。
                 只输出一个 JSON 对象，不要 Markdown。格式：
                 {"roles":[{"name":"角色名","aliases":["别名"],"gender":"MALE|FEMALE|UNSPECIFIED","identity":"简述","frequency":12}],"voiceAssignments":{"角色名":"voice-id"}}
-                规则：旁白不放在 roles；角色名必须是人名或稳定称呼，不得使用“他、她、我、你”；只保留实际说话角色；voiceAssignments 只能使用候选音色 id。
+                规则：旁白不放在 roles；角色名必须是人名或稳定称呼，不得使用“他、她、我、你”；只保留实际说话角色；voiceAssignments 只能使用候选音色 id。综合年龄、身份、性格、性别和声音标签分配；主要角色尽量使用不同音色，没有性别信息的音色不要臆断。将同一人物的姓名、绰号、敬称合并为一个角色的 aliases。
                 """.trimIndent()
             ),
             ChatMessage(
                 ChatRole.USER,
-                "候选音色：\n$voiceText\n\n请结合以下代表性章节抽取角色并分配音色：\n$sampleText"
+                "已知人物（同一人物沿用精确姓名）：$existingText\n候选音色：\n$voiceText\n\n请结合以下代表性章节抽取角色并分配音色：\n$sampleText"
             )
         )
         val output = StringBuilder()
@@ -110,7 +157,7 @@ class AudiobookRoleExtractor @Inject constructor(
         chapterBodies.forEach { body ->
             DialogueRuleSegmenter.segment(body)
                 .asSequence()
-                .filter { it.kind == AudiobookSegmentKind.DIALOGUE }
+                .filter { it.kind == AudiobookSegmentKind.DIALOGUE && it.confidence >= 0.85f && it.roleName !in INVALID_ROLE_NAMES }
                 .forEach { segment -> counts[segment.roleName] = (counts[segment.roleName] ?: 0) + 1 }
         }
         val roles = counts.entries
@@ -121,7 +168,7 @@ class AudiobookRoleExtractor @Inject constructor(
                     bookId = bookId,
                     name = name,
                     kind = AudiobookRoleKind.CHARACTER.name,
-                    engine = AudiobookEngine.AI.name,
+                    engine = if (voices.firstOrNull()?.providerHint == "SYSTEM") AudiobookEngine.SYSTEM.name else AudiobookEngine.AI.name,
                     voiceId = pickVoice(voices, "UNSPECIFIED", index)?.voiceId.orEmpty(),
                     extraJson = buildJsonObject { put("frequency", count) }.toString(),
                     color = roleColor(index + 1),
@@ -149,14 +196,14 @@ class AudiobookRoleExtractor @Inject constructor(
             val name = item.string("name")?.take(MAX_ROLE_NAME_CHARS) ?: return@mapIndexedNotNull null
             if (name in INVALID_ROLE_NAMES || !seen.add(name)) return@mapIndexedNotNull null
             val aliases = when (val value = item["aliases"]) {
-                is JsonArray -> value.mapNotNull { it.jsonPrimitive.contentOrNull?.trim() }
+                is JsonArray -> value.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.trim() }
                 is JsonPrimitive -> value.contentOrNull.orEmpty().split(',', '，').map(String::trim)
                 else -> emptyList()
             }.filter(String::isNotEmpty).distinct().joinToString(",")
             val gender = item.string("gender")?.uppercase()
                 ?.takeIf { it in VALID_GENDERS } ?: "UNSPECIFIED"
             val identity = item.string("identity", "description").orEmpty()
-            val frequency = item["frequency"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+            val frequency = (item["frequency"] as? JsonPrimitive)?.contentOrNull?.toIntOrNull() ?: 0
             val assigned = assignments[name]
                 ?: pickVoice(voices, gender, index)?.voiceId.orEmpty()
             AudiobookRoleEntity(
@@ -165,7 +212,7 @@ class AudiobookRoleExtractor @Inject constructor(
                 aliases = aliases,
                 kind = AudiobookRoleKind.CHARACTER.name,
                 gender = gender,
-                engine = AudiobookEngine.AI.name,
+                engine = if (SystemTtsVoiceInfo.decode(assigned) != null) AudiobookEngine.SYSTEM.name else AudiobookEngine.AI.name,
                 voiceId = assigned,
                 extraJson = buildJsonObject {
                     put("identity", identity)
@@ -184,7 +231,7 @@ class AudiobookRoleExtractor @Inject constructor(
         name = "旁白",
         kind = AudiobookRoleKind.NARRATOR.name,
         engine = AudiobookEngine.SYSTEM.name,
-        voiceId = voices.firstOrNull { "旁白" in it.tags }?.voiceId.orEmpty(),
+        voiceId = voices.firstOrNull { it.providerHint == "SYSTEM" }?.voiceId.orEmpty(),
         color = roleColor(0),
         sortOrder = 0,
         source = "SYSTEM"
@@ -201,7 +248,7 @@ class AudiobookRoleExtractor @Inject constructor(
     }
 
     private fun JsonObject.string(vararg keys: String): String? = keys.firstNotNullOfOrNull { key ->
-        get(key)?.jsonPrimitive?.contentOrNull?.trim()?.takeIf(String::isNotEmpty)
+        (get(key) as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf(String::isNotEmpty)
     }
 
     private fun representativeChapterIndices(count: Int): List<Int> {
@@ -216,7 +263,7 @@ class AudiobookRoleExtractor @Inject constructor(
     private companion object {
         val json = Json { ignoreUnknownKeys = true }
         val SAFE_TOOL_NAMES = setOf("search_book")
-        val INVALID_ROLE_NAMES = setOf("旁白", "他", "她", "它", "我", "你", "null")
+        val INVALID_ROLE_NAMES = setOf("旁白", "他", "她", "它", "我", "你", "对白", "未知", "角色", "null")
         val VALID_GENDERS = setOf("MALE", "FEMALE", "UNSPECIFIED")
         val ROLE_COLORS = listOf(
             "#607D8B", "#5C6BC0", "#26A69A", "#EC407A",

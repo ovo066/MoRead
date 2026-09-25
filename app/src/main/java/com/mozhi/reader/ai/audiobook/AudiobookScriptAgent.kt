@@ -24,7 +24,8 @@ data class AudiobookScriptResult(
     val segments: List<AudiobookSegmentEntity>,
     val usedAi: Boolean,
     val chapterTitle: String,
-    val body: String
+    val body: String,
+    val unresolvedDialogueCount: Int = 0
 )
 
 @Singleton
@@ -32,6 +33,7 @@ class AudiobookScriptAgent @Inject constructor(
     private val libraryRepository: LibraryRepository,
     private val audiobookRepository: AudiobookRepository,
     private val readerSettingsRepository: ReaderSettingsRepository,
+    private val roleExtractor: AudiobookRoleExtractor,
     private val agentLoop: AgentLoop
 ) {
     suspend fun generate(
@@ -43,6 +45,11 @@ class AudiobookScriptAgent @Inject constructor(
             .firstOrNull { it.chapterIndex == chapterIndex }
             ?: error("章节不存在")
         val body = libraryRepository.readChapterText(bookId, chapter)
+        val existingRoles = audiobookRepository.getRoles(bookId)
+        if (useAi) {
+            val discovered = roleExtractor.extract(bookId, useAi = true, chapterIndex = chapterIndex, existingRoles = existingRoles)
+            audiobookRepository.replaceRoles(bookId, discovered.roles)
+        }
         val roles = audiobookRepository.getRoles(bookId)
         require(roles.isNotEmpty()) { "请先确认角色与音色" }
 
@@ -55,11 +62,9 @@ class AudiobookScriptAgent @Inject constructor(
         val narrator = roles.firstOrNull { it.kind == AudiobookRoleKind.NARRATOR.name }
             ?: roles.first()
         val characters = roles.filter { it.kind == AudiobookRoleKind.CHARACTER.name }
-        val dialogueFallbacks = characters.filter { it.engine == com.mozhi.reader.core.library.AudiobookEngine.AI.name }
-            .ifEmpty { characters }
         val lockedRoles = dialogueIndices.mapNotNull { index ->
             val draft = ruleSegments[index]
-            resolveAudiobookRole(roles, draft.roleName)
+            resolveExplicitAudiobookRole(characters, draft.roleName)
                 ?.takeIf { draft.confidence >= LOCAL_LOCK_CONFIDENCE }
                 ?.let { index to it }
         }.toMap()
@@ -77,10 +82,20 @@ class AudiobookScriptAgent @Inject constructor(
                     bookId = bookId,
                     chapterTitle = chapter.title,
                     previousChapterTail = previousChapterTail,
-                    roles = characters,
+                    roles = roles,
                     batch = batch
                 )
-                AudiobookScriptParser.parseAssignments(extractJsonPayload(raw), batch.targetIndices)
+                val first = AudiobookScriptParser.parseAssignments(extractJsonPayload(raw), batch.targetIndices)
+                val unresolved = batch.targetIndices.filter { index ->
+                    index !in lockedRoles && first.none { it.segmentIndex == index && isReliableAudiobookAssignment(it) &&
+                        resolveAudiobookRole(roles, it.roleName) != null }
+                }.toSet()
+                if (unresolved.isEmpty()) first else {
+                    val review = runAgentBatch(bookId, chapter.title, previousChapterTail, roles,
+                        batch.copy(targetIndices = unresolved), review = true)
+                    val corrected = AudiobookScriptParser.parseAssignments(extractJsonPayload(review), unresolved)
+                    first.filterNot { it.segmentIndex in unresolved } + corrected
+                }
             }.distinctBy(ParsedAudiobookAssignment::segmentIndex)
         } else {
             emptyList()
@@ -90,23 +105,15 @@ class AudiobookScriptAgent @Inject constructor(
             body,
             readerSettingsRepository.settings.first().textReplacementRules
         )
-        val recentDialogueRoles = ArrayDeque<AudiobookRoleEntity>()
         val entities = ruleSegments.mapIndexed { index, draft ->
             val performanceAssignment = assignments[index]
-            val roleAssignment = performanceAssignment?.takeIf {
-                it.confidence == null || it.confidence >= MIN_AI_ASSIGNMENT_CONFIDENCE
-            }
+            val roleAssignment = performanceAssignment?.takeIf(::isReliableAudiobookAssignment)
             val proposedRole = if (draft.kind == AudiobookSegmentKind.NARRATION) {
                 narrator
             } else {
                 lockedRoles[index]
-                    ?: resolveAudiobookRole(characters, roleAssignment?.roleName)
-                    ?: chooseDialogueFallback(draft, characters, dialogueFallbacks, recentDialogueRoles.toList())
+                    ?: resolveAudiobookRole(roles, roleAssignment?.roleName)
                     ?: narrator
-            }
-            if (draft.kind == AudiobookSegmentKind.DIALOGUE && proposedRole.kind == AudiobookRoleKind.CHARACTER.name) {
-                recentDialogueRoles.addLast(proposedRole)
-                while (recentDialogueRoles.size > RECENT_DIALOGUE_ROLE_LIMIT) recentDialogueRoles.removeFirst()
             }
             AudiobookSegmentEntity(
                 bookId = bookId,
@@ -124,7 +131,11 @@ class AudiobookScriptAgent @Inject constructor(
             segments = audiobookRepository.getSegments(bookId, chapterIndex),
             usedAi = aiAssignments.isNotEmpty(),
             chapterTitle = chapter.title,
-            body = body
+            body = body,
+            unresolvedDialogueCount = ruleSegments.indices.count {
+                ruleSegments[it].kind == AudiobookSegmentKind.DIALOGUE && entities[it].roleId == narrator.id &&
+                    assignments[it]?.let { assignment -> isReliableAudiobookAssignment(assignment) && assignment.roleName == narrator.name } != true
+            }
         )
     }
 
@@ -133,7 +144,8 @@ class AudiobookScriptAgent @Inject constructor(
         chapterTitle: String,
         previousChapterTail: String,
         roles: List<AudiobookRoleEntity>,
-        batch: AudiobookAttributionBatch
+        batch: AudiobookAttributionBatch,
+        review: Boolean = false
     ): String {
         val roleList = roles.joinToString("\n") { role ->
             val identity = roleIdentity(role)
@@ -144,6 +156,7 @@ class AudiobookScriptAgent @Inject constructor(
                 if (identity.isNotBlank()) append("；身份：").append(identity)
             }
         }
+        val reviewHint = if (review) "这是对证据不足对白的复核。只处理下列待标注 ID，忽略其他 target 标记。核对称呼、代词、动作与问答承接；仍不确定时输出 null，不猜测。" else ""
         val targetIds = batch.targetIndices.sorted().joinToString(",")
         val history = listOf(
             ChatMessage(
@@ -153,7 +166,8 @@ class AudiobookScriptAgent @Inject constructor(
                 - target="true" 的 dialogue 必须标注；存在 locked_speaker 时，role 必须原样复制该名称，禁止修改，但仍要判断情绪和表演方式。
                 - 按证据优先级判断说话人：对白前后明确“某人说/问/答” > 同段动作与称呼 > 代词与人物指代 > 连续对话的问答、轮替和话题承接 > 规则猜测。
                 - 连续对话不能机械地全部继承上一人；只有文本支持时才使用轮替。不要根据角色性别、声音或主角地位臆测。
-                - role 必须逐字使用角色表中的精确名称，禁止输出旁白、未知、男主、角色1或自造人物。
+                - dialogue 是待分类候选，不一定是真正对白。独立方括号可能是人物发言，也可能是系统提示；引号可能是引用或强调。系统提示、引用、强调、无说话人的叙述使用“旁白”，真正对白再判断人物。
+                - role 必须逐字使用角色表中的精确名称；没有足够证据时输出 null 和低置信度，不得为凑齐结果编造角色。
                 - confidence 为 0 到 1；evidence 用不超过 24 个中文字概括直接证据。
                 - 情绪只能是开心、悲伤、愤怒、恐惧、厌恶、惊讶、中性之一；“中性”只用于真正平静、无明显潜台词的对白。
                 - instruction 用 1 到 3 个可执行短语组合，优先使用：轻声、低声、高声、急促、缓慢、颤抖、哽咽、句末短停。文本有明确表演线索时不要留空。
@@ -165,6 +179,7 @@ class AudiobookScriptAgent @Inject constructor(
             ChatMessage(
                 ChatRole.USER,
                 """
+                $reviewHint
                 章节：$chapterTitle
                 待标注 segment_id：$targetIds
 
@@ -184,7 +199,7 @@ class AudiobookScriptAgent @Inject constructor(
             history = history,
             tools = emptyList(),
             maxRounds = 1,
-            modelRole = ModelRole.CHEAP
+            modelRole = if (review) ModelRole.CHAT else ModelRole.CHEAP
         ).collect { event ->
             if (event is AgentEvent.Text) output.append(event.text)
         }
@@ -215,22 +230,16 @@ class AudiobookScriptAgent @Inject constructor(
     private companion object {
         val VALID_EMOTIONS = setOf("开心", "悲伤", "愤怒", "恐惧", "厌恶", "惊讶", "中性")
         const val LOCAL_LOCK_CONFIDENCE = 0.85f
-        const val MIN_AI_ASSIGNMENT_CONFIDENCE = 0.42f
         const val PREVIOUS_CHAPTER_CONTEXT_CHARS = 1_200
-        const val RECENT_DIALOGUE_ROLE_LIMIT = 4
     }
 }
 
-private fun chooseDialogueFallback(
-    draft: DraftAudiobookSegment,
-    characters: List<AudiobookRoleEntity>,
-    preferredCharacters: List<AudiobookRoleEntity>,
-    recentRoles: List<AudiobookRoleEntity>
-): AudiobookRoleEntity? {
-    val recentDistinct = recentRoles.asReversed().distinctBy(AudiobookRoleEntity::id).take(2)
-    if (recentDistinct.size == 2) return recentDistinct[1]
-    resolveAudiobookRole(characters, draft.roleName)?.let { return it }
-    return preferredCharacters.firstOrNull()
+/** Regex guesses may include actions or addressed people; only exact known names can be locked. */
+internal fun resolveExplicitAudiobookRole(roles: List<AudiobookRoleEntity>, name: String): AudiobookRoleEntity? {
+    val matches = roles.filter { role ->
+        (listOf(role.name) + role.aliases.split(',', '，', ';', '；')).any { it.trim() == name.trim() }
+    }
+    return matches.singleOrNull()
 }
 
 /** 角色名允许别名、括号说明和轻微格式差异，但避免把“他/她/对白”误配成人物。 */
@@ -248,12 +257,13 @@ internal fun resolveAudiobookRole(
             .filter(String::isNotEmpty)
             .map { alias -> role to normalizeRoleName(alias) }
     }
-    candidates.firstOrNull { (_, alias) -> alias == normalized }?.let { return it.first }
+    val exact = candidates.filter { (_, alias) -> alias == normalized }.map { it.first }.distinctBy { it.id }
+    if (exact.size == 1) return exact.single()
+    if (exact.size > 1) return null
     if (normalized.length < 2) return null
-    return candidates
-        .filter { (_, alias) -> alias.length >= 2 && (normalized.contains(alias) || alias.contains(normalized)) }
-        .maxByOrNull { (_, alias) -> alias.length }
-        ?.first
+    val matching = candidates.filter { (_, alias) -> alias.length >= 2 && normalized.contains(alias) }
+        .map { it.first }.distinctBy { it.id }
+    return matching.singleOrNull()
 }
 
 private fun normalizeRoleName(value: String): String = value
@@ -261,3 +271,6 @@ private fun normalizeRoleName(value: String): String = value
     .replace(Regex("[\\s·•._—-]"), "")
     .replace(Regex("[（(【\\[].*?[）)】\\]]"), "")
     .replace(Regex("[^\\p{L}\\p{N}]"), "")
+
+internal fun isReliableAudiobookAssignment(assignment: ParsedAudiobookAssignment): Boolean =
+    assignment.confidence?.let { it.isFinite() && it >= 0.65f } == true && !assignment.roleName.isNullOrBlank()

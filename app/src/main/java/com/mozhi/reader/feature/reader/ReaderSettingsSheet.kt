@@ -1,5 +1,6 @@
 package com.mozhi.reader.feature.reader
 
+import com.mozhi.reader.ui.components.MoReadBottomSheet
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
@@ -31,7 +32,7 @@ internal fun ReaderSettingsSheet(palette: ReaderPalette, onDismiss: () -> Unit, 
             }
         }
     } else {
-        ModalBottomSheet(onDismissRequest = onDismiss, containerColor = color, contentColor = palette.onBackground,
+        MoReadBottomSheet(onDismissRequest = onDismiss, containerColor = color, contentColor = palette.onBackground,
             scrimColor = Color.Transparent, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) { content() }
     }
 }

@@ -125,7 +125,38 @@ class CssParser(
         // 厂商前缀别名归一到标准属性：级联与样式解析只认 writing-mode 一个名字。
         "-webkit-writing-mode", "-epub-writing-mode" ->
             parsePropertyValue("writing-mode", raw)?.let { listOf(CssDeclaration("writing-mode", it, important)) }
+        // 定位卡片常用 translate(-50%, -50%) 居中；其余变换（旋转、缩放）不改变排版，按不支持忽略。
+        "transform", "-webkit-transform" -> parseTranslate(raw)?.let { listOf(CssDeclaration("transform", it, important)) }
+        "-webkit-text-orientation", "-epub-text-orientation" ->
+            parsePropertyValue("text-orientation", raw)?.let { listOf(CssDeclaration("text-orientation", it, important)) }
+        // 縦中横：标准名与 -webkit-text-combine / -epub-text-combine 的 horizontal 取值同义。
+        "text-combine-upright", "-webkit-text-combine", "-epub-text-combine" -> {
+            val keyword = raw.trim().lowercase().substringBefore(' ')
+            val combine = when (keyword) {
+                "all", "horizontal", "digits" -> "all"
+                "none" -> "none"
+                else -> null
+            }
+            combine?.let { listOf(CssDeclaration("text-combine-upright", CssValue.Keyword(it), important)) }
+        }
         else -> parsePropertyValue(property, raw)?.let { listOf(CssDeclaration(property, it, important)) }
+    }
+
+    /** `translate(x[, y])`, `translateX(x)`, `translateY(y)` as a two-length tuple; `none` as zero. */
+    private fun parseTranslate(raw: String): CssValue? {
+        val value = raw.trim().lowercase()
+        if (value == "none") return CssValue.Tuple(listOf(CssValue.Length(0f, CssUnit.PX), CssValue.Length(0f, CssUnit.PX)))
+        val match = Regex("^translate(x|y)?\\(([^)]*)\\)$").matchEntire(value) ?: return null
+        val arguments = splitTopLevel(match.groupValues[2], ',').map { part ->
+            componentValues("left", part.trim())?.zeroAsLength()?.singleOrNull() as? CssValue.Length ?: return null
+        }
+        val zero = CssValue.Length(0f, CssUnit.PX)
+        val (x, y) = when (match.groupValues[1]) {
+            "x" -> (arguments.singleOrNull() ?: return null) to zero
+            "y" -> zero to (arguments.singleOrNull() ?: return null)
+            else -> (arguments.getOrNull(0) ?: return null) to (arguments.getOrNull(1) ?: zero)
+        }
+        return CssValue.Tuple(listOf(x, y))
     }
 
     private fun expandBox(property: String, raw: String, important: Boolean): List<CssDeclaration>? {
@@ -194,7 +225,27 @@ class CssParser(
     }
 
     private fun expandBackground(raw: String, important: Boolean): List<CssDeclaration>? {
-        val slashParts = splitTopLevel(raw, '/')
+        // 多层背景：颜色只能写在最后一层；图片取最上面一层有图（url 或渐变）的，其余层按渲染能力略去。
+        val layers = splitTopLevel(raw, ',').filter(String::isNotBlank)
+        if (layers.size > 1) {
+            val parsed = layers.map { expandBackgroundLayer(it, important) ?: return null }
+            val imageLayer = parsed.firstOrNull { layer ->
+                layer.first { it.property == "background-image" }.value != CssValue.Keyword("none")
+            } ?: parsed.last()
+            val color = parsed.last().first { it.property == "background-color" }
+            return imageLayer.map { if (it.property == "background-color") color else it }
+        }
+        return expandBackgroundLayer(raw, important)
+    }
+
+    private fun expandBackgroundLayer(raw: String, important: Boolean): List<CssDeclaration>? {
+        var layerSource = raw
+        var gradient: CssValue.Gradient? = null
+        CssGradientParser.find(layerSource)?.let { range ->
+            gradient = CssGradientParser.parse(layerSource.substring(range)) ?: return null
+            layerSource = layerSource.removeRange(range)
+        }
+        val slashParts = splitTopLevel(layerSource, '/')
         if (slashParts.size > 2) return null
         var beforeSource = slashParts[0]
         var color: CssValue = CssValue.Color(0)
@@ -216,6 +267,7 @@ class CssParser(
                 else -> position += value
             }
         }
+        gradient?.let { image = it }
         val size = if (slashParts.size == 2) parseTuple("background-size", slashParts[1]) ?: return null
             else CssValue.Keyword("auto")
         return listOf(
@@ -294,6 +346,12 @@ class CssParser(
             return families.takeIf { it.isNotEmpty() }?.let(CssValue::CommaList)
         }
         if (property in COLOR_PROPERTIES) return colorValue(raw)
+        if (property == "background-image") {
+            // 多层时取最上面一层：url(...) 或 linear-/radial-gradient(...)。
+            val layer = splitTopLevel(raw, ',').firstOrNull { it.isNotBlank() }?.trim() ?: return null
+            if (CssGradientParser.find(layer) != null) return CssGradientParser.parse(layer)
+            return componentValues(property, layer)?.singleOrNull()
+        }
         if (property == "background-position" || property == "background-size" ||
             property == "box-shadow" || property == "text-shadow" || property == "grid-template-columns"
         ) return parseTuple(property, raw)
@@ -811,7 +869,8 @@ class CssParser(
             "always", "avoid", "avoid-page", "page", "visible", "hidden", "collapse", "separate", "border-box",
             "content-box", "nowrap", "pre", "pre-wrap", "break-spaces", "row", "column", "solid", "dashed", "dotted",
             "double", "groove", "ridge", "inset", "outset", "thin", "medium", "thick", "landscape", "portrait",
-            "horizontal-tb", "vertical-rl", "vertical-lr", "tb-rl", "tb-lr", "mixed", "upright", "sideways"
+            "horizontal-tb", "vertical-rl", "vertical-lr", "tb-rl", "tb-lr", "mixed", "upright", "sideways",
+            "static", "relative", "absolute", "fixed", "sticky"
         )
         val COLOR_PROPERTIES = setOf(
             "color", "background-color", "border-color", "border-top-color", "border-right-color", "border-bottom-color",
@@ -823,10 +882,12 @@ class CssParser(
             "padding-left", "width", "height", "min-width", "min-height", "max-width", "max-height", "text-indent",
             "font-size", "line-height", "letter-spacing", "word-spacing", "vertical-align", "border-top-width",
             "border-right-width", "border-bottom-width", "border-left-width", "border-top-left-radius", "border-top-right-radius",
-            "border-bottom-right-radius", "border-bottom-left-radius", "column-gap", "row-gap", "gap"
+            "border-bottom-right-radius", "border-bottom-left-radius", "column-gap", "row-gap", "gap",
+            "top", "right", "bottom", "left"
         )
         val NON_NEGATIVE_LENGTH_PROPERTIES = LENGTH_PROPERTIES - setOf(
-            "margin-top", "margin-right", "margin-bottom", "margin-left", "text-indent", "letter-spacing", "word-spacing", "vertical-align"
+            "margin-top", "margin-right", "margin-bottom", "margin-left", "text-indent", "letter-spacing", "word-spacing", "vertical-align",
+            "top", "right", "bottom", "left"
         )
         val SUPPORTED_PROPERTIES = setOf(
             "margin", "padding", "border", "border-top", "border-right", "border-bottom", "border-left", "border-width",
@@ -839,7 +900,10 @@ class CssParser(
             "orphans", "widows", "list-style-type", "list-style-position", "list-style-image", "border-collapse",
             "ruby-align", "duokan-text-indent", "duokan-bleed", "align-items", "justify-content", "flex-direction",
             "grid-template-columns", "column-gap", "row-gap", "gap",
-            "writing-mode", "-webkit-writing-mode", "-epub-writing-mode", "text-orientation"
+            "writing-mode", "-webkit-writing-mode", "-epub-writing-mode", "text-orientation", "position",
+            "transform", "-webkit-transform",
+            "-webkit-text-orientation", "-epub-text-orientation",
+            "text-combine-upright", "-webkit-text-combine", "-epub-text-combine"
         )
     }
 }

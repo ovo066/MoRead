@@ -52,7 +52,7 @@ internal fun BoxScope.ReaderSelectionMediaStatus(
         shape = RoundedCornerShape(16.dp),
         color = palette.glassStrong,
         contentColor = palette.onBackground,
-        shadowElevation = 8.dp,
+        shadowElevation = 0.dp,
         modifier = Modifier
             .align(Alignment.BottomCenter)
             .padding(start = 20.dp, end = 20.dp, bottom = bottomPadding)
@@ -109,7 +109,7 @@ internal fun BoxScope.ReaderAnnotationInkOverlay(
             color = palette.glassStrong,
             contentColor = palette.onBackground,
             border = BorderStroke(1.dp, palette.glassBorder),
-            shadowElevation = 8.dp
+            shadowElevation = 0.dp
         ) {
             AnnotationStylePanel(
                 selectedStyle = AnnotationStyle.fromWire(annotation.style),

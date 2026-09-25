@@ -20,14 +20,20 @@ import com.mozhi.reader.core.datastore.ReaderSyntaxFont
 import com.mozhi.reader.core.library.EpubArchiveAsset
 import com.mozhi.reader.core.library.EpubArchivePool
 import com.mozhi.reader.feature.reader.engine.BackgroundSizeMode
+import com.mozhi.reader.feature.reader.engine.BorderLineStyle
+import com.mozhi.reader.feature.reader.engine.TextBoxShadow
+import com.mozhi.reader.feature.reader.engine.TextGradient
 import com.mozhi.reader.feature.reader.engine.ImmersiveArtworkFit
 import com.mozhi.reader.feature.reader.engine.TransientHighlightSpan
 import com.mozhi.reader.feature.reader.engine.ReaderAnnotationMark
 import com.mozhi.reader.feature.reader.engine.ReaderIllustrationMark
 import com.mozhi.reader.feature.reader.engine.RenderPage
 import com.mozhi.reader.feature.reader.engine.TextBlockDecoration
+import com.mozhi.reader.feature.reader.engine.VerticalForms
+import com.mozhi.reader.feature.reader.engine.VerticalOrientation
 import com.mozhi.reader.feature.reader.engine.annotationGeometry
 import com.mozhi.reader.feature.reader.engine.inlineMarkerLayout
+import com.mozhi.reader.feature.reader.engine.lineExtent
 import java.io.File
 import java.util.Locale
 
@@ -232,7 +238,7 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
                 canvas.drawRect(viewport, epubDecorationPaint)
             }
             page.page.backgroundImagePath?.let { path ->
-                drawCoverImage(canvas, path, viewport, page.page.backgroundOpacity)
+                drawPageBackgroundImage(canvas, page, path, viewport)
             }
         }
         // 封面/整页插画：不管来自旧引擎的 inlineImage 还是盒模型引擎的定位图片，都整屏居中落位。
@@ -297,8 +303,39 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         clipBottom: Float = Float.POSITIVE_INFINITY,
         drawPageBackground: Boolean = true
     ) {
-        val markerRadius = (pageStyle.tipSizePx * 0.72f).coerceAtLeast(8f)
         if (drawPageBackground) drawEpubPageBackground(canvas, page, clipTop, clipBottom)
+        val verticalWidth = page.page.verticalFrameWidth
+        if (verticalWidth == null) {
+            drawFrameContent(canvas, page, annotations, illustrations, transientHighlight, clipTop, clipBottom)
+            return
+        }
+        // vertical-rl：整页内容在顺时针旋转 90° 的坐标系里排好，这里把画布转过去；
+        // 直立的字、图片与背景图在各自位置再转回来（见 EpubVerticalFrame）。
+        // 帧坐标里的行是物理上的列，滚动模式按物理纵向给的裁剪窗在这里没有意义。
+        val saved = canvas.save()
+        canvas.translate(verticalWidth, 0f)
+        canvas.rotate(90f)
+        try {
+            drawFrameContent(
+                canvas, page, annotations, illustrations, transientHighlight,
+                Float.NEGATIVE_INFINITY, Float.POSITIVE_INFINITY
+            )
+        } finally {
+            canvas.restoreToCount(saved)
+        }
+    }
+
+    private fun drawFrameContent(
+        canvas: Canvas,
+        page: RenderPage.Laid,
+        annotations: List<ReaderAnnotationMark>,
+        illustrations: List<ReaderIllustrationMark>,
+        transientHighlight: TransientHighlightSpan?,
+        clipTop: Float,
+        clipBottom: Float
+    ) {
+        val vertical = page.page.verticalFrameWidth != null
+        val markerRadius = (pageStyle.tipSizePx * 0.72f).coerceAtLeast(8f)
         drawEpubDecorations(canvas, page, clipTop, clipBottom)
         // 听书当前句底色画在批注高亮之下，两者重叠时批注色仍占主导。
         if (transientHighlight != null && transientHighlight.chapterIndex == page.chapterIndex) {
@@ -314,7 +351,7 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
                 ),
                 markerRadius = markerRadius,
                 markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.INLINE_MARKER_GAP_RATIO,
-                maxRight = pageStyle.contentWidth
+                maxRight = page.page.lineExtent(pageStyle.contentWidth, pageStyle.spec.visibleHeight)
             )
             listenGeometry.highlights.forEach { rect ->
                 if (rect.bottom < clipTop || rect.top > clipBottom) return@forEach
@@ -331,7 +368,7 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
             illustrations = illustrations,
             markerRadius = markerRadius,
             markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.INLINE_MARKER_GAP_RATIO,
-            maxRight = pageStyle.contentWidth
+            maxRight = page.page.lineExtent(pageStyle.contentWidth, pageStyle.spec.visibleHeight)
         )
         val markById = annotations.associateBy(ReaderAnnotationMark::id)
         // 荧光垫在正文之下；直线/波浪画在字形基线下沿，也一并先画（都在文字层之下不糊字形）
@@ -400,7 +437,8 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
                             line.lineTop + image.topOffset,
                             image.left + image.width,
                             line.lineTop + image.topOffset + image.height
-                        )
+                        ),
+                        upright = vertical
                     )
                 }
                 continue
@@ -416,12 +454,13 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
                         line.lineTop,
                         line.startX + inlineImage.width,
                         line.lineTop + inlineImage.height
-                    )
+                    ),
+                    upright = vertical
                 )
                 continue
             }
             line.inlineDecorations.forEach { decoration ->
-                drawEpubDecoration(canvas, decoration)
+                drawEpubDecoration(canvas, decoration, vertical)
             }
             line.inlineGlyphImages.forEach { image ->
                 drawInlineImage(
@@ -433,10 +472,13 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
                         line.lineTop + image.topOffset,
                         image.left + image.width,
                         line.lineTop + image.topOffset + image.height
-                    )
+                    ),
+                    upright = vertical
                 )
             }
             val paint = if (line.isReaderTitle) titlePaint else if (line.isTitle) publisherTitlePaint else contentPaint
+            // 竖排列的中轴：以本列最大字号的字形框居中，大小字、上下标都对齐同一条中线。
+            val axisY = if (vertical) verticalAxis(line, paint) else 0f
             for ((columnIndex, column) in line.columns.withIndex()) {
                 if (column.inlineMarkerKind != null) continue
                 val columnStart = geometry.startFor(lineIndex, columnIndex, column)
@@ -515,8 +557,15 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
                     resolvedPaint.alpha = (column.opacity * 255).toInt().coerceIn(0, 255)
                 }
                 try {
-                    canvas.drawText(column.charData, columnStart,
-                        line.lineBase + column.baselineShiftPx, resolvedPaint)
+                    if (column.verticalOrientation == null) {
+                        withTextShadows(column.textShadows, resolvedPaint) {
+                            canvas.drawText(column.charData, columnStart,
+                                line.lineBase + column.baselineShiftPx, resolvedPaint)
+                        }
+                    } else {
+                        drawVerticalColumn(canvas, column, columnStart, columnEnd,
+                            axisY + column.baselineShiftPx, resolvedPaint)
+                    }
                 } finally {
                     resolvedPaint.shader = oldShader
                     resolvedPaint.alpha = oldAlpha
@@ -538,8 +587,12 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
                     fontFamily = ruby.fontFamily,
                     opacity = ruby.opacity
                 )
-                val rubyX = ruby.left + (ruby.right - ruby.left - rubyPaint.measureText(ruby.text)) / 2f
-                canvas.drawText(ruby.text, rubyX, ruby.baseline, rubyPaint)
+                if (vertical) {
+                    drawVerticalRuby(canvas, ruby, rubyPaint)
+                } else {
+                    val rubyX = ruby.left + (ruby.right - ruby.left - rubyPaint.measureText(ruby.text)) / 2f
+                    canvas.drawText(ruby.text, rubyX, ruby.baseline, rubyPaint)
+                }
             }
         }
         geometry.markers.forEach { marker ->
@@ -745,9 +798,20 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
             epubDecorationPaint.color = color.withOpacity(page.page.backgroundOpacity)
             canvas.drawRect(destination, epubDecorationPaint)
         }
-        page.page.backgroundImagePath?.let { path ->
+        page.page.backgroundImagePath?.let { path -> drawPageBackgroundImage(canvas, page, path, destination) }
+    }
+
+    private fun drawPageBackgroundImage(canvas: Canvas, page: RenderPage.Laid, path: String, destination: RectF) {
+        val layer = page.page.backgroundLayer
+        if (layer == null || layer.backgroundSizeMode == BackgroundSizeMode.COVER &&
+            !layer.backgroundRepeatX && !layer.backgroundRepeatY
+        ) {
             drawCoverImage(canvas, path, destination, page.page.backgroundOpacity)
+            return
         }
+        // body 背景按 CSS 的尺寸、平铺与定位铺开（例如沿页边竖向平铺的花边），不再一律居中 cover。
+        drawDecorationBackgroundImage(canvas, path, destination, layer.copy(opacity = page.page.backgroundOpacity),
+            Path().apply { addRect(destination, Path.Direction.CW) })
     }
 
     private fun drawEpubDecorations(
@@ -756,13 +820,14 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         clipTop: Float,
         clipBottom: Float
     ) {
+        val vertical = page.page.verticalFrameWidth != null
         page.page.decorations.forEach { decoration ->
             if (decoration.bottom < clipTop || decoration.top > clipBottom) return@forEach
-            drawEpubDecoration(canvas, decoration)
+            drawEpubDecoration(canvas, decoration, vertical)
         }
     }
 
-    private fun drawEpubDecoration(canvas: Canvas, decoration: TextBlockDecoration) {
+    private fun drawEpubDecoration(canvas: Canvas, decoration: TextBlockDecoration, vertical: Boolean = false) {
         val rect = RectF(decoration.left, decoration.top, decoration.right, decoration.bottom)
         if (rect.width() <= 0f || rect.height() <= 0f) return
         val shape = decorationPath(decoration, rect)
@@ -772,8 +837,39 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
             epubDecorationPaint.color = color.withOpacity(decoration.opacity)
             canvas.drawPath(shape, epubDecorationPaint)
         }
+        decoration.backgroundGradient?.let { gradient ->
+            val saved = canvas.save()
+            canvas.clipPath(shape)
+            // 渐变方向是物理方向：竖排页先在盒心转回直立坐标再铺。
+            val box = if (vertical) {
+                canvas.rotate(-90f, rect.centerX(), rect.centerY())
+                uprightRect(rect)
+            } else rect
+            gradientShader(gradient, box)?.let { shader ->
+                epubDecorationPaint.style = Paint.Style.FILL
+                epubDecorationPaint.shader = shader
+                epubDecorationPaint.color = Color.BLACK
+                epubDecorationPaint.alpha = (decoration.opacity.coerceIn(0f, 1f) * 255f).toInt()
+                canvas.drawRect(box, epubDecorationPaint)
+                epubDecorationPaint.shader = null
+                epubDecorationPaint.alpha = 255
+            }
+            canvas.restoreToCount(saved)
+        }
         decoration.backgroundImagePath?.let { path ->
-            drawDecorationBackgroundImage(canvas, path, rect, decoration, shape)
+            if (vertical) {
+                // 背景图的尺寸与定位按物理盒子算；先按帧里的形状裁剪，再在盒心把图立回来。
+                val saved = canvas.save()
+                canvas.clipPath(shape)
+                canvas.rotate(-90f, rect.centerX(), rect.centerY())
+                val upright = uprightRect(rect)
+                drawDecorationBackgroundImage(canvas, path, upright, decoration, Path().apply {
+                    addRect(upright, Path.Direction.CW)
+                })
+                canvas.restoreToCount(saved)
+            } else {
+                drawDecorationBackgroundImage(canvas, path, rect, decoration, shape)
+            }
         }
         drawDecorationShadows(canvas, decoration, rect, shape, inset = true)
         drawDecorationBorders(canvas, decoration, rect, shape)
@@ -859,6 +955,11 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         }
     }
 
+    /**
+     * CSS borders are painted inside the border box: each side's stroke is centred half its
+     * width in from the edge. Per-side styles (dashed, dotted, double, groove/ridge, inset/outset)
+     * follow the browser conventions closely enough to read as the same design.
+     */
     private fun drawDecorationBorders(
         canvas: Canvas,
         decoration: TextBlockDecoration,
@@ -878,22 +979,26 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
             decoration.borderBottomColorArgb ?: fallbackColor,
             decoration.borderLeftColorArgb ?: fallbackColor
         )
-        val uniform = decoration.drawTopEdge && decoration.drawRightEdge &&
-            decoration.drawBottomEdge && decoration.drawLeftEdge &&
-            widths.all { kotlin.math.abs(it - widths[0]) < 0.01f } && colors.all { it == colors[0] }
-        if (uniform && widths[0] > 0f) {
-            epubBorderPaint.strokeWidth = widths[0]
-            epubBorderPaint.color = colors[0].withOpacity(decoration.opacity)
-            canvas.drawPath(shape, epubBorderPaint)
-            return
-        }
-
+        val styles = arrayOf(
+            decoration.borderTopStyle,
+            decoration.borderRightStyle,
+            decoration.borderBottomStyle,
+            decoration.borderLeftStyle
+        )
         val enabled = booleanArrayOf(
             decoration.drawTopEdge,
             decoration.drawRightEdge,
             decoration.drawBottomEdge,
             decoration.drawLeftEdge
         )
+        val shaded = styles.any { it == BorderLineStyle.INSET || it == BorderLineStyle.OUTSET }
+        val uniform = enabled.all { it } && !shaded &&
+            widths.all { kotlin.math.abs(it - widths[0]) < 0.01f } && colors.all { it == colors[0] } &&
+            styles.all { it == styles[0] }
+        if (uniform) {
+            if (widths[0] > 0f) strokeBorder(canvas, decoration, rect, widths[0], colors[0], styles[0], side = -1)
+            return
+        }
         val topRadius = maxOf(decoration.borderTopLeftRadius, decoration.borderTopRightRadius)
         val rightRadius = maxOf(decoration.borderTopRightRadius, decoration.borderBottomRightRadius)
         val bottomRadius = maxOf(decoration.borderBottomLeftRadius, decoration.borderBottomRightRadius)
@@ -909,13 +1014,84 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         // 遇到 border-left/right 不同色或不同宽时会丢掉圆角弧线，看起来像完全方框。
         widths.indices.forEach { side ->
             if (!enabled[side] || widths[side] <= 0f) return@forEach
-            epubBorderPaint.strokeWidth = widths[side]
-            epubBorderPaint.color = colors[side].withOpacity(decoration.opacity)
             canvas.save()
             canvas.clipRect(clips[side])
-            canvas.drawPath(shape, epubBorderPaint)
+            strokeBorder(canvas, decoration, rect, widths[side], colors[side], styles[side], side)
             canvas.restore()
         }
+    }
+
+    /** [side] is 0..3 for top/right/bottom/left, or -1 when all four sides share this stroke. */
+    private fun strokeBorder(
+        canvas: Canvas,
+        decoration: TextBlockDecoration,
+        rect: RectF,
+        width: Float,
+        color: Int,
+        style: BorderLineStyle,
+        side: Int
+    ) {
+        val base = color.withOpacity(decoration.opacity)
+        fun stroke(inset: Float, strokeWidth: Float, strokeColor: Int) {
+            epubBorderPaint.strokeWidth = strokeWidth
+            epubBorderPaint.color = strokeColor
+            canvas.drawPath(insetDecorationPath(decoration, rect, inset), epubBorderPaint)
+        }
+        epubBorderPaint.pathEffect = null
+        epubBorderPaint.strokeCap = Paint.Cap.BUTT
+        when (style) {
+            BorderLineStyle.DASHED -> {
+                val dash = (width * 3f).coerceAtLeast(3f)
+                epubBorderPaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(dash, dash), 0f)
+                stroke(width / 2f, width, base)
+            }
+            BorderLineStyle.DOTTED -> {
+                epubBorderPaint.strokeCap = Paint.Cap.ROUND
+                epubBorderPaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(0.01f, width * 2f), 0f)
+                stroke(width / 2f, width, base)
+            }
+            BorderLineStyle.DOUBLE -> if (width >= 3f) {
+                stroke(width / 6f, width / 3f, base)
+                stroke(width * 5f / 6f, width / 3f, base)
+            } else stroke(width / 2f, width, base)
+            BorderLineStyle.GROOVE, BorderLineStyle.RIDGE -> {
+                val dark = shade(base, darker = true)
+                val light = shade(base, darker = false)
+                val (outer, inner) = if (style == BorderLineStyle.GROOVE) dark to light else light to dark
+                stroke(width / 4f, width / 2f, outer)
+                stroke(width * 3f / 4f, width / 2f, inner)
+            }
+            BorderLineStyle.INSET, BorderLineStyle.OUTSET -> {
+                // 上、左边是「背光面」：inset 变暗、outset 变亮，下、右边相反。
+                val upperLeft = side == 0 || side == 3
+                val darker = (style == BorderLineStyle.INSET) == upperLeft
+                stroke(width / 2f, width, shade(base, darker))
+            }
+            BorderLineStyle.SOLID -> stroke(width / 2f, width, base)
+        }
+        epubBorderPaint.pathEffect = null
+        epubBorderPaint.strokeCap = Paint.Cap.BUTT
+    }
+
+    private fun insetDecorationPath(decoration: TextBlockDecoration, rect: RectF, inset: Float): Path {
+        val inner = RectF(rect).apply { inset(inset, inset) }
+        if (inner.width() <= 0f || inner.height() <= 0f) return decorationPath(decoration, rect)
+        return decorationPath(
+            decoration.copy(
+                borderTopLeftRadius = (decoration.borderTopLeftRadius - inset).coerceAtLeast(0f),
+                borderTopRightRadius = (decoration.borderTopRightRadius - inset).coerceAtLeast(0f),
+                borderBottomRightRadius = (decoration.borderBottomRightRadius - inset).coerceAtLeast(0f),
+                borderBottomLeftRadius = (decoration.borderBottomLeftRadius - inset).coerceAtLeast(0f)
+            ),
+            inner
+        )
+    }
+
+    private fun shade(color: Int, darker: Boolean): Int {
+        val factor = if (darker) 0.6f else 1f
+        val lift = if (darker) 0f else 0.35f
+        fun channel(value: Int) = (value * factor + (255 - value * factor) * lift).toInt().coerceIn(0, 255)
+        return Color.argb(Color.alpha(color), channel(Color.red(color)), channel(Color.green(color)), channel(Color.blue(color)))
     }
 
     private fun drawDecorationBackgroundImage(
@@ -1014,8 +1190,16 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         path: String,
         altText: String,
         destination: RectF,
-        roundCorners: Boolean = true
+        roundCorners: Boolean = true,
+        upright: Boolean = false
     ) {
+        if (upright) {
+            val saved = canvas.save()
+            canvas.rotate(-90f, destination.centerX(), destination.centerY())
+            drawInlineImage(canvas, path, altText, uprightRect(destination), roundCorners)
+            canvas.restoreToCount(saved)
+            return
+        }
         val bitmap = loadImage(path, destination.width().toInt(), destination.height().toInt())
         if (bitmap != null) {
             canvas.save()
@@ -1124,6 +1308,257 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         }.getOrElse {
             bitmap.recycle()
             null
+        }
+    }
+
+    /** Draws [draw] once per CSS text-shadow layer (bottom first), then once plainly on top. */
+    private inline fun withTextShadows(shadows: List<TextBoxShadow>, paint: TextPaint, draw: () -> Unit) {
+        if (shadows.isEmpty()) {
+            draw()
+            return
+        }
+        for (shadow in shadows.asReversed()) {
+            // CSS 的模糊半径约是高斯 σ 的两倍；Android 的阴影半径为 0 时不画阴影。
+            paint.setShadowLayer((shadow.blurRadius / 2f).coerceAtLeast(0.1f), shadow.offsetX, shadow.offsetY, shadow.colorArgb)
+            draw()
+        }
+        paint.clearShadowLayer()
+        draw()
+    }
+
+    /**
+     * CSS gradient as a shader over [box] (CSS Images 3): the linear gradient line passes through
+     * the box centre with length |w·sinθ| + |h·cosθ|; radial ellipses reach the farthest corner.
+     */
+    private fun gradientShader(gradient: TextGradient, box: RectF): Shader? {
+        if (gradient.stops.isEmpty() || box.width() <= 0f || box.height() <= 0f) return null
+        val colors = gradient.stops.map { it.colorArgb }.toIntArray()
+        val centerX = box.left + box.width() * gradient.centerX
+        val centerY = box.top + box.height() * gradient.centerY
+        val length: Float
+        var radiusX = 0f
+        var radiusY = 0f
+        if (gradient.radial) {
+            val dx = maxOf(centerX - box.left, box.right - centerX)
+            val dy = maxOf(centerY - box.top, box.bottom - centerY)
+            if (gradient.circle) {
+                radiusX = kotlin.math.hypot(dx, dy)
+                radiusY = radiusX
+            } else {
+                radiusX = dx * kotlin.math.sqrt(2f)
+                radiusY = dy * kotlin.math.sqrt(2f)
+            }
+            length = radiusX.coerceAtLeast(1f)
+        } else {
+            val radians = Math.toRadians(gradient.angleDeg.toDouble())
+            length = (kotlin.math.abs(box.width() * kotlin.math.sin(radians)) +
+                kotlin.math.abs(box.height() * kotlin.math.cos(radians))).toFloat().coerceAtLeast(1f)
+        }
+        // 解析停靠点：百分比按渐变线长折算，缺省位置在前后已知点之间均分，且不许倒退。
+        val positions = FloatArray(gradient.stops.size) { index ->
+            val stop = gradient.stops[index]
+            stop.fraction?.times(length) ?: stop.px ?: Float.NaN
+        }
+        if (positions.first().isNaN()) positions[0] = 0f
+        if (positions.last().isNaN()) positions[positions.lastIndex] = maxOf(length, positions.filterNot(Float::isNaN).maxOrNull() ?: length)
+        var index = 1
+        while (index < positions.size) {
+            if (positions[index].isNaN()) {
+                val next = (index until positions.size).first { !positions[it].isNaN() }
+                val from = positions[index - 1]
+                val step = (positions[next] - from) / (next - index + 1)
+                for (fill in index until next) positions[fill] = from + step * (fill - index + 1)
+                index = next
+            }
+            positions[index] = maxOf(positions[index], positions[index - 1])
+            index++
+        }
+        val first = positions.first()
+        val last = positions.last()
+        val (start, end) = if (gradient.repeating) {
+            first to last.coerceAtLeast(first + 0.5f)
+        } else {
+            minOf(0f, first) to maxOf(length, last)
+        }
+        val span = (end - start).coerceAtLeast(0.5f)
+        val normalized = FloatArray(positions.size) { ((positions[it] - start) / span).coerceIn(0f, 1f) }
+        val tile = if (gradient.repeating) Shader.TileMode.REPEAT else Shader.TileMode.CLAMP
+        if (gradient.radial) {
+            // 径向只能以 [start, end] 为半径段；非重复时 start 恒为 0。
+            val shader = android.graphics.RadialGradient(centerX, centerY, end.coerceAtLeast(0.5f),
+                colors, FloatArray(positions.size) { (positions[it] / end.coerceAtLeast(0.5f)).coerceIn(0f, 1f) }, tile)
+            if (radiusY != radiusX) {
+                shader.setLocalMatrix(Matrix().apply { setScale(1f, radiusY / radiusX, centerX, centerY) })
+            }
+            return shader
+        }
+        val radians = Math.toRadians(gradient.angleDeg.toDouble())
+        val directionX = kotlin.math.sin(radians).toFloat()
+        val directionY = (-kotlin.math.cos(radians)).toFloat()
+        val originX = box.centerX() - directionX * length / 2f
+        val originY = box.centerY() - directionY * length / 2f
+        return android.graphics.LinearGradient(
+            originX + directionX * start, originY + directionY * start,
+            originX + directionX * end, originY + directionY * end,
+            colors, normalized, tile
+        )
+    }
+
+
+    /** The physical box a rotated-frame rectangle covers, centred where the frame rectangle is. */
+    private fun uprightRect(frame: RectF): RectF {
+        val halfWidth = frame.height() / 2f
+        val halfHeight = frame.width() / 2f
+        return RectF(frame.centerX() - halfWidth, frame.centerY() - halfHeight,
+            frame.centerX() + halfWidth, frame.centerY() + halfHeight)
+    }
+
+    private fun verticalAxis(line: com.mozhi.reader.feature.reader.engine.TextLine, paint: TextPaint): Float {
+        val scale = line.columns.maxOfOrNull { it.textSizeScale } ?: 1f
+        return line.lineBase + (paint.ascent() + paint.descent()) / 2f * scale
+    }
+
+    /**
+     * One cluster of a vertical-rl column, drawn in the rotated frame around its cell centre.
+     * Upright glyphs get the font's `vert` alternates (。，「」 etc.); TR glyphs whose font lacks one
+     * fall back to sideways, as browsers do. Underline/strike become lines along the column.
+     */
+    private fun drawVerticalColumn(
+        canvas: Canvas,
+        column: com.mozhi.reader.feature.reader.engine.TextColumn,
+        start: Float,
+        end: Float,
+        axisY: Float,
+        source: TextPaint
+    ) {
+        val orientation = column.verticalOrientation
+        val paint = verticalPaint(source, vert = !column.combineUpright)
+        // 字体自带 vert 字形就用它；没有时退到 Unicode 竖排标点（︐︒﹁…），再没有才侧转。
+        val transformed = !column.combineUpright &&
+            (orientation == VerticalOrientation.TU || orientation == VerticalOrientation.TR)
+        val fontForm = transformed && hasVerticalForm(paint, column.charData)
+        val presentationForm = if (transformed && !fontForm) {
+            VerticalForms.of(column.charData)?.takeIf(paint::hasGlyph)
+        } else null
+        val text = presentationForm ?: column.charData
+        val upright = column.combineUpright || orientation == VerticalOrientation.U ||
+            orientation == VerticalOrientation.TU ||
+            orientation == VerticalOrientation.TR && (fontForm || presentationForm != null)
+        val centerX = (start + end) / 2f
+        if (upright) {
+            val saved = canvas.save()
+            canvas.rotate(-90f, centerX, axisY)
+            val width = paint.measureText(text)
+            val baseline = axisY - (paint.ascent() + paint.descent()) / 2f
+            if (column.combineUpright && width > end - start) {
+                canvas.scale((end - start) / width, 1f, centerX, axisY)
+            }
+            // 直立字形已转回物理方向，阴影偏移按物理坐标原样使用。
+            withTextShadows(column.textShadows, paint) {
+                canvas.drawText(text, centerX - width / 2f, baseline, paint)
+            }
+            canvas.restoreToCount(saved)
+        } else {
+            // 侧转的字（西文、数字、破折号）沿列顺时针躺倒；字形框同样落在列中轴上。
+            val plain = verticalPaint(source, vert = false)
+            val baseline = axisY - (plain.ascent() + plain.descent()) / 2f
+            // 侧转字形画在帧里：物理偏移 (dx, dy) 在帧里是 (dy, -dx)。
+            val frameShadows = column.textShadows.map { it.copy(offsetX = it.offsetY, offsetY = -it.offsetX) }
+            withTextShadows(frameShadows, plain) {
+                canvas.drawText(column.charData, centerX - plain.measureText(column.charData) / 2f, baseline, plain)
+            }
+        }
+        if (source.isUnderlineText || source.isStrikeThruText) {
+            verticalLinePaint.color = source.color
+            verticalLinePaint.strokeWidth = (source.textSize * 0.06f).coerceAtLeast(1f)
+            if (source.isUnderlineText) {
+                val y = axisY + source.textSize * 0.56f
+                canvas.drawLine(start, y, end, y, verticalLinePaint)
+            }
+            if (source.isStrikeThruText) canvas.drawLine(start, axisY, end, axisY, verticalLinePaint)
+        }
+    }
+
+    /** Ruby in vertical text: characters stack down the column beside their base, each upright. */
+    private fun drawVerticalRuby(
+        canvas: Canvas,
+        ruby: com.mozhi.reader.feature.reader.engine.TextRubyPlacement,
+        source: TextPaint
+    ) {
+        // 拼音、罗马字这类侧转文字的注音整体躺倒居中（与浏览器一致）；假名、注音符号逐字直立。
+        if (ruby.text.codePoints().anyMatch { VerticalOrientation.of(it) == VerticalOrientation.R && !Character.isWhitespace(it) }) {
+            val plain = verticalPaint(source, vert = false)
+            val axisY = ruby.baseline + (plain.ascent() + plain.descent()) / 2f
+            canvas.drawText(ruby.text, (ruby.left + ruby.right - plain.measureText(ruby.text)) / 2f,
+                axisY - (plain.ascent() + plain.descent()) / 2f, plain)
+            return
+        }
+        val paint = verticalPaint(source, vert = true)
+        val characters = ArrayList<String>()
+        var index = 0
+        while (index < ruby.text.length) {
+            val next = index + Character.charCount(ruby.text.codePointAt(index))
+            characters += ruby.text.substring(index, next)
+            index = next
+        }
+        if (characters.isEmpty()) return
+        val span = ruby.right - ruby.left
+        val step = maxOf(paint.textSize, span / characters.size)
+        var x = ruby.left + (span - step * characters.size) / 2f
+        val axisY = ruby.baseline + (paint.ascent() + paint.descent()) / 2f
+        val baseline = axisY - (paint.ascent() + paint.descent()) / 2f
+        characters.forEach { character ->
+            val centerX = x + step / 2f
+            val saved = canvas.save()
+            canvas.rotate(-90f, centerX, axisY)
+            canvas.drawText(character, centerX - paint.measureText(character) / 2f, baseline, paint)
+            canvas.restoreToCount(saved)
+            x += step
+        }
+    }
+
+    private val verticalPaints = HashMap<Pair<TextPaint, Boolean>, TextPaint>()
+    private val verticalForms = HashMap<String, Boolean>()
+    private val verticalLinePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    /** Decorations are drawn along the column by [drawVerticalColumn], never by the glyph paint. */
+    private fun verticalPaint(source: TextPaint, vert: Boolean): TextPaint =
+        verticalPaints.getOrPut(source to vert) {
+            TextPaint(source).apply {
+                isUnderlineText = false
+                isStrikeThruText = false
+                fontFeatureSettings = if (vert) "'vert' 1" else null
+            }
+        }.also { paint ->
+            // Colour, alpha and shader change per column on the shared source paint.
+            paint.color = source.color
+            paint.alpha = source.alpha
+            paint.shader = source.shader
+        }
+
+    /** Whether the font substitutes a vertical form for [text]: compare outlines with and without `vert`. */
+    private fun hasVerticalForm(paint: TextPaint, text: String): Boolean {
+        val key = "${System.identityHashCode(paint.typeface)}|${paint.isFakeBoldText}|$text"
+        return verticalForms.getOrPut(key) {
+            runCatching {
+                fun bounds(features: String?): RectF {
+                    val probe = TextPaint(paint).apply {
+                        fontFeatureSettings = features
+                        textSize = 100f
+                    }
+                    val path = Path()
+                    probe.getTextPath(text, 0, text.length, 0f, 0f, path)
+                    return RectF().also { path.computeBounds(it, true) }
+                }
+                val plain = bounds(null)
+                val vertical = bounds("'vert' 1")
+                !plain.isEmpty && (
+                    kotlin.math.abs(plain.left - vertical.left) > 0.5f ||
+                        kotlin.math.abs(plain.top - vertical.top) > 0.5f ||
+                        kotlin.math.abs(plain.width() - vertical.width()) > 0.5f ||
+                        kotlin.math.abs(plain.height() - vertical.height()) > 0.5f
+                    )
+            }.getOrDefault(false)
         }
     }
 

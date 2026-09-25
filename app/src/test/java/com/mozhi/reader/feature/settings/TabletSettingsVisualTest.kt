@@ -34,7 +34,8 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35], application = Application::class, qualifiers = "w1400dp-h960dp-mdpi")
+// 按默认中文界面断言文案；英文资源由 LocalizationResourcesTest 覆盖。
+@Config(sdk = [35], application = Application::class, qualifiers = "zh-rCN-w1400dp-h960dp-mdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class TabletSettingsVisualTest {
     @get:Rule val compose = createComposeRule()
@@ -108,7 +109,7 @@ class TabletSettingsVisualTest {
         compose.onNodeWithText("显示伴读 Token 用量").assertExists()
     }
 
-    @Test @Config(qualifiers = "w900dp-h1200dp-mdpi")
+    @Test @Config(qualifiers = "zh-rCN-w900dp-h1200dp-mdpi")
     fun portraitKeepsCategoryAndDetailUsableAndNestedEditorsHaveBack() {
         show()
         capture("tablet-settings-portrait.png")

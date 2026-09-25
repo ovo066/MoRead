@@ -17,6 +17,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ModelCatalogTest {
+    @Test fun geminiTtsCatalogUsesNativeSpeechRoute() = runBlocking {
+        val client = fakeClient { """{"models":[{"name":"models/gemini-3.8-flash-tts"},{"name":"models/gemini-3.8-flash"}]}""" }
+        val result = ModelCatalogFetcher(client).fetch(provider(AiProviderAdapter.GEMINI).copy(apiFormat = "GEMINI"), "test-key") as ModelCatalogResult.Success
+        val speech = result.models.single { it.type == AiModelType.TTS }
+        assertEquals("gemini-3.8-flash-tts", speech.modelName)
+        assertEquals("/interactions", speech.endpointPath)
+    }
     @Test fun rerankModelsUseTheirOwnCapabilityAndEndpoint() = runBlocking {
         val client = fakeClient { """{"data":[{"id":"BAAI/bge-reranker-v2-m3"},{"id":"ordinary-chat"}]}""" }
         val result = ModelCatalogFetcher(client).fetch(provider(AiProviderAdapter.CUSTOM), "test-key") as ModelCatalogResult.Success

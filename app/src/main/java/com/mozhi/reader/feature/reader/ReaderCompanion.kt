@@ -526,7 +526,7 @@ private fun BubbleActionBar(
         color = palette.glassStrong,
         shape = CircleShape,
         border = BorderStroke(1.dp, palette.glassBorder),
-        shadowElevation = 3.dp,
+        shadowElevation = 0.dp,
         modifier = Modifier.padding(top = 3.dp)
     ) {
         Row(

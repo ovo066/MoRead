@@ -7,6 +7,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mozhi.reader.ai.media.AiMediaGenerationService
 import com.mozhi.reader.core.security.ApiKeyStore
+import com.mozhi.reader.core.speech.SystemTtsVoiceInfo
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import com.mozhi.reader.core.speech.SystemTtsEngineInfo
 import com.mozhi.reader.core.speech.SystemTtsSpeaker
 import com.mozhi.reader.core.speech.TtsApiProvider
@@ -14,8 +19,6 @@ import com.mozhi.reader.core.speech.TtsEngineMode
 import com.mozhi.reader.core.speech.TtsSettings
 import com.mozhi.reader.core.speech.TtsSettingsStore
 import com.mozhi.reader.core.speech.TtsSynthesisGranularity
-import com.mozhi.reader.core.speech.defaultBaseUrl
-import com.mozhi.reader.core.speech.defaultModel
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
@@ -30,7 +33,9 @@ data class TtsSettingsUiState(
     val systemEngines: List<SystemTtsEngineInfo> = emptyList(),
     val hasApiKey: Boolean = false,
     val isPreviewing: Boolean = false,
-    val message: String? = null
+    val message: String? = null,
+    val systemVoices: List<SystemTtsVoiceInfo> = emptyList(),
+    val loadingVoices: Boolean = false
 )
 
 @HiltViewModel
@@ -42,10 +47,10 @@ class TtsSettingsViewModel @Inject constructor(
     @ApplicationScope private val applicationScope: CoroutineScope
 ) : ViewModel() {
 
+    private val voiceState = MutableStateFlow(emptyList<SystemTtsVoiceInfo>() to false)
+    private var voiceJob: Job? = null
     private val engines = MutableStateFlow<List<SystemTtsEngineInfo>>(emptyList())
-    private val hasKey = MutableStateFlow(
-        !apiKeyStore.get(TtsSettingsStore.API_KEY_ALIAS).isNullOrBlank()
-    )
+    private val keyRevision = MutableStateFlow(0)
     private val preview = MutableStateFlow(false)
     private val message = MutableStateFlow<String?>(null)
     private val writes = SettingsWriteQueue(
@@ -63,12 +68,13 @@ class TtsSettingsViewModel @Inject constructor(
 
     val uiState = combine(
         settingsStore.settings,
-        engines,
-        hasKey,
+        combine(engines, voiceState) { installed, voices -> installed to voices },
+        keyRevision,
         preview,
         message
-    ) { settings, engines, hasApiKey, previewing, message ->
-        TtsSettingsUiState(settings, engines, hasApiKey, previewing, message)
+    ) { settings, engines, _, previewing, message ->
+        val providerKey = apiKeyStore.migrateAlias(TtsSettingsStore.API_KEY_ALIAS, TtsSettingsStore.apiKeyAlias(settings.aiProvider))
+        TtsSettingsUiState(settings, engines.first, !providerKey.isNullOrBlank(), previewing, message, engines.second.first, engines.second.second)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
@@ -77,12 +83,43 @@ class TtsSettingsViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
+            settingsStore.settings.map { it.systemEnginePackage }.distinctUntilChanged().collectLatest {
+                refreshSystemVoices()
+            }
+        }
+        viewModelScope.launch {
             engines.value = runCatching { systemTtsSpeaker.engines() }.getOrDefault(emptyList())
         }
     }
 
+    fun refreshSystemVoices() {
+        voiceJob?.cancel()
+        voiceJob = viewModelScope.launch {
+            if (!writes.flush()) return@launch
+            val engine = settingsStore.current().systemEnginePackage
+            voiceState.value = voiceState.value.first to true
+            try {
+                engines.value = systemTtsSpeaker.engines()
+                val voices = systemTtsSpeaker.voices(engine)
+                voiceState.value = voices to false
+                message.value = if (voices.isEmpty()) "引擎未公开音色，请在引擎应用中配置后刷新" else "已读取 "+voices.size+" 个音色"
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                voiceState.value = emptyList<SystemTtsVoiceInfo>() to false
+                message.value = error.message ?: "读取音色失败"
+            }
+        }
+    }
+
+    fun setSystemVoice(name: String) = update("setSystemVoice") { it.copy(systemVoiceName = name) }
+
     fun setEngineMode(mode: TtsEngineMode) = update("setEngineMode") { it.copy(engineMode = mode) }
-    fun setSystemEngine(packageName: String) = update("setSystemEngine") { it.copy(systemEnginePackage = packageName) }
+    fun setSystemEngine(packageName: String) {
+        voiceJob?.cancel()
+        voiceState.value = emptyList<SystemTtsVoiceInfo>() to true
+        update("setSystemEngine") { it.copy(systemEnginePackage = packageName) }
+        refreshSystemVoices()
+    }
     fun setSystemLanguage(tag: String) = update("setSystemLanguage") { it.copy(systemLanguageTag = tag) }
     fun setSystemRate(rate: Float) = update("setSystemRate") { it.copy(systemRate = rate) }
     fun setSystemPitch(pitch: Float) = update("setSystemPitch") { it.copy(systemPitch = pitch) }
@@ -99,13 +136,12 @@ class TtsSettingsViewModel @Inject constructor(
     fun setRetryCount(value: Int) = update("setRetryCount") { it.copy(retryCount = value) }
     fun setPrefetchCount(value: Int) = update("setPrefetchCount") { it.copy(prefetchCount = value) }
 
-    /** 切服务商预设时把 Base URL / 模型重置为该预设默认值（可再手改）。 */
-    fun setAiProvider(provider: TtsApiProvider) = update("setAiProvider") {
-        it.copy(
-            aiProvider = provider,
-            aiBaseUrl = provider.defaultBaseUrl(),
-            aiModel = provider.defaultModel()
-        )
+    /** The write queue commits the outgoing form before restoring the target provider profile. */
+    fun setAiProvider(provider: TtsApiProvider) = writes.enqueue("setAiProvider") {
+        val previous = settingsStore.current().aiProvider
+        apiKeyStore.migrateAlias(TtsSettingsStore.API_KEY_ALIAS, TtsSettingsStore.apiKeyAlias(previous))
+        settingsStore.update { it.copy(aiProvider = provider) }
+        keyRevision.value += 1
     }
 
     fun setAiBaseUrl(value: String) = update("setAiBaseUrl") { it.copy(aiBaseUrl = value) }
@@ -115,15 +151,23 @@ class TtsSettingsViewModel @Inject constructor(
     fun saveApiKey(raw: String) {
         val key = raw.trim()
         if (key.isEmpty()) return
-        apiKeyStore.put(TtsSettingsStore.API_KEY_ALIAS, key)
-        hasKey.value = true
-        message.value = "API Key 已保存"
+        writes.enqueue("saveApiKey") {
+            val provider = settingsStore.current().aiProvider
+            apiKeyStore.migrateAlias(TtsSettingsStore.API_KEY_ALIAS, TtsSettingsStore.apiKeyAlias(provider))
+            apiKeyStore.put(TtsSettingsStore.apiKeyAlias(provider), key)
+            keyRevision.value += 1
+            message.value = "API Key 已保存"
+        }
     }
 
     fun clearApiKey() {
-        apiKeyStore.remove(TtsSettingsStore.API_KEY_ALIAS)
-        hasKey.value = false
-        message.value = "已删除 API Key"
+        writes.enqueue("clearApiKey") {
+            val provider = settingsStore.current().aiProvider
+            apiKeyStore.migrateAlias(TtsSettingsStore.API_KEY_ALIAS, TtsSettingsStore.apiKeyAlias(provider))
+            apiKeyStore.remove(TtsSettingsStore.apiKeyAlias(provider))
+            keyRevision.value += 1
+            message.value = "已删除 API Key"
+        }
     }
 
     fun preview() {

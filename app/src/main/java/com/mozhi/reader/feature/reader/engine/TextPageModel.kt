@@ -35,7 +35,16 @@ class TextColumn(
     val inlineMarkerOffset: Int? = null,
     /** EPUB 内部超链接；保留原 href（含 fragment），点击时再解析到章节坐标。 */
     val linkHref: String? = null,
-    val syntaxPaintSpan: com.mozhi.reader.core.datastore.ReaderPaintSpan? = null
+    val syntaxPaintSpan: com.mozhi.reader.core.datastore.ReaderPaintSpan? = null,
+    /**
+     * Glyph orientation on a vertical page ([TextPage.verticalFrameWidth] != null); null on
+     * horizontal pages. U/TU/TR stand upright (TR rotates when the font has no vertical form).
+     */
+    val verticalOrientation: VerticalOrientation? = null,
+    /** text-combine-upright: [charData] is squeezed horizontally into one upright em cell. */
+    val combineUpright: Boolean = false,
+    /** CSS text-shadow layers in physical px, first on top. */
+    val textShadows: List<TextBoxShadow> = emptyList()
 )
 
 /** Only generated illustration buttons occupy text space. Comments are paint-only decorations. */
@@ -64,6 +73,42 @@ data class InlineImagePlacement(
 )
 
 enum class BackgroundSizeMode { AUTO, COVER, CONTAIN, STRETCH, EXPLICIT }
+
+/** CSS border-style values the painter distinguishes; `none`/`hidden` never reach it (width 0). */
+enum class BorderLineStyle {
+    SOLID, DASHED, DOTTED, DOUBLE, GROOVE, RIDGE, INSET, OUTSET;
+
+    companion object {
+        fun of(css: String?): BorderLineStyle = when (css) {
+            "dashed" -> DASHED
+            "dotted" -> DOTTED
+            "double" -> DOUBLE
+            "groove" -> GROOVE
+            "ridge" -> RIDGE
+            "inset" -> INSET
+            "outset" -> OUTSET
+            else -> SOLID
+        }
+    }
+}
+
+/**
+ * A CSS gradient background layer. Stop positions are either a fraction of the gradient line
+ * ([TextGradientStop.fraction]) or px along it ([TextGradientStop.px]); unpositioned stops are
+ * spread evenly by the painter, as CSS specifies.
+ */
+data class TextGradient(
+    val radial: Boolean,
+    val repeating: Boolean,
+    /** CSS degrees: 0 = to top, clockwise. */
+    val angleDeg: Float,
+    val circle: Boolean,
+    val centerX: Float,
+    val centerY: Float,
+    val stops: List<TextGradientStop>
+)
+
+data class TextGradientStop(val colorArgb: Int, val fraction: Float? = null, val px: Float? = null)
 
 data class PositionedInlineImagePlacement(
     val imagePath: String,
@@ -110,7 +155,13 @@ data class TextBlockDecoration(
     val drawTopEdge: Boolean = true,
     val drawRightEdge: Boolean = true,
     val drawBottomEdge: Boolean = true,
-    val drawLeftEdge: Boolean = true
+    val drawLeftEdge: Boolean = true,
+    val borderTopStyle: BorderLineStyle = BorderLineStyle.SOLID,
+    val borderRightStyle: BorderLineStyle = BorderLineStyle.SOLID,
+    val borderBottomStyle: BorderLineStyle = BorderLineStyle.SOLID,
+    val borderLeftStyle: BorderLineStyle = BorderLineStyle.SOLID,
+    /** Painted above the background colour and below a background image, like a lower CSS layer. */
+    val backgroundGradient: TextGradient? = null
 )
 
 data class TextBoxShadow(
@@ -195,7 +246,15 @@ class TextPage(
      */
     val trailingGap: Float = 0f,
     /** Only large single artwork may be refitted to the viewport; preserve small CSS image boxes. */
-    val fullPageArtwork: Boolean = false
+    val fullPageArtwork: Boolean = false,
+    /**
+     * `writing-mode: vertical-rl`: the physical content width. Every coordinate on this page is
+     * then in a frame rotated 90° clockwise (frame x = physical y, frame y = width - physical x);
+     * convert with [physicalToFrame] / [frameToPhysical]. Null on horizontal pages.
+     */
+    val verticalFrameWidth: Float? = null,
+    /** body background size/repeat/position for [backgroundImagePath]; null means centred cover. */
+    val backgroundLayer: TextBlockDecoration? = null
 )
 
 /** A fully laid out chapter. Layout is atomic: once published, all pages exist. */

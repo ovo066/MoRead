@@ -34,6 +34,7 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -52,6 +53,10 @@ import com.mozhi.reader.core.speech.TtsEngineMode
 import com.mozhi.reader.ui.components.MoReadBackdrop
 import com.mozhi.reader.ui.components.TtsTuningActions
 import com.mozhi.reader.ui.components.TtsTuningSections
+import com.mozhi.reader.ui.components.MoReadRow
+import com.mozhi.reader.ui.components.VoiceChoiceDialog
+import com.mozhi.reader.ui.components.VoiceChoice
+import com.mozhi.reader.ui.components.GeminiVoicePicker
 import java.util.Locale
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 
@@ -71,6 +76,8 @@ fun TtsSettingsScreen(
     val settings = state.settings
     val drafts = rememberCommittedDrafts()
     val focusManager = LocalFocusManager.current
+    // Secret drafts stay in memory and are encrypted before switching or leaving the page.
+    var apiKeyInput by remember { mutableStateOf("") }
     val systemLanguageTagDraft = rememberCommittedTextFieldState(drafts, "systemLanguageTag", settings.systemLanguageTag,
         trim = true, onCommit = viewModel::setSystemLanguage)
     val aiBaseUrlDraft = rememberCommittedTextFieldState(drafts, "aiBaseUrl", settings.aiBaseUrl,
@@ -82,8 +89,14 @@ fun TtsSettingsScreen(
     val aiVoiceIdDraft = rememberCommittedTextFieldState(drafts, "aiVoiceId", settings.aiVoiceId,
         trim = true, onCommit = viewModel::setAiVoice)
     val saveGate = rememberDraftSaveGate(drafts, viewModel::flushPendingWrites, viewModel::discardFailedWrites)
-    fun afterDrafts(action: () -> Unit) { saveGate.run(action = action) }
-    fun leaveAfterDrafts(action: () -> Unit) { saveGate.run(navigation = true, action = action) }
+    fun commitKey() {
+        if (apiKeyInput.isNotBlank()) {
+            viewModel.saveApiKey(apiKeyInput)
+            apiKeyInput = ""
+        }
+    }
+    fun afterDrafts(action: () -> Unit) { commitKey(); saveGate.run(action = action) }
+    fun leaveAfterDrafts(action: () -> Unit) { commitKey(); saveGate.run(navigation = true, action = action) }
     BackHandler { leaveAfterDrafts(onBack) }
     DraftSaveDialogs(saveGate)
 
@@ -135,7 +148,7 @@ fun TtsSettingsScreen(
 
                 if (settings.engineMode == TtsEngineMode.SYSTEM) {
                     Text(
-                        "用手机上已装的语音引擎朗读，不花钱。",
+                        "使用 MultiTTS 等已安装引擎；音色是否联网由引擎决定。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -182,6 +195,24 @@ fun TtsSettingsScreen(
                             }
                         }
                     }
+                    var showVoices by remember { mutableStateOf(false) }
+                    MoReadRow(
+                        title = "朗读音色",
+                        subtitle = settings.systemVoiceName.ifBlank { "跟随引擎默认" },
+                        onClick = { showVoices = true }
+                    )
+                    Button(onClick = viewModel::refreshSystemVoices, enabled = !state.loadingVoices) {
+                        Text(if (state.loadingVoices) "正在读取音色…" else "刷新本地音色")
+                    }
+                    if (showVoices) VoiceChoiceDialog(
+                        title = "选择本地音色",
+                        choices = listOf(VoiceChoice("", "跟随引擎默认")) + state.systemVoices.map {
+                            VoiceChoice(it.name, it.name, it.description)
+                        },
+                        selectedId = settings.systemVoiceName,
+                        onSelect = { viewModel.setSystemVoice(it); showVoices = false },
+                        onDismiss = { showVoices = false }
+                    )
                     OutlinedTextField(
                         value = systemLanguageTagDraft.value,
                         onValueChange = systemLanguageTagDraft::edit,
@@ -206,7 +237,7 @@ fun TtsSettingsScreen(
                     )
                 } else {
                     Text(
-                        "云端语音效果更好，按用量计费。API Key 加密保存在本机。",
+                        "各服务商配置分别保存。云端语音按用量计费，API Key 加密保存在本机。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -257,31 +288,26 @@ fun TtsSettingsScreen(
                                     TtsApiProvider.MINIMAX_INTL -> "MiniMax 海外：https://api.minimax.io/v1"
                                     TtsApiProvider.OPENAI_COMPAT -> "OpenAI 官方或任意兼容中转"
                                     TtsApiProvider.GMI_CLOUD -> "GMI Cloud，或兼容其 Request Queue 协议的地址"
+                                    TtsApiProvider.GEMINI -> "Google 官方地址，也可填写兼容 Gemini 原生协议的地址"
                                 }
                             )
                         },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().committedDraft(aiBaseUrlDraft)
                     )
-                    // Secret entry deliberately stays out of savedInstanceState; only explicit Save uses encrypted storage.
-                    var apiKeyInput by remember { mutableStateOf("") }
                     OutlinedTextField(
                         value = apiKeyInput,
                         onValueChange = { apiKeyInput = it },
                         label = { Text("API Key") },
                         visualTransformation = PasswordVisualTransformation(),
                         supportingText = {
-                            Text(if (state.hasApiKey) "已保存，重新输入可覆盖" else "尚未保存")
+                            Text(if (state.hasApiKey) "当前服务商已保存，重新输入可覆盖" else "当前服务商尚未保存")
                         },
                         singleLine = true,
                         trailingIcon = {
                             TextButton(
                                 onClick = {
-                                    val pendingKey = apiKeyInput
-                                    afterDrafts {
-                                        viewModel.saveApiKey(pendingKey)
-                                        if (apiKeyInput == pendingKey) apiKeyInput = ""
-                                    }
+                                    afterDrafts {}
                                 },
                                 enabled = apiKeyInput.isNotBlank()
                             ) { Text("保存") }
@@ -314,6 +340,7 @@ fun TtsSettingsScreen(
                                 when (settings.aiProvider) {
                                     TtsApiProvider.OPENAI_COMPAT -> "如 gpt-4o-mini-tts / tts-1"
                                     TtsApiProvider.GMI_CLOUD -> "如 minimax-tts-speech-2.8-hd"
+                                    TtsApiProvider.GEMINI -> "gemini-3.8-flash-tts；更快可用 gemini-3.8-flash-lite-tts"
                                     else -> if ("turbo" in settings.aiModel.lowercase()) {
                                         "Turbo 更偏速度；有声书表演推荐 speech-2.8-hd"
                                     } else {
@@ -325,6 +352,18 @@ fun TtsSettingsScreen(
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().committedDraft(aiModelDraft)
                     )
+                    if (settings.aiIsGemini) {
+                        var chooseGeminiVoice by remember { mutableStateOf(false) }
+                        MoReadRow(
+                            title = "朗读音色",
+                            subtitle = settings.aiVoiceId.ifBlank { "Sulafat · 温暖" },
+                            onClick = { afterDrafts { chooseGeminiVoice = true } }
+                        )
+                        if (chooseGeminiVoice) GeminiVoicePicker(settings.aiVoiceId, { voice ->
+                            chooseGeminiVoice = false
+                            afterDrafts { drafts.acceptExternalChanges(); viewModel.setAiVoice(voice) }
+                        }, { chooseGeminiVoice = false })
+                    }
                     OutlinedTextField(
                         value = aiVoiceIdDraft.value,
                         onValueChange = aiVoiceIdDraft::edit,
@@ -332,7 +371,8 @@ fun TtsSettingsScreen(
                         keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                         label = { Text("音色 ID（可选）") },
                         supportingText = {
-                            Text("OpenAI 如 alloy / nova；MiniMax 与 GMI 可填系统或克隆音色 ID")
+                            Text(if (settings.aiIsGemini) "也可填写音色库或自定义 voice_… ID；留空使用 Sulafat"
+                                else "OpenAI 如 alloy / nova；MiniMax 与 GMI 可填系统或克隆音色 ID")
                         },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().committedDraft(aiVoiceIdDraft)
@@ -344,14 +384,14 @@ fun TtsSettingsScreen(
                         onChange = viewModel::setAiSpeed
                     )
                     LabeledSlider(
-                        label = "音量（MiniMax / GMI）",
+                        label = if (settings.aiIsGemini) "音量风格" else "音量（MiniMax / GMI）",
                         value = settings.aiVolume,
                         range = 0.5f..2f,
                         onChange = viewModel::setAiVolume
                     )
                     Column {
                         Text(
-                            "音调（MiniMax / GMI）：${settings.aiPitch}",
+                            (if (settings.aiIsGemini) "音调风格：" else "音调（MiniMax / GMI）：") + settings.aiPitch,
                             style = MaterialTheme.typography.bodySmall
                         )
                         Slider(
@@ -362,7 +402,9 @@ fun TtsSettingsScreen(
                         )
                     }
                     Text(
-                        if (settings.aiProvider == TtsApiProvider.GMI_CLOUD) {
+                        if (settings.aiIsGemini) {
+                            "语速、音量与音调通过风格指令引导，实际效果以试听为准。"
+                        } else if (settings.aiProvider == TtsApiProvider.GMI_CLOUD) {
                             "GMI 请求会自动等待任务完成并下载音频，默认情绪为 auto。"
                         } else {
                             "OpenAI 不支持音量与音调。"
@@ -435,4 +477,5 @@ private fun TtsApiProvider.label(): String = when (this) {
     TtsApiProvider.MINIMAX_INTL -> "MiniMax（海外）"
     TtsApiProvider.OPENAI_COMPAT -> "OpenAI 兼容"
     TtsApiProvider.GMI_CLOUD -> "GMI Cloud（自定义 TTS）"
+    TtsApiProvider.GEMINI -> "Gemini TTS"
 }

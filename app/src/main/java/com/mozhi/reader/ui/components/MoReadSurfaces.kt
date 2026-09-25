@@ -11,7 +11,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
@@ -71,17 +70,18 @@ fun MoReadBackdrop(
 /**
  * 低成本玻璃表面。
  *
- * 用于浮层的半透明渐变、0.5dp 高光边和极轻投影。页面内列表使用 MoReadSection。
+ * 用于浮层的半透明渐变、0.5dp 高光边；保留原有材质与透明度，不绘制投影。页面内列表使用 MoReadSection。
  * 浮动导航、底部操作舱等少量关键浮层请用
  * [BlurredGlassSurface] 获得真实背景模糊。
  */
 @Composable
+@Suppress("UNUSED_PARAMETER")
 fun FrostedSurface(
     modifier: Modifier = Modifier,
     shape: Shape = MaterialTheme.shapes.large,
     color: Color = Color.Unspecified,
     contentColor: Color = MaterialTheme.colorScheme.onSurface,
-    shadowElevation: Dp = 3.dp,
+    shadowElevation: Dp = 0.dp,
     content: @Composable () -> Unit
 ) {
     val darkTheme = isDarkTheme()
@@ -94,7 +94,6 @@ fun FrostedSurface(
     } else {
         Color.White.copy(alpha = 0.78f)
     }
-    val effectiveShadow = shadowElevation.coerceAtMost(if (flat) 2.dp else 8.dp)
     val topColor = glassColor.copy(
         alpha = (glassColor.alpha + if (darkTheme) 0.06f else 0.08f).coerceAtMost(0.94f)
     )
@@ -109,13 +108,6 @@ fun FrostedSurface(
 
     Box(
         modifier = modifier
-            .shadow(
-                elevation = effectiveShadow,
-                shape = shape,
-                clip = false,
-                ambientColor = Color.Black.copy(alpha = if (darkTheme) 0.22f else 0.10f),
-                spotColor = Color.Black.copy(alpha = if (darkTheme) 0.28f else 0.14f)
-            )
             .clip(shape)
             .then(material)
     ) {
@@ -133,13 +125,14 @@ fun FrostedSurface(
  */
 @OptIn(ExperimentalHazeMaterialsApi::class)
 @Composable
+@Suppress("UNUSED_PARAMETER")
 fun BlurredGlassSurface(
     hazeState: HazeState,
     modifier: Modifier = Modifier,
     shape: Shape = MaterialTheme.shapes.large,
     tint: Color = Color.Unspecified,
     contentColor: Color = MaterialTheme.colorScheme.onSurface,
-    shadowElevation: Dp = 6.dp,
+    shadowElevation: Dp = 0.dp,
     content: @Composable () -> Unit
 ) {
     val darkTheme = isDarkTheme()
@@ -166,13 +159,6 @@ fun BlurredGlassSurface(
     }
     Box(
         modifier = modifier
-            .shadow(
-                elevation = shadowElevation.coerceAtMost(if (flat) 2.dp else 8.dp),
-                shape = shape,
-                clip = false,
-                ambientColor = Color.Black.copy(alpha = if (darkTheme) 0.24f else 0.10f),
-                spotColor = Color.Black.copy(alpha = if (darkTheme) 0.30f else 0.14f)
-            )
             .clip(shape)
             .then(material)
     ) {

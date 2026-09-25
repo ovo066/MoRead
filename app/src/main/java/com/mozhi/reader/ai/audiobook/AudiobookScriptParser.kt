@@ -4,6 +4,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
@@ -91,15 +92,15 @@ object AudiobookScriptParser {
     }
 
     private fun JsonObject.int(vararg keys: String): Int? = keys.firstNotNullOfOrNull { key ->
-        get(key)?.jsonPrimitive?.intOrNull
+        (get(key) as? JsonPrimitive)?.intOrNull
     }
 
     private fun JsonObject.double(vararg keys: String): Double? = keys.firstNotNullOfOrNull { key ->
-        get(key)?.jsonPrimitive?.doubleOrNull
+        (get(key) as? JsonPrimitive)?.doubleOrNull
     }
 
     private fun JsonObject.string(vararg keys: String): String? = keys.firstNotNullOfOrNull { key ->
-        get(key)?.jsonPrimitive?.contentOrNull?.trim()?.takeIf(String::isNotEmpty)
+        (get(key) as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf(String::isNotEmpty)
     }
 
     private fun List<ParsedAudiobookSegment>.filterNonOverlapping(): List<ParsedAudiobookSegment> {

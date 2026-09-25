@@ -48,7 +48,7 @@ fun ReaderAnnotationNoticeCapsule(
         color = palette.glassStrong,
         contentColor = palette.onBackground,
         border = BorderStroke(1.dp, palette.glassBorder),
-        shadowElevation = 8.dp,
+        shadowElevation = 0.dp,
         modifier = modifier.widthIn(max = 440.dp).focusable(false).pointerInput(result) {
             var distance = 0f
             detectHorizontalDragGestures(

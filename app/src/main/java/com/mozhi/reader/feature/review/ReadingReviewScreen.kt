@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mozhi.reader.feature.reader.AnnotationDiscussionViewModel
+import com.mozhi.reader.core.datastore.ReadingReviewPreferences
 import com.mozhi.reader.feature.reader.render.AnnotationInk
 import com.mozhi.reader.ui.components.*
 import com.mozhi.reader.ui.theme.isDarkTheme
@@ -59,6 +60,7 @@ internal fun ReadingReviewScreen(
     val draft by viewModel.draft.collectAsStateWithLifecycle()
     val thread by discussion.uiState.collectAsStateWithLifecycle()
     val readerSettings by viewModel.readerSettings.collectAsStateWithLifecycle()
+    val preferences by viewModel.reviewPreferences.collectAsStateWithLifecycle()
     val context = LocalContext.current
     LaunchedEffect(viewModel) {
         viewModel.events.collect { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
@@ -82,11 +84,12 @@ internal fun ReadingReviewScreen(
     }
     DisposableEffect(Unit) { onDispose { discussion.close() } }
 
-    ReadingReviewContent(state, onBack,
+    preferences?.let { saved -> ReadingReviewContent(state, onBack,
         onOpen = { detailKey = it.key },
         onReview = { reviewKeys = ArrayList(it.map(ReviewEntry::key)) },
         onCompose = { composerKeys = ArrayList(it.map(ReviewEntry::key)); comment = false },
-        onExport = { viewModel.share(it) }, onFontChange = viewModel::setReviewFont)
+        onExport = { viewModel.share(it) }, onFontChange = viewModel::setReviewFont,
+        preferences = saved, onPreferencesChange = viewModel::setReviewPreferences) }
 
     selected?.let { entry ->
         ReviewDetailDialog(entry, state.personas, thread,
@@ -131,20 +134,24 @@ internal fun ReadingReviewContent(
     state: ReadingReviewState, onBack: () -> Unit, onOpen: (ReviewEntry) -> Unit,
     onReview: (List<ReviewEntry>) -> Unit, onCompose: (List<ReviewEntry>) -> Unit,
     onExport: (List<ReviewEntry>) -> Unit,
-    onFontChange: (String) -> Unit = {}
+    onFontChange: (String) -> Unit = {},
+    preferences: ReadingReviewPreferences = ReadingReviewPreferences(),
+    onPreferencesChange: (ReadingReviewPreferences) -> Unit = {}
 ) {
     ReadingReviewTheme {
     var query by rememberSaveable { mutableStateOf("") }
-    var source by rememberSaveable { mutableStateOf(ReviewSource.MINE) }
-    var kind by rememberSaveable { mutableStateOf(ReviewKind.ALL) }
-    var bookIds by rememberSaveable { mutableStateOf(arrayListOf<Long>()) }
-    var personaId by rememberSaveable { mutableStateOf<Long?>(null) }
-    var oldest by rememberSaveable { mutableStateOf(false) }
-    var grid by rememberSaveable { mutableStateOf(true) }
+    var source by rememberSaveable { mutableStateOf(ReviewSource.valueOf(preferences.source)) }
+    var kind by rememberSaveable { mutableStateOf(ReviewKind.valueOf(preferences.kind)) }
+    var bookIds by rememberSaveable { mutableStateOf(ArrayList(preferences.bookIds)) }
+    var personaId by rememberSaveable { mutableStateOf(preferences.personaId) }
+    var oldest by rememberSaveable { mutableStateOf(preferences.oldestFirst) }
+    var grid by rememberSaveable { mutableStateOf(preferences.grid) }
     var filterOpen by rememberSaveable { mutableStateOf(false) }
     var searchOpen by rememberSaveable { mutableStateOf(false) }
     var booksOpen by rememberSaveable { mutableStateOf(false) }
     val filter = ReviewFilter(query, bookIds.toSet(), source, personaId, kind, oldest)
+    fun save(current: ReviewFilter = filter, layout: Boolean = grid) = onPreferencesChange(
+        ReadingReviewPreferences(current.source.name, current.kind.name, current.bookIds, current.personaId, current.oldestFirst, layout))
     val filtered = remember(state.entries, filter) { filterReview(state.entries, filter) }
     val bookCount = remember(filtered) { filtered.map { it.book.id }.distinct().size }
     val holder = rememberSaveableStateHolder()
@@ -161,16 +168,24 @@ internal fun ReadingReviewContent(
                         Text("${filtered.size} 条 · $bookCount 本书 · ${if (query.isBlank()) source.label else "搜索结果"}", style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
                     }
-                    FilledTonalIconButton(onClick = { grid = !grid }, shape = CircleShape, modifier = Modifier.testTag("review-layout-toggle"),
+                    FilledTonalIconButton(onClick = { grid = !grid; save(layout = grid) }, shape = CircleShape, modifier = Modifier.testTag("review-layout-toggle"),
                         colors = IconButtonDefaults.filledTonalIconButtonColors(containerColor = MaterialTheme.colorScheme.primaryContainer,
                             contentColor = MaterialTheme.colorScheme.onPrimaryContainer)) {
                         Icon(if (grid) Icons.Outlined.GridView else Icons.Outlined.ViewAgenda,
                             if (grid) "切换单列" else "切换瀑布流")
                     }
-                    FilledTonalIconButton(onClick = { filterOpen = true }, shape = CircleShape, modifier = Modifier.testTag("review-filter-button"),
-                        colors = IconButtonDefaults.filledTonalIconButtonColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
-                            contentColor = MaterialTheme.colorScheme.primary)) {
-                        Icon(Icons.Outlined.Tune, "筛选与回顾操作")
+                    Box {
+                        FilledTonalIconButton(onClick = { filterOpen = !filterOpen }, shape = CircleShape, modifier = Modifier.testTag("review-filter-button"),
+                            colors = IconButtonDefaults.filledTonalIconButtonColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+                                contentColor = MaterialTheme.colorScheme.primary)) {
+                            Icon(Icons.Outlined.Tune, "筛选与回顾操作")
+                        }
+                        if (filterOpen) ReviewOptionsMenu(state, filter,
+                            onDismiss = { filterOpen = false }, onApply = {
+                                query = it.query; bookIds = ArrayList(it.bookIds); kind = it.kind; source = it.source
+                                personaId = it.personaId; oldest = it.oldestFirst; save(it)
+                            }, onCompose = { filterOpen = false; onCompose(it) }, onExport = { filterOpen = false; onExport(it) },
+                            onReview = { filterOpen = false; onReview(it) }, onFontChange = onFontChange)
                     }
                 }
                 BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
@@ -193,7 +208,7 @@ internal fun ReadingReviewContent(
                                     else {
                                         Icon(Icons.Outlined.FormatQuote, null, Modifier.size(46.dp), tint = MaterialTheme.colorScheme.primary)
                                         Spacer(Modifier.height(18.dp))
-                                        Text(state.error ?: if (state.entries.isEmpty()) "把触动你的句子留在这里" else "还没有符合筛选的记录",
+                                        Text(state.error ?: if (state.entries.isEmpty()) "暂无划线与笔记" else "还没有符合筛选的记录",
                                             style = MaterialTheme.typography.titleMedium)
                                         Text(if (state.entries.isEmpty()) "阅读时长按划线，写下此刻的想法。" else "试试其他书籍、来源或关键词。",
                                             style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -228,14 +243,9 @@ internal fun ReadingReviewContent(
             }
         }
     }
-    if (filterOpen) ReviewFiltersDialog(state, filter,
-        onDismiss = { filterOpen = false }, onApply = {
-            query = it.query; bookIds = ArrayList(it.bookIds); kind = it.kind; source = it.source; personaId = it.personaId; oldest = it.oldestFirst; filterOpen = false
-        }, onCompose = { filterOpen = false; onCompose(it) }, onExport = { filterOpen = false; onExport(it) },
-        onReview = { filterOpen = false; onReview(it) }, onFontChange = onFontChange)
     if (searchOpen) ReviewSearchDialog(query, onDismiss = { searchOpen = false }, onSearch = { query = it; searchOpen = false })
     if (booksOpen) ReviewBookSelector(state, bookIds.toSet(), onDismiss = { booksOpen = false }, onApply = {
-        bookIds = ArrayList(it.sorted()); booksOpen = false
+        bookIds = ArrayList(it.sorted()); save(filter.copy(bookIds = it)); booksOpen = false
     })
     }
 }
@@ -298,47 +308,6 @@ internal fun ReviewQuoteCard(entry: ReviewEntry, compact: Boolean, onClick: () -
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun ReviewFiltersDialog(state: ReadingReviewState, initial: ReviewFilter, onDismiss: () -> Unit,
-    onApply: (ReviewFilter) -> Unit, onCompose: (List<ReviewEntry>) -> Unit, onExport: (List<ReviewEntry>) -> Unit,
-    onReview: (List<ReviewEntry>) -> Unit, onFontChange: (String) -> Unit) {
-    var kind by rememberSaveable { mutableStateOf(initial.kind) }
-    var source by rememberSaveable { mutableStateOf(initial.source) }
-    var persona by rememberSaveable { mutableStateOf(initial.personaId) }
-    var oldest by rememberSaveable { mutableStateOf(initial.oldestFirst) }
-    var query by rememberSaveable { mutableStateOf(initial.query) }
-    val current = ReviewFilter(query, initial.bookIds, source, persona, kind, oldest)
-    val selected = remember(state.entries, current) { filterReview(state.entries, current) }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("回顾选项") }, text = {
-        Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState())) {
-            ReviewFilterChoice("来源", source.name, ReviewSource.entries.map { it.name to it.label },
-                { source = ReviewSource.valueOf(it) }, "source")
-            ReviewFilterChoice("内容", kind.name, ReviewKind.entries.map { it.name to it.label },
-                { kind = ReviewKind.valueOf(it) }, "kind")
-            if (source == ReviewSource.AI) ReviewFilterChoice("伴读角色", persona?.toString() ?: "all",
-                listOf("all" to "全部角色") + state.entries.mapNotNull { it.personaId }.distinct().map { id ->
-                    id.toString() to (state.personas.firstOrNull { it.id == id }?.name ?: "已删除角色")
-                }, { persona = it.toLongOrNull() }, "persona")
-            ReviewFilterChoice("排序", oldest.toString(), listOf("false" to "最近记录", "true" to "最早记录"),
-                { oldest = it.toBoolean() }, "sort")
-            ReviewFilterChoice("划线字体", LocalReviewReaderSettings.current.reviewFont,
-                reviewFontChoices(LocalReviewReaderSettings.current), onFontChange, "font")
-            HorizontalDivider(Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.outlineVariant)
-            TextButton(onClick = { onReview(selected) }, enabled = selected.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
-                Icon(Icons.Outlined.AutoStories, null, Modifier.size(18.dp)); Spacer(Modifier.width(10.dp)); Text("全屏翻阅")
-            }
-            TextButton(onClick = { onExport(selected) }, enabled = selected.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
-                Icon(Icons.Outlined.IosShare, null, Modifier.size(18.dp)); Spacer(Modifier.width(10.dp)); Text("导出这 ${selected.size} 条记录")
-            }
-            TextButton(onClick = { onCompose(selected) }, enabled = selected.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
-                Icon(Icons.Outlined.AutoAwesome, null, Modifier.size(18.dp)); Spacer(Modifier.width(10.dp)); Text("与 AI 共创笔记（可选）")
-            }
-        }
-    }, confirmButton = { TextButton(onClick = { onApply(current) }) { Text("应用筛选") } },
-        dismissButton = { TextButton(onClick = { onApply(ReviewFilter(source = ReviewSource.MINE)) }) { Text("重置") } })
-}
-
 @Composable
 private fun ReviewSearchDialog(initial: String, onDismiss: () -> Unit, onSearch: (String) -> Unit) {
     var query by rememberSaveable { mutableStateOf(initial) }
@@ -356,30 +325,6 @@ private fun ReviewSearchDialog(initial: String, onDismiss: () -> Unit, onSearch:
             Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (initial.isNotBlank()) FilledTonalButton(onClick = { onSearch("") }, shape = CircleShape) { Text("清除") }
                 Button(onClick = { onSearch(query) }, shape = CircleShape, modifier = Modifier.weight(1f).height(50.dp)) { Text("搜索") }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ReviewFilterChoice(label: String, selected: String, choices: List<Pair<String, String>>,
-    onSelect: (String) -> Unit, tag: String) {
-    var expanded by remember { mutableStateOf(false) }
-    Box {
-        Row(Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).clickable { expanded = true }
-            .heightIn(min = 52.dp).padding(horizontal = 4.dp).testTag("review-choose-$tag"), verticalAlignment = Alignment.CenterVertically) {
-            Text(label, style = MaterialTheme.typography.bodyMedium)
-            Spacer(Modifier.width(20.dp))
-            Text(choices.firstOrNull { it.first == selected }?.second ?: "请选择", style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-            Icon(Icons.Outlined.ExpandMore, null, Modifier.size(20.dp))
-        }
-        DropdownMenu(expanded, onDismissRequest = { expanded = false }, modifier = Modifier.heightIn(max = 340.dp)) {
-            choices.forEach { (id, text) ->
-                DropdownMenuItem(text = { Text(text) }, onClick = { onSelect(id); expanded = false },
-                    modifier = Modifier.testTag("review-$tag-$id"), trailingIcon = {
-                        if (id == selected) Icon(Icons.Outlined.Check, null, Modifier.size(18.dp))
-                    })
             }
         }
     }

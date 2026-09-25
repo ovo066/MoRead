@@ -198,6 +198,7 @@ data class ReaderSettings(
     val bookChineseConversions: Map<Long, ChineseConversionMode> = emptyMap(),
     /** Empty follows the book/default reading font; built-in name or font:<asset id> overrides review quotes only. */
     val reviewFont: String = "",
+    val reviewPreferences: ReadingReviewPreferences = ReadingReviewPreferences(),
     val reviewShareTemplates: List<ReviewShareTemplate> = emptyList()
 )
 
@@ -337,6 +338,7 @@ class ReaderSettingsRepository @Inject constructor(
                 .coerceIn(0.05f, 1f),
             bookThemes = BookReaderThemeCodec.decode(preferences[Keys.BookThemes]),
             reviewShareTemplates = ReviewShareTemplateCodec.decode(preferences[Keys.ReviewShareTemplates]),
+            reviewPreferences = ReadingReviewPreferencesCodec.decode(preferences[Keys.ReviewPreferences]),
             reviewFont = preferences[Keys.ReviewFont]?.takeIf { value ->
                 ReaderFont.entries.any { it != ReaderFont.CUSTOM && it.name == value } ||
                     (value.startsWith("font:") && fontLibrary.any { it.id == value.removePrefix("font:") })
@@ -619,6 +621,10 @@ class ReaderSettingsRepository @Inject constructor(
                 preferences[Keys.ReviewFont] = value
             }
         }
+    }
+
+    suspend fun setReviewPreferences(value: ReadingReviewPreferences) {
+        dataStore.edit { it[Keys.ReviewPreferences] = ReadingReviewPreferencesCodec.encode(value) }
     }
 
     suspend fun saveReviewShareTemplate(template: ReviewShareTemplate) {
@@ -1478,6 +1484,7 @@ class ReaderSettingsRepository @Inject constructor(
         val FontScale = floatPreferencesKey("reader_font_scale")
         val Font = stringPreferencesKey("reader_font")
         val ReviewFont = stringPreferencesKey("review_quote_font")
+        val ReviewPreferences = stringPreferencesKey("reading_review_preferences")
         val ReviewShareTemplates = stringPreferencesKey("review_share_templates")
         val CustomFontPath = stringPreferencesKey("reader_custom_font_path")
         val CustomFontName = stringPreferencesKey("reader_custom_font_name")

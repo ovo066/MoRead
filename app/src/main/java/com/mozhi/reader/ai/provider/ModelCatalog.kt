@@ -137,7 +137,8 @@ class ModelCatalogFetcher @Inject constructor(
                     AiJson.decodeFromString(GeminiCatalog.serializer(), response.body.string())
                 }.getOrNull()?.models.orEmpty().map { it.name.removePrefix("models/") }
                 return catalogResult(
-                    names.map { CatalogModel(it, AiModelType.CHAT) },
+                    names.map { if ("tts" in it.lowercase()) CatalogModel(it, AiModelType.TTS, "/interactions")
+                        else CatalogModel(it, AiModelType.CHAT) },
                     httpFailure = null
                 )
             }

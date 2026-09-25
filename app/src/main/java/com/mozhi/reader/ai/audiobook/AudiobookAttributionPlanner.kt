@@ -23,7 +23,7 @@ internal fun buildAudiobookAttributionBatches(
         .sorted()
     if (validTargets.isEmpty()) return emptyList()
 
-    if (body.length <= maxWholeChapterChars) {
+    if (body.length <= maxWholeChapterChars && validTargets.size <= maxTargets) {
         return listOf(
             AudiobookAttributionBatch(
                 targetIndices = validTargets.toSet(),

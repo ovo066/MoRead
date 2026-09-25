@@ -135,7 +135,7 @@ internal fun CustomThemeSwatch(
                 Icon(
                     imageVector = Icons.Outlined.Edit,
                     contentDescription = "编辑「${theme.name}」",
-                    tint = Color(theme.textArgb),
+                    tint = customReaderPalette(theme).onBackground,
                     modifier = Modifier.size(15.dp)
                         .background(background.copy(alpha = 0.72f), CircleShape)
                         .padding(2.dp)
@@ -195,6 +195,7 @@ internal fun ReaderSettings.toCustomReaderTheme(
         name = name,
         backgroundArgb = backgroundArgb,
         textArgb = textArgb,
+        textColorCustomized = customThemes.firstOrNull { it.id == activeCustomThemeId }?.textColorCustomized ?: false,
         accentArgb = accentArgb,
         isDark = isDark,
         font = font,
@@ -248,7 +249,8 @@ internal fun CustomThemeEditorDialog(
     var name by remember { mutableStateOf(initial.name) }
     var typography by remember { mutableStateOf(initial) }
     var background by remember { mutableStateOf(Color(initial.backgroundArgb)) }
-    var text by remember { mutableStateOf(Color(initial.textArgb)) }
+    var textCustomized by remember { mutableStateOf(initial.textColorCustomized) }
+    var text by remember { mutableStateOf(customReaderPalette(initial).onBackground) }
     var accent by remember { mutableStateOf(Color(initial.accentArgb)) }
     var isDark by remember { mutableStateOf(initial.isDark ?: (Color(initial.backgroundArgb).luminance() < 0.5f)) }
     var selectedFont by remember { mutableStateOf(initial.font) }
@@ -270,11 +272,11 @@ internal fun CustomThemeEditorDialog(
     val selectedBackgroundPath = selectedBackground?.filePath
         ?: initial.backgroundImagePath.takeIf { selectedBackgroundImageId == initialBackgroundImageId }
     val selectedFontAsset = settings.fontLibrary.firstOrNull { it.id == selectedCustomFontId }
-    fun update(color: Color) = when (target) {
-        ThemeColorTarget.BACKGROUND -> background = color
-        ThemeColorTarget.TEXT -> text = color
+    fun update(color: Color) { when (target) {
+        ThemeColorTarget.BACKGROUND -> { background = color; if (!textCustomized) text = readableReaderText(color, text) }
+        ThemeColorTarget.TEXT -> { text = color; textCustomized = true }
         ThemeColorTarget.ACCENT -> accent = color
-    }
+    } }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -452,6 +454,13 @@ internal fun CustomThemeEditorDialog(
                     }
                 }
                 NoteStyleColorPalette(color = current, onColorChange = ::update)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("文字随背景调整", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                    Switch(checked = !textCustomized, onCheckedChange = {
+                        textCustomized = !it
+                        if (it) text = readableReaderText(background, text)
+                    })
+                }
             }
         },
         confirmButton = {
@@ -462,6 +471,7 @@ internal fun CustomThemeEditorDialog(
                             name = name.trim().ifBlank { "自定义主题" },
                             backgroundArgb = background.toArgb(),
                             textArgb = text.toArgb(),
+                            textColorCustomized = textCustomized,
                             accentArgb = accent.toArgb(),
                             isDark = isDark,
                             font = selectedFont,

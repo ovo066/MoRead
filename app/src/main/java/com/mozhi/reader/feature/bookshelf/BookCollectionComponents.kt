@@ -1,5 +1,6 @@
 package com.mozhi.reader.feature.bookshelf
 
+import com.mozhi.reader.ui.components.MoReadBottomSheet
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -35,7 +36,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -296,10 +296,9 @@ internal fun CollectionPickerSheet(
     onSelect: (Long) -> Unit,
     onDismiss: () -> Unit
 ) {
-    ModalBottomSheet(
+    MoReadBottomSheet(
         onDismissRequest = onDismiss,
         sheetMaxWidth = MoReadLayoutPolicy.SheetMaxWidthDp.dp,
-        sheetGesturesEnabled = false,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ) {
         Column(
@@ -407,7 +406,7 @@ internal fun CollectionContentsSheet(
             memberGridState.firstVisibleItemScrollOffset
         )
     }
-    ModalBottomSheet(
+    MoReadBottomSheet(
         onDismissRequest = onDismiss,
         sheetMaxWidth = MoReadLayoutPolicy.SheetMaxWidthDp.dp,
         dragHandle = {
@@ -418,8 +417,6 @@ internal fun CollectionContentsSheet(
                 BottomSheetDefaults.DragHandle()
             }
         },
-        modifier = Modifier.fillMaxHeight(),
-        sheetGesturesEnabled = false,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ) {
         Box(

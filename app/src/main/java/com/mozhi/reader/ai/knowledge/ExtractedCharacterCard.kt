@@ -39,4 +39,5 @@ fun CharacterAttributeKind.label(): String = when (this) {
     CharacterAttributeKind.AGE -> "年龄"
     CharacterAttributeKind.GENDER -> "性别"
     CharacterAttributeKind.IDENTITY -> "身份"
+    CharacterAttributeKind.APPEARANCE -> "外貌"
 }

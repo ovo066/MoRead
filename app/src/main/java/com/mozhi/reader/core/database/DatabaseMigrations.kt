@@ -796,6 +796,19 @@ object DatabaseMigrations {
         }
     }
 
+    val Migration31To32 = object : Migration(31, 32) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `illustrations` ADD COLUMN `recipeJson` TEXT NOT NULL DEFAULT ''")
+            db.execSQL("ALTER TABLE `illustrations` ADD COLUMN `castKeys` TEXT NOT NULL DEFAULT '[]'")
+            db.execSQL("CREATE TABLE IF NOT EXISTS `book_image_styles` (`bookId` INTEGER NOT NULL PRIMARY KEY, `specJson` TEXT NOT NULL, FOREIGN KEY(`bookId`) REFERENCES `books`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE)")
+            db.execSQL("CREATE TABLE IF NOT EXISTS `image_style_templates` (`id` TEXT NOT NULL PRIMARY KEY, `name` TEXT NOT NULL, `specJson` TEXT NOT NULL, `updatedAt` INTEGER NOT NULL)")
+            db.execSQL("CREATE TABLE IF NOT EXISTS `character_looks` (`id` TEXT NOT NULL PRIMARY KEY, `bookId` INTEGER NOT NULL, `characterKey` TEXT NOT NULL, `sinceChapter` INTEGER NOT NULL, `specJson` TEXT NOT NULL, FOREIGN KEY(`bookId`) REFERENCES `books`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE)")
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_character_looks_bookId_characterKey_sinceChapter` ON `character_looks` (`bookId`, `characterKey`, `sinceChapter`)")
+            db.execSQL("CREATE TABLE IF NOT EXISTS `illustration_queue` (`id` TEXT NOT NULL PRIMARY KEY, `bookId` INTEGER NOT NULL, `chapterIndex` INTEGER NOT NULL, `sourceText` TEXT NOT NULL, `recipeJson` TEXT NOT NULL, `status` TEXT NOT NULL, `illustrationId` INTEGER, `error` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, FOREIGN KEY(`bookId`) REFERENCES `books`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_illustration_queue_bookId` ON `illustration_queue` (`bookId`)")
+        }
+    }
+
     val Migration30To31 = object : Migration(30, 31) {
         override fun migrate(db: SupportSQLiteDatabase) {
             db.execSQL("ALTER TABLE `messages` ADD COLUMN `inputTokens` INTEGER")

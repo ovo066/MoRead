@@ -5,6 +5,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -21,7 +22,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.ArrowForward
-import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -41,6 +41,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
@@ -172,10 +176,6 @@ internal fun ReviewDetailDialog(
                 }
                 Text("${entry.book.title} · ${entry.locationLabel} · ${SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(entry.timestamp))}${if (entry.book.removedAt > 0) " · 正文已移除" else ""}",
                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold, letterSpacing = .5.sp), color = visual.caption)
-                entry.annotation?.let { annotation ->
-                    ReviewDetailInkRow(annotation.colorTag, annotationSolidColor(annotation.colorTag, palette),
-                        AnnotationStyle.fromWire(annotation.style), visual.accent, { color -> onStyleChange(AnnotationStyle.fromWire(annotation.style), color) })
-                }
             }
             item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -287,27 +287,59 @@ internal fun ReviewPagerDialog(entries: List<ReviewEntry>, onDismiss: () -> Unit
             HorizontalPager(pager, key = { entries[it].key }, beyondViewportPageCount = 1,
                 modifier = Modifier.fillMaxSize().testTag("review-pager")) { index ->
                 val entry = entries[index]
-                Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)
-                    .graphicsLayer {
+                var verticalDrag by remember(entry.key) { mutableFloatStateOf(0f) }
+                val openEntry by rememberUpdatedState(onOpen)
+                val dismiss by rememberUpdatedState(onDismiss)
+                val density = LocalDensity.current
+                val swipeThreshold = with(density) { 88.dp.toPx() }
+                BoxWithConstraints(Modifier.fillMaxSize()
+                    .pointerInput(entry.key, swipeThreshold) {
+                        detectVerticalDragGestures(
+                            onDragStart = { verticalDrag = 0f },
+                            onDragCancel = { verticalDrag = 0f },
+                            onDragEnd = {
+                                val distance = verticalDrag
+                                verticalDrag = 0f
+                                if (distance <= -swipeThreshold) openEntry(entry)
+                                else if (distance >= swipeThreshold) dismiss()
+                            }
+                        ) { change, amount -> change.consume(); verticalDrag += amount }
+                    }
+                    .padding(horizontal = 32.dp, vertical = 24.dp).graphicsLayer {
                         val motion = reviewCardMotion(pager.currentPage - index + pager.currentPageOffsetFraction)
                         scaleX = motion.scale; scaleY = motion.scale; alpha = motion.alpha
-                        rotationZ = motion.rotation; translationY = motion.dropDp.dp.toPx()
-                    }.padding(start = 16.dp, end = 16.dp, top = 48.dp, bottom = 52.dp)) {
-                    Text("“", fontFamily = FontFamily.Serif, fontSize = 58.sp, lineHeight = 46.sp,
-                        color = LocalReadingReviewStyle.current.accent.copy(alpha = .48f), modifier = Modifier.padding(start = 26.dp))
-                    Spacer(Modifier.height(30.dp))
-                    Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.Top) {
-                        SelectionContainer { Text(entry.quote.ifBlank { reviewPlainText(entry.body) },
-                            style = reviewQuoteStyle(entry.book.id, MaterialTheme.typography.headlineSmall.copy(fontSize = 28.sp, lineHeight = 50.sp))) }
-                        Spacer(Modifier.height(24.dp))
+                        rotationZ = motion.rotation; translationY = motion.dropDp.dp.toPx() + verticalDrag * .16f
+                    }) {
+                    val quote = entry.quote.ifBlank { reviewPlainText(entry.body) }
+                    val base = reviewQuoteStyle(entry.book.id, MaterialTheme.typography.headlineSmall)
+                    val measurer = rememberTextMeasurer()
+                    val widthPx = with(density) { maxWidth.roundToPx() }
+                    val targetHeight = with(density) { (maxHeight * .60f).roundToPx() }
+                    val quoteStyle = remember(quote, base, widthPx, targetHeight, density) {
+                        listOf(32, 30, 28, 26, 24).map { base.copy(fontSize = it.sp, lineHeight = (it * 1.65f).sp) }
+                            .firstOrNull { measurer.measure(quote, it, constraints = Constraints(maxWidth = widthPx)).size.height <= targetHeight }
+                            ?: base.copy(fontSize = 24.sp, lineHeight = 39.sp)
                     }
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .5f))
-                    Text(entry.book.title, style = MaterialTheme.typography.titleMedium.copy(fontSize = 18.sp, fontWeight = FontWeight.Bold), modifier = Modifier.padding(top = 18.dp))
-                    val date = SimpleDateFormat("MM-dd", Locale.getDefault()).format(Date(entry.timestamp))
-                    Text("${entry.locationLabel} · $date ${if (entry.annotation != null) "划下" else "写下"}" +
-                        if (entry.annotation != null && entry.body.isNotBlank()) " · ${if (entry.personaId == null) "你写过一条笔记" else entry.author}" else "",
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
-                        color = LocalReadingReviewStyle.current.toolbarInk, modifier = Modifier.padding(top = 5.dp))
+                    val longQuote = measurer.measure(quote, quoteStyle, constraints = Constraints(maxWidth = widthPx)).size.height > targetHeight
+                    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {
+                        Text("“", fontFamily = FontFamily.Serif, fontSize = 52.sp, lineHeight = 42.sp,
+                            color = LocalReadingReviewStyle.current.accent.copy(alpha = .48f), modifier = Modifier.padding(start = 12.dp))
+                        Spacer(Modifier.height(20.dp))
+                        Column(Modifier.weight(1f, fill = false).fillMaxWidth().verticalScroll(rememberScrollState(), enabled = longQuote)
+                            .testTag("review-focus-quote-${entry.key}")) {
+                            SelectionContainer { Text(quote, style = quoteStyle) }
+                        }
+                        Spacer(Modifier.height(32.dp))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .5f))
+                        Text(entry.book.title, style = MaterialTheme.typography.titleMedium.copy(fontSize = 18.sp, fontWeight = FontWeight.Bold),
+                            maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = 18.dp))
+                        val date = SimpleDateFormat("MM-dd", Locale.getDefault()).format(Date(entry.timestamp))
+                        Text("${entry.locationLabel} · $date ${if (entry.annotation != null) "划下" else "写下"}" +
+                            if (entry.annotation != null && entry.body.isNotBlank()) " · ${if (entry.personaId == null) "有一条笔记" else entry.author}" else "",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = LocalReadingReviewStyle.current.caption, modifier = Modifier.padding(top = 6.dp))
+                    }
                 }
             }
             Column(Modifier.align(Alignment.CenterEnd).padding(end = 14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -321,7 +353,7 @@ internal fun ReviewPagerDialog(entries: List<ReviewEntry>, onDismiss: () -> Unit
             }
             }
             val entry = entries[pager.currentPage.coerceIn(entries.indices)]
-            Text("左右滑动，翻阅摘录", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold), color = LocalReadingReviewStyle.current.caption,
+            Text("左右翻页 · 上滑查看 · 下滑返回", style = MaterialTheme.typography.labelMedium, color = LocalReadingReviewStyle.current.caption,
                 modifier = Modifier.align(Alignment.CenterHorizontally).padding(vertical = 18.dp))
             Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 20.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 FilledTonalIconButton(onClick = { onLocate(entry) }, enabled = entry.canLocate, shape = CircleShape, modifier = Modifier.size(64.dp),

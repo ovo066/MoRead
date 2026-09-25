@@ -1,5 +1,6 @@
 package com.mozhi.reader
 
+import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
@@ -16,6 +17,7 @@ import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.res.stringResource
 import com.mozhi.reader.feature.reader.LocalShowCompanionTokenUsage
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,6 +34,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
 import com.mozhi.reader.core.dictionary.LocalDictionaryRepository
+import com.mozhi.reader.core.i18n.AppLocales
 import com.mozhi.reader.feature.reader.DictionaryManagerDialog
 import com.mozhi.reader.feature.reader.EnglishLearningViewModel
 import com.mozhi.reader.core.datastore.PendingReaderFont
@@ -73,6 +76,11 @@ class MainActivity : ComponentActivity() {
     /** 阅读页注册事件处理；未匹配或当前不可翻页的按键交还系统。 */
     fun setReaderHardwareKeyHandler(handler: ((KeyEvent) -> Boolean)?) {
         readerHardwareKeyHandler = handler
+    }
+
+    override fun attachBaseContext(newBase: Context) {
+        // Android 12 及以下的应用内语言；13+ 由系统 per-app language 负责，这里原样透传。
+        super.attachBaseContext(AppLocales.wrap(newBase))
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
@@ -146,7 +154,7 @@ class MainActivity : ComponentActivity() {
                                         .onSuccess {
                                             Toast.makeText(
                                                 this@MainActivity,
-                                                "字体已导入并应用",
+                                                getString(R.string.font_import_applied),
                                                 Toast.LENGTH_SHORT
                                             ).show()
                                         }
@@ -154,7 +162,10 @@ class MainActivity : ComponentActivity() {
                                             readerFontImporter.discard(pending)
                                             Toast.makeText(
                                                 this@MainActivity,
-                                                "字体导入失败：${error.message ?: "文件格式不受支持"}",
+                                                getString(
+                                                    R.string.font_import_failed,
+                                                    error.message ?: getString(R.string.font_import_unsupported)
+                                                ),
                                                 Toast.LENGTH_LONG
                                             ).show()
                                         }
@@ -210,7 +221,7 @@ class MainActivity : ComponentActivity() {
                 externalDictionaryConsumed = true
                 externalDictionaryVisible.value = true
                 if (dictionaryViewModel.state.value.importing) {
-                    Toast.makeText(this@MainActivity, "词典正在导入，请完成后再打开另一个文件", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this@MainActivity, R.string.dictionary_import_busy, Toast.LENGTH_LONG).show()
                 } else dictionaryViewModel.importMdx(uri, intent?.type)
             } else if (readerFontImporter.supports(uri)) {
                 runCatching { readerFontImporter.prepare(uri) }
@@ -219,7 +230,7 @@ class MainActivity : ComponentActivity() {
                         clearIncomingIntent()
                         Toast.makeText(
                             this@MainActivity,
-                            "字体读取失败：${error.message ?: "文件格式不受支持"}",
+                            getString(R.string.font_read_failed, error.message ?: getString(R.string.font_import_unsupported)),
                             Toast.LENGTH_LONG
                         ).show()
                     }
@@ -243,17 +254,17 @@ private fun ExternalFontImportDialog(
     var displayName by remember(pending.cachePath) { mutableStateOf(pending.detectedName) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("确认导入字体") },
+        title = { Text(stringResource(R.string.font_import_confirm_title)) },
         text = {
             androidx.compose.foundation.layout.Column {
                 Text(
-                    "墨知识别到字体文件 ${pending.originalFileName}，确认后将导入并用于阅读。",
+                    stringResource(R.string.font_import_confirm_body, pending.originalFileName),
                     style = MaterialTheme.typography.bodyMedium
                 )
                 OutlinedTextField(
                     value = displayName,
                     onValueChange = { displayName = it.take(48) },
-                    label = { Text("字体名称") },
+                    label = { Text(stringResource(R.string.font_import_name)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -263,10 +274,10 @@ private fun ExternalFontImportDialog(
             TextButton(
                 enabled = displayName.isNotBlank(),
                 onClick = { onConfirm(displayName) }
-            ) { Text("导入并应用") }
+            ) { Text(stringResource(R.string.font_import_apply)) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
         }
     )
 }

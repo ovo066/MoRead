@@ -1,6 +1,7 @@
 package com.mozhi.reader.ui
 
 import android.net.Uri
+import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
@@ -50,6 +51,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -59,6 +61,7 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.mozhi.reader.R
 import com.mozhi.reader.feature.bookdetail.BookDetailScreen
 import com.mozhi.reader.feature.bookshelf.BookshelfScreen
 import com.mozhi.reader.feature.bookshelf.BookshelfViewModel
@@ -124,35 +127,38 @@ private const val LOCATE_ANCHOR_KEY = "locate-anchor"
 
 internal enum class RootDestination(
     val route: String,
-    val label: String,
+    @param:StringRes val labelRes: Int,
     val icon: ImageVector,
     val selectedIcon: ImageVector
 ) {
     Bookshelf(
         route = "bookshelf",
-        label = "书架",
+        labelRes = R.string.nav_bookshelf,
         icon = Icons.Outlined.AutoStories,
         selectedIcon = Icons.Filled.AutoStories
     ),
     Stats(
         route = "stats",
-        label = "统计",
+        labelRes = R.string.nav_stats,
         icon = Icons.Outlined.InsertChartOutlined,
         selectedIcon = Icons.Filled.InsertChartOutlined
     ),
     Companion(
         route = "companion",
-        label = "伴读",
+        labelRes = R.string.nav_companion,
         icon = Icons.Outlined.AutoAwesome,
         selectedIcon = Icons.Filled.AutoAwesome
     ),
     Settings(
         route = "settings",
-        label = "设置",
+        labelRes = R.string.nav_settings,
         icon = Icons.Outlined.Settings,
         selectedIcon = Icons.Filled.Settings
     )
 }
+
+internal val RootDestination.label: String
+    @Composable get() = stringResource(labelRes)
 
 @Composable
 fun MoReadApp(

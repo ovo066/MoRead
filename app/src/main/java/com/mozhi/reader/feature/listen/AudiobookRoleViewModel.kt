@@ -16,6 +16,11 @@ import com.mozhi.reader.core.library.AudiobookRoleKind
 import com.mozhi.reader.core.library.LibraryRepository
 import com.mozhi.reader.core.speech.TtsVoiceRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import com.mozhi.reader.core.speech.SystemTtsSpeaker
+import com.mozhi.reader.core.speech.SystemTtsVoiceInfo
+import com.mozhi.reader.core.speech.TtsSettingsStore
+import com.mozhi.reader.core.speech.withSystemVoiceId
+import kotlinx.coroutines.CancellationException
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -29,7 +34,8 @@ data class AudiobookRoleUiState(
     val voices: List<TtsVoiceEntity> = emptyList(),
     val isWorking: Boolean = false,
     val message: String? = null,
-    val previewPath: String? = null
+    val previewPath: String? = null,
+    val systemVoices: List<SystemTtsVoiceInfo> = emptyList()
 )
 
 @HiltViewModel
@@ -39,9 +45,12 @@ class AudiobookRoleViewModel @Inject constructor(
     private val audiobookRepository: AudiobookRepository,
     private val roleExtractor: AudiobookRoleExtractor,
     private val mediaService: AiMediaGenerationService,
+    private val systemTtsSpeaker: SystemTtsSpeaker,
+    private val settingsStore: TtsSettingsStore,
     voiceRepository: TtsVoiceRepository
 ) : ViewModel() {
     val bookId = savedStateHandle.bookIdOrNull() ?: 0L
+    private val localVoices = MutableStateFlow<List<SystemTtsVoiceInfo>>(emptyList())
     private val working = MutableStateFlow(false)
     private val message = MutableStateFlow<String?>(null)
     private val previewPath = MutableStateFlow<String?>(null)
@@ -49,24 +58,55 @@ class AudiobookRoleViewModel @Inject constructor(
     val uiState = combine(
         libraryRepository.observeBook(bookId),
         audiobookRepository.observeRoles(bookId),
-        voiceRepository.voices,
+        combine(voiceRepository.voices, localVoices) { cloud, local -> cloud to local },
         combine(working, message, previewPath) { busy, notice, preview -> Triple(busy, notice, preview) }
     ) { book, roles, voices, transient ->
-        AudiobookRoleUiState(book, roles, voices, transient.first, transient.second, transient.third)
+        AudiobookRoleUiState(book, roles, voices.first, transient.first, transient.second, transient.third, voices.second)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AudiobookRoleUiState())
+
+    init { refreshVoices() }
+
+    fun refreshVoices() {
+        viewModelScope.launch {
+            try {
+                localVoices.value = systemTtsSpeaker.voices(settingsStore.current().systemEnginePackage)
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                if (settingsStore.current().engineMode == com.mozhi.reader.core.speech.TtsEngineMode.SYSTEM)
+                    message.value = error.message ?: "读取本地音色失败"
+            }
+        }
+    }
 
     fun extract(useAi: Boolean) {
         if (working.value) return
         viewModelScope.launch {
             working.value = true
             message.value = if (useAi) "AI 正在识别角色…" else "正在按对白规则识别…"
-            runCatching { roleExtractor.extract(bookId, useAi) }
+            runCatching { roleExtractor.extract(bookId, useAi, existingRoles = audiobookRepository.getRoles(bookId)) }
                 .onSuccess { result ->
                     audiobookRepository.replaceRoles(bookId, result.roles)
                     message.value = if (result.usedAi) "AI 角色提案已生成" else "规则角色提案已生成"
                 }
                 .onFailure { message.value = it.message ?: "角色识别失败" }
             working.value = false
+        }
+    }
+
+    fun assignVoices() {
+        if (working.value) return
+        viewModelScope.launch {
+            working.value = true
+            message.value = "AI 正在选择角色音色…"
+            try {
+                val roles = audiobookRepository.getRoles(bookId)
+                val assigned = roleExtractor.assignVoices(roles)
+                audiobookRepository.updateCasting(assigned)
+                message.value = "已分配音色，分镜保留；受影响的音频需重新制作"
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                message.value = error.message ?: "音色分配失败"
+            } finally { working.value = false }
         }
     }
 
@@ -85,7 +125,7 @@ class AudiobookRoleViewModel @Inject constructor(
                     bookId = bookId,
                     name = "新角色",
                     kind = AudiobookRoleKind.CHARACTER.name,
-                    engine = AudiobookEngine.AI.name,
+                    engine = if (settingsStore.current().engineMode == com.mozhi.reader.core.speech.TtsEngineMode.SYSTEM) AudiobookEngine.SYSTEM.name else AudiobookEngine.AI.name,
                     color = ROLE_COLORS[(uiState.value.roles.size + 1) % ROLE_COLORS.size],
                     sortOrder = uiState.value.roles.size
                 )
@@ -105,20 +145,29 @@ class AudiobookRoleViewModel @Inject constructor(
         }
     }
 
-    fun preview(voiceId: String) {
-        if (voiceId.isBlank()) {
+    fun preview(role: AudiobookRoleEntity) {
+        if (working.value) return
+        val voiceId = role.voiceId
+        if (role.engine == AudiobookEngine.AI.name && voiceId.isBlank()) {
             message.value = "请先为角色选择 AI 音色"
             return
         }
         viewModelScope.launch {
             working.value = true
             runCatching {
-                mediaService.synthesizeSpeech(bookId, PREVIEW_TEXT, voiceId = voiceId).path
+                if (role.engine == AudiobookEngine.SYSTEM.name) {
+                    check(systemTtsSpeaker.speak(PREVIEW_TEXT, settingsStore.current().withSystemVoiceId(voiceId))) {
+                        "本地音色不可用，请刷新音色或重新选择引擎"
+                    }
+                    null
+                } else mediaService.synthesizeSpeech(bookId, PREVIEW_TEXT, voiceId = voiceId).path
             }.onSuccess { previewPath.value = it }
-                .onFailure { message.value = it.message ?: "试听生成失败" }
+                .onFailure { if (it is CancellationException) throw it; message.value = it.message ?: "试听生成失败" }
             working.value = false
         }
     }
+
+    override fun onCleared() { systemTtsSpeaker.stop() }
 
     fun consumePreview() { previewPath.value = null }
     fun clearMessage() { message.value = null }

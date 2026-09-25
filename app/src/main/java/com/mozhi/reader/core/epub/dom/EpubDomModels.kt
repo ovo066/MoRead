@@ -15,7 +15,13 @@ data class EpubDomChapter(
     val textLength: Int,
     val diagnostics: List<EpubLayoutDiagnostic> = emptyList(),
     /** Embedded <style> sheets, with document-relative URLs and their original cascade order. */
-    val embeddedStylesheets: List<EpubStylesheetText> = emptyList()
+    val embeddedStylesheets: List<EpubStylesheetText> = emptyList(),
+    /**
+     * The `<html>` element without children. Vertical books usually declare `writing-mode` and the
+     * root font there (`html { -epub-writing-mode: vertical-rl }`), so the cascade must start at
+     * the root element rather than at `<body>`. Null for layouts cached before it was recorded.
+     */
+    val htmlNode: EpubDomNode? = null
 ) {
     companion object {
         const val CURRENT_SCHEMA_VERSION = 10

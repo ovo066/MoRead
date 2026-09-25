@@ -35,4 +35,12 @@ class DialogueRuleSegmenterTest {
         assertEquals("林渊", dialogue[0].roleName)
         assertEquals("林渊", dialogue[1].roleName)
     }
+    @Test fun bracketedSpeechAndNoticesAreCandidatesWithoutOverlappingInnerQuotes() {
+        val text = "守门人说道。\n［请出示证件。］\n【我忘带了。】\n［已发动技能‘观察’。］"
+        val result = DialogueRuleSegmenter.segment(text)
+        val dialogue = result.filter { it.kind == AudiobookSegmentKind.DIALOGUE }
+        assertEquals(3, dialogue.size)
+        assertEquals("［已发动技能‘观察’。］", text.substring(dialogue.last().startCharOffset, dialogue.last().endCharOffset))
+        result.zipWithNext().forEach { (a, b) -> assertTrue(a.endCharOffset <= b.startCharOffset) }
+    }
 }

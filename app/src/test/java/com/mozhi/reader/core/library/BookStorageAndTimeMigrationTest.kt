@@ -40,7 +40,7 @@ class BookStorageAndTimeMigrationTest {
         }
         db = Room.inMemoryDatabaseBuilder(context, MoReadDatabase::class.java).build()
         library = LibraryRepository(context, db, db.bookDao(), BookTextStore(context), BookTextWriter(), BookMediaStore(context),
-            BookLayoutStore(context), Lazy { error("optional index unavailable") })
+            BookLayoutStore(context), Lazy { error("optional index unavailable") }, Lazy { io.mockk.mockk(relaxed = true) })
     }
     @After fun close() { db.close() }
     private fun book(path: String = "") = BookEntity(title = "书", author = "", coverPath = null, epubPath = path,
@@ -108,7 +108,7 @@ class BookStorageAndTimeMigrationTest {
             old.version = 29
         }
         val upgraded = Room.databaseBuilder(context, MoReadDatabase::class.java, "hour-migration.db")
-            .addMigrations(DatabaseMigrations.Migration29To30, DatabaseMigrations.Migration30To31).build()
+            .addMigrations(DatabaseMigrations.Migration29To30, DatabaseMigrations.Migration30To31, DatabaseMigrations.Migration31To32).build()
         try {
             assertEquals(60_000L, upgraded.bookDao().getReadingDays(1).single().durationMs)
             assertTrue(upgraded.readingHourlyDao().getForBook(1).isEmpty())

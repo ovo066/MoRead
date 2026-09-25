@@ -87,6 +87,7 @@ class AiMediaGenerationService @Inject constructor(
     private val imagePromptComposer: ImagePromptComposer,
     private val illustrations: IllustrationRepository,
     private val speechCache: SpeechCacheStore,
+    private val imageConsistency: com.mozhi.reader.core.library.ImageConsistencyRepository,
     @ApplicationScope applicationScope: CoroutineScope
 ) {
     private val sharedSpeechGenerations =
@@ -101,15 +102,21 @@ class AiMediaGenerationService @Inject constructor(
         personaId: Long?,
         textAnchorJson: String = "",
         persist: Boolean = true,
-        beforePaidRequest: suspend () -> Boolean = { true }
+        beforePaidRequest: suspend () -> Boolean = { true },
+        recipe: ImageRecipe? = null
     ): IllustrationEntity {
         val cleanPrompt = prompt.trim().take(MAX_PROMPT_CHARS)
         require(cleanPrompt.isNotEmpty()) { "生图提示词不能为空" }
         check(beforePaidRequest()) { "生成条件已改变" }
-        val generatedPrompt = imagePromptComposer.compose(cleanPrompt).take(MAX_PROMPT_CHARS)
         val resolved = clientFactory.imageGeneration()
+        val actualRecipe = recipe ?: imageConsistency.plan(bookId, chapterIndex, cleanPrompt)
+        imageConsistency.validateRecipe(bookId, actualRecipe, chapterIndex)
+        require(actualRecipe.backend.isBlank() || actualRecipe.backend == resolved.label) { "生图服务已更换，请重新调整配方" }
         check(beforePaidRequest()) { "生成条件已改变" }
-        val generated = resolved.client.generateImages(prompt = generatedPrompt).first()
+        val request = imageConsistency.request(actualRecipe, resolved.client)
+        val generatedPrompt = request.prompt
+        check(beforePaidRequest()) { "生成条件已改变" }
+        val generated = resolved.client.generateImages(request).first()
         val bytes = resolved.client.materializeImage(generated)
         require(bytes.size <= MAX_MEDIA_BYTES) { "生成图片超过 30 MB，已取消保存" }
         return withContext(Dispatchers.IO) {
@@ -122,6 +129,7 @@ class AiMediaGenerationService @Inject constructor(
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(output.absolutePath, bounds)
             try {
+                require(bounds.outWidth > 0 && bounds.outHeight > 0) { "生图服务返回的内容不是可识别的图片" }
                 val asset = IllustrationEntity(
                     bookId = bookId,
                     chapterIndex = chapterIndex,
@@ -134,8 +142,11 @@ class AiMediaGenerationService @Inject constructor(
                     pixelWidth = bounds.outWidth.coerceAtLeast(0),
                     pixelHeight = bounds.outHeight.coerceAtLeast(0),
                     createdByPersonaId = personaId,
+                    recipeJson = actualRecipe.encode(),
+                    castKeys = kotlinx.serialization.json.JsonArray(actualRecipe.cast.map { kotlinx.serialization.json.JsonPrimitive(it.characterKey) }).toString(),
                     createdAt = System.currentTimeMillis()
                 )
+                if (!persist) File("${output.absolutePath}.recipe.json").writeText(actualRecipe.encode())
                 if (persist) illustrations.insert(asset) else asset
             } catch (error: Throwable) {
                 output.delete()

@@ -32,7 +32,8 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35], application = Application::class, qualifiers = "w411dp-h891dp-mdpi")
+// 按默认中文界面断言文案；英文资源由 LocalizationResourcesTest 覆盖。
+@Config(sdk = [35], application = Application::class, qualifiers = "zh-rCN-w411dp-h891dp-mdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class DictionaryLookupVisualTest {
     @get:Rule val compose = createComposeRule()

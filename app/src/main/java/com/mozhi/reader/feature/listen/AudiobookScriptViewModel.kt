@@ -17,6 +17,10 @@ import com.mozhi.reader.core.library.AudiobookEngine
 import com.mozhi.reader.core.library.AudiobookRepository
 import com.mozhi.reader.core.library.LibraryRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import com.mozhi.reader.core.speech.SystemTtsSpeaker
+import com.mozhi.reader.core.speech.TtsSettingsStore
+import com.mozhi.reader.core.speech.withSystemVoiceId
+import kotlinx.coroutines.CancellationException
 import javax.inject.Inject
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -49,6 +53,8 @@ class AudiobookScriptViewModel @Inject constructor(
     private val libraryRepository: LibraryRepository,
     private val audiobookRepository: AudiobookRepository,
     private val scriptAgent: AudiobookScriptAgent,
+    private val systemTtsSpeaker: SystemTtsSpeaker,
+    private val ttsSettingsStore: TtsSettingsStore,
     private val mediaService: AiMediaGenerationService
 ) : ViewModel() {
     val bookId = savedStateHandle.bookIdOrNull() ?: 0L
@@ -121,7 +127,9 @@ class AudiobookScriptViewModel @Inject constructor(
             runCatching { scriptAgent.generate(bookId, chapterIndex, useAi) }
                 .onSuccess { result ->
                     body.value = result.body
-                    message.value = if (result.usedAi) "AI 精排完成，请逐段确认" else "规则排版完成，请逐段确认"
+                    message.value = if (result.unresolvedDialogueCount > 0)
+                        "有 "+result.unresolvedDialogueCount+" 段对白证据不足，暂用旁白，请校对说话人"
+                    else if (result.usedAi) "AI 精排完成，请逐段确认" else "规则排版完成，请逐段确认"
                 }
                 .onFailure { message.value = it.message ?: "剧本生成失败" }
             working.value = false
@@ -147,7 +155,12 @@ class AudiobookScriptViewModel @Inject constructor(
         viewModelScope.launch {
             working.value = true
             runCatching {
-                mediaService.synthesizeSpeech(
+                if (role.engine == AudiobookEngine.SYSTEM.name) {
+                    check(systemTtsSpeaker.speak(text, ttsSettingsStore.current().withSystemVoiceId(role.voiceId))) {
+                        "本地音色不可用，请重新选择音色"
+                    }
+                    null
+                } else mediaService.synthesizeSpeech(
                     bookId = bookId,
                     text = text,
                     voiceId = role.voiceId.takeIf(String::isNotBlank),
@@ -155,7 +168,7 @@ class AudiobookScriptViewModel @Inject constructor(
                     instruction = segment.instruction
                 ).path
             }.onSuccess { previewPath.value = it }
-                .onFailure { message.value = it.message ?: "试听生成失败" }
+                .onFailure { if (it is CancellationException) throw it; message.value = it.message ?: "试听生成失败" }
             working.value = false
         }
     }

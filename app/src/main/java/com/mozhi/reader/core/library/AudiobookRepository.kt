@@ -30,11 +30,27 @@ class AudiobookRepository @Inject constructor(
 
     suspend fun replaceRoles(bookId: Long, roles: List<AudiobookRoleEntity>) {
         database.withTransaction {
-            val userRoles = dao.getRoles(bookId).filter { it.source == "USER" }
-            dao.deleteSegmentsForBook(bookId)
-            dao.deleteChaptersForBook(bookId)
-            dao.deleteRoles(bookId)
-            dao.upsertRoles((roles.filterNot { proposed -> userRoles.any { it.name == proposed.name } } + userRoles))
+            val existing = dao.getRoles(bookId).toMutableList()
+            roles.forEach { proposed ->
+                val aliases = (proposed.aliases.split(',', '，') + proposed.name).map(String::trim).filter(String::isNotBlank).toSet()
+                val matches = existing.filter { old ->
+                    (old.kind == AudiobookRoleKind.NARRATOR.name && proposed.kind == old.kind) ||
+                        (old.aliases.split(',', '，') + old.name).any { it.trim() in aliases }
+                }
+                if (matches.isEmpty()) {
+                    val id = dao.upsertRoles(listOf(proposed.copy(id = 0))).single()
+                    existing += proposed.copy(id = id)
+                } else if (matches.size == 1) {
+                    val old = matches.single()
+                    // Preserve stable role IDs, casting, manual corrections and all existing scripts.
+                    if (old.source != "USER") dao.updateRole(old.copy(
+                        aliases = (old.aliases.split(',', '，') + proposed.aliases.split(',', '，') + proposed.name)
+                            .map(String::trim).filter { it.isNotBlank() && it != old.name }.distinct().joinToString(","),
+                        gender = proposed.gender.takeUnless { it == "UNSPECIFIED" } ?: old.gender,
+                        extraJson = proposed.extraJson.ifBlank { old.extraJson }
+                    ))
+                }
+            }
         }
     }
 
@@ -43,6 +59,19 @@ class AudiobookRepository @Inject constructor(
             dao.clearAudioForRole(role.id)
             dao.invalidateAudioForRole(role.bookId, role.id)
             dao.updateRole(role.copy(source = "USER"))
+        }
+    }
+
+    suspend fun updateCasting(roles: List<AudiobookRoleEntity>) {
+        database.withTransaction {
+            roles.forEach { proposed ->
+                val current = dao.getRolesForId(proposed.id) ?: return@forEach
+                if (current.bookId != proposed.bookId) return@forEach
+                if (current.engine == proposed.engine && current.voiceId == proposed.voiceId) return@forEach
+                dao.clearAudioForRole(current.id)
+                dao.invalidateAudioForRole(current.bookId, current.id)
+                dao.updateRole(current.copy(engine = proposed.engine, voiceId = proposed.voiceId, source = "USER"))
+            }
         }
     }
 
@@ -61,8 +90,16 @@ class AudiobookRepository @Inject constructor(
     }
 
     suspend fun applyEnginePolicy(bookId: Long, policy: AudiobookEnginePolicy) {
-        dao.getRoles(bookId).forEach { role ->
-            dao.updateRole(role.copy(engine = policy.engineFor(role.kind).name, source = "USER"))
+        if (policy == AudiobookEnginePolicy.CUSTOM) return
+        database.withTransaction {
+            dao.getRoles(bookId).forEach { role ->
+                val engine = policy.engineFor(role.kind).name
+                if (engine != role.engine) {
+                    dao.clearAudioForRole(role.id)
+                    dao.invalidateAudioForRole(bookId, role.id)
+                    dao.updateRole(role.copy(engine = engine, voiceId = "", source = "USER"))
+                }
+            }
         }
     }
 

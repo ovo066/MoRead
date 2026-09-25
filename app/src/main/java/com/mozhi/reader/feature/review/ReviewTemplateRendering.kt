@@ -28,7 +28,7 @@ private class ReviewTextSpan(private val style: ReaderSyntaxStyleSpan, private v
     }
     override fun updateDrawState(paint: TextPaint) {
         updateMeasureState(paint)
-        paint.color = style.colorArgb
+        style.colorArgb?.let { paint.color = it }
         paint.shader = gradient
         if (gradient != null) paint.alpha = 255
         paint.isUnderlineText = style.underline

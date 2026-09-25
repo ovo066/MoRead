@@ -49,7 +49,8 @@ import org.robolectric.annotation.GraphicsMode
 
 /** Exercise the production NavHost, Scaffold, per-entry rail and animated dock together. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35], application = Application::class, qualifiers = "w411dp-h891dp-mdpi")
+// 按默认中文界面断言文案；英文资源由 LocalizationResourcesTest 覆盖。
+@Config(sdk = [35], application = Application::class, qualifiers = "zh-rCN-w411dp-h891dp-mdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class NavigationStabilityTest {
     @get:Rule val compose = createComposeRule()
@@ -231,7 +232,7 @@ class NavigationStabilityTest {
         assertEquals(original.height - 8 - 16, sizes.getValue("list-bookshelf").height)
     }
 
-    @Test @Config(qualifiers = "w1024dp-h768dp-mdpi")
+    @Test @Config(qualifiers = "zh-rCN-w1024dp-h768dp-mdpi")
     fun expandedPushPopAndNestedNavigationNeverRemeasureTheOutgoingViewport() {
         mount()
         freeze()
@@ -310,7 +311,7 @@ class NavigationStabilityTest {
         assertEquals(21, lists.getValue("bookshelf").firstVisibleItemIndex)
     }
 
-    @Test @Config(qualifiers = "w320dp-h640dp-mdpi")
+    @Test @Config(qualifiers = "zh-rCN-w320dp-h640dp-mdpi")
     fun fullWidthBarStaysAtBottomAndRetainsEachRootAnchorAcrossTextureChanges() {
         appearance = AppearanceSettings(colorScheme = ColorSchemePreset.HAZE_BLUE, navStyle = NavStyle.BAR,
             surfaceStyle = SurfaceStyle.FLAT, shapeStyle = ShapeStyle.EXPRESSIVE)
@@ -337,7 +338,7 @@ class NavigationStabilityTest {
         capture("bar-small.png")
     }
 
-    @Test @Config(qualifiers = "w1024dp-h768dp-mdpi")
+    @Test @Config(qualifiers = "zh-rCN-w1024dp-h768dp-mdpi")
     fun choosingBarOnATabletRetainsTheSideNavigationAndViewport() {
         appearance = AppearanceSettings(colorScheme = ColorSchemePreset.SAGE, navStyle = NavStyle.BAR,
             surfaceStyle = SurfaceStyle.FLAT, shapeStyle = ShapeStyle.EXPRESSIVE)

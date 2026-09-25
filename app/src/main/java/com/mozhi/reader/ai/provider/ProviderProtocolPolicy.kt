@@ -69,7 +69,11 @@ object ProviderProtocolPolicy {
             AiModelType.RERANK -> if (provider.adapter == AiProviderAdapter.CUSTOM) {
                 ModelProtocolRoute.Rerank
             } else ModelProtocolRoute.Unsupported("重排模型请使用支持 /rerank 的自定义供应商")
-            AiModelType.TTS, AiModelType.IMAGE -> mediaRoute(provider)
+            AiModelType.TTS -> if (provider.adapter == AiProviderAdapter.GEMINI ||
+                (provider.adapter == AiProviderAdapter.CUSTOM && providerChatDialect(provider) == ApiDialect.GEMINI)) {
+                ModelProtocolRoute.Media
+            } else mediaRoute(provider)
+            AiModelType.IMAGE -> mediaRoute(provider)
         }
 
     fun isSupported(provider: AiProviderEntity, model: AiModelEntity): Boolean =

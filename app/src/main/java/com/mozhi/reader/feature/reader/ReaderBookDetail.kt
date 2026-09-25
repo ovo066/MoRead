@@ -190,7 +190,7 @@ private fun BookHero(
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .shadow(14.dp, RoundedCornerShape(26.dp), clip = false),
+            ,
         color = palette.glass,
         shape = RoundedCornerShape(26.dp),
         border = BorderStroke(1.dp, palette.glassBorder)

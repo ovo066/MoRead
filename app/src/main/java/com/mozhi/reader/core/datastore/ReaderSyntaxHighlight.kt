@@ -52,7 +52,8 @@ data class ReaderSyntaxRule(
 data class ReaderSyntaxStyleSpan(
     val start: Int,
     val endExclusive: Int,
-    val colorArgb: Int,
+    /** null 表示不改颜色：「符号本身也着色」关闭时的包裹符号只跟随字形，不跟随颜色。 */
+    val colorArgb: Int?,
     val backgroundArgb: Int?,
     val underline: Boolean,
     val font: ReaderSyntaxFont,
@@ -61,7 +62,9 @@ data class ReaderSyntaxStyleSpan(
     val italic: Boolean,
     val strikethrough: Boolean,
     val ruleId: Long,
-    val paintSpan: ReaderPaintSpan? = null
+    val paintSpan: ReaderPaintSpan? = null,
+    /** 只承载字体/字重/斜体的包裹符号片段，不计入命中数。 */
+    val delimiterGlyphsOnly: Boolean = false
 )
 
 object ReaderSyntaxHighlighter {
@@ -93,6 +96,12 @@ object ReaderSyntaxHighlighter {
                         val styleStart = if (rule.includeDelimiters) openAt else contentStart
                         val styleEnd = if (rule.includeDelimiters) matchEnd else closeAt
                         addSpan(result, occupied, rule, styleStart, styleEnd)
+                        if (!rule.includeDelimiters && rule.changesGlyphs()) {
+                            // 符号不着色，但字体必须与被包裹的内容一致，否则引号用正文字体、
+                            // 内容换了字体，交界处字形不搭。
+                            addSpan(result, occupied, rule, openAt, contentStart, delimiterGlyphsOnly = true)
+                            addSpan(result, occupied, rule, closeAt, matchEnd, delimiterGlyphsOnly = true)
+                        }
                         from = matchEnd.coerceAtLeast(openAt + 1)
                     }
                 }
@@ -148,17 +157,34 @@ object ReaderSyntaxHighlighter {
         return merged
     }
 
+    private fun ReaderSyntaxRule.changesGlyphs(): Boolean =
+        font != ReaderSyntaxFont.INHERIT || bold || italic
+
     private fun addSpan(
         result: MutableList<ReaderSyntaxStyleSpan>,
         occupied: BooleanArray,
         rule: ReaderSyntaxRule,
         start: Int,
-        endExclusive: Int
+        endExclusive: Int,
+        delimiterGlyphsOnly: Boolean = false
     ) {
         val safeStart = start.coerceIn(0, occupied.size)
         val safeEnd = endExclusive.coerceIn(safeStart, occupied.size)
         if (safeStart >= safeEnd || (safeStart until safeEnd).any { occupied[it] }) return
-        result += ReaderSyntaxStyleSpan(
+        result += if (delimiterGlyphsOnly) ReaderSyntaxStyleSpan(
+            start = safeStart,
+            endExclusive = safeEnd,
+            colorArgb = null,
+            backgroundArgb = null,
+            underline = false,
+            font = rule.font,
+            fontAssetId = rule.fontAssetId,
+            bold = rule.bold,
+            italic = rule.italic,
+            strikethrough = false,
+            ruleId = rule.id,
+            delimiterGlyphsOnly = true
+        ) else ReaderSyntaxStyleSpan(
             start = safeStart,
             endExclusive = safeEnd,
             colorArgb = rule.colorArgb,

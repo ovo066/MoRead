@@ -58,9 +58,11 @@ class BookLayoutArchiveCacheTest {
         store.initialize(1, archive(), pkg(), listOf(EpubLayoutChapterInput(0, href, value.document)))
         assertNotNull(store.readChapter(1, 0, value.text))
         val cached = cache().listFiles()!!.single()
-        GzipTextFiles.replaceWithGzip(cached, GzipTextFiles.readText(cached).replace("\"parserRevision\":1", "\"parserRevision\":0"))
+        val current = EpubLayoutPackage.CURRENT_PARSER_REVISION
+        GzipTextFiles.replaceWithGzip(cached, GzipTextFiles.readText(cached)
+            .replace("\"parserRevision\":$current", "\"parserRevision\":${current - 1}"))
         assertEquals(value.dom, store.readChapter(1, 0, value.text)!!.dom)
-        assertTrue(GzipTextFiles.readText(cached).contains("\"parserRevision\":1"))
+        assertTrue(GzipTextFiles.readText(cached).contains("\"parserRevision\":$current"))
         assertNull(store.readChapter(1, 0, "错".repeat(value.text.length)))
         assertTrue(store.hasCurrentLayout(1, listOf(value.text.length)))
         assertNotNull(store.readChapter(1, 0, value.text))

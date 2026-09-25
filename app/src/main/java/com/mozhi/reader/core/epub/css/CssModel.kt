@@ -74,6 +74,25 @@ sealed interface CssValue {
     @Serializable
     @SerialName("comma-list")
     data class CommaList(val items: List<CssValue>) : CssValue
+
+    /** `linear-gradient()` / `radial-gradient()` (and `repeating-`) as a background image. */
+    @Serializable
+    @SerialName("gradient")
+    data class Gradient(
+        val radial: Boolean,
+        val repeating: Boolean,
+        /** Linear direction in CSS degrees: 0 = to top, clockwise. */
+        val angleDeg: Float = 180f,
+        /** Radial shape: circle, otherwise an ellipse fitted to the box. */
+        val circle: Boolean = false,
+        /** Radial centre as fractions of the box. */
+        val centerX: Float = .5f,
+        val centerY: Float = .5f,
+        val stops: List<GradientStop>
+    ) : CssValue
+
+    @Serializable
+    data class GradientStop(val argb: Int, val position: Length? = null)
 }
 
 @Serializable

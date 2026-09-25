@@ -16,7 +16,7 @@ data class KnowledgeCharacter(val name: String, val facts: List<KnowledgeFact>,
     val relationships: List<KnowledgeCharacterRelationship> = emptyList())
 
 @Serializable
-enum class CharacterAttributeKind { ALIAS, AGE, GENDER, IDENTITY }
+enum class CharacterAttributeKind { ALIAS, AGE, GENDER, IDENTITY, APPEARANCE }
 @Serializable
 data class KnowledgeCharacterAttribute(val kind: CharacterAttributeKind, val value: String, val fact: KnowledgeFact)
 @Serializable

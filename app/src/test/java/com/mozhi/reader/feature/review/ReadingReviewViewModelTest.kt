@@ -38,6 +38,7 @@ class ReadingReviewViewModelTest {
         every { personas.observePersonas() } returns flowOf(listOf(reviewTestPersona()))
         every { settings.companionSpoilerProtectionEnabled } returns protect
         every { settings.cachedSettings } returns MutableStateFlow(com.mozhi.reader.core.datastore.ReaderSettings())
+        every { settings.settings } returns flowOf(com.mozhi.reader.core.datastore.ReaderSettings())
         coEvery { library.getBook(1) } returns book
         coEvery { annotations.getAnnotation(1) } returns annotation
         coEvery { personas.getPersona(7) } returns reviewTestPersona()

@@ -349,6 +349,8 @@ data class IllustrationEntity(
     val pixelHeight: Int = 0,
     /** 无 FK：角色删除后插图仍是用户资产。 */
     val createdByPersonaId: Long? = null,
+    @ColumnInfo(defaultValue = "''") val recipeJson: String = "",
+    @ColumnInfo(defaultValue = "'[]'") val castKeys: String = "[]",
     @ColumnInfo(defaultValue = "''")
     val textAnchorJson: String = "",
     val createdAt: Long

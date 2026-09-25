@@ -1300,6 +1300,15 @@ internal class EpubBoxLayoutBackend(
             EpubVerticalAlign.SUB -> spec.contentFontSizePx * fontSizeEm * 0.2f
             EpubVerticalAlign.BASELINE -> 0f
         }
+        // Replacing the dominant body face with the reader font must not accidentally hand
+        // ownership to a syntax rule's unrelated font. The publisher still owns this slot;
+        // only the glyph source is substituted.
+        val syntaxFont = if (publisherFamily != null) {
+            ReaderSyntaxFont.INHERIT
+        } else {
+            syntax?.font ?: ReaderSyntaxFont.INHERIT
+        }
+        val syntaxFontAssetId = if (publisherFamily != null) null else syntax?.fontAssetId
         return ResolvedTextStyle(
             measureStyle = MeasuredTextStyle(
                 isTitle = isTitle,
@@ -1308,7 +1317,9 @@ internal class EpubBoxLayoutBackend(
                 fontFamily = family,
                 bold = epub.fontWeight?.let { it >= 600 } ?: (syntax?.bold == true),
                 italic = epub.italic || syntax?.italic == true,
-                letterSpacingEm = epub.letterSpacingEm ?: 0f
+                letterSpacingEm = epub.letterSpacingEm ?: 0f,
+                syntaxFont = syntaxFont,
+                syntaxFontAssetId = syntaxFontAssetId
             ),
             // Publisher styling wins property-by-property. User syntax highlighting only fills
             // unspecified slots, so dialogue rules cannot repaint an EPUB badge/font/background.
@@ -1317,15 +1328,8 @@ internal class EpubBoxLayoutBackend(
             backgroundArgb = adaptedBackground ?: syntax?.backgroundArgb,
             underline = epub.underline || syntax?.underline == true,
             strikethrough = epub.strikethrough || syntax?.strikethrough == true,
-            // Replacing the dominant body face with the reader font must not accidentally hand
-            // ownership to a syntax rule's unrelated font. The publisher still owns this slot;
-            // only the glyph source is substituted.
-            syntaxFont = if (publisherFamily != null) {
-                ReaderSyntaxFont.INHERIT
-            } else {
-                syntax?.font ?: ReaderSyntaxFont.INHERIT
-            },
-            syntaxFontAssetId = if (publisherFamily != null) null else syntax?.fontAssetId,
+            syntaxFont = syntaxFont,
+            syntaxFontAssetId = syntaxFontAssetId,
             baselineShiftPx = verticalShift,
             lineHeightEm = epub.lineHeightEm,
             opacity = epub.opacity

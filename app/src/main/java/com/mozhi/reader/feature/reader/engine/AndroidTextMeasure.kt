@@ -3,8 +3,12 @@ package com.mozhi.reader.feature.reader.engine
 import android.graphics.Typeface
 import android.os.Build
 import android.text.Layout
+import android.text.SpannableString
+import android.text.Spanned
 import android.text.StaticLayout
 import android.text.TextPaint
+import android.text.style.MetricAffectingSpan
+import com.mozhi.reader.core.datastore.ReaderSyntaxFont
 import java.io.File
 
 /**
@@ -21,7 +25,10 @@ class AndroidTextMeasure(
     letterSpacingEm: Float = 0f,
     titleTypeface: Typeface? = null,
     titleBold: Boolean = true,
-    private val publisherTitleSizePx: Float = titleSizePx
+    private val publisherTitleSizePx: Float = titleSizePx,
+    /** Reader custom fonts, for syntax rules that pick [ReaderSyntaxFont.CUSTOM]. */
+    private val customFontPath: String? = null,
+    private val customFontPaths: Map<String, String> = emptyMap()
 ) : TextMeasure {
 
     private val styledPaints = HashMap<MeasuredTextStyle, TextPaint>()
@@ -44,7 +51,9 @@ class AndroidTextMeasure(
     private val indentWidth = StaticLayout.getDesiredWidth(INDENT_CHAR, contentPaint)
 
     fun forPublisherHeadings(): AndroidTextMeasure = AndroidTextMeasure(
-        contentPaint.textSize, publisherTitleSizePx, contentPaint.typeface, contentPaint.letterSpacing
+        contentPaint.textSize, publisherTitleSizePx, contentPaint.typeface, contentPaint.letterSpacing,
+        customFontPath = customFontPath,
+        customFontPaths = customFontPaths
     )
 
     override fun metrics(isTitle: Boolean): LineMetrics =
@@ -62,12 +71,33 @@ class AndroidTextMeasure(
         isTitle: Boolean,
         availableWidth: Float,
         firstLineIndent: Float
+    ): IntArray = breakLines(text, isTitle, availableWidth, firstLineIndent, emptyList())
+
+    override fun breakLines(
+        text: String,
+        isTitle: Boolean,
+        availableWidth: Float,
+        firstLineIndent: Float,
+        styledRuns: List<StyledTextRun>
     ): IntArray {
         if (text.isEmpty()) return IntArray(0)
         val paint = if (isTitle) titlePaint else contentPaint
         val width = availableWidth.toInt().coerceAtLeast(1)
+        val source: CharSequence = if (styledRuns.isEmpty()) {
+            text
+        } else {
+            SpannableString(text).apply {
+                styledRuns.forEach { run ->
+                    val start = run.start.coerceIn(0, text.length)
+                    val end = run.end.coerceIn(start, text.length)
+                    if (start < end) {
+                        setSpan(MeasuredStyleSpan(paintFor(run.style)), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    }
+                }
+            }
+        }
         val builder = StaticLayout.Builder
-            .obtain(text, 0, text.length, paint, width)
+            .obtain(source, 0, text.length, paint, width)
             .setAlignment(Layout.Alignment.ALIGN_NORMAL)
             .setLineSpacing(0f, 1f)
             .setIncludePad(true)
@@ -99,13 +129,38 @@ class AndroidTextMeasure(
         TextPaint(base).apply {
             textSize = base.textSize * style.textSizeScale.coerceIn(MIN_TEXT_SCALE, MAX_TEXT_SCALE)
             letterSpacing = base.letterSpacing + style.letterSpacingEm
-            val family = style.fontFilePath
-                ?.let { path -> typefaces.getOrPut(path) { runCatching { Typeface.createFromFile(File(path)) }.getOrNull() } }
-                ?: style.fontFamily.toSystemTypeface()
-                ?: base.typeface
+            // Mirrors PageBitmapRenderer.syntaxPaint: every face the renderer can draw with has
+            // to be the face we measure with.
+            val family = when (style.syntaxFont) {
+                ReaderSyntaxFont.INHERIT -> style.fontFilePath?.let(::typefaceFromFile)
+                    ?: style.fontFamily.toSystemTypeface()
+                    ?: base.typeface
+                ReaderSyntaxFont.SYSTEM -> Typeface.DEFAULT
+                ReaderSyntaxFont.SERIF -> Typeface.SERIF
+                ReaderSyntaxFont.SANS_SERIF -> Typeface.SANS_SERIF
+                ReaderSyntaxFont.MONOSPACE -> Typeface.MONOSPACE
+                ReaderSyntaxFont.CUSTOM -> (style.syntaxFontAssetId?.let(customFontPaths::get) ?: customFontPath)
+                    ?.let(::typefaceFromFile)
+                    ?: base.typeface
+            }
             val typefaceStyle = (if (style.bold) Typeface.BOLD else Typeface.NORMAL) or
                 (if (style.italic) Typeface.ITALIC else Typeface.NORMAL)
             typeface = if (typefaceStyle == Typeface.NORMAL) family else Typeface.create(family, typefaceStyle)
+        }
+    }
+
+    private fun typefaceFromFile(path: String): Typeface? =
+        typefaces.getOrPut(path) { runCatching { Typeface.createFromFile(File(path)) }.getOrNull() }
+
+    /** Hands a styled run's measuring paint to StaticLayout. */
+    private class MeasuredStyleSpan(private val source: TextPaint) : MetricAffectingSpan() {
+        override fun updateMeasureState(textPaint: TextPaint) = copyInto(textPaint)
+        override fun updateDrawState(textPaint: TextPaint) = copyInto(textPaint)
+
+        private fun copyInto(textPaint: TextPaint) {
+            textPaint.typeface = source.typeface
+            textPaint.textSize = source.textSize
+            textPaint.letterSpacing = source.letterSpacing
         }
     }
 

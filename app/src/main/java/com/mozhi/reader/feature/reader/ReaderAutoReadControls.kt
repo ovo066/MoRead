@@ -1,5 +1,6 @@
 package com.mozhi.reader.feature.reader
 
+import com.mozhi.reader.ui.components.MoReadBottomSheet
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -15,7 +16,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
@@ -59,7 +59,7 @@ internal fun ReaderAutoReadSheet(
     onStart: (AutoReadSettings) -> Unit,
     onStop: () -> Unit
 ) {
-    ModalBottomSheet(
+    MoReadBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = palette.glassStrong,

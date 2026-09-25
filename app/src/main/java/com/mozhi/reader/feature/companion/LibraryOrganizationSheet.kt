@@ -1,5 +1,6 @@
 package com.mozhi.reader.feature.companion
 
+import com.mozhi.reader.ui.components.MoReadBottomSheet
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -20,7 +21,7 @@ internal fun LibraryOrganizationSheet(
 ) {
     var selectedId by remember { mutableStateOf(plans.lastOrNull { it.plan.status == "PENDING" }?.messageId ?: plans.lastOrNull()?.messageId) }
     val selected = plans.firstOrNull { it.messageId == selectedId } ?: plans.lastOrNull()
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+    MoReadBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.fillMaxWidth().heightIn(max = 620.dp).navigationBarsPadding().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("整理书架", style = MaterialTheme.typography.titleLarge)
             if (plans.size > 1) LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

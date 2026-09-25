@@ -72,7 +72,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -157,7 +156,8 @@ internal fun readerControlsPalette(content: ReaderPalette): ReaderPalette {
  */
 fun customReaderPalette(theme: CustomReaderTheme): ReaderPalette {
     val background = Color(theme.backgroundArgb)
-    val text = Color(theme.textArgb)
+    val text = if (theme.textColorCustomized) Color(theme.textArgb)
+        else readableReaderText(background, Color(theme.textArgb))
     val accent = Color(theme.accentArgb)
     val dark = theme.isDark ?: (background.luminance() < 0.5f)
     val glassBase = lerp(background, Color.White, if (dark) 0.07f else 0.42f)
@@ -175,6 +175,18 @@ fun customReaderPalette(theme: CustomReaderTheme): ReaderPalette {
         scrim = Color.Black.copy(alpha = if (dark) 0.6f else 0.42f),
         isDark = dark
     )
+}
+
+/** Retain readable ink; otherwise choose the strongest neutral contrast against the paper. */
+internal fun readableReaderText(background: Color, preferred: Color): Color {
+    fun contrast(ink: Color): Float {
+        val a = ink.compositeOver(background).luminance()
+        val b = background.luminance()
+        return (maxOf(a, b) + .05f) / (minOf(a, b) + .05f)
+    }
+    if (contrast(preferred) >= 4.5f) return preferred
+    val gentle = listOf(Color(0xFF303234), Color(0xFFE8E6E3)).maxBy(::contrast)
+    return if (contrast(gentle) >= 4.5f) gentle else listOf(Color.Black, Color.White).maxBy(::contrast)
 }
 
 fun readerPalette(theme: ReaderTheme, systemDark: Boolean, accent: Color): ReaderPalette {
@@ -408,7 +420,6 @@ private fun ReaderTopBar(
             TabletReaderAction(Icons.Outlined.Info, "书籍详情", palette, onOpenDetails)
         } else Surface(
             modifier = (if (tablet) Modifier.widthIn(max = 240.dp).heightIn(min = 48.dp) else Modifier.weight(1f))
-                .shadow(if (tablet) 8.dp else 12.dp, if (tablet) CircleShape else RoundedCornerShape(17.dp), clip = false)
                 .clickable(onClick = onOpenDetails),
             shape = if (tablet) CircleShape else RoundedCornerShape(17.dp),
             color = palette.glass,
@@ -509,7 +520,7 @@ private fun ReaderTopBar(
 @Composable
 private fun TabletReaderAction(icon: ImageVector, label: String, palette: ReaderPalette, onClick: () -> Unit) {
     Surface(shape = CircleShape, color = palette.glass, border = BorderStroke(1.dp, palette.glassBorder),
-        modifier = Modifier.size(48.dp).shadow(8.dp, CircleShape, clip = false)) {
+        modifier = Modifier.size(48.dp)) {
         IconButton(onClick = onClick) { Icon(icon, label, tint = palette.onBackground, modifier = Modifier.size(21.dp)) }
     }
 }
@@ -523,8 +534,7 @@ private fun GlassIconButton(
 ) {
     Surface(
         modifier = Modifier
-            .size(42.dp)
-            .shadow(10.dp, RoundedCornerShape(15.dp), clip = false),
+            .size(42.dp),
         shape = RoundedCornerShape(15.dp),
         color = palette.glass,
         border = BorderStroke(1.dp, palette.glassBorder)
@@ -569,7 +579,7 @@ private fun ReaderBottomBar(
             shape = RoundedCornerShape(22.dp),
             color = palette.glass,
             border = BorderStroke(1.dp, palette.glassBorder),
-            shadowElevation = 14.dp
+            shadowElevation = 0.dp
         ) {
             Row(
                 modifier = Modifier
@@ -618,8 +628,7 @@ private fun ChapterHelm(
         )
         Surface(
             modifier = Modifier
-                .weight(1f)
-                .shadow(10.dp, RoundedCornerShape(15.dp), clip = false),
+                .weight(1f),
             shape = RoundedCornerShape(15.dp),
             color = palette.glass,
             border = BorderStroke(1.dp, palette.glassBorder)
@@ -683,7 +692,6 @@ private fun HelmOrbButton(
                 scaleX = scale
                 scaleY = scale
             }
-            .shadow(10.dp, CircleShape, clip = false)
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,

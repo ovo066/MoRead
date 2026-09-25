@@ -1,5 +1,6 @@
 package com.mozhi.reader.feature.bookdetail
 
+import com.mozhi.reader.ui.components.MoReadBottomSheet
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -65,7 +66,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -346,7 +346,7 @@ fun BookDetailScreen(
         }
 
         if (showMoreInfo) {
-            ModalBottomSheet(
+            MoReadBottomSheet(
                 onDismissRequest = { showMoreInfo = false },
                 sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
                 containerColor = MaterialTheme.colorScheme.surface
@@ -518,7 +518,7 @@ fun BookDetailScreen(
     }
 
     if (showBookmarks) {
-        ModalBottomSheet(onDismissRequest = { showBookmarks = false }) {
+        MoReadBottomSheet(onDismissRequest = { showBookmarks = false }) {
             Text(
                 text = "书签",
                 style = MaterialTheme.typography.headlineSmall,
@@ -564,7 +564,7 @@ fun BookDetailScreen(
     }
 
     if (showAllNotes) {
-        ModalBottomSheet(
+        MoReadBottomSheet(
             onDismissRequest = { showAllNotes = false },
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ) {
@@ -649,45 +649,7 @@ fun BookDetailScreen(
     }
 
     if (showGallery) {
-        ModalBottomSheet(
-            onDismissRequest = { showGallery = false },
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(0.88f)
-                    .padding(horizontal = 20.dp)
-            ) {
-                Text("书籍插图廊", style = MaterialTheme.typography.titleLarge)
-                Text(
-                    "选段和伴读 Agent 生成的插图都会保存在这里。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
-                )
-                if (state.illustrations.isEmpty()) {
-                    Text("还没有插图，可在阅读页划线后选择“生图”。")
-                } else {
-                    val galleryListState = androidx.compose.foundation.lazy.rememberLazyListState()
-                    LazyColumn(
-                        state = galleryListState,
-                        modifier = Modifier
-                            .weight(1f)
-                            .blockSheetDrag(galleryListState),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        items(state.illustrations, key = IllustrationEntity::id) { illustration ->
-                            IllustrationGalleryCard(
-                                illustration = illustration,
-                                onOpen = { selectedIllustration = illustration },
-                                onDelete = { viewModel.deleteIllustration(illustration) }
-                            )
-                        }
-                    }
-                }
-            }
-        }
+        com.mozhi.reader.feature.illustration.ImageStudio(bookId = bookId, onDismiss = { showGallery = false })
     }
 
     if (showNoteEditor) {

@@ -336,7 +336,7 @@ private fun SegmentCard(
                 }
             }
             Spacer(Modifier.weight(1f))
-            if (ai) {
+            if (role != null) {
                 IconButton(onClick = onPreview) {
                     AudiobookSmallIcon(Icons.Outlined.PlayArrow, "试听本段")
                 }

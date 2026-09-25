@@ -9,6 +9,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.LocalOverscrollFactory
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -57,7 +59,7 @@ import androidx.compose.ui.window.PopupProperties
 import com.mozhi.reader.ui.theme.isDarkTheme
 
 /**
- * 全局统一的弹出菜单外观：大圆角 + 近不透明表面 + 1dp 细描边 + 小阴影，与
+ * 全局统一的弹出菜单外观：大圆角 + 近不透明表面 + 1dp 细描边（不绘制阴影），与
  * [FrostedSurface] 是同一套语言。M3 默认的 DropdownMenu 是方角实心卡，落在
  * 玻璃层界面上很突兀（尤其阅读页的纸色/夜间底），所有菜单一律走这里。
  */
@@ -104,6 +106,9 @@ fun MoReadStableDropdownMenu(
     offset: DpOffset = DpOffset(0.dp, 6.dp),
     width: Dp = 244.dp,
     maxHeight: Dp = 390.dp,
+    scrollState: ScrollState = rememberScrollState(),
+    contentModifier: Modifier = Modifier,
+    header: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
     if (!expanded) return
@@ -132,23 +137,22 @@ fun MoReadStableDropdownMenu(
         onDismissRequest = onDismissRequest,
         properties = PopupProperties(focusable = true)
     ) {
-        Surface(
+        MoReadOverlayTheme { Surface(
             modifier = modifier.widthIn(min = width, max = width),
             shape = RoundedCornerShape(18.dp),
             color = containerColor,
             contentColor = MaterialTheme.colorScheme.onSurface,
             tonalElevation = 0.dp,
-            shadowElevation = 12.dp,
+            shadowElevation = 0.dp,
             border = BorderStroke(1.dp, borderColor)
         ) {
-            Column(
-                modifier = Modifier
-                    .heightIn(max = maxHeight)
-                    .verticalScroll(rememberScrollState())
-                    .padding(vertical = 8.dp),
-                content = content
-            )
-        }
+            CompositionLocalProvider(LocalOverscrollFactory provides null) {
+                Column(Modifier.heightIn(max = maxHeight)) {
+                    header?.invoke()
+                    Column(contentModifier.weight(1f, fill = false).verticalScroll(scrollState).padding(vertical = 8.dp), content = content)
+                }
+            }
+        } }
     }
 }
 
@@ -203,12 +207,12 @@ fun MoReadDropdownMenu(
         containerColor = containerColor,
         // tonalElevation 会在容器色上再叠一层主题色，把我们钉好的玻璃色染歪。
         tonalElevation = 0.dp,
-        shadowElevation = 12.dp,
+        shadowElevation = 0.dp,
         border = BorderStroke(1.dp, borderColor),
         content = {
             val columnScope = this
             CompositionLocalProvider(LocalContentColor provides contentColor) {
-                columnScope.content()
+                MoReadOverlayTheme { columnScope.content() }
             }
         }
     )

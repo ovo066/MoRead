@@ -28,18 +28,26 @@ app/objectbox-models/*.json.bak
 # ---- 开源边界：以下内容只保留在本地，不进入公开仓库 ----
 # 维护者私有工作文档（新克隆中没有这些文件属正常）
 CLAUDE.md
+AGENTS.md
 DECISIONS.md
 DEVELOPMENT_PLAN.md
 design/
 docs/COMPANION_PHASE3_HANDOFF.md
 docs/superpowers/
 docs/EPUB_NATIVE_LAYOUT_PLAN.md
+docs/UI_GUIDELINES.md
 docs/releases/v1.0.5.md
 .firecrawl/
 
 # 构建产物与发布材料（APK 一律通过 GitHub Release 分发）
 *.apk
 dist/
+artifacts/
+output/
+tmp/
+/build-*.log
+/*-handoff.zip
+/nul
 
 # 发布签名：密钥与口令永不入库
 keys/

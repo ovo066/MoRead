@@ -1,5 +1,6 @@
 package com.mozhi.reader.feature.reader
 
+import com.mozhi.reader.ui.components.MoReadBottomSheet
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -23,7 +24,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -60,7 +60,7 @@ internal fun CompanionConversationSheet(
     onRenameConversation: (ConversationEntity) -> Unit,
     onDeleteConversation: (ConversationEntity) -> Unit
 ) {
-    ModalBottomSheet(
+    MoReadBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ) {

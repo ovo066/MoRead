@@ -15,6 +15,8 @@ import com.mozhi.reader.core.media.ImageApiProvider
 import com.mozhi.reader.core.media.ImageApiSettingsStore
 import com.mozhi.reader.core.security.ApiKeyStore
 import com.mozhi.reader.core.speech.TtsSettingsStore
+import com.mozhi.reader.core.speech.TtsSettings
+import com.mozhi.reader.core.speech.TtsApiProvider
 import javax.inject.Inject
 import javax.inject.Singleton
 import okhttp3.OkHttpClient
@@ -119,7 +121,7 @@ class AiClientFactory @Inject constructor(
     suspend fun mediaForRole(role: ModelRole): ResolvedMediaClient {
         require(role == ModelRole.TTS || role == ModelRole.IMAGE) { "仅支持 TTS 或 IMAGE 角色" }
         if (role == ModelRole.TTS) {
-            standaloneTtsClient()?.let { return it }
+            standaloneTtsClient(ttsSettingsStore.current())?.let { return it }
         }
         val (provider, model) = resolve(role)
         when (val route = ProviderProtocolPolicy.route(provider, model)) {
@@ -213,10 +215,9 @@ class AiClientFactory @Inject constructor(
     }
 
     /** 「语音朗读」二级页里的独立 TTS API；Base URL + 模型齐了才算配置生效。 */
-    private suspend fun standaloneTtsClient(): ResolvedMediaClient? {
-        val settings = ttsSettingsStore.current()
+    private suspend fun standaloneTtsClient(settings: TtsSettings): ResolvedMediaClient? {
         if (!settings.aiApiConfigured) return null
-        val apiKey = apiKeyStore.get(TtsSettingsStore.API_KEY_ALIAS)
+        val apiKey = apiKeyStore.migrateAlias(TtsSettingsStore.API_KEY_ALIAS, TtsSettingsStore.apiKeyAlias(settings.aiProvider))
             ?.takeIf(String::isNotBlank)
             ?: throw AiClientException.MissingKey("语音朗读 API")
         val isGmiCloud = settings.aiIsGmiCloud
@@ -225,10 +226,14 @@ class AiClientFactory @Inject constructor(
             id = STANDALONE_ENTITY_ID,
             name = "语音朗读 API",
             baseUrl = settings.aiBaseUrl,
-            apiKeyAlias = TtsSettingsStore.API_KEY_ALIAS,
+            apiKeyAlias = TtsSettingsStore.apiKeyAlias(settings.aiProvider),
             type = AiProviderType.TTS,
-            apiFormat = "OPENAI",
-            adapter = if (isMiniMax) AiProviderAdapter.MINIMAX else AiProviderAdapter.CUSTOM,
+            apiFormat = if (settings.aiIsGemini) "GEMINI" else "OPENAI",
+            adapter = when {
+                settings.aiIsGemini -> AiProviderAdapter.GEMINI
+                isMiniMax -> AiProviderAdapter.MINIMAX
+                else -> AiProviderAdapter.CUSTOM
+            },
             createdAt = 0
         )
         val model = AiModelEntity(
@@ -237,6 +242,7 @@ class AiClientFactory @Inject constructor(
             modelName = settings.aiModel,
             type = AiModelType.TTS,
             endpointPath = when {
+                settings.aiIsGemini -> "/interactions"
                 isGmiCloud -> "/api/v1/ie/requestqueue/apikey/requests"
                 isMiniMax -> "/t2a_v2"
                 else -> "/audio/speech"
@@ -251,6 +257,27 @@ class AiClientFactory @Inject constructor(
             provider = provider,
             model = model
         )
+    }
+
+    suspend fun geminiTtsVoices(): List<com.mozhi.reader.core.database.entity.TtsVoiceEntity> {
+        return geminiVoiceDesigner().listVoices()
+    }
+
+    suspend fun geminiVoiceDesigner(): GeminiTtsClient {
+        val current = ttsSettingsStore.current()
+        // Claim a legacy key for the active provider before reading a different saved profile.
+        apiKeyStore.migrateAlias(TtsSettingsStore.API_KEY_ALIAS, TtsSettingsStore.apiKeyAlias(current.aiProvider))
+        val gemini = ttsSettingsStore.forProvider(TtsApiProvider.GEMINI)
+        val resolved = if (!apiKeyStore.get(TtsSettingsStore.apiKeyAlias(TtsApiProvider.GEMINI)).isNullOrBlank()) {
+            standaloneTtsClient(gemini) ?: throw AiClientException.NotConfigured("Gemini 语音服务")
+        } else mediaForRole(ModelRole.TTS)
+        require(resolved.provider.adapter == AiProviderAdapter.GEMINI ||
+            (resolved.provider.adapter == AiProviderAdapter.CUSTOM && ApiDialect.fromWire(resolved.provider.apiFormat) == ApiDialect.GEMINI)) {
+            "请先在语音朗读中配置 Gemini 服务"
+        }
+        val key = apiKeyStore.get(resolved.provider.apiKeyAlias)
+            ?: throw AiClientException.MissingKey("Gemini TTS")
+        return GeminiTtsClient(resolved.provider, resolved.model, key, httpClient)
     }
 
     private suspend fun resolve(role: ModelRole): Pair<AiProviderEntity, AiModelEntity> {

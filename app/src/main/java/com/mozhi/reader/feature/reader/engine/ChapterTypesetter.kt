@@ -1,5 +1,6 @@
 package com.mozhi.reader.feature.reader.engine
 
+import com.mozhi.reader.core.datastore.ReaderSyntaxFont
 import com.mozhi.reader.core.datastore.ReaderSyntaxHighlighter
 import com.mozhi.reader.core.datastore.ReaderSyntaxRule
 import com.mozhi.reader.core.datastore.ReaderSyntaxStyleSpan
@@ -289,9 +290,15 @@ class ChapterTypesetter(
         val indent = if (isTitle) 0f else indentWidth
         val layoutText = if (synthetic) LayoutText.identity(text) else buildLayoutText(text, bodyOffset, inlineMarkers)
         val widths = measure.charWidths(layoutText.text, isTitle)
+        // 高亮规则换了字体/字重的片段按渲染时的字体重测，并让断行看到同样的宽度。
+        val styledRuns = if (synthetic) emptyList() else syntaxMeasureRuns(layoutText, bodyOffset, isTitle, syntax)
+        styledRuns.forEach { run ->
+            measure.charWidths(layoutText.text.substring(run.start, run.end), run.style)
+                .copyInto(widths, destinationOffset = run.start)
+        }
         val titleInset = if (isTitle) (spec.readerTitleInset + spec.readerTitlePadding).coerceAtMost(spec.visibleWidth * 0.4f) else 0f
         val availableWidth = spec.visibleWidth - titleInset * 2f
-        val lineStarts = measure.breakLines(layoutText.text, isTitle, availableWidth, indent)
+        val lineStarts = measure.breakLines(layoutText.text, isTitle, availableWidth, indent, styledRuns)
         if (isTitle) state.addSpacing(spec.readerTitlePadding, atPageTop = true)
 
         for (lineIndex in lineStarts.indices) {
@@ -345,6 +352,43 @@ class ChapterTypesetter(
             )
         }
         if (isTitle) state.addSpacing(spec.readerTitlePadding, atPageTop = false)
+    }
+
+    /**
+     * Ranges of [layoutText] whose syntax rule changes glyph advances (font, bold, italic).
+     * Colour-only rules measure like the body text and produce no run.
+     */
+    private fun syntaxMeasureRuns(
+        layoutText: LayoutText,
+        bodyOffset: Int,
+        isTitle: Boolean,
+        syntax: SyntaxStyleMap
+    ): List<StyledTextRun> {
+        val runs = ArrayList<StyledTextRun>()
+        var runStart = -1
+        var runStyle: MeasuredTextStyle? = null
+        for (index in 0..layoutText.text.length) {
+            val style = if (index < layoutText.text.length && index !in layoutText.markersByIndex) {
+                syntax.at(bodyOffset + layoutText.sourceBoundary[index])
+                    ?.takeIf { it.font != ReaderSyntaxFont.INHERIT || it.bold || it.italic }
+                    ?.let { span ->
+                        MeasuredTextStyle(
+                            isTitle = isTitle,
+                            bold = span.bold,
+                            italic = span.italic,
+                            syntaxFont = span.font,
+                            syntaxFontAssetId = span.fontAssetId
+                        )
+                    }
+            } else {
+                null
+            }
+            if (style == runStyle) continue
+            runStyle?.let { runs += StyledTextRun(runStart, index, it) }
+            runStart = index
+            runStyle = style
+        }
+        return runs
     }
 
     /**

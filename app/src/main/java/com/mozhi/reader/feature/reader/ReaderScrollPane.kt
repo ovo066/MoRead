@@ -68,6 +68,10 @@ import com.mozhi.reader.feature.reader.engine.imageAt
 import com.mozhi.reader.feature.reader.engine.linkAt
 import com.mozhi.reader.feature.reader.engine.selectionBodyRange
 import com.mozhi.reader.feature.reader.engine.selectionRects
+import com.mozhi.reader.feature.reader.engine.frameToPhysical
+import com.mozhi.reader.feature.reader.engine.isVertical
+import com.mozhi.reader.feature.reader.engine.lineExtent
+import com.mozhi.reader.feature.reader.engine.physicalToFrame
 import com.mozhi.reader.feature.reader.engine.textPosAtBodyOffset
 import com.mozhi.reader.feature.reader.engine.wordSelectionAt
 import com.mozhi.reader.feature.reader.engine.translationAt
@@ -906,14 +910,13 @@ internal class ScrollPaneHolder(private val controller: ReaderContentController)
             if (stripY < 0f || stripY >= strip.totalHeight) continue
             val pageIndex = strip.pageIndexAt(stripY)
             val page = strip.chapter.pages.getOrNull(pageIndex) ?: continue
+            // 竖排页在条带里仍是一屏高的一块，页内坐标转进它的旋转坐标系再查询。
+            val (localX, localY) = page.physicalToFrame(position.x - style.paddingLeft, stripY - strip.pageTops[pageIndex])
             return ResolvedScrollPoint(
                 chapterIndex = block.chapterIndex,
                 pageIndex = pageIndex,
                 page = page,
-                local = Offset(
-                    position.x - style.paddingLeft,
-                    stripY - strip.pageTops[pageIndex]
-                )
+                local = Offset(localX, localY)
             )
         }
         return null
@@ -946,7 +949,10 @@ internal class ScrollPaneHolder(private val controller: ReaderContentController)
 
     fun visibleSourceRange(chapterIndex: Int): IntRange? {
         val lines = visiblePages(chapterIndex).flatMap { page -> page.page.lines.filter { line ->
-            line.charLength > 0 && page.origin.y + line.lineBottom > contentTop && page.origin.y + line.lineTop < contentBottom
+            // 竖排页的一行是一列：它在屏幕上的纵向范围是列里首尾字的帧 x。
+            val top = if (page.page.isVertical) line.columns.firstOrNull()?.start ?: line.startX else line.lineTop
+            val bottom = if (page.page.isVertical) line.columns.lastOrNull()?.end ?: top else line.lineBottom
+            line.charLength > 0 && page.origin.y + bottom > contentTop && page.origin.y + top < contentBottom
         } }
         val first = lines.minOfOrNull { it.chapterPosition } ?: return null
         return first until lines.maxOf { it.chapterPosition + it.charLength }
@@ -964,7 +970,8 @@ internal class ScrollPaneHolder(private val controller: ReaderContentController)
     fun imageAt(position: Offset): ReaderPageImage? {
         val currentStyle = style ?: return null
         val hit = resolve(position) ?: return null
-        if (hit.local.x < 0f || hit.local.x >= currentStyle.contentWidth) return null
+        val (physicalX, _) = hit.page.frameToPhysical(hit.local.x, hit.local.y)
+        if (physicalX < 0f || physicalX >= currentStyle.contentWidth) return null
         return hit.page.imageAt(hit.local.x, hit.local.y, hit.chapterIndex)
     }
 
@@ -982,7 +989,7 @@ internal class ScrollPaneHolder(private val controller: ReaderContentController)
             illustrations = illustrations.filter { it.chapterIndex == hit.chapterIndex },
             markerRadius = markerRadius,
             markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.INLINE_MARKER_GAP_RATIO,
-            maxRight = currentStyle.contentWidth
+            maxRight = hit.page.lineExtent(currentStyle.contentWidth, currentStyle.spec.visibleHeight)
         )
         return geometry.annotationIdsAt(hit.local.x, hit.local.y)
     }
@@ -996,7 +1003,7 @@ internal class ScrollPaneHolder(private val controller: ReaderContentController)
             illustrations = illustrations.filter { it.chapterIndex == hit.chapterIndex },
             markerRadius = markerRadius,
             markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.INLINE_MARKER_GAP_RATIO,
-            maxRight = currentStyle.contentWidth
+            maxRight = hit.page.lineExtent(currentStyle.contentWidth, currentStyle.spec.visibleHeight)
         )
         val hitRadius = (currentStyle.tipSizePx * 1.35f).coerceAtLeast(18f)
         return markers.markers.firstOrNull { marker ->
@@ -1256,7 +1263,7 @@ private class ScrollSelectionController(
         val pages = holder.visiblePages(current.chapterIndex)
         val color = palette.accent.copy(alpha = if (palette.isDark) 0.18f else 0.30f)
         pages.forEach { visible ->
-            visible.page.selectionRects(current.bodyRange).forEach { rect ->
+            visible.page.selectionRects(current.bodyRange).map(visible.page::frameToPhysical).forEach { rect ->
                 drawScope.drawRect(
                     color = color,
                     topLeft = Offset(visible.origin.x + rect.left, visible.origin.y + rect.top),
@@ -1265,14 +1272,15 @@ private class ScrollSelectionController(
             }
         }
         endpointGeometry(current.chapterIndex, current.startOffset, startSide = true)?.let { endpoint ->
-            drawHandle(drawScope, palette, endpoint.center.x, endpoint.top, endpoint.bottom)
+            drawHandle(drawScope, palette, endpoint.top, endpoint.center)
         }
         endpointGeometry(current.chapterIndex, current.endOffset, startSide = false)?.let { endpoint ->
-            drawHandle(drawScope, palette, endpoint.center.x, endpoint.top, endpoint.bottom)
+            drawHandle(drawScope, palette, endpoint.top, endpoint.center)
         }
     }
 
-    private data class Endpoint(val center: Offset, val top: Float, val bottom: Float)
+    /** [top] and [center] are the handle bar's two ends; the knob hangs past [center]. */
+    private data class Endpoint(val center: Offset, val top: Offset)
 
     private fun endpointCenter(chapterIndex: Int, offset: Int, startSide: Boolean): Offset? =
         endpointGeometry(chapterIndex, offset, startSide)?.center
@@ -1284,11 +1292,12 @@ private class ScrollSelectionController(
             val pos = visible.page.textPosAtBodyOffset(offset) ?: return@forEach
             val line = visible.page.lines[pos.lineIndex]
             val column = line.columns[pos.columnIndex]
-            val x = visible.origin.x + if (startSide) column.start else column.end
+            val x = if (startSide) column.start else column.end
+            val (topX, topY) = visible.page.frameToPhysical(x, line.lineTop)
+            val (bottomX, bottomY) = visible.page.frameToPhysical(x, line.lineBottom)
             return Endpoint(
-                center = Offset(x, visible.origin.y + line.lineBottom),
-                top = visible.origin.y + line.lineTop,
-                bottom = visible.origin.y + line.lineBottom
+                center = Offset(visible.origin.x + bottomX, visible.origin.y + bottomY),
+                top = Offset(visible.origin.x + topX, visible.origin.y + topY)
             )
         }
         return null
@@ -1297,28 +1306,24 @@ private class ScrollSelectionController(
     private fun drawHandle(
         drawScope: DrawScope,
         palette: ReaderPalette,
-        x: Float,
-        top: Float,
-        bottom: Float
+        top: Offset,
+        bottom: Offset
     ) = with(drawScope) {
         val barWidth = 2.dp.toPx()
         val radius = 6.dp.toPx()
-        drawRect(
-            color = palette.accent,
-            topLeft = Offset(x - barWidth / 2f, top),
-            size = Size(barWidth, bottom - top)
-        )
+        drawLine(color = palette.accent, start = top, end = bottom, strokeWidth = barWidth)
+        val length = (bottom - top).getDistance().coerceAtLeast(1f)
         drawCircle(
             color = palette.accent,
             radius = radius,
-            center = Offset(x, bottom + radius * 0.8f)
+            center = bottom + (bottom - top) / length * (radius * 0.8f)
         )
     }
 
     fun toolbarTop(current: ActiveSelection, density: Density): Int {
         val rects = holder.visiblePages(current.chapterIndex)
             .flatMap { visible ->
-                visible.page.selectionRects(current.bodyRange).map { rect -> rect to visible.origin }
+                visible.page.selectionRects(current.bodyRange).map { rect -> visible.page.frameToPhysical(rect) to visible.origin }
             }
         val gap = with(density) { 12.dp.toPx() }
         val barHeight = with(density) { 48.dp.toPx() }

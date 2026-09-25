@@ -232,16 +232,16 @@ class ReaderViewModelPersistenceTest {
         reader.viewModel.addBookmarkFromPull()
         val bookmark = reader.bookmarks.receive()
         assertEquals(source.indexOf("主機板"), bookmark.charOffset)
-        assertEquals(com.mozhi.reader.R.string.reader_bookmark_added,
-            (reader.viewModel.events.first() as ReaderEvent.ShowLocalizedMessage).resourceId)
-        assertEquals(com.mozhi.reader.R.string.reader_bookmark_exists,
-            (reader.viewModel.events.first() as ReaderEvent.ShowLocalizedMessage).resourceId)
+        assertEquals(com.mozhi.reader.core.i18n.UiText.of(com.mozhi.reader.R.string.reader_bookmark_added),
+            (reader.viewModel.events.first() as ReaderEvent.ShowLocalizedMessage).text)
+        assertEquals(com.mozhi.reader.core.i18n.UiText.of(com.mozhi.reader.R.string.reader_bookmark_exists),
+            (reader.viewModel.events.first() as ReaderEvent.ShowLocalizedMessage).text)
         assertTrue(reader.bookmarks.tryReceive().isFailure)
         reader.viewModel.uiState.first { it.bookmarks.size == 1 }
         assertTrue(reader.viewModel.isCurrentPositionBookmarked())
         reader.viewModel.toggleBookmark()
-        assertEquals(com.mozhi.reader.R.string.reader_bookmark_removed,
-            (reader.viewModel.events.first() as ReaderEvent.ShowLocalizedMessage).resourceId)
+        assertEquals(com.mozhi.reader.core.i18n.UiText.of(com.mozhi.reader.R.string.reader_bookmark_removed),
+            (reader.viewModel.events.first() as ReaderEvent.ShowLocalizedMessage).text)
         reader.viewModel.uiState.first { it.bookmarks.isEmpty() }
     }
 
@@ -451,7 +451,7 @@ class ReaderViewModelPersistenceTest {
                 coEvery { setBilingual(1, any()) } returns Unit
             }
             val libraryRepository = LibraryRepository(
-                mockk(), mockk(), bookDao, textStore, mockk(), mediaStore, layoutStore, mockk()
+                mockk(), mockk(), bookDao, textStore, mockk(), mediaStore, layoutStore, mockk(), mockk()
             )
             val illustrations = mockk<IllustrationRepository> {
                 every { observeForBook(1) } returns flowOf(emptyList())

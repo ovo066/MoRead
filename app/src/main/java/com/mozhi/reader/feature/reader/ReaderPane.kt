@@ -98,6 +98,10 @@ import com.mozhi.reader.feature.reader.engine.linkAt
 import com.mozhi.reader.feature.reader.engine.ReaderVisibleReadSnapshot
 import com.mozhi.reader.feature.reader.engine.selectionBodyRange
 import com.mozhi.reader.feature.reader.engine.selectionRects
+import com.mozhi.reader.feature.reader.engine.frameToPhysical
+import com.mozhi.reader.feature.reader.engine.physicalToFrame
+import com.mozhi.reader.feature.reader.engine.lineExtent
+import com.mozhi.reader.feature.reader.engine.isVertical
 import com.mozhi.reader.feature.reader.engine.textPosAtBodyOffset
 import com.mozhi.reader.feature.reader.engine.wordSelectionAt
 import com.mozhi.reader.feature.reader.engine.translationAt
@@ -192,6 +196,8 @@ internal fun ReaderPane(
     }
 
     val refreshQueue = remember(controller, holder) { PageWindowRefreshQueue() }
+    // 竖排（vertical-rl）页从右往左翻：点左侧、向右滑是下一页，动画整体镜像。
+    val rightToLeft = { holder.spread == null && (controller.curPage() as? RenderPage.Laid)?.page?.isVertical == true }
 
     val driver = remember(controller) {
         PageTurnDriver(
@@ -236,6 +242,7 @@ internal fun ReaderPane(
             }
         )
     }
+    driver.mirrorProvider = rightToLeft
     driver.mode = when (settings.pageTurnAnimation) {
         // A hinge uses relative travel, including cancellation back to startX; no corner curl.
         PageTurnAnimation.SIMULATION -> if (spreadMode) PageTurnDriver.Mode.FLAT else PageTurnDriver.Mode.SIMULATION
@@ -525,7 +532,8 @@ internal fun ReaderPane(
                         return@readerPageTouch
                     }
                     val tapDirection = readerTapDirection(
-                        position.x, holder.viewWidth.toFloat(), holder.spread,
+                        if (rightToLeft()) holder.viewWidth - position.x else position.x,
+                        holder.viewWidth.toFloat(), holder.spread,
                         minimumChromeWidthPx = with(density) { SpreadLayoutPolicy.CHROME_TOUCH_DP.dp.toPx() }
                     )
                     if (tapDirection != null) driver.turnByTap(tapDirection)
@@ -546,12 +554,16 @@ internal fun ReaderPane(
                         front != null &&
                         under != null
                     ) {
+                        val mirrored = driver.mirrored
+                        val saved = canvas.save()
+                        if (mirrored) canvas.scale(-1f, 1f, size.width / 2f, 0f)
                         holder.compositor.draw(
                             canvas = canvas,
                             animation = animation,
                             direction = direction,
-                            front = front,
-                            under = under,
+                            // 镜像空间里合成：页图预先翻转一次，屏幕上的字就是正的。
+                            front = if (mirrored) holder.mirrored(front, slot = 0) else front,
+                            under = if (mirrored) holder.mirrored(under, slot = 1) else under,
                             touchX = driver.touchX,
                             touchY = driver.touchY,
                             startX = driver.startX,
@@ -564,6 +576,7 @@ internal fun ReaderPane(
                             modernBackTextOpacity = settings.modernBackTextOpacity,
                             modernRadiusScale = settings.modernCurlRadiusScale
                         )
+                        canvas.restoreToCount(saved)
                     } else {
                         holder.curBitmap?.takeUnless(Bitmap::isRecycled)?.let {
                             canvas.drawBitmap(it, 0f, 0f, null)
@@ -678,7 +691,7 @@ internal fun BoxScope.SelectionToolbar(
         color = palette.glassStrong,
         contentColor = palette.onBackground,
         border = BorderStroke(1.dp, palette.glassBorder),
-        shadowElevation = 8.dp
+        shadowElevation = 0.dp
     ) {
         Row(
             modifier = Modifier
@@ -1048,7 +1061,7 @@ private class ReaderSelectionController(
         val current = active ?: return
         for ((laid, origin) in holder.visiblePages()) {
             if (laid.chapterIndex != current.chapterIndex) continue
-            val rects = laid.page.selectionRects(current.bodyRange)
+            val rects = laid.page.selectionRects(current.bodyRange).map(laid.page::frameToPhysical)
             val color = palette.accent.copy(alpha = if (palette.isDark) 0.18f else 0.30f)
             for (rect in rects) {
                 drawScope.drawRect(
@@ -1057,15 +1070,11 @@ private class ReaderSelectionController(
                     size = Size(rect.right - rect.left, rect.bottom - rect.top)
                 )
             }
-            endpointCenter(laid.page, current.startOffset, origin, startSide = true)?.let { center ->
-                val pos = laid.page.textPosAtBodyOffset(current.startOffset) ?: return@let
-                val line = laid.page.lines[pos.lineIndex]
-                drawHandle(drawScope, palette, center.x, origin.y + line.lineTop, origin.y + line.lineBottom)
+            handleBar(laid.page, current.startOffset, origin, startSide = true)?.let { (top, bottom) ->
+                drawHandle(drawScope, palette, top, bottom)
             }
-            endpointCenter(laid.page, current.endOffset, origin, startSide = false)?.let { center ->
-                val pos = laid.page.textPosAtBodyOffset(current.endOffset) ?: return@let
-                val line = laid.page.lines[pos.lineIndex]
-                drawHandle(drawScope, palette, center.x, origin.y + line.lineTop, origin.y + line.lineBottom)
+            handleBar(laid.page, current.endOffset, origin, startSide = false)?.let { (top, bottom) ->
+                drawHandle(drawScope, palette, top, bottom)
             }
         }
     }
@@ -1075,33 +1084,41 @@ private class ReaderSelectionController(
         offset: Int,
         origin: Offset,
         startSide: Boolean
-    ): Offset? {
+    ): Offset? = handleBar(page, offset, origin, startSide)?.second
+
+    /** Screen-space ends of a selection handle's bar; the knob hangs past the second end. */
+    private fun handleBar(
+        page: com.mozhi.reader.feature.reader.engine.TextPage,
+        offset: Int,
+        origin: Offset,
+        startSide: Boolean
+    ): Pair<Offset, Offset>? {
         val pageEnd = page.chapterPosition + page.charLength
         if (offset !in page.chapterPosition until pageEnd) return null
         val pos = page.textPosAtBodyOffset(offset) ?: return null
         val line = page.lines[pos.lineIndex]
         val column = line.columns[pos.columnIndex]
-        return Offset(origin.x + if (startSide) column.start else column.end, origin.y + line.lineBottom)
+        val x = if (startSide) column.start else column.end
+        // 竖排页的行是物理上的列：柄随之横躺，圆头落在列的左侧。
+        val (topX, topY) = page.frameToPhysical(x, line.lineTop)
+        val (bottomX, bottomY) = page.frameToPhysical(x, line.lineBottom)
+        return Offset(origin.x + topX, origin.y + topY) to Offset(origin.x + bottomX, origin.y + bottomY)
     }
 
     private fun drawHandle(
         drawScope: DrawScope,
         palette: ReaderPalette,
-        x: Float,
-        top: Float,
-        bottom: Float
+        top: Offset,
+        bottom: Offset
     ) = with(drawScope) {
         val barWidth = 2.dp.toPx()
         val radius = 6.dp.toPx()
-        drawRect(
-            color = palette.accent,
-            topLeft = Offset(x - barWidth / 2f, top),
-            size = Size(barWidth, bottom - top)
-        )
+        drawLine(color = palette.accent, start = top, end = bottom, strokeWidth = barWidth)
+        val length = (bottom - top).getDistance().coerceAtLeast(1f)
         drawCircle(
             color = palette.accent,
             radius = radius,
-            center = Offset(x, bottom + radius * 0.8f)
+            center = bottom + (bottom - top) / length * (radius * 0.8f)
         )
     }
 
@@ -1109,13 +1126,13 @@ private class ReaderSelectionController(
         val (laid, origin) = holder.visiblePages().firstOrNull {
             it.first.page.selectionRects(current.bodyRange).isNotEmpty()
         } ?: return 0
-        val rects = laid.page.selectionRects(current.bodyRange)
+        val rects = laid.page.selectionRects(current.bodyRange).map(laid.page::frameToPhysical)
         val gap = with(density) { 12.dp.toPx() }
         val barHeight = with(density) { 48.dp.toPx() }
-        val first = rects.firstOrNull() ?: return 0
-        val above = origin.y + first.top - gap - barHeight
+        if (rects.isEmpty()) return 0
+        val above = origin.y + rects.minOf { it.top } - gap - barHeight
         if (above > origin.y * 0.4f) return above.toInt()
-        return (origin.y + rects.last().bottom + gap).toInt()
+        return (origin.y + rects.maxOf { it.bottom } + gap).toInt()
     }
 
     private companion object {
@@ -1135,6 +1152,28 @@ internal class ReaderPaneHolder(private val controller: ReaderContentController)
         private set
     var backgroundColor: Int = android.graphics.Color.TRANSPARENT
         private set
+
+    private val mirrorSlots = arrayOfNulls<Bitmap>(2)
+    private val mirrorSources = arrayOfNulls<Bitmap>(2)
+    private val mirrorGenerations = IntArray(2)
+
+    /** A horizontally flipped copy of [source] for right-to-left turns, reused while it is unchanged. */
+    fun mirrored(source: Bitmap, slot: Int): Bitmap {
+        val cached = mirrorSlots[slot]
+        if (cached != null && !cached.isRecycled && mirrorSources[slot] === source &&
+            mirrorGenerations[slot] == source.generationId) return cached
+        val target = cached?.takeIf { !it.isRecycled && it.width == source.width && it.height == source.height }
+            ?: Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888).also { cached?.recycle() }
+        target.eraseColor(android.graphics.Color.TRANSPARENT)
+        android.graphics.Canvas(target).apply {
+            scale(-1f, 1f, source.width / 2f, 0f)
+            drawBitmap(source, 0f, 0f, null)
+        }
+        mirrorSlots[slot] = target
+        mirrorSources[slot] = source
+        mirrorGenerations[slot] = source.generationId
+        return target
+    }
 
     val compositor = PageTurnCompositor()
 
@@ -1349,7 +1388,10 @@ internal class ReaderPaneHolder(private val controller: ReaderContentController)
             val page = controller.curPage() as? RenderPage.Laid ?: return null
             PageHit(Leaf.LEFT, page, position)
         } ?: return null
-        return hit.copy(local = position - contentOrigin(hit.page, hit.leaf))
+        val physical = position - contentOrigin(hit.page, hit.leaf)
+        // 之后的命中、选区、链接、批注都按页面自己的坐标系查询；竖排页在这里转进旋转坐标系。
+        val (x, y) = hit.page.page.physicalToFrame(physical.x, physical.y)
+        return hit.copy(local = Offset(x, y))
     }
 
     fun englishWordAt(position: Offset): com.mozhi.reader.core.dictionary.DictionaryLookupHit? {
@@ -1379,8 +1421,9 @@ internal class ReaderPaneHolder(private val controller: ReaderContentController)
                 ReaderPageImage(artwork.imagePath, hit.page.chapterIndex, page.chapterPosition, artwork.altText)
             } else null
         }
-        if (!page.immersive && (hit.local.x < 0f || hit.local.x >= currentStyle.contentWidth ||
-                hit.local.y < 0f || hit.local.y >= currentStyle.spec.visibleHeight)) return null
+        val (physicalX, physicalY) = page.frameToPhysical(hit.local.x, hit.local.y)
+        if (!page.immersive && (physicalX < 0f || physicalX >= currentStyle.contentWidth ||
+                physicalY < 0f || physicalY >= currentStyle.spec.visibleHeight)) return null
         return page.imageAt(hit.local.x, hit.local.y, hit.page.chapterIndex)
     }
 
@@ -1404,7 +1447,7 @@ internal class ReaderPaneHolder(private val controller: ReaderContentController)
             illustrations = illustrations.filter { it.chapterIndex == page.chapterIndex },
             markerRadius = markerRadius,
             markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.INLINE_MARKER_GAP_RATIO,
-            maxRight = currentStyle.contentWidth
+            maxRight = page.page.lineExtent(currentStyle.contentWidth, currentStyle.spec.visibleHeight)
         )
         return geometry.annotationIdsAt(local.x, local.y)
     }
@@ -1420,7 +1463,7 @@ internal class ReaderPaneHolder(private val controller: ReaderContentController)
             illustrations = illustrations.filter { it.chapterIndex == page.chapterIndex },
             markerRadius = markerRadius,
             markerGap = markerRadius * com.mozhi.reader.feature.reader.engine.INLINE_MARKER_GAP_RATIO,
-            maxRight = currentStyle.contentWidth
+            maxRight = page.page.lineExtent(currentStyle.contentWidth, currentStyle.spec.visibleHeight)
         )
         val hitRadius = (currentStyle.tipSizePx * 1.35f).coerceAtLeast(18f)
         return markers.markers.firstOrNull { marker ->
@@ -1607,6 +1650,11 @@ internal class ReaderPaneHolder(private val controller: ReaderContentController)
     fun release() {
         detach()
         compositor.release()
+        mirrorSlots.forEachIndexed { index, bitmap ->
+            bitmap?.recycle()
+            mirrorSlots[index] = null
+            mirrorSources[index] = null
+        }
         renderer?.release()
         renderer = null
         style = null

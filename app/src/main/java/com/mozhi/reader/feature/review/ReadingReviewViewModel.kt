@@ -61,6 +61,8 @@ internal class ReadingReviewViewModel @Inject constructor(
     private val exporter: ReviewExporter
 ) : ViewModel() {
     val readerSettings = settings.cachedSettings
+    val reviewPreferences = settings.settings.map { it.reviewPreferences }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
     private val mutableState = MutableStateFlow(ReadingReviewState())
     val state = mutableState.asStateFlow()
     private val mutableDraft = MutableStateFlow<ReviewDraft?>(null)
@@ -74,6 +76,8 @@ internal class ReadingReviewViewModel @Inject constructor(
     private val writeMutex = Mutex()
 
     fun setReviewFont(choice: String) = write { settings.setReviewFont(choice) }
+    fun setReviewPreferences(value: com.mozhi.reader.core.datastore.ReadingReviewPreferences) =
+        write { settings.setReviewPreferences(value) }
 
     suspend fun saveTemplate(template: ReviewShareTemplate) = writeMutex.withLock { settings.saveReviewShareTemplate(template) }
     suspend fun deleteTemplate(id: String) = writeMutex.withLock { settings.deleteReviewShareTemplate(id) }

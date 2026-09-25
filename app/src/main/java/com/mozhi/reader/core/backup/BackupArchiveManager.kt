@@ -228,12 +228,14 @@ class BackupArchiveManager @Inject constructor(
         const val PENDING_RESTORE_NAME = "pending-restore.moread.zip"
         const val PREPARED_RESTORE_DIRECTORY = "prepared"
         val LIGHTWEIGHT_FILE_DIRECTORIES = listOf(
+            "image-vibes",
             "covers",
             "avatars",
             "reader-custom",
             ReaderImageImporter.IMAGE_LIBRARY_DIRECTORY
         )
         val MANAGED_FILE_DIRECTORIES = listOf(
+            "image-vibes",
             "books",
             "book-text",
             "book-media",

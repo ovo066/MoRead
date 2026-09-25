@@ -106,7 +106,7 @@ internal fun ReaderTypographyCard(
                     .widthIn(max = 400.dp)
                     .fillMaxWidth(0.92f)
                     .onSizeChanged { cardSize = it }
-                    .shadow(22.dp, RoundedCornerShape(26.dp), clip = false)
+
                     // 吞掉落在卡片上的点击，否则会穿到外层的「点外部收起」。
                     .pointerInput(Unit) { detectTapGestures { } },
                 shape = RoundedCornerShape(26.dp),

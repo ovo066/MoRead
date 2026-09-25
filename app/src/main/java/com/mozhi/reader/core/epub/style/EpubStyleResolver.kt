@@ -30,6 +30,12 @@ enum class EpubFloatValue { NONE, LEFT, RIGHT }
 enum class EpubClearValue { NONE, LEFT, RIGHT, BOTH }
 enum class EpubTextAlignValue { START, CENTER, END, JUSTIFY }
 
+/** CSS `position`; sticky behaves as relative in paginated flow. */
+enum class EpubPosition { STATIC, RELATIVE, ABSOLUTE }
+
+/** CSS `text-orientation`: only meaningful in vertical writing modes. */
+enum class EpubTextOrientation { MIXED, UPRIGHT, SIDEWAYS }
+
 sealed interface EpubVerticalAlignment {
     data object Baseline : EpubVerticalAlignment
     data object Sub : EpubVerticalAlignment
@@ -48,8 +54,23 @@ data class EpubBackgroundStyle(
     /** 0..1 fractions along each axis, defaulting to the CSS initial 0%/0%. */
     val positionX: Float = 0f,
     val positionY: Float = 0f,
-    val repeat: String = "repeat"
+    val repeat: String = "repeat",
+    /** `linear-gradient()` / `radial-gradient()` painted as the background image layer. */
+    val gradient: EpubGradient? = null
 )
+
+/** A resolved CSS gradient; stop positions stay relative until the box size is known. */
+data class EpubGradient(
+    val radial: Boolean,
+    val repeating: Boolean,
+    val angleDeg: Float,
+    val circle: Boolean,
+    val centerX: Float,
+    val centerY: Float,
+    val stops: List<EpubGradientStop>
+)
+
+data class EpubGradientStop(val colorArgb: Int, val position: ResolvedLength?)
 
 data class EpubShadow(
     val offsetXPx: Float,
@@ -69,8 +90,11 @@ data class EpubStyle(
     val italic: Boolean = false,
     val underline: Boolean = false,
     val strikethrough: Boolean = false,
-    /** 书写模式随文档继承；引擎目前只有横排轴，竖排由能力判定记录并按横排流出。 */
+    /** 书写模式随文档继承；vertical-rl 由排版器在旋转坐标系里排出，其余竖排按能力判定降级。 */
     val writingMode: EpubWritingMode = EpubWritingMode.HORIZONTAL_TB,
+    val textOrientation: EpubTextOrientation = EpubTextOrientation.MIXED,
+    /** 縦中横：竖排里把一小段横排文字压进一个字格直立显示。 */
+    val textCombineUpright: Boolean = false,
     val letterSpacingPx: Float = 0f,
     val colorArgb: Int,
     val lineHeight: Float? = null,
@@ -99,25 +123,40 @@ data class EpubStyle(
     val background: EpubBackgroundStyle = EpubBackgroundStyle(),
     /** Effective border widths in px (style:none already collapsed to 0), order top/right/bottom/left. */
     val borderWidths: List<Float> = ZERO_SIDES,
+    /** border-*-style keywords (solid, dashed, dotted, double, groove, ridge, inset, outset). */
+    val borderStyles: List<String> = SOLID_SIDES,
     val borderColors: List<Int?> = List(4) { null },
     /** Corner order: top-left, top-right, bottom-right, bottom-left. */
     val borderRadii: List<ResolvedLength> = List(4) { ResolvedLength.Px(0f) },
     val boxShadows: List<EpubShadow> = emptyList(),
+    /** text-shadow layers, first on top; inherited like the CSS property. */
+    val textShadows: List<EpubShadow> = emptyList(),
     val opacity: Float = 1f,
     val breakBefore: Boolean = false,
     val breakAfter: Boolean = false,
     val breakInsideAvoid: Boolean = false,
     val breakAfterAvoid: Boolean = false,
     val orphans: Int = 1,
-    val widows: Int = 1
+    val widows: Int = 1,
+    /** white-space: nowrap / pre — lines break only at forced breaks. */
+    val noWrap: Boolean = false,
+    val position: EpubPosition = EpubPosition.STATIC,
+    /** Inset properties top/right/bottom/left; auto unless declared. */
+    val insets: List<ResolvedLength> = AUTO_SIDES,
+    /** `transform: translate()`; percentages refer to the element's own border box. */
+    val translateX: ResolvedLength = ResolvedLength.Px(0f),
+    val translateY: ResolvedLength = ResolvedLength.Px(0f)
 ) {
     fun hasBorder(): Boolean = borderWidths.any { it > 0f }
 
     fun hasDecoration(): Boolean =
-        background.colorArgb != null || background.imageHref != null || hasBorder() || boxShadows.isNotEmpty()
+        background.colorArgb != null || background.imageHref != null || background.gradient != null ||
+            hasBorder() || boxShadows.isNotEmpty()
 
     private companion object {
         val ZERO_SIDES = listOf(0f, 0f, 0f, 0f)
+        val SOLID_SIDES = listOf("solid", "solid", "solid", "solid")
+        val AUTO_SIDES: List<ResolvedLength> = List(4) { ResolvedLength.Auto }
     }
 }
 
@@ -167,9 +206,16 @@ class EpubStyleResolver(
         index = CssRuleIndex(ua + effective)
     }
 
-    fun resolve(body: EpubDomNode): StyledDomNode {
-        val root = NodeView(body, null)
-        return resolveNode(root, null, rootFontSizePx)
+    /**
+     * [html] is the document root without children. When present the cascade starts there, so
+     * `html { writing-mode: vertical-rl }` and `html body p` selectors apply as in a browser.
+     */
+    fun resolve(body: EpubDomNode, html: EpubDomNode? = null): StyledDomNode {
+        val rootView = html?.let { NodeView(it, null) }
+        val rootStyle = rootView?.let { resolveNode(it, null, rootFontSizePx).style }
+        val root = NodeView(body, rootView)
+        // rem is relative to the root element's computed size, as in a browser.
+        return resolveNode(root, rootStyle, rootStyle?.fontSizePx ?: rootFontSizePx)
     }
 
     private fun resolveNode(view: NodeView, parent: EpubStyle?, rootSize: Float): StyledDomNode {
@@ -252,8 +298,13 @@ class EpubStyleResolver(
                 borderWidthPx(specified["border-$side-width"], borderStyles[sideIndex], fontSize, rootSize)
             },
             borderColors = SIDES.map { edge -> color(specified["border-$edge-color"], color) },
+            borderStyles = borderStyles.map { it ?: "none" },
             borderRadii = CORNERS.map { resolved(specified["border-$it-radius"], fontSize, rootSize, false) },
             boxShadows = shadows(specified["box-shadow"], fontSize, rootSize, color),
+            textShadows = when (val shadow = inherited("text-shadow")) {
+                null -> parent?.textShadows.orEmpty()
+                else -> shadows(shadow, fontSize, rootSize, color).filterNot(EpubShadow::inset)
+            },
             opacity = (specified["opacity"] as? CssValue.Number)?.value?.coerceIn(0f, 1f) ?: 1f,
             breakBefore = breakAlways(specified["break-before"] ?: specified["page-break-before"]),
             breakAfter = breakAlways(specified["break-after"] ?: specified["page-break-after"]),
@@ -266,7 +317,33 @@ class EpubStyleResolver(
             writingMode = (inherited("writing-mode") as? CssValue.Keyword)?.name
                 ?.let(EpubWritingMode::parse)
                 ?: parent?.writingMode
-                ?: EpubWritingMode.HORIZONTAL_TB
+                ?: EpubWritingMode.HORIZONTAL_TB,
+            textOrientation = when (keywordName(inherited("text-orientation"))) {
+                "upright" -> EpubTextOrientation.UPRIGHT
+                "sideways", "sideways-right" -> EpubTextOrientation.SIDEWAYS
+                "mixed", "vertical-right" -> EpubTextOrientation.MIXED
+                else -> parent?.textOrientation ?: EpubTextOrientation.MIXED
+            },
+            noWrap = when (keywordName(inherited("white-space"))) {
+                "nowrap", "pre" -> true
+                null -> parent?.noWrap ?: false
+                else -> false
+            },
+            position = when (keywordName(specified["position"])) {
+                "relative", "sticky" -> EpubPosition.RELATIVE
+                "absolute", "fixed" -> EpubPosition.ABSOLUTE
+                else -> EpubPosition.STATIC
+            },
+            insets = SIDES.map { side -> resolved(specified[side], fontSize, rootSize) },
+            translateX = ((specified["transform"] as? CssValue.Tuple)?.items?.getOrNull(0))
+                ?.let { resolved(it, fontSize, rootSize, auto = false) } ?: ResolvedLength.Px(0f),
+            translateY = ((specified["transform"] as? CssValue.Tuple)?.items?.getOrNull(1))
+                ?.let { resolved(it, fontSize, rootSize, auto = false) } ?: ResolvedLength.Px(0f),
+            textCombineUpright = when (keywordName(inherited("text-combine-upright"))) {
+                "all" -> true
+                "none" -> false
+                else -> parent?.textCombineUpright ?: false
+            }
         )
         val children = view.childViews.map { child -> resolveNode(child, style, rootSize) }
         return StyledDomNode(view.node, style, children)
@@ -289,7 +366,23 @@ class EpubStyleResolver(
         }
         val (positionX, positionY) = positionFractions(position)
         val repeat = (values["background-repeat"] as? CssValue.Keyword)?.name ?: "repeat"
-        return EpubBackgroundStyle(color, image, sizeMode, size, positionX, positionY, repeat)
+        val gradient = (values["background-image"] as? CssValue.Gradient)?.let { value ->
+            EpubGradient(
+                radial = value.radial,
+                repeating = value.repeating,
+                angleDeg = value.angleDeg,
+                circle = value.circle,
+                centerX = value.centerX,
+                centerY = value.centerY,
+                stops = value.stops.map { stop ->
+                    EpubGradientStop(
+                        colorArgb = if (stop.argb == CssColor.CURRENT_COLOR) currentColor else stop.argb,
+                        position = stop.position?.let { resolved(it, fontSize, root, auto = false) }
+                    )
+                }
+            )
+        }
+        return EpubBackgroundStyle(color, image, sizeMode, size, positionX, positionY, repeat, gradient)
     }
 
     /** CSS background-position resolved to 0..1 fractions; px offsets are approximated by 0. */
@@ -484,6 +577,12 @@ class EpubStyleResolver(
         }
     }
 
+    private fun keywordName(value: CssValue?): String? = when (value) {
+        is CssValue.Keyword -> value.name
+        is CssValue.Ident -> value.name.lowercase()
+        else -> null
+    }
+
     private class NodeView(val node: EpubDomNode, override val parent: NodeView?) : CssElementNode {
         override val tag get() = node.tag
         override val id get() = node.id
@@ -503,7 +602,7 @@ class EpubStyleResolver(
         val INHERITED_PROPERTIES = setOf(
             "color", "font-family", "font-size", "font-weight", "font-style", "line-height",
             "letter-spacing", "text-align", "text-indent", "white-space", "visibility", "orphans", "widows",
-            "writing-mode"
+            "writing-mode", "text-orientation", "text-combine-upright", "text-shadow"
         )
         val FONT_SIZE_KEYWORDS = mapOf(
             "xx-small" to 0.6f, "x-small" to 0.75f, "small" to 0.875f, "medium" to 1f,
@@ -517,7 +616,8 @@ class EpubStyleResolver(
             "break-before", "break-after", "break-inside", "page-break-before", "page-break-after",
             "page-break-inside", "orphans", "widows", "border-collapse", "flex-direction",
             "grid-template-columns", "column-gap", "row-gap", "gap", "align-items", "justify-content",
-            "list-style-type", "list-style-position", "writing-mode",
+            "list-style-type", "list-style-position", "writing-mode", "text-orientation", "text-combine-upright",
+            "position", "top", "right", "bottom", "left", "transform",
             // An illustration remains book content when encoded as a CSS background.
             "background-image", "background-size", "background-position", "background-repeat"
         )

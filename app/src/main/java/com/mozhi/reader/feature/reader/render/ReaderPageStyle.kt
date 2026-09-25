@@ -121,7 +121,9 @@ class ReaderPageStyle(
         letterSpacingEm = letterSpacingEm,
         titleTypeface = titleTypeface,
         titleBold = titleStyle.bold,
-        publisherTitleSizePx = publisherTitleSizePx
+        publisherTitleSizePx = publisherTitleSizePx,
+        customFontPath = customFontPath,
+        customFontPaths = customFontPaths
     )
     val publisherMeasure = measure.forPublisherHeadings()
 

@@ -60,7 +60,8 @@ class LibraryRepository @Inject constructor(
     private val textWriter: BookTextWriter,
     private val mediaStore: BookMediaStore,
     private val layoutStore: BookLayoutStore,
-    private val vectorStore: dagger.Lazy<BoxStore>
+    private val vectorStore: dagger.Lazy<BoxStore>,
+    private val imageReferenceCleanup: dagger.Lazy<ImageReferenceCleanup>
 ) {
     fun observeBooks(): Flow<List<BookEntity>> = bookDao.observeBooks()
 
@@ -603,6 +604,7 @@ class LibraryRepository @Inject constructor(
             original.isFile && original.isInsideAppStorage() && otherBooks.none { it.epubPath == book.epubPath }
         }?.delete()
         if (deleteRecords) {
+            imageReferenceCleanup.get().forDeletedBook(book.id)
             runCatching { VectorQueries.removeMemoriesForBook(vectorStore.get(), book.id) }
             File(context.filesDir, "illustrations/${book.id}").deleteRecursively()
             conversationIds.forEach { id ->

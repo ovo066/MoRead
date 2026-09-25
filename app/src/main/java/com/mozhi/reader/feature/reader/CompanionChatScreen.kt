@@ -116,6 +116,7 @@ fun CompanionChatPane(
     var deletingConversationTitle by remember { mutableStateOf("") }
     var editingMessage by remember { mutableStateOf<MessageEntity?>(null) }
     var editText by remember { mutableStateOf("") }
+    var showImageStudio by remember { mutableStateOf(false) }
     var previewImagePath by remember { mutableStateOf<String?>(null) }
 
     val context = LocalContext.current
@@ -255,8 +256,7 @@ fun CompanionChatPane(
             companionViewModel.generatePlotSummary(sceneQuote)
         },
         onGenerateIllustration = {
-            scrollState.requestFollowLatest()
-            companionViewModel.requestIllustration(sceneQuote)
+            showImageStudio = true
         },
         onToggleSpoilerProtection = {
             companionViewModel.setSpoilerProtectionEnabled(!state.spoilerProtectionEnabled)
@@ -565,8 +565,10 @@ fun CompanionChatPane(
         }
     )
 
-    CompanionImagePreviewDialog(
-        path = previewImagePath,
-        onDismiss = { previewImagePath = null }
-    )
+    if (showImageStudio || previewImagePath != null) {
+        com.mozhi.reader.feature.illustration.ImageStudio(bookId,
+            com.mozhi.reader.feature.illustration.StudioEntry(page = com.mozhi.reader.feature.illustration.StudioPage.GENERATE,
+                source = sceneQuote.orEmpty(), imagePath = previewImagePath),
+            onDismiss = { showImageStudio = false; previewImagePath = null })
+    }
 }

@@ -32,6 +32,10 @@ class ProactiveAnnotationServiceTest {
         assertFalse(messages.any { "never-inject" in it.content.orEmpty() })
         assertFalse(system.contains("用你自己的口吻和性格写"))
         assertTrue(system.contains("只输出一个 JSON 对象"))
+        assertTrue(system.contains("你和用户都在书外一起阅读"))
+        assertTrue(system.contains("用户是读者，不是书中人物"))
+        assertTrue(system.contains("不能把共读场景变成剧情扮演"))
+        assertTrue(system.contains("即使人物与你或用户同名"))
         assertTrue(system.contains("绝不推测后文"))
     }
     private val factory = mockk<AiClientFactory>()

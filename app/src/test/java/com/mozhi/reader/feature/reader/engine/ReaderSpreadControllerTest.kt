@@ -431,7 +431,7 @@ class ReaderSpreadControllerTest {
         val release = CountDownLatch(1)
         var block = false
         val measure = object : TextMeasure by FakeMeasure() {
-            override fun breakLines(text: String, isTitle: Boolean, availableWidth: Float, firstLineIndent: Float): IntArray {
+            override fun breakLines(text: String, isTitle: Boolean, availableWidth: Float, firstLineIndent: Float, styledRuns: List<StyledTextRun>): IntArray {
                 if (block) {
                     started.countDown()
                     check(release.await(5, TimeUnit.SECONDS))

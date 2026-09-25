@@ -1,5 +1,6 @@
 package com.mozhi.reader.feature.companion
 
+import com.mozhi.reader.ui.components.MoReadBottomSheet
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -24,7 +25,7 @@ import java.io.File
 internal fun LibraryBookPicker(books: List<BookEntity>, selected: Set<Long>, onToggle: (Long) -> Unit, onDismiss: () -> Unit) {
     var query by remember { mutableStateOf("") }
     val filtered = remember(books, query) { books.filter { query.isBlank() || it.title.contains(query, true) || it.author.contains(query, true) } }
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+    MoReadBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.fillMaxWidth().fillMaxHeight(0.66f).navigationBarsPadding().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("重点讨论", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))

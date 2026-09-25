@@ -1,5 +1,6 @@
 package com.mozhi.reader.feature.bookdetail
 
+import com.mozhi.reader.ui.components.MoReadBottomSheet
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -65,7 +66,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -157,7 +157,7 @@ internal fun BookTagPickerSheet(
     val selectedIds = remember(bookId, refs) {
         refs.filter { it.bookId == bookId }.map(BookTagRefEntity::tagId).toSet()
     }
-    ModalBottomSheet(
+    MoReadBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ) {
@@ -229,7 +229,7 @@ internal fun BookGroupPickerSheet(
     onDismiss: () -> Unit,
     onSelect: (Long?) -> Unit
 ) {
-    ModalBottomSheet(
+    MoReadBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ) {

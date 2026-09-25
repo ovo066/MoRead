@@ -34,6 +34,21 @@ class ApiKeyStore @Inject constructor(
         preferences.edit { remove(alias) }
     }
 
+    /** Atomically claim a legacy shared credential for the provider active before switching. */
+    @Synchronized
+    fun migrateAlias(oldAlias: String, newAlias: String): String? {
+        val current = get(newAlias)
+        val legacy = get(oldAlias)
+        if (legacy != null) {
+            val saved = preferences.edit().apply {
+                if (current == null) putString(newAlias, legacy)
+                remove(oldAlias)
+            }.commit()
+            check(saved) { "保存 API Key 失败，请重试" }
+        }
+        return current ?: legacy
+    }
+
     private companion object {
         const val FILE_NAME = "encrypted_ai_credentials"
     }

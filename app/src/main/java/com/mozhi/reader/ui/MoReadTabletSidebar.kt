@@ -18,12 +18,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mozhi.reader.R
 import com.mozhi.reader.core.database.entity.BookReadState
 import com.mozhi.reader.core.database.entity.readState
 import com.mozhi.reader.feature.bookshelf.BookshelfUiState
@@ -54,16 +56,16 @@ internal fun MoReadTabletSidebar(
             Column(Modifier.padding(start = 12.dp, top = 30.dp, bottom = 30.dp)) {
                 Text("MoRead", fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold,
                     fontSize = 29.sp, color = colors.onSurface)
-                Text("让阅读，慢慢发生", style = MaterialTheme.typography.labelMedium,
+                Text(stringResource(R.string.sidebar_tagline), style = MaterialTheme.typography.labelMedium,
                     color = colors.onSurfaceVariant, modifier = Modifier.padding(top = 5.dp))
             }
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).testTag("tablet-sidebar-scroll")) {
                 listOf(RootDestination.Bookshelf, RootDestination.Companion, RootDestination.Stats).forEach { destination ->
                     SidebarItem(
                         label = when (destination) {
-                            RootDestination.Bookshelf -> "我的书库"
-                            RootDestination.Companion -> "AI 伴读"
-                            else -> "阅读统计"
+                            RootDestination.Bookshelf -> stringResource(R.string.sidebar_my_library)
+                            RootDestination.Companion -> stringResource(R.string.sidebar_ai_companion)
+                            else -> stringResource(R.string.sidebar_reading_stats)
                         },
                         icon = destination.icon,
                         selected = selectedRoute == destination.route,
@@ -72,21 +74,21 @@ internal fun MoReadTabletSidebar(
                     )
                 }
                 HorizontalDivider(Modifier.padding(vertical = 18.dp), color = colors.outlineVariant.copy(alpha = .5f))
-                Text("书库", style = MaterialTheme.typography.labelMedium, color = colors.onSurfaceVariant,
+                Text(stringResource(R.string.sidebar_library), style = MaterialTheme.typography.labelMedium, color = colors.onSurfaceVariant,
                     modifier = Modifier.padding(start = 12.dp, bottom = 8.dp))
-                SidebarItem("全部书籍", Icons.AutoMirrored.Outlined.LibraryBooks, inLibrary && !shelf.filter.isActive,
+                SidebarItem(stringResource(R.string.sidebar_all_books), Icons.AutoMirrored.Outlined.LibraryBooks, inLibrary && !shelf.filter.isActive,
                     count = shelf.totalBooks, tag = "tablet-filter-all", onClick = onClearFilters)
                 listOf(
-                    Triple(BookReadState.READING, "正在阅读", Icons.Outlined.AutoStories),
-                    Triple(BookReadState.UNREAD, "尚未开始", Icons.Outlined.BookmarkBorder),
-                    Triple(BookReadState.FINISHED, "已经读完", Icons.Outlined.CheckCircleOutline),
-                    Triple(BookReadState.SHELVED, "暂时搁置", Icons.Outlined.PauseCircleOutline)
+                    Triple(BookReadState.READING, stringResource(R.string.sidebar_filter_reading), Icons.Outlined.AutoStories),
+                    Triple(BookReadState.UNREAD, stringResource(R.string.sidebar_filter_unread), Icons.Outlined.BookmarkBorder),
+                    Triple(BookReadState.FINISHED, stringResource(R.string.sidebar_filter_finished), Icons.Outlined.CheckCircleOutline),
+                    Triple(BookReadState.SHELVED, stringResource(R.string.sidebar_filter_shelved), Icons.Outlined.PauseCircleOutline)
                 ).forEach { (state, label, icon) ->
                     SidebarItem(label, icon, inLibrary && shelf.filter.readState == state,
                         count = counts[state] ?: 0, tag = "tablet-filter-${state.name}",
                         onClick = { onReadState(if (shelf.filter.readState == state) null else state) })
                 }
-                SidebarSection("我的分组", groupsExpanded, { groupsExpanded = !groupsExpanded }, onManageGroups)
+                SidebarSection(stringResource(R.string.sidebar_my_groups), groupsExpanded, { groupsExpanded = !groupsExpanded }, onManageGroups)
                 if (groupsExpanded) {
                     shelf.groups.forEach { group ->
                         SidebarItem(group.name, Icons.Outlined.FolderOpen,
@@ -94,10 +96,10 @@ internal fun MoReadTabletSidebar(
                             count = shelf.groupCounts[group.id] ?: 0, tag = "tablet-group-${group.id}",
                             onClick = { onGroup(group.id, false) })
                     }
-                    SidebarItem("未分组", Icons.Outlined.FolderOpen, inLibrary && shelf.filter.ungroupedOnly,
+                    SidebarItem(stringResource(R.string.sidebar_ungrouped), Icons.Outlined.FolderOpen, inLibrary && shelf.filter.ungroupedOnly,
                         count = shelf.groupCounts[null] ?: 0, onClick = { onGroup(null, true) })
                 }
-                SidebarSection("标签", tagsExpanded, { tagsExpanded = !tagsExpanded }, onManageTags)
+                SidebarSection(stringResource(R.string.sidebar_tags), tagsExpanded, { tagsExpanded = !tagsExpanded }, onManageTags)
                 if (tagsExpanded) {
                     shelf.tags.forEach { tag ->
                         SidebarItem(tag.name, Icons.AutoMirrored.Outlined.Label,
@@ -106,7 +108,7 @@ internal fun MoReadTabletSidebar(
                             onClick = { onTag(tag.id) })
                     }
                     if (shelf.tags.isEmpty()) {
-                        Text("用标签整理不同主题的书", style = MaterialTheme.typography.bodySmall,
+                        Text(stringResource(R.string.sidebar_tags_empty), style = MaterialTheme.typography.bodySmall,
                             color = colors.onSurfaceVariant, modifier = Modifier.padding(12.dp))
                     }
                 }
@@ -114,7 +116,7 @@ internal fun MoReadTabletSidebar(
             }
             HorizontalDivider(color = colors.outlineVariant.copy(alpha = .5f))
             Box(Modifier.padding(vertical = 12.dp)) {
-                SidebarItem("设置", Icons.Outlined.Settings, selectedRoute == RootDestination.Settings.route,
+                SidebarItem(stringResource(R.string.nav_settings), Icons.Outlined.Settings, selectedRoute == RootDestination.Settings.route,
                     tag = "tablet-nav-settings", onClick = { onSelect(RootDestination.Settings) })
             }
         }
@@ -128,10 +130,10 @@ private fun SidebarSection(title: String, expanded: Boolean, onToggle: () -> Uni
             Text(title, Modifier.weight(1f), style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             Icon(if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
-                contentDescription = if (expanded) "收起$title" else "展开$title", modifier = Modifier.size(16.dp))
+                contentDescription = stringResource(if (expanded) R.string.sidebar_section_collapse else R.string.sidebar_section_expand, title), modifier = Modifier.size(16.dp))
         }
         IconButton(onClick = onManage, modifier = Modifier.size(44.dp)) {
-            Icon(Icons.Outlined.Add, "管理$title", modifier = Modifier.size(18.dp))
+            Icon(Icons.Outlined.Add, stringResource(R.string.sidebar_section_manage, title), modifier = Modifier.size(18.dp))
         }
     }
 }

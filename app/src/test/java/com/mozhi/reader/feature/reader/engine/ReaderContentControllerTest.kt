@@ -391,7 +391,8 @@ class ReaderContentControllerTest {
                 text: String,
                 isTitle: Boolean,
                 availableWidth: Float,
-                firstLineIndent: Float
+                firstLineIndent: Float,
+                styledRuns: List<StyledTextRun>
             ): IntArray {
                 relayoutStarted.countDown()
                 releaseRelayout.await()

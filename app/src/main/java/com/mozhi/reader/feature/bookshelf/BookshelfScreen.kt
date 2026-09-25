@@ -1,5 +1,6 @@
 package com.mozhi.reader.feature.bookshelf
 
+import com.mozhi.reader.ui.components.MoReadBottomSheet
 import android.net.Uri
 import android.Manifest
 import android.content.pm.PackageManager
@@ -74,7 +75,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -627,7 +627,7 @@ private fun ImportMethodSheet(
     onPickFolder: () -> Unit,
     onLanTransfer: () -> Unit
 ) {
-    ModalBottomSheet(
+    MoReadBottomSheet(
         onDismissRequest = onDismiss,
         sheetMaxWidth = MoReadLayoutPolicy.SheetMaxWidthDp.dp,
         sheetState = rememberModalBottomSheetState()

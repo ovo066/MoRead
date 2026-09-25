@@ -13,6 +13,7 @@
 - OpenCC 词库（Apache-2.0，上游 BYVoid/OpenCC）：OpenccJava 随附的 `dicts/**` 转换数据（`licenses/opencc-dictionaries-Apache-2.0.txt`；原始 `dicts/LICENSE` 与 assets 声明均随包保留）。
 - Coil（Apache-2.0）：图片加载。
 - AndroidSVG（Apache-2.0）：EPUB 内联 SVG 导入期栅格化。
+- Unicode 字符数据库（Unicode License V3，Copyright © 1991-2026 Unicode, Inc.）：竖排字向表取自 UAX #50 `VerticalOrientation.txt`，竖排标点回退取自 `UnicodeData.txt` 的 `<vertical>` 分解（`licenses/unicode-LICENSE-V3.txt`）。
 - Lobe Icons 1.95.0（MIT，Copyright (c) 2023 LobeHub）：AI 供应商、模型系列与搜索引擎图标，转换为本地 Android 矢量资源（`licenses/lobe-icons-MIT.txt`）。
 - ZXing core（Apache-2.0）：局域网传书页的二维码矩阵生成（只用纯 Java 的 `core`，绘制由应用自己完成）。
 - multiplatform-markdown-renderer（Apache-2.0）：AI 输出的 Markdown 渲染。

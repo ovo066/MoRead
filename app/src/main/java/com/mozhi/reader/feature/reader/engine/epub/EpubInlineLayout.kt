@@ -2,6 +2,7 @@ package com.mozhi.reader.feature.reader.engine.epub
 
 import com.mozhi.reader.core.epub.style.EpubStyle
 import com.mozhi.reader.core.epub.style.EpubTextAlignValue
+import com.mozhi.reader.core.epub.style.EpubTextOrientation
 import com.mozhi.reader.core.epub.style.EpubVerticalAlignment
 import com.mozhi.reader.core.epub.style.ResolvedLength
 import com.mozhi.reader.core.epub.style.resolve
@@ -14,6 +15,7 @@ import com.mozhi.reader.feature.reader.engine.TextBlockDecoration
 import com.mozhi.reader.feature.reader.engine.TextColumn
 import com.mozhi.reader.feature.reader.engine.TextLine
 import com.mozhi.reader.feature.reader.engine.TextRubyPlacement
+import com.mozhi.reader.feature.reader.engine.VerticalOrientation
 import com.mozhi.reader.feature.reader.engine.addWordGlosses
 import com.mozhi.reader.feature.reader.engine.translationLines
 import com.mozhi.reader.feature.reader.engine.moveTranslationTo
@@ -105,7 +107,8 @@ internal class EpubInlineLayout(private val ctx: EpubLayoutContext) {
                 y = bandBottom
                 continue
             }
-            var end = fillLine(clusters, index, limit)
+            // white-space: nowrap 只在强制换行处断行，溢出盒子由出版方自己负责（多见于定位卡片）。
+            var end = fillLine(clusters, index, if (blockStyle.noWrap) Float.MAX_VALUE else limit)
             // A float band can leave no usable room; drop below the nearest band and retry.
             if (end == index) {
                 val bandBottom = bfc.bands
@@ -233,7 +236,9 @@ internal class EpubInlineLayout(private val ctx: EpubLayoutContext) {
         val rubyKey: Int? = null,
         val rubyText: String? = null,
         var rubyLeadingInset: Float = 0f,
-        var rubyTrailingInset: Float = 0f
+        var rubyTrailingInset: Float = 0f,
+        val verticalOrientation: VerticalOrientation? = null,
+        val combineUpright: Boolean = false
     ) {
         val advanceWidth: Float
             get() = leadingMargin + leadingInset + rubyLeadingInset + width + rubyTrailingInset +
@@ -477,6 +482,27 @@ internal class EpubInlineLayout(private val ctx: EpubLayoutContext) {
         val boxStyle = item.decoratedBox?.style
         val requestedStep = requestedStepFor(item.style, isHeading)
 
+        if (ctx.verticalWriting && item.style.textCombineUpright && text.isNotBlank()) {
+            // 縦中横：整段横排文字占一个直立字格，绘制时横向压缩进 1em。
+            val style = ctx.resolveRunStyle(item.style, isHeading, inheritedBackgroundArgb, start)
+            result += Cluster(
+                text = text,
+                width = uprightAdvance(style),
+                sourceOffset = start,
+                sourceLength = end - start,
+                marker = null,
+                style = style,
+                requestedStep = requestedStep,
+                linkHref = item.linkHref,
+                boxKey = boxKey,
+                boxStyle = boxStyle,
+                rubyKey = item.rubyGroup,
+                rubyText = item.rubyText,
+                verticalOrientation = VerticalOrientation.U,
+                combineUpright = true
+            )
+            return
+        }
         var index = 0
         while (index < text.length) {
             if (index and 0xFF == 0) ctx.cancellationCheck()
@@ -488,11 +514,17 @@ internal class EpubInlineLayout(private val ctx: EpubLayoutContext) {
             val clusterText = text.substring(index, clusterEnd)
             val offset = start + index
             val style = ctx.resolveRunStyle(item.style, isHeading, inheritedBackgroundArgb, offset)
+            val orientation = verticalOrientation(clusterText, item.style)
             result += Cluster(
                 text = clusterText,
                 // 逐簇测量拿不到 run 内部的字间距，必须自己补，否则用户的字间距对 EPUB 无效。
-                width = ctx.measure.charWidths(clusterText, style.measureStyle).sum() +
-                    ctx.measure.clusterLetterSpacing(style.measureStyle),
+                // 竖排里直立的字按字身（1em）沿列推进，而不是按横排的字宽。
+                width = if (orientation != null && orientation != VerticalOrientation.R) {
+                    uprightAdvance(style)
+                } else {
+                    ctx.measure.charWidths(clusterText, style.measureStyle).sum() +
+                        ctx.measure.clusterLetterSpacing(style.measureStyle)
+                },
                 sourceOffset = offset,
                 sourceLength = clusterEnd - index,
                 marker = null,
@@ -502,7 +534,8 @@ internal class EpubInlineLayout(private val ctx: EpubLayoutContext) {
                 boxKey = boxKey,
                 boxStyle = boxStyle,
                 rubyKey = item.rubyGroup,
-                rubyText = item.rubyText
+                rubyText = item.rubyText,
+                verticalOrientation = orientation
             )
             markersByLocal[clusterEnd].orEmpty().sortedBy { it.kind.ordinal }.forEach { marker ->
                 result += Cluster(
@@ -521,6 +554,20 @@ internal class EpubInlineLayout(private val ctx: EpubLayoutContext) {
             index = clusterEnd
         }
     }
+
+    /** UAX #50 orientation under the element's text-orientation; null outside vertical writing. */
+    private fun verticalOrientation(text: String, style: EpubStyle): VerticalOrientation? {
+        if (!ctx.verticalWriting) return null
+        return when (style.textOrientation) {
+            EpubTextOrientation.UPRIGHT -> VerticalOrientation.U
+            EpubTextOrientation.SIDEWAYS -> VerticalOrientation.R
+            EpubTextOrientation.MIXED -> VerticalOrientation.of(text.codePointAt(0))
+        }
+    }
+
+    private fun uprightAdvance(style: ResolvedRunStyle): Float =
+        ctx.baseFontSize(style.measureStyle.isTitle) * style.measureStyle.textSizeScale +
+            ctx.measure.clusterLetterSpacing(style.measureStyle)
 
     private fun requestedStepFor(style: EpubStyle, isHeading: Boolean): Float =
         ctx.requestedLineStep(style, isHeading)
@@ -758,7 +805,10 @@ internal class EpubInlineLayout(private val ctx: EpubLayoutContext) {
                 sourceLength = cluster.sourceLength,
                 inlineMarkerKind = cluster.marker?.kind,
                 inlineMarkerOffset = cluster.marker?.charOffset,
-                linkHref = cluster.linkHref
+                linkHref = cluster.linkHref,
+                verticalOrientation = cluster.verticalOrientation,
+                combineUpright = cluster.combineUpright,
+                textShadows = style.textShadows
             )
             cluster.image?.let { image ->
                 val (imageAscent, _) = imageExtents(image, cluster)

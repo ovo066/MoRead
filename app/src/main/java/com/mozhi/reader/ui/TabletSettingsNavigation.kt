@@ -1,5 +1,6 @@
 package com.mozhi.reader.ui
 
+import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedContentScope
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -20,24 +21,31 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.composable
+import com.mozhi.reader.R
 
-internal enum class SettingsDestination(val route: String, val label: String, val icon: ImageVector, val group: String) {
-    REVIEW("settings-review", "划线与笔记", Icons.Outlined.BorderColor, "阅读体验"),
-    READING("settings-reading", "阅读与外观", Icons.Outlined.Palette, "阅读体验"),
-    TTS("tts-settings", "朗读与音色", Icons.Outlined.RecordVoiceOver, "阅读体验"),
-    DICTIONARIES("settings-dictionaries", "词典管理", Icons.AutoMirrored.Outlined.MenuBook, "阅读体验"),
-    VOCABULARY("settings-vocabulary", "生词本", Icons.Outlined.Bookmarks, "阅读体验"),
-    SERVICES("ai-services", "AI 服务", Icons.Outlined.Hub, "智能服务"),
-    COMPANION("settings-ai", "伴读与联网", Icons.Outlined.AutoAwesome, "智能服务"),
-    BACKUP("backup-settings", "备份与恢复", Icons.Outlined.CloudSync, "数据与应用"),
-    STORAGE("settings-data", "存储与缓存", Icons.Outlined.Storage, "数据与应用"),
-    ABOUT("settings-about", "关于与诊断", Icons.Outlined.Info, "数据与应用")
+internal enum class SettingsDestination(
+    val route: String,
+    @param:StringRes val labelRes: Int,
+    val icon: ImageVector,
+    @param:StringRes val groupRes: Int
+) {
+    REVIEW("settings-review", R.string.settings_review, Icons.Outlined.BorderColor, R.string.settings_section_reading),
+    READING("settings-reading", R.string.settings_reading_appearance, Icons.Outlined.Palette, R.string.settings_section_reading),
+    TTS("tts-settings", R.string.settings_tts, Icons.Outlined.RecordVoiceOver, R.string.settings_section_reading),
+    DICTIONARIES("settings-dictionaries", R.string.settings_dictionaries, Icons.AutoMirrored.Outlined.MenuBook, R.string.settings_section_reading),
+    VOCABULARY("settings-vocabulary", R.string.settings_vocabulary, Icons.Outlined.Bookmarks, R.string.settings_section_reading),
+    SERVICES("ai-services", R.string.settings_ai_services, Icons.Outlined.Hub, R.string.settings_section_ai),
+    COMPANION("settings-ai", R.string.settings_companion, Icons.Outlined.AutoAwesome, R.string.settings_section_ai),
+    BACKUP("backup-settings", R.string.settings_backup, Icons.Outlined.CloudSync, R.string.settings_group_data_app),
+    STORAGE("settings-data", R.string.settings_storage, Icons.Outlined.Storage, R.string.settings_group_data_app),
+    ABOUT("settings-about", R.string.settings_about, Icons.Outlined.Info, R.string.settings_group_data_app)
 }
 
 internal fun settingsDestination(route: String?): SettingsDestination? = when (route) {
@@ -109,12 +117,12 @@ internal fun TabletSettingsSidebar(
         TextButton(onClick = onBackToLibrary, modifier = Modifier.padding(start = 12.dp, top = 12.dp)) {
             Icon(Icons.AutoMirrored.Outlined.ArrowBack, null, Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
-            Text("书库")
+            Text(stringResource(R.string.sidebar_library))
         }
-        Text("设置", style = MaterialTheme.typography.headlineLarge, modifier = Modifier.padding(start = 28.dp, top = 16.dp, bottom = 20.dp))
+        Text(stringResource(R.string.nav_settings), style = MaterialTheme.typography.headlineLarge, modifier = Modifier.padding(start = 28.dp, top = 16.dp, bottom = 20.dp))
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
-            SettingsDestination.entries.groupBy { it.group }.forEach { (group, destinations) ->
-                Text(group, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            SettingsDestination.entries.groupBy { it.groupRes }.forEach { (group, destinations) ->
+                Text(stringResource(group), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(start = 12.dp, top = 18.dp, bottom = 10.dp))
                 destinations.forEach { destination ->
                     val active = destination == selected
@@ -125,7 +133,7 @@ internal fun TabletSettingsSidebar(
                         }).padding(horizontal = 12.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(destination.icon, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         Spacer(Modifier.width(12.dp))
-                        Text(destination.label, style = MaterialTheme.typography.bodyMedium)
+                        Text(stringResource(destination.labelRes), style = MaterialTheme.typography.bodyMedium)
                     }
                     Spacer(Modifier.height(4.dp))
                 }

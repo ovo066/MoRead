@@ -1,6 +1,5 @@
 package com.mozhi.reader.feature.reader
 
-import androidx.annotation.StringRes
 import com.mozhi.reader.ai.companion.ProactiveAnnotationBatchResult
 import com.mozhi.reader.core.database.entity.AnnotationColors
 import com.mozhi.reader.core.database.entity.AnnotationEntity
@@ -13,6 +12,7 @@ import com.mozhi.reader.core.database.entity.IllustrationEntity
 import com.mozhi.reader.core.datastore.PendingReaderFont
 import com.mozhi.reader.core.datastore.ReaderSettings
 import com.mozhi.reader.core.datastore.ReaderTextReplacementRule
+import com.mozhi.reader.core.i18n.UiText
 
 data class ReaderUiState(
     val book: BookEntity? = null,
@@ -89,7 +89,7 @@ enum class PageTurnDirection {
 
 sealed interface ReaderEvent {
     data class ShowMessage(val message: String) : ReaderEvent
-    data class ShowLocalizedMessage(@param:StringRes val resourceId: Int) : ReaderEvent
+    data class ShowLocalizedMessage(val text: UiText) : ReaderEvent
     data class ConfirmFontImport(val pending: PendingReaderFont) : ReaderEvent
     data class TextReplacementRuleSuggested(val rule: ReaderTextReplacementRule) : ReaderEvent
 }

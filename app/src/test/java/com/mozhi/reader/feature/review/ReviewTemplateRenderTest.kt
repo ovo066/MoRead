@@ -16,6 +16,25 @@ import org.robolectric.annotation.GraphicsMode
 @Config(sdk = [35], application = Application::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ReviewTemplateRenderTest {
+    @Test fun cardsAdaptToQuoteLengthAndPreviewKeepsTheSameProportions() {
+        val base = ReviewEntry(reviewTestBook(), "我的", annotation = reviewTestAnnotation().copy(note = ""))
+        val heights = listOf("鸟都没叫。", "旧物替人记事，书页也留下了曾经停留的位置。".repeat(6),
+            "在雨声里翻开书页，记住这一刻。".repeat(55)).mapIndexed { index, text ->
+            val entry = base.copy(annotation = base.annotation!!.copy(selectedText = text))
+            val full = renderReviewCard(entry, ReviewCardStyle.PAPER)
+            val preview = renderReviewCard(entry, ReviewCardStyle.PAPER, width = 540)
+            assertEquals(full.height / 2f, preview.height.toFloat(), 12f)
+            File("build/reports/reading-review/export-length-$index.png").apply { parentFile.mkdirs() }.outputStream()
+                .use { full.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            val height = full.height
+            preview.recycle(); full.recycle()
+            height
+        }
+        assertTrue(heights[0] < heights[1])
+        assertTrue(heights[1] < heights[2])
+        assertTrue(heights[0] < 1440)
+    }
+
     @Test fun savedCssChangesExportAndSyntaxColorsReachOnlyMatchedText() {
         val template = ReviewShareTemplate("a", "薄荷", backgroundArgb = 0xFFF2F3E9.toInt(), textArgb = 0xFF2F443B.toInt(),
             accentArgb = 0xFF739A86.toInt(), fontChoice = "SERIF", css = "font-size: 1.15em; line-height: 1.8; border-width: 0.05em; border-radius: 0.8em;",

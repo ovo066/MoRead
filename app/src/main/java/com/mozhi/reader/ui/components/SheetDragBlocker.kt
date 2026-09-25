@@ -10,11 +10,20 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.Velocity
 
+/** Shared sheet boundary: children consume ordinary scroll first; only excess is stopped here. */
+internal fun Modifier.containSheetScroll(): Modifier = nestedScroll(SheetScrollBoundary)
+
+private object SheetScrollBoundary : NestedScrollConnection {
+    override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource) = Offset(0f, available.y)
+    override suspend fun onPostFling(consumed: Velocity, available: Velocity) = Velocity(0f, available.y)
+}
+
 /**
  * ModalBottomSheet 内嵌可滚动内容的手势防抖：
  * 弹层的嵌套滚动会把列表消费不掉的滚动量（列表到顶后的下拉、内容不满一屏时的
  * 任何下拉、到底后的上推）拿去拖动整个弹层，松手再弹回——列表一滑整层上下弹跳。
- * 这里把剩余滚动量全部吃掉：内容区手势只滚列表，关闭弹层走返回/蒙层/拖把手。
+ * 在两端直接停止越界滚动，剩余滚动量和惯性不传给父容器。
+ * NavigationSheet 关闭内容边缘拉伸，但保留标题区下拉关闭、显式按钮、返回和蒙层。
  *
  * 用法：给弹层内的 LazyColumn/verticalScroll 容器（或其父层）挂
  * `Modifier.blockSheetDrag(state)`，state 是该滚动容器自己的状态。
@@ -30,8 +39,7 @@ private class SheetDragBlockerConnection(
 ) : NestedScrollConnection {
 
     override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-        // 列表已到顶时，向下拖拽本来会先交给弹层；在父层接管之前截断它。
-        return if (available.y > 0f && !state.canScrollBackward) {
+        return if (atBoundary(available.y)) {
             Offset(0f, available.y)
         } else {
             Offset.Zero
@@ -45,7 +53,7 @@ private class SheetDragBlockerConnection(
     ): Offset = Offset(0f, available.y)
 
     override suspend fun onPreFling(available: Velocity): Velocity {
-        return if (available.y > 0f && !state.canScrollBackward) {
+        return if (atBoundary(available.y)) {
             Velocity(0f, available.y)
         } else {
             Velocity.Zero
@@ -56,4 +64,7 @@ private class SheetDragBlockerConnection(
         consumed: Velocity,
         available: Velocity
     ): Velocity = Velocity(0f, available.y)
+
+    private fun atBoundary(delta: Float): Boolean =
+        (delta > 0f && !state.canScrollBackward) || (delta < 0f && !state.canScrollForward)
 }

@@ -1,7 +1,6 @@
 package com.mozhi.reader.feature.reader.engine.epub
 
 import com.mozhi.reader.core.datastore.PublisherStyleMode
-import com.mozhi.reader.core.epub.style.EpubLayoutFallbackReason
 import com.mozhi.reader.core.epub.style.EpubWritingMode
 import com.mozhi.reader.core.library.EpubLayoutChapterBundle
 import com.mozhi.reader.core.library.EpubStylesheetText
@@ -339,7 +338,7 @@ class EpubV2RegressionTest {
     }
 
     @Test
-    fun `vertical writing mode is laid out horizontally but reported through the capability gate`() {
+    fun `vertical-rl chapters are laid out in rotated columns and pass the capability gate`() {
         val css = "body { -epub-writing-mode: vertical-rl; writing-mode: vertical-rl; }"
         val parsed = EpubLayoutDocumentParser().parseWithText(
             "<html><body><p>竖排正文第一段。</p><p>竖排正文第二段。</p></body></html>".toByteArray(),
@@ -362,9 +361,9 @@ class EpubV2RegressionTest {
         val capability = chapter.layoutCapability!!
 
         assertTrue(chapter.pages.flatMap { it.lines }.any { it.text.isNotBlank() })
-        assertEquals(false, capability.supported)
-        assertEquals(EpubLayoutFallbackReason.VERTICAL_WRITING_MODE, capability.reason)
+        assertEquals(true, capability.supported)
         assertEquals(EpubWritingMode.VERTICAL_RL, capability.chapterWritingMode)
+        assertEquals(testSpec().visibleWidth, chapter.pages.first().verticalFrameWidth)
     }
 
     private fun testSpec() = TypesetSpec(

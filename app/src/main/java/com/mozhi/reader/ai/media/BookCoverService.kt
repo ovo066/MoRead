@@ -56,7 +56,8 @@ class BookCoverService @Inject constructor(
     private val libraryRepository: LibraryRepository,
     private val agentLoop: AgentLoop,
     private val webSearchService: WebSearchService,
-    private val webSearchSettingsStore: WebSearchSettingsStore
+    private val webSearchSettingsStore: WebSearchSettingsStore,
+    private val imageConsistency: com.mozhi.reader.core.library.ImageConsistencyRepository
 ) {
     private data class CachedCoverSearch(val savedAt: Long, val result: OnlineBookCoverSearchResult)
     private val searchCache = ConcurrentHashMap<String, CachedCoverSearch>()
@@ -278,16 +279,16 @@ class BookCoverService @Inject constructor(
                 ?: fallbackPrompt(bookId)
         }
         onProgress(BookCoverGenerationProgress(0.34f, "正在整理封面构图提示词"))
-        val generatedPrompt = imagePromptComposer.compose(
+        val recipe = imageConsistency.plan(bookId, book.maxReachedChapterIndex,
             """
             为小说《${book.title}》创作竖版 2:3 书籍封面主视觉。
             ${prompt.trim()}
             构图需适合缩略图，主体清晰，留出安全边距；不要生成文字、水印、边框、出版社标识。
             """.trimIndent()
-        ).take(MAX_PROMPT_CHARS)
+        , useReferences = true)
         val resolved = clientFactory.imageGeneration()
         onProgress(BookCoverGenerationProgress(0.48f, "正在调用 ${resolved.label} 生成图片"))
-        val generated = resolved.client.generateImages(generatedPrompt).firstOrNull()
+        val generated = resolved.client.generateImages(imageConsistency.request(recipe, resolved.client)).firstOrNull()
             ?: error("生图 API 已响应，但没有返回可用图片")
         onProgress(
             BookCoverGenerationProgress(

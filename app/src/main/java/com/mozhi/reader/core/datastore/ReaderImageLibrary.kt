@@ -6,7 +6,7 @@ import kotlinx.serialization.json.Json
 
 @Serializable
 enum class ReaderImagePurpose(val label: String) {
-    BACKGROUND("背景图"), COVER("封面图"), GENERAL("未分类")
+    BACKGROUND("背景图"), COVER("封面图"), GENERAL("未分类"), CHARACTER_REF("人物参考"), STYLE_REF("画风参考")
 }
 
 @Serializable
@@ -18,7 +18,8 @@ data class ReaderImageAsset(
     val width: Int = 0,
     val height: Int = 0,
     val importedAt: Long = 0L,
-    val purpose: ReaderImagePurpose = ReaderImagePurpose.GENERAL
+    val purpose: ReaderImagePurpose = ReaderImagePurpose.GENERAL,
+    val ownerBookId: Long? = null
 )
 
 object ReaderImageLibraryCodec {

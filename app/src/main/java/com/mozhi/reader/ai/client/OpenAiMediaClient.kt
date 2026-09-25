@@ -8,6 +8,7 @@ import java.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
@@ -22,6 +23,9 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.MultipartBody
+import okhttp3.MediaType.Companion.toMediaType
+import com.mozhi.reader.ai.media.ImageCapabilities
 
 data class GeneratedImage(
     val bytes: ByteArray?,
@@ -45,11 +49,59 @@ class OpenAiMediaClient(
     private val base = normalizeBase(provider.baseUrl)
     private val mergedExtraJson = mergeExtraJson(provider.extraJson, model.extraJson)
     private val overrides = RequestOverrides.parse(mergedExtraJson)
+    override val defaultImageSize: String get() = (overrides.body["size"] as? JsonPrimitive)?.contentOrNull ?: "1024x1024"
     private val isGmiRequestQueue = provider.baseUrl.contains("gmicloud.ai", ignoreCase = true) ||
         model.endpointPath.contains("requestqueue", ignoreCase = true)
     private val isMiniMax = provider.adapter == AiProviderAdapter.MINIMAX ||
         provider.baseUrl.contains("minimax", ignoreCase = true) ||
         provider.baseUrl.contains("minimaxi", ignoreCase = true)
+
+    override val capabilities: ImageCapabilities get() {
+        val name = model.modelName.lowercase()
+        val chat = model.endpointPath.contains("chat/completion", true)
+        val gpt = name.startsWith("gpt-image-")
+        val gemini = name.contains("gemini") && name.contains("image")
+        val gemini3 = gemini && name.contains("gemini-3")
+        val max = if (gpt) 16 else if (chat && gemini3) 14 else if (chat && gemini) 3 else if (chat) 4 else 0
+        return ImageCapabilities(maxReferences = max,
+            maxCharacterReferences = if (gemini3) { if (name.contains("pro")) 5 else 4 } else max)
+    }
+
+    override suspend fun generateImages(request: ImageRequest): List<GeneratedImage> {
+        require(request.count in 1..4)
+        require(request.references.size <= capabilities.maxReferences)
+        if (model.endpointPath.contains("chat/completion", true)) {
+            return (0 until request.count).flatMap {
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                generateImagesViaChat(request.prompt, model.endpointPath, request.references, request.size).take(1)
+            }
+        }
+        if (request.references.isEmpty()) return generateImages(request.prompt, request.count, request.size)
+        val fields = overrides.body.toMutableMap().apply {
+            put("model", JsonPrimitive(model.modelName))
+            put("prompt", JsonPrimitive(request.prompt))
+            put("n", JsonPrimitive(request.count))
+            request.size?.let { put("size", JsonPrimitive(it)) }
+            remove("response_format")
+            remove("seed")
+            // gpt-image-2 always uses high fidelity; mini does not support this parameter.
+            if (model.modelName == "gpt-image-1" || model.modelName == "gpt-image-1.5") put("input_fidelity", JsonPrimitive("high"))
+            else remove("input_fidelity")
+        }
+        val form = MultipartBody.Builder().setType(MultipartBody.FORM)
+        fields.forEach { (key, value) -> form.addFormDataPart(key, (value as? JsonPrimitive)?.content ?: value.toString()) }
+        request.references.forEachIndexed { index, ref ->
+            form.addFormDataPart("image[]", "reference-${index + 1}.png", ref.bytes.toRequestBody(ref.mediaType.toMediaType()))
+        }
+        val path = model.endpointPath.ifBlank { "/images/generations" }
+            .replace(Regex("/generations/?$"), "/edits")
+        require(path.endsWith("/edits")) { "当前生图端点不支持参考图，请使用 images/edits" }
+        val httpRequest = Request.Builder().url("$base/${path.trimStart('/')}")
+            .header("Authorization", "Bearer $apiKey").header("Accept", "application/json")
+            .apply { overrides.headers.filterKeys { !it.equals("content-type", true) }.forEach { (k, v) -> header(k, v) } }
+            .post(form.build()).build()
+        return parseImageResponse(execute(httpClient, httpRequest))
+    }
 
     override suspend fun generateImages(
         prompt: String,
@@ -72,10 +124,16 @@ class OpenAiMediaClient(
             "model" to JsonPrimitive(model.modelName),
             "prompt" to JsonPrimitive(prompt)
         )
-        if (count > 1) fields["n"] = JsonPrimitive(count)
-        size?.takeIf(String::isNotBlank)?.let { fields["size"] = JsonPrimitive(it) }
         fields.putAll(overrides.body)
+        fields["model"] = JsonPrimitive(model.modelName)
+        fields["prompt"] = JsonPrimitive(prompt)
+        fields["n"] = JsonPrimitive(count)
+        size?.takeIf(String::isNotBlank)?.let { fields["size"] = JsonPrimitive(it) }
         val body = execute(httpClient, request(path, JsonObject(fields)))
+        return parseImageResponse(body)
+    }
+
+    private fun parseImageResponse(body: String): List<GeneratedImage> {
         val response = runCatching {
             AiJson.decodeFromString(ImageResponse.serializer(), body)
         }.getOrElse { throw AiClientException.Malformed("无法解析生图响应") }
@@ -99,11 +157,18 @@ class OpenAiMediaClient(
     }
 
     /** chat/completions 出图：发一轮用户消息，从响应各处（images[] / markdown / data URI）捞图。 */
-    private suspend fun generateImagesViaChat(prompt: String, path: String): List<GeneratedImage> {
+    private suspend fun generateImagesViaChat(prompt: String, path: String,
+        references: List<ImageReferenceInput> = emptyList(), size: String? = null): List<GeneratedImage> {
+        val text = if (size == null) prompt else "$prompt\nCanvas: $size."
+        val content: JsonElement = if (references.isEmpty()) JsonPrimitive(text) else JsonArray(
+            listOf(JsonObject(mapOf("type" to JsonPrimitive("text"), "text" to JsonPrimitive(text)))) + references.map { ref ->
+                JsonObject(mapOf("type" to JsonPrimitive("image_url"), "image_url" to JsonObject(mapOf(
+                    "url" to JsonPrimitive("data:${ref.mediaType};base64,${Base64.getEncoder().encodeToString(ref.bytes)}")))))
+            })
         val message = JsonObject(
             mapOf(
                 "role" to JsonPrimitive("user"),
-                "content" to JsonPrimitive(prompt)
+                "content" to content
             )
         )
         val fields = linkedMapOf<String, kotlinx.serialization.json.JsonElement>(
@@ -115,7 +180,7 @@ class OpenAiMediaClient(
             )
         )
         overrides.body.forEach { (key, value) ->
-            if (key != "size") fields[key] = value
+            if (key !in setOf("size", "messages", "model", "stream", "n")) fields[key] = value
         }
         val body = execute(httpClient, request(path, JsonObject(fields)))
         val images = ChatImageExtractor.extract(body).mapNotNull(::imageFromRef)
@@ -200,6 +265,11 @@ class OpenAiMediaClient(
         instruction: String? = null
     ): SynthesizedSpeech {
         require(text.isNotBlank()) { "朗读文本不能为空" }
+        if (provider.adapter == AiProviderAdapter.GEMINI ||
+            (provider.adapter == AiProviderAdapter.CUSTOM && ApiDialect.fromWire(provider.apiFormat) == ApiDialect.GEMINI)) {
+            return GeminiTtsClient(provider, model, apiKey, httpClient)
+                .synthesizeSpeech(text, voice, speed, volume, pitch, emotion, instruction)
+        }
         return if (isGmiRequestQueue) {
             synthesizeGmiCloud(text, voice, responseFormat, speed, volume, pitch, emotion, instruction)
         } else if (isMiniMax) {

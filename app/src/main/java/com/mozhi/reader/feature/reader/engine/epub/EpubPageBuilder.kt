@@ -20,7 +20,8 @@ internal class EpubPageBuilder(private val ctx: EpubLayoutContext) {
         bodyStyle: EpubStyle?,
         hideHeaderFirstPage: Boolean,
         layoutCapability: EpubLayoutCapability? = null,
-        fullPageArtwork: Boolean = false
+        fullPageArtwork: Boolean = false,
+        verticalFrameWidth: Float? = null
     ): TextChapter {
         val lines = output.lines
         if (lines.isEmpty()) {
@@ -32,7 +33,9 @@ internal class EpubPageBuilder(private val ctx: EpubLayoutContext) {
                 height = height, decorations = decorations,
                 backgroundColorArgb = pageBackgroundColor(bodyStyle),
                 backgroundImagePath = backgroundImage, backgroundOpacity = bodyStyle?.opacity ?: 1f,
-                immersive = ctx.immersivePage, hideHeader = hideHeaderFirstPage
+                immersive = ctx.immersivePage, hideHeader = hideHeaderFirstPage,
+                verticalFrameWidth = verticalFrameWidth,
+                backgroundLayer = backgroundLayer(bodyStyle, backgroundImage)
             )
             return TextChapter(chapterIndex, title, listOf(page), ctx.body.length, layoutCapability)
         }
@@ -41,6 +44,7 @@ internal class EpubPageBuilder(private val ctx: EpubLayoutContext) {
 
         val pageBackground = pageBackgroundColor(bodyStyle)
         val pageBackgroundImage = pageBackgroundImage(bodyStyle)
+        val pageBackgroundLayer = backgroundLayer(bodyStyle, pageBackgroundImage)
 
         cuts.forEachIndexed { pageIndex, cut ->
             ctx.cancellationCheck()
@@ -66,7 +70,9 @@ internal class EpubPageBuilder(private val ctx: EpubLayoutContext) {
                 immersive = ctx.immersivePage,
                 fullPageArtwork = fullPageArtwork,
                 hideHeader = pageIndex == 0 && hideHeaderFirstPage,
-                trailingGap = nextStart?.let { (it - lastBottomAbsolute).coerceAtLeast(0f) } ?: 0f
+                trailingGap = nextStart?.let { (it - lastBottomAbsolute).coerceAtLeast(0f) } ?: 0f,
+                verticalFrameWidth = verticalFrameWidth,
+                backgroundLayer = pageBackgroundLayer
             )
         }
         return TextChapter(chapterIndex, title, pages, ctx.body.length, layoutCapability)
@@ -208,6 +214,10 @@ internal class EpubPageBuilder(private val ctx: EpubLayoutContext) {
         if (ctx.spec.preferReaderBackground && !ctx.immersivePage) return null
         return ctx.bundle.resourcePaths[href]
     }
+
+    /** Size/repeat/position of the body background, resolved against one page of content box. */
+    private fun backgroundLayer(bodyStyle: EpubStyle?, image: String?) = if (bodyStyle == null || image == null) null else
+        ctx.themeBlockDecoration(bodyStyle, 0f, 0f, ctx.spec.visibleWidth, ctx.spec.visibleHeight)
 
     private fun capacity(pageIndex: Int): Float = ctx.spec.visibleHeight + if (pageIndex == 0) {
         (if (ctx.immersivePage || firstPageExtraTop) ctx.spec.immersiveExtraTopPx else 0f) +

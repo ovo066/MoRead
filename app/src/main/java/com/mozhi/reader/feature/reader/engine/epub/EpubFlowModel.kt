@@ -13,6 +13,9 @@ import com.mozhi.reader.core.epub.style.ResolvedLength
 import com.mozhi.reader.core.epub.style.resolve
 import com.mozhi.reader.core.library.EpubLayoutChapterBundle
 import com.mozhi.reader.feature.reader.engine.BackgroundSizeMode
+import com.mozhi.reader.feature.reader.engine.BorderLineStyle
+import com.mozhi.reader.feature.reader.engine.TextGradient
+import com.mozhi.reader.feature.reader.engine.TextGradientStop
 import com.mozhi.reader.feature.reader.engine.EpubThemeColors
 import com.mozhi.reader.feature.reader.engine.InlineImageSource
 import com.mozhi.reader.feature.reader.engine.InlineMarkerReservation
@@ -169,6 +172,28 @@ internal class FlowOutput {
         nextZIndex += other.nextZIndex
     }
 
+    /** Like [mergeFrom], but [other]'s lines join at [lineIndex] (document order), decorations on top. */
+    fun insertFrom(other: FlowOutput, lineIndex: Int) {
+        val paragraphOffset = nextParagraphId
+        val zOffset = nextZIndex
+        lines.addAll(lineIndex, other.lines.map { flowLine ->
+            FlowLine(
+                line = flowLine.line,
+                paragraphId = flowLine.paragraphId + paragraphOffset,
+                orphans = flowLine.orphans,
+                widows = flowLine.widows,
+                indexInParagraph = flowLine.indexInParagraph,
+                paragraphLineCount = flowLine.paragraphLineCount,
+                keepWithNext = flowLine.keepWithNext
+            )
+        })
+        other.decorations.forEach { entry -> decorations += FlowDecoration(entry.decoration, entry.zIndex + zOffset) }
+        forcedBreaks += other.forcedBreaks
+        keepRanges += other.keepRanges
+        nextParagraphId += other.nextParagraphId
+        nextZIndex += other.nextZIndex
+    }
+
     companion object {
         fun translateLine(line: TextLine, dx: Float, dy: Float): TextLine {
             line.lineTop += dy
@@ -210,7 +235,10 @@ internal class FlowOutput {
                         sourceLength = column.sourceLength,
                         inlineMarkerKind = column.inlineMarkerKind,
                         inlineMarkerOffset = column.inlineMarkerOffset,
-                        linkHref = column.linkHref
+                        linkHref = column.linkHref,
+                        verticalOrientation = column.verticalOrientation,
+                        combineUpright = column.combineUpright,
+                        textShadows = column.textShadows
                     )
                 },
                 lineTop = line.lineTop,
@@ -247,7 +275,8 @@ internal data class ResolvedRunStyle(
     val baselineShiftPx: Float,
     val lineHeightPx: Float?,
     val paintSpan: com.mozhi.reader.core.datastore.ReaderPaintSpan? = null,
-    val opacity: Float
+    val opacity: Float,
+    val textShadows: List<TextBoxShadow> = emptyList()
 )
 
 /** Shared services for the block/inline/pagination layers of one chapter layout run. */
@@ -259,7 +288,9 @@ internal class EpubLayoutContext(
     val inlineMarkers: List<InlineMarkerReservation>,
     val cancellationCheck: () -> Unit,
     val immersivePage: Boolean,
-    val dominantBodyFamily: String?
+    val dominantBodyFamily: String?,
+    /** Laying out a vertical-rl chapter in the rotated frame (see [EpubVerticalFrame]). */
+    val verticalWriting: Boolean = false
 ) {
     var imageSources: Map<Int, InlineImageSource> = emptyMap()
     private val syntax = SyntaxStyleMap(body, spec.syntaxHighlightRules)
@@ -342,6 +373,8 @@ internal class EpubLayoutContext(
             else -> 0f
         }
         val hasPublisherFont = publisherFamily != null
+        val syntaxFont = if (hasPublisherFont) ReaderSyntaxFont.INHERIT else syntaxSpan?.font ?: ReaderSyntaxFont.INHERIT
+        val syntaxFontAssetId = if (hasPublisherFont) null else syntaxSpan?.fontAssetId
         return ResolvedRunStyle(
             measureStyle = MeasuredTextStyle(
                 isTitle = isTitle,
@@ -350,7 +383,10 @@ internal class EpubLayoutContext(
                 fontFamily = resolvedFont.familyName,
                 bold = style.fontWeight >= 600 || syntaxSpan?.bold == true,
                 italic = style.italic || syntaxSpan?.italic == true,
-                letterSpacingEm = if (style.fontSizePx > 0f) style.letterSpacingPx / style.fontSizePx else 0f
+                letterSpacingEm = if (style.fontSizePx > 0f) style.letterSpacingPx / style.fontSizePx else 0f,
+                // 渲染器按高亮规则的字体画，测量必须同一套字体，否则英文字母间隙忽大忽小、互相压叠。
+                syntaxFont = syntaxFont,
+                syntaxFontAssetId = syntaxFontAssetId
             ),
             // Publisher styling wins property-by-property; user syntax rules only fill gaps.
             paintSpan = syntaxSpan?.paintSpan?.let { it.copy(paint = it.paint.respectingPublisher(adaptedColor != null, adaptedBackground != null || style.background.imageHref != null)) },
@@ -358,11 +394,15 @@ internal class EpubLayoutContext(
             backgroundArgb = adaptedBackground ?: syntaxSpan?.backgroundArgb,
             underline = style.underline || syntaxSpan?.underline == true,
             strikethrough = style.strikethrough || syntaxSpan?.strikethrough == true,
-            syntaxFont = if (hasPublisherFont) ReaderSyntaxFont.INHERIT else syntaxSpan?.font ?: ReaderSyntaxFont.INHERIT,
-            syntaxFontAssetId = if (hasPublisherFont) null else syntaxSpan?.fontAssetId,
+            syntaxFont = syntaxFont,
+            syntaxFontAssetId = syntaxFontAssetId,
             baselineShiftPx = shift,
             lineHeightPx = style.lineHeight,
-            opacity = style.opacity
+            opacity = style.opacity,
+            // 阴影色跟纸面走：夜间主题下白色描边光晕不能把浅色字糊成一团。
+            textShadows = style.textShadows.map { shadow ->
+                shadow.toTextShadow().copy(colorArgb = mappedBackground(shadow.colorArgb) ?: shadow.colorArgb)
+            }
         )
     }
 
@@ -418,8 +458,11 @@ internal class EpubLayoutContext(
         // A missing second component is auto, not a copy of the first component. Preserve auto
         // as -1 until the renderer knows the image's intrinsic aspect ratio; zero remains zero.
         val automaticSize = if (style.background.sizeMode == "explicit") -1f else 0f
-        val explicitW = style.background.size.getOrNull(0)?.resolve(boxWidth) ?: automaticSize
-        val explicitH = style.background.size.getOrNull(1)?.resolve(bottom - top) ?: automaticSize
+        // 背景图按物理盒子绘制（竖排的帧宽是物理高），百分比尺寸也按物理边换算。
+        val physicalWidth = if (verticalWriting) bottom - top else boxWidth
+        val physicalHeight = if (verticalWriting) boxWidth else bottom - top
+        val explicitW = style.background.size.getOrNull(0)?.resolve(physicalWidth) ?: automaticSize
+        val explicitH = style.background.size.getOrNull(1)?.resolve(physicalHeight) ?: automaticSize
         val stretch = style.background.sizeMode == "explicit" &&
             style.background.size.size == 2 &&
             style.background.size.all { it is ResolvedLength.Percent && it.value == 100f }
@@ -461,9 +504,33 @@ internal class EpubLayoutContext(
             borderBottomRightRadius = style.borderRadii[2].resolve(boxWidth) ?: 0f,
             borderBottomLeftRadius = style.borderRadii[3].resolve(boxWidth) ?: 0f,
             boxShadows = style.boxShadows.map(EpubShadow::toTextShadow),
-            opacity = style.opacity
+            opacity = style.opacity,
+            borderTopStyle = BorderLineStyle.of(style.borderStyles[0]),
+            borderRightStyle = BorderLineStyle.of(style.borderStyles[1]),
+            borderBottomStyle = BorderLineStyle.of(style.borderStyles[2]),
+            borderLeftStyle = BorderLineStyle.of(style.borderStyles[3]),
+            backgroundGradient = style.background.gradient
+                ?.takeUnless { suppressBackground }
+                ?.let { gradient -> gradient(gradient) }
         )
     }
+
+    private fun gradient(gradient: com.mozhi.reader.core.epub.style.EpubGradient) = TextGradient(
+        radial = gradient.radial,
+        repeating = gradient.repeating,
+        angleDeg = gradient.angleDeg,
+        circle = gradient.circle,
+        centerX = gradient.centerX,
+        centerY = gradient.centerY,
+        stops = gradient.stops.map { stop ->
+            val color = mappedBackground(stop.colorArgb) ?: stop.colorArgb
+            when (val position = stop.position) {
+                is ResolvedLength.Percent -> TextGradientStop(color, fraction = position.value / 100f)
+                is ResolvedLength.Px -> TextGradientStop(color, px = position.value)
+                else -> TextGradientStop(color)
+            }
+        }
+    )
 
     data class ResolvedFontRef(val filePath: String?, val familyName: String?)
 

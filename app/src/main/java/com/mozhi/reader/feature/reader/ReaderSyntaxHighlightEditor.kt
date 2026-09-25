@@ -168,7 +168,7 @@ internal fun SyntaxRuleEditorDialog(initial: ReaderSyntaxRule, fontLibrary: List
 
 @Composable
 private fun SyntaxStylePreview(sample: String, rule: ReaderSyntaxRule, settings: ReaderSettings, palette: ReaderPalette) {
-    val matches = remember(sample, rule) { ReaderSyntaxHighlighter.spans(sample, listOf(rule)).size }
+    val matches = remember(sample, rule) { ReaderSyntaxHighlighter.spans(sample, listOf(rule)).count { !it.delimiterGlyphsOnly } }
     val bitmap = remember(sample, rule, settings, palette) {
         val style = ReaderPageStyle.resolve(settings.copy(syntaxHighlightEnabled = true, syntaxHighlightRules = listOf(rule),
             showHeader = false, showFooter = false, pageMarginTop = .3f, pageMarginBottom = .3f, fontScale = 1.05f), palette, Density(1f), 360, 145, 0f, 0f)

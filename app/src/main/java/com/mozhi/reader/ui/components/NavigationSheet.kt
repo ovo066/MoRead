@@ -1,6 +1,7 @@
 package com.mozhi.reader.ui.components
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,13 +14,14 @@ import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.background
+import androidx.compose.foundation.LocalOverscrollFactory
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.material3.Surface
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -38,8 +40,9 @@ internal enum class NavigationSheetEdge { BOTTOM, START, END }
 internal enum class CompactNavigationPresentation { BOTTOM_SHEET, PAGE, IMMERSIVE_PAGE }
 
 /**
- * Navigation pages own their scrolling. Fix the CONTENT viewport height and disable sheet gestures
- * so list overscroll/fling cannot move the page's coordinate system. Never constrain the modal's
+ * Navigation pages own their scrolling. Fix the CONTENT viewport height and stop list overscroll
+ * so boundary gestures cannot move the page's coordinate system. The header can still drag to close.
+ * Never constrain the modal's
  * modifier height: Material uses those constraints as the full window when calculating anchors,
  * so a fractional outer height leaves an equally sized gap below the sheet.
  * Children fill this stable viewport, keep independent lazy states and use blockSheetDrag(state).
@@ -66,28 +69,32 @@ internal fun NavigationSheet(
                 if (sidePanel) Box(Modifier.fillMaxSize().background(scrimColor)
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null,
                         onClickLabel = "关闭面板", onClick = onDismissRequest).testTag("navigation-scrim"))
-                Surface(
+                MoReadOverlayTheme { Surface(
                     modifier = Modifier.align(if (sidePanel && expandedEdge == NavigationSheetEdge.START) Alignment.CenterStart else Alignment.CenterEnd)
                         .width(if (sidePanel) minOf(440.dp, maxWidth * .48f) else maxWidth).fillMaxHeight()
                         .testTag(if (sidePanel) "navigation-sheet" else "navigation-page"),
-                    color = containerColor, contentColor = contentColor, shadowElevation = 12.dp
+                    color = containerColor, contentColor = contentColor
                 ) {
-                    Box(Modifier.fillMaxSize().testTag("navigation-viewport")
+                    Box(Modifier.fillMaxSize().containSheetScroll().testTag("navigation-viewport")
                         .windowInsetsPadding(if (sidePanel) WindowInsets.safeDrawing.union(com.mozhi.reader.ui.stableNavigationInsets())
-                            else WindowInsets(0, 0, 0, 0))) { content() }
-                }
+                            else WindowInsets(0, 0, 0, 0)).padding(horizontal = 8.dp)) {
+                        CompositionLocalProvider(LocalOverscrollFactory provides null) { content() }
+                    }
+                } }
             }
         }
         return
     }
-    ModalBottomSheet(
+    MoReadBottomSheet(
         onDismissRequest = onDismissRequest,
         modifier = Modifier.testTag("navigation-sheet"),
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        sheetGesturesEnabled = false,
-        dragHandle = null,
         containerColor = containerColor,
         contentColor = contentColor,
         scrimColor = scrimColor
-    ) { Box(Modifier.fillMaxWidth().fillMaxHeight(contentHeightFraction).testTag("navigation-viewport")) { content() } }
+    ) {
+        CompositionLocalProvider(LocalOverscrollFactory provides null) {
+            Box(Modifier.fillMaxWidth().fillMaxHeight(contentHeightFraction).containSheetScroll().testTag("navigation-viewport")) { content() }
+        }
+    }
 }

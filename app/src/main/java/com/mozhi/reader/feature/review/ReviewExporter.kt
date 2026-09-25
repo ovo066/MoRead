@@ -41,7 +41,9 @@ internal data class ReviewExportOptions(val thought: Boolean = true, val book: B
 /** The preview and exported PNG share exactly the same text layout, including long quotations. */
 internal fun renderReviewCard(entry: ReviewEntry, style: ReviewCardStyle, options: ReviewExportOptions = ReviewExportOptions(), width: Int = 1080): Bitmap {
     require(width in 120..1080)
-    val scale = width / 1080f
+    // Measure once in export coordinates. Scaling the canvas keeps preview line breaks identical.
+    val layoutWidth = 1080
+    val scale = layoutWidth / 1080f
     val template = options.template
     val css = template?.let { ReviewTemplateCss.parse(it.css) }
     require(css?.declarations?.errors.isNullOrEmpty()) { css!!.declarations.errors.joinToString("\n") }
@@ -50,24 +52,39 @@ internal fun renderReviewCard(entry: ReviewEntry, style: ReviewCardStyle, option
     val foreground = declarations?.color ?: template?.textArgb ?: style.foreground
     val accent = template?.accentArgb ?: style.accent
     val em = 47f * scale
-    val gutter = ((declarations?.padding ?: (96f / 47f)) + (declarations?.inset ?: 0f)).times(em).coerceIn(12f * scale, width * .4f)
-    val textWidth = width - gutter.toInt() * 2
-    val quote = reviewTextBlock(entry.quote.ifBlank { entry.title.ifBlank { "读书笔记" } }, textWidth,
-        em * (declarations?.sizeEm ?: 1f), foreground, options, css, quotation = true)
+    val gutter = ((declarations?.padding ?: (96f / 47f)) + (declarations?.inset ?: 0f)).times(em).coerceIn(12f * scale, layoutWidth * .4f)
+    val textWidth = layoutWidth - gutter.toInt() * 2
+    val quotation = entry.quote.ifBlank { entry.title.ifBlank { "读书笔记" } }
+    val normalQuote = reviewTextBlock(quotation, textWidth, em, foreground, options, css, quotation = true)
+    val quoteSize = declarations?.sizeEm?.let { em * it } ?: when {
+        normalQuote.layout.lineCount <= 2 -> 64f * scale
+        normalQuote.layout.lineCount <= 5 -> 56f * scale
+        normalQuote.layout.lineCount <= 12 -> em
+        else -> 43f * scale
+    }
+    val quote = reviewTextBlock(quotation, textWidth, quoteSize, foreground, options, css, quotation = true)
     val thought = if (options.thought && entry.body.isNotBlank()) reviewTextBlock(reviewPlainText(entry.body), textWidth, 32f * scale,
         foreground, options, null, quotation = false) else null
     val metadata = reviewTextBlock(listOfNotNull(
-        if (options.book) "${entry.book.title}\n${entry.locationLabel}" else null, entry.author,
+        if (options.book) "${entry.book.title}\n${entry.locationLabel}" else null,
+        entry.author.takeIf { entry.personaId != null },
         if (options.date) SimpleDateFormat("yyyy.MM.dd", Locale.getDefault()).format(Date(entry.timestamp)) else null
     ).joinToString(" · "), textWidth, 26f * scale, foreground, options, null, quotation = false)
     val extraTop = (declarations?.topEm ?: 0f) * em
     val extraBottom = (declarations?.bottomEm ?: 0f) * em
-    val contentHeight = (480 * scale + extraTop + extraBottom + quote.height + (thought?.let { 100 * scale + it.height } ?: 0f) + metadata.height).toInt()
+    val quoteTop = 216f * scale + extraTop
+    val footerGap = 96f * scale
+    val footerBottom = (if (options.watermark) 144f else 80f) * scale
+    val contentHeight = (quoteTop + extraBottom + quote.height + (thought?.let { 100 * scale + it.height } ?: 0f) +
+        footerGap + metadata.height + footerBottom).toInt()
     require(contentHeight <= 8192 * scale) { "这条内容较长，请使用 Markdown 导出以保留全文" }
-    val bitmap = Bitmap.createBitmap(width, contentHeight.coerceAtLeast((1440 * scale).toInt()), Bitmap.Config.ARGB_8888)
+    val cardHeight = contentHeight.coerceAtLeast((920 * scale).toInt())
+    val outputScale = width / layoutWidth.toFloat()
+    val bitmap = Bitmap.createBitmap(width, kotlin.math.ceil(cardHeight * outputScale).toInt(), Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bitmap)
-    val bounds = RectF(0f, 0f, width.toFloat(), bitmap.height.toFloat())
-    val radius = ((declarations?.radius ?: 0f) * em).coerceAtMost(width / 2f)
+    canvas.scale(outputScale, outputScale)
+    val bounds = RectF(0f, 0f, layoutWidth.toFloat(), cardHeight.toFloat())
+    val radius = ((declarations?.radius ?: 0f) * em).coerceAtMost(layoutWidth / 2f)
     canvas.clipPath(android.graphics.Path().apply { addRoundRect(bounds, radius, radius, android.graphics.Path.Direction.CW) })
     canvas.drawColor(background)
     declarations?.paint?.let { drawReviewBackground(canvas, bounds, it, options.imagePaths) }
@@ -77,11 +94,12 @@ internal fun renderReviewCard(entry: ReviewEntry, style: ReviewCardStyle, option
     val ornament = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = accent; textSize = 150f * scale; typeface = Typeface.create("serif", Typeface.NORMAL)
     }
-    canvas.drawText("“", gutter - 8f * scale, 204f * scale, ornament)
+    val breathingRoom = (cardHeight - contentHeight) * .42f
+    canvas.drawText("“", gutter - 8f * scale, 158f * scale + breathingRoom, ornament)
     fun draw(block: ReviewTextBlock, y: Float) {
         canvas.save(); canvas.translate(gutter, y); block.draw(canvas); canvas.restore()
     }
-    var y = 280f * scale + extraTop
+    var y = quoteTop + breathingRoom
     draw(quote, y)
     y += quote.height + extraBottom
     thought?.let {
@@ -92,9 +110,9 @@ internal fun renderReviewCard(entry: ReviewEntry, style: ReviewCardStyle, option
         y += 40f * scale
         draw(it, y)
     }
-    draw(metadata, bitmap.height - metadata.height - 160f * scale)
+    draw(metadata, cardHeight - metadata.height - footerBottom)
     ornament.apply { textSize = 24f * scale; typeface = Typeface.create("sans-serif", Typeface.NORMAL) }
-    if (options.watermark) canvas.drawText("墨知 MoRead", gutter, bitmap.height - 64f * scale, ornament)
+    if (options.watermark) canvas.drawText("墨知 MoRead", gutter, cardHeight - 64f * scale, ornament)
     declarations?.borderWidth?.takeIf { it > 0f }?.let { border ->
         val inset = border * em / 2
         canvas.drawRoundRect(RectF(bounds).apply { inset(inset, inset) }, radius, radius, Paint(Paint.ANTI_ALIAS_FLAG).apply {

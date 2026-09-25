@@ -43,7 +43,9 @@ data class CustomReaderTheme(
     val showFooter: Boolean = true,
     val backgroundImageId: String? = null,
     val backgroundImagePath: String? = null,
-    val backgroundImageOpacity: Float = 0.28f
+    val backgroundImageOpacity: Float = 0.28f,
+    /** Legacy themes preserve their saved ink; newly created themes opt into automatic contrast. */
+    val textColorCustomized: Boolean = true
 )
 
 object CustomReaderThemeCodec {

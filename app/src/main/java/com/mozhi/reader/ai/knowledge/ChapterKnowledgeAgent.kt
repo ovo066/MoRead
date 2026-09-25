@@ -51,7 +51,7 @@ class ChapterKnowledgeAgent @Inject constructor(
             从 source 中识别人名或稳定称呼，提取原文明确交代的身份、行为和关系；没有人物就返回空数组。
             每人优先保留1–2条重要且不重复的事实，text简洁具体，不超过120字。人名必须逐字出现在原文中；不使用他、她、我、旁白等泛称，不猜测别名属于同一人。
             每条事实附4–300字的连续 quote，必须逐字照录且在这段 source 中唯一。不要改标点或用省略号代替原文。
-            另用 attributes 提取明确的别名(ALIAS)、年龄(AGE)、性别(GENDER)、身份(IDENTITY)，每项含 kind、value、quote。
+            另用 attributes 提取明确的别名(ALIAS)、年龄(AGE)、性别(GENDER)、身份(IDENTITY)、外貌(APPEARANCE，发色/瞳色/身形/服饰/标志物)，每项含 kind、value、quote。外貌只用明确原文，不推断。
             年龄保留原文的时期与表述，不推算当前年龄；不按名字或职业猜性别。未交代的属性省略，不写未知。
             relationships 每项含 target、relation、quote。relation 表示当前人物相对 target 的关系，例如父亲、师父、盟友。
             属性引文包含当前人名；别名引文必须同时包含当前人名与别名；关系引文必须包含双方称呼。缺少明确依据则省略，不强行合并同名或相似称呼。
@@ -146,7 +146,7 @@ class ChapterKnowledgeAgent @Inject constructor(
                                 putJsonObject("items") {
                                     put("type", "object")
                                     putJsonObject("properties") {
-                                        putJsonObject("kind") { put("type", "string"); putJsonArray("enum") { add("ALIAS"); add("AGE"); add("GENDER"); add("IDENTITY") } }
+                                        putJsonObject("kind") { put("type", "string"); putJsonArray("enum") { add("ALIAS"); add("AGE"); add("GENDER"); add("IDENTITY"); add("APPEARANCE") } }
                                         putJsonObject("value") { put("type", "string") }
                                         putJsonObject("quote") { put("type", "string") }
                                     }

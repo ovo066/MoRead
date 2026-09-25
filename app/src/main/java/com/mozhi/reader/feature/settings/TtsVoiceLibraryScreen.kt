@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Download
@@ -56,6 +57,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -70,6 +72,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.mozhi.reader.ai.media.AiMediaGenerationService
+import com.mozhi.reader.ai.client.AiClientFactory
+import com.mozhi.reader.core.speech.GeminiVoicePresets
+import com.mozhi.reader.core.speech.VoiceDesignPreviewStore
 import com.mozhi.reader.core.database.entity.TtsVoiceEntity
 import com.mozhi.reader.core.speech.TtsSettingsStore
 import com.mozhi.reader.core.speech.TtsVoiceRepository
@@ -77,6 +82,8 @@ import com.mozhi.reader.ui.components.FrostedSurface
 import com.mozhi.reader.ui.components.MoReadBackdrop
 import com.mozhi.reader.ui.components.MoReadMenuDivider
 import com.mozhi.reader.ui.components.MoReadMenuItem
+import com.mozhi.reader.ui.components.MoReadRow
+import com.mozhi.reader.ui.components.MoReadSection
 import com.mozhi.reader.ui.components.MoReadStableDropdownMenu
 import com.mozhi.reader.ui.theme.MoReadTokens
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -118,7 +125,9 @@ private data class VoiceFilters(
 class TtsVoiceLibraryViewModel @Inject constructor(
     private val repository: TtsVoiceRepository,
     private val settingsStore: TtsSettingsStore,
-    private val mediaService: AiMediaGenerationService
+    private val mediaService: AiMediaGenerationService,
+    private val clientFactory: AiClientFactory,
+    private val designPreviews: VoiceDesignPreviewStore
 ) : ViewModel() {
     private val search = MutableStateFlow("")
     private val selectedTag = MutableStateFlow<String?>(null)
@@ -172,6 +181,14 @@ class TtsVoiceLibraryViewModel @Inject constructor(
     fun setGenderFilter(value: String?) { genderFilter.value = value }
     fun dismissMessage() { message.value = null }
 
+    fun revealCreatedVoice(name: String) {
+        search.value = name
+        selectedTag.value = null
+        pinnedOnly.value = false
+        genderFilter.value = null
+        message.value = "音色已入库，可设为默认或绑定角色"
+    }
+
     fun save(voice: TtsVoiceEntity) = viewModelScope.launch {
         runCatching { repository.save(voice) }
             .onSuccess { message.value = "音色已保存" }
@@ -196,6 +213,26 @@ class TtsVoiceLibraryViewModel @Inject constructor(
         message.value = "已导入 MiniMax 常用音色"
     }
 
+    private var importingGemini = false
+    fun importGeminiPresets() = viewModelScope.launch {
+        repository.importGeminiVoices(GeminiVoicePresets.voices)
+        message.value = "已导入 Gemini 30 个预设音色"
+    }
+
+    fun importGeminiCatalog() = viewModelScope.launch {
+        if (importingGemini) return@launch
+        importingGemini = true
+        message.value = "正在读取 Gemini 在线音色…"
+        try {
+            val voices = clientFactory.geminiTtsVoices()
+            repository.importGeminiVoices(voices)
+            message.value = if (voices.isEmpty()) "服务暂未返回音色，可先导入 Gemini 预设"
+                else "已导入 ${voices.size} 个 Gemini 在线音色"
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) { message.value = error.message ?: "导入 Gemini 音色失败" }
+        finally { importingGemini = false }
+    }
+
     suspend fun exportJson(): String = VoiceJson.encode(repository.getVoices())
 
     fun importJson(raw: String) = viewModelScope.launch {
@@ -213,13 +250,14 @@ class TtsVoiceLibraryViewModel @Inject constructor(
         viewModelScope.launch {
             previewingVoiceId.value = voice.id
             try {
-                val speech = mediaService.synthesizeSpeech(
+                val cachedDesign = if (voice.providerHint == "GEMINI" && voice.voiceId.startsWith("voice_")) designPreviews.find(voice.voiceId) else null
+                val path = cachedDesign ?: mediaService.synthesizeSpeech(
                     bookId = 0,
                     text = PREVIEW_TEXT,
                     voiceId = voice.voiceId
-                )
+                ).path
                 player = MediaPlayer().apply {
-                    setDataSource(speech.path)
+                    setDataSource(path)
                     setOnPreparedListener { it.start() }
                     setOnCompletionListener {
                         it.release()
@@ -267,6 +305,8 @@ fun TtsVoiceLibraryScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
+    val designModel: VoiceDesignViewModel = hiltViewModel()
+    var showDesign by rememberSaveable { mutableStateOf(false) }
     var editor by remember { mutableStateOf<TtsVoiceEntity?>(null) }
     var pendingDelete by remember { mutableStateOf<TtsVoiceEntity?>(null) }
     var showImport by remember { mutableStateOf(false) }
@@ -328,6 +368,17 @@ fun TtsVoiceLibraryScreen(
                         )
                         MoReadMenuDivider()
                         MoReadMenuItem(
+                            text = "导入 Gemini 预设",
+                            icon = Icons.Outlined.Download,
+                            onClick = { topMenu = false; viewModel.importGeminiPresets() }
+                        )
+                        MoReadMenuItem(
+                            text = "获取 Gemini 在线音色",
+                            icon = Icons.Outlined.Download,
+                            onClick = { topMenu = false; viewModel.importGeminiCatalog() }
+                        )
+                        MoReadMenuDivider()
+                        MoReadMenuItem(
                             text = "从 JSON 导入",
                             icon = Icons.Outlined.Upload,
                             onClick = { topMenu = false; showImport = true }
@@ -354,6 +405,12 @@ fun TtsVoiceLibraryScreen(
                 ),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                item("voice-design-entry") {
+                    MoReadSection {
+                        MoReadRow(title = "设计新音色", subtitle = "和 AI 助手聊聊，或自己描述声音", icon = Icons.Outlined.AutoAwesome,
+                            onClick = { designModel.begin(); showDesign = true })
+                    }
+                }
                 val defaultName = state.voices
                     .firstOrNull { it.voiceId == state.defaultVoiceId }
                     ?.displayName
@@ -511,6 +568,10 @@ fun TtsVoiceLibraryScreen(
         }
     }
 
+    if (showDesign) VoiceDesignDialog(designModel, onDismiss = { showDesign = false }, onSaved = {
+        showDesign = false
+        viewModel.revealCreatedVoice(designModel.state.value.name)
+    })
     editor?.let { voice ->
         VoiceEditorDialog(voice, { editor = null }) {
             viewModel.save(it)
@@ -592,7 +653,7 @@ private fun EmptyVoiceLibrary(onImportPresets: () -> Unit, onCreate: () -> Unit)
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                "用 MiniMax 可以一键导入常用音色；其他服务商手动添加，填上服务商给的音色 ID。",
+                "右上角菜单可导入 MiniMax 或 Gemini 音色，也可手动添加服务商提供的音色 ID。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

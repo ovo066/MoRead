@@ -35,6 +35,7 @@ import com.mozhi.reader.core.speech.SleepTimerState
 import com.mozhi.reader.core.speech.SystemTtsSpeaker
 import com.mozhi.reader.core.speech.TtsEngineMode
 import com.mozhi.reader.core.speech.TtsSettings
+import com.mozhi.reader.core.speech.withSystemVoiceId
 import com.mozhi.reader.core.speech.TtsSettingsStore
 import com.mozhi.reader.core.speech.TtsSynthesisGranularity
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -445,7 +446,7 @@ class ListenEngine @Inject constructor(
                         val result = speakGuarded {
                             engineOk = systemTtsSpeaker.speakBatch(
                                 utterances = batch.map(Utterance::text),
-                                settings = settings
+                                settings = settings.withSystemVoiceId(batch.first().voiceId)
                             ) { startedIndex ->
                                 reached = startedIndex
                                 val utterance = batch.getOrNull(startedIndex) ?: return@speakBatch

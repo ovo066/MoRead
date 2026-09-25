@@ -1,5 +1,7 @@
 package com.mozhi.reader.feature.reader
 
+import com.mozhi.reader.core.i18n.resolve
+import com.mozhi.reader.ui.components.MoReadBottomSheet
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
@@ -42,7 +44,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Slider
@@ -175,6 +176,7 @@ fun ReaderScreen(
         else onOpenCompanionChat(bookId)
     }
     val snackbarHostState = remember { SnackbarHostState() }
+    var imageStudioEntry by remember(bookId) { mutableStateOf<com.mozhi.reader.feature.illustration.StudioEntry?>(null) }
     val screenState = rememberReaderScreenState(bookId)
     val autoRead = remember(bookId) { AutoReadSession() }
     var hardwarePageTurnRequest by remember { mutableStateOf<ReaderPageTurnRequest?>(null) }
@@ -547,7 +549,7 @@ fun ReaderScreen(
         viewModel.events.collect { event ->
             when (event) {
                 is ReaderEvent.ShowMessage -> snackbarHostState.showSnackbar(event.message)
-                is ReaderEvent.ShowLocalizedMessage -> snackbarHostState.showSnackbar(context.getString(event.resourceId))
+                is ReaderEvent.ShowLocalizedMessage -> snackbarHostState.showSnackbar(event.text.resolve(context))
                 is ReaderEvent.ConfirmFontImport -> {
                     screenState.pendingFont = event.pending
                     screenState.pendingFontName = event.pending.detectedName
@@ -850,15 +852,12 @@ fun ReaderScreen(
                         coroutineScope.launch {
                             val source = viewModel.sourceSelectionForDisplayed(chapterIndex, range)
                                 ?: return@launch
-                            selectionMediaViewModel.generateImage(
-                                bookId = bookId,
-                                bookTitle = state.book?.title.orEmpty(),
-                                chapterTitle = chapterTitle,
+                            imageStudioEntry = com.mozhi.reader.feature.illustration.StudioEntry(
+                                page = com.mozhi.reader.feature.illustration.StudioPage.GENERATE,
+                                source = source.text,
                                 chapterIndex = chapterIndex,
                                 charOffset = source.start,
-                                textAnchorJson = source.textAnchorJson,
-                                selection = source.text,
-                                contextText = contextText
+                                anchor = source.textAnchorJson
                             )
                         }
                     }
@@ -1094,6 +1093,9 @@ fun ReaderScreen(
             }
         )
 
+        imageStudioEntry?.let { entry ->
+            com.mozhi.reader.feature.illustration.ImageStudio(bookId, entry, onDismiss = { imageStudioEntry = null })
+        }
         ReaderSelectionMediaStatus(
             state = selectionMediaState,
             palette = palette,
@@ -1161,7 +1163,7 @@ fun ReaderScreen(
                 color = palette.glassStrong.compositeOver(palette.background),
                 contentColor = palette.onBackground,
                 border = androidx.compose.foundation.BorderStroke(1.dp, palette.glassBorder),
-                shadowElevation = 12.dp
+                shadowElevation = 0.dp
             ) {
                 Column(
                     modifier = Modifier.padding(16.dp),
@@ -1222,7 +1224,7 @@ fun ReaderScreen(
                 color = palette.glassStrong.compositeOver(palette.background),
                 contentColor = palette.onBackground,
                 border = androidx.compose.foundation.BorderStroke(1.dp, palette.glassBorder),
-                shadowElevation = 8.dp
+                shadowElevation = 0.dp
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     TextButton(onClick = {
@@ -1351,7 +1353,7 @@ fun ReaderScreen(
         ReaderSheet.SYNTAX -> ReaderSyntaxSheet(state.settings, palette, typographyActions.syntax) {
             screenState.activeSheet = null
         }
-        ReaderSheet.REIDENTIFY_CHAPTERS -> ModalBottomSheet(
+        ReaderSheet.REIDENTIFY_CHAPTERS -> MoReadBottomSheet(
             onDismissRequest = { screenState.activeSheet = null },
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
             containerColor = palette.glassStrong,
@@ -1366,7 +1368,7 @@ fun ReaderScreen(
                 }
             )
         }
-        ReaderSheet.TEXT_REPLACEMENT_RULES -> ModalBottomSheet(
+        ReaderSheet.TEXT_REPLACEMENT_RULES -> MoReadBottomSheet(
             onDismissRequest = { screenState.activeSheet = null },
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
             containerColor = palette.glassStrong,
@@ -1399,7 +1401,7 @@ fun ReaderScreen(
             LaunchedEffect(bookId, conversionMode) {
                 searchViewModel.bind(bookId, conversionMode)
             }
-            ModalBottomSheet(
+            MoReadBottomSheet(
                 onDismissRequest = {
                     screenState.activeSheet = null
                     searchViewModel.clear()
@@ -1467,7 +1469,7 @@ fun ReaderScreen(
         val discussionState by discussionViewModel.uiState.collectAsStateWithLifecycle()
         val threadIds = threadAnnotations.map { it.id }
         LaunchedEffect(threadIds) { discussionViewModel.open(threadIds) }
-        ModalBottomSheet(
+        MoReadBottomSheet(
             onDismissRequest = {
                 screenState.annotationThread = null
                 discussionViewModel.close()
@@ -1524,12 +1526,11 @@ fun ReaderScreen(
         )
     }
 
-    ReaderGeneratedImageDialog(
-        state = selectionMediaState,
-        palette = palette,
-        onDismiss = selectionMediaViewModel::dismissImage,
-        onReroll = selectionMediaViewModel::rerollImage
-    )
+    selectionMediaState.imagePath?.let { path ->
+        com.mozhi.reader.feature.illustration.ImageStudio(bookId,
+            com.mozhi.reader.feature.illustration.StudioEntry(page = com.mozhi.reader.feature.illustration.StudioPage.GENERATE, imagePath = path),
+            onDismiss = selectionMediaViewModel::dismissImage)
+    }
 
     ReaderTextEditDialog(
         draft = screenState.textEditDraft,
@@ -1542,7 +1543,7 @@ fun ReaderScreen(
 
     screenState.aiRequest?.let { request ->
         LaunchedEffect(request) { aiViewModel.start(request) }
-        ModalBottomSheet(
+        MoReadBottomSheet(
             onDismissRequest = {
                 aiViewModel.stop()
                 aiViewModel.reset()

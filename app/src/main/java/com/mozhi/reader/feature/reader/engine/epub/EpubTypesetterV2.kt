@@ -7,6 +7,7 @@ import com.mozhi.reader.core.epub.style.EpubLayoutCapabilityAnalyzer
 import com.mozhi.reader.core.epub.style.EpubDisplay
 import com.mozhi.reader.core.epub.style.EpubFloatValue
 import com.mozhi.reader.core.epub.style.EpubStyleResolver
+import com.mozhi.reader.core.epub.style.EpubWritingMode
 import com.mozhi.reader.core.epub.style.ResolvedLength
 import com.mozhi.reader.core.epub.style.StyledDomNode
 import com.mozhi.reader.core.library.EpubLayoutChapterBundle
@@ -58,27 +59,43 @@ internal class EpubTypesetterV2(
             publisherStyleMode = spec.publisherStyleMode,
             preParsedPublisherRules = cachedRules(stylesheets),
             documentHref = bundle.document.href
-        ).resolve(dom.bodyNode)
+        ).resolve(dom.bodyNode, dom.htmlNode)
         val immersive = bundle.document.immersivePage || isBackgroundArtwork(publisherRoot)
         val styledRoot = applyReaderPaper(publisherRoot, immersive)
         cancellationCheck()
+        // 布局前先做能力判定：vertical-lr 等尚不支持的书写模式按结构化原因降级到横排，而不是排到一半才发现。
+        val capability = EpubLayoutCapabilityAnalyzer.analyze(styledRoot)
+        // 整页插画不分横竖，按横排的沉浸落位最稳；其余 vertical-rl 章节在旋转坐标系里排。
+        val vertical = capability.chapterWritingMode == EpubWritingMode.VERTICAL_RL && !immersive
+        val layoutSpec = if (vertical) {
+            spec.copy(
+                visibleWidth = spec.visibleHeight,
+                visibleHeight = spec.visibleWidth,
+                immersiveExtraTopPx = 0f,
+                immersiveExtraBottomPx = 0f
+            )
+        } else spec
+        val layoutRoot = if (vertical) EpubVerticalFrame.toFrame(styledRoot) else styledRoot
         val ctx = EpubLayoutContext(
-            spec = spec,
+            spec = layoutSpec,
             measure = measure,
             body = body,
             bundle = bundle,
             inlineMarkers = inlineMarkers,
             cancellationCheck = cancellationCheck,
             immersivePage = immersive,
-            dominantBodyFamily = dominantBodyFamily(styledRoot)
+            dominantBodyFamily = dominantBodyFamily(styledRoot),
+            verticalWriting = vertical
         )
-        ctx.imageSources = inlineImages.associateBy(InlineImageSource::charOffset)
-        // 布局前先做能力判定：竖排等尚不支持的书写模式按结构化原因降级到横排，而不是排到一半才发现。
-        val capability = EpubLayoutCapabilityAnalyzer.analyze(styledRoot)
-        val boxTree = EpubBoxTreeBuilder.build(styledRoot)
+        ctx.imageSources = inlineImages.associate { image ->
+            // 竖排坐标系里图片的「宽」沿列方向，也就是物理高度；绘制时再立回来。
+            image.charOffset to if (vertical) image.copy(pixelWidth = image.pixelHeight, pixelHeight = image.pixelWidth) else image
+        }
+        val boxTree = EpubBoxTreeBuilder.build(layoutRoot)
         val output = EpubBlockLayout(ctx).layout(boxTree)
         val fullPageArtwork = fitImmersiveArtwork(ctx, output)
-        val hideHeader = firstPageHidesReaderHeader(dom.bodyNode)
+        // 竖排页的页眉仍是横排的阅读器页眉；回收它的空间会落到旋转坐标系的错误轴上。
+        val hideHeader = !vertical && firstPageHidesReaderHeader(dom.bodyNode)
         val builder = EpubPageBuilder(ctx)
         builder.firstPageExtraTop = hideHeader
         return builder.build(
@@ -88,7 +105,8 @@ internal class EpubTypesetterV2(
             bodyStyle = styledRoot.style,
             hideHeaderFirstPage = hideHeader,
             layoutCapability = capability,
-            fullPageArtwork = fullPageArtwork
+            fullPageArtwork = fullPageArtwork,
+            verticalFrameWidth = if (vertical) spec.visibleWidth else null
         )
     }
 
@@ -197,7 +215,7 @@ internal class EpubTypesetterV2(
             val paper = node === root || plainWrapper
             val preserveArtwork = immersive || node !== root && style.background.imageHref != null
             val background = if (paper && !preserveArtwork) {
-                style.background.copy(colorArgb = null)
+                style.background.copy(colorArgb = null, gradient = null)
             } else style.background
             return node.copy(style = style.copy(background = background), children = node.children.map(::visit))
         }

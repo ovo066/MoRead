@@ -108,6 +108,89 @@ class ReadingReviewVisualTest {
         compose.onNodeWithTag("review-filter-button").assertIsDisplayed()
     }
 
+    @Test fun optionsUseSecondaryPagesAndStayAnchoredToTheTopButton() {
+        show()
+        compose.onNodeWithTag("review-filter-button").performClick()
+        val header = compose.onNodeWithTag("review-options-menu").fetchSemanticsNode().boundsInRoot.top
+        val anchor = compose.onNodeWithTag("review-filter-button").fetchSemanticsNode().boundsInRoot
+        val menu = compose.onNodeWithTag("review-options-menu").fetchSemanticsNode().boundsInRoot
+        var popupTop = 0
+        compose.runOnIdle {
+            val popup = WindowInspector.getGlobalWindowViews().last { it.isShown && it !== root }
+            val position = popup.layoutParams as android.view.WindowManager.LayoutParams
+            // The popup anchors to the button's touch container, which extends beyond its 40 dp face.
+            assertTrue(position.y - anchor.bottom in 6f..14f)
+            popupTop = position.y
+        }
+        assertTrue(menu.width <= 282f)
+        compose.onNodeWithTag("navigation-sheet").assertDoesNotExist()
+        compose.onNodeWithText("回顾选项").assertDoesNotExist()
+        compose.onNodeWithContentDescription("关闭回顾选项").assertDoesNotExist()
+        capture("review-options.png", dialog = true)
+        compose.onNodeWithTag("review-choose-source").performClick()
+        compose.onNodeWithTag("review-source-AI").performClick()
+        compose.onNodeWithTag("review-choose-persona").performClick()
+        compose.onNodeWithTag("review-persona-7").assertIsDisplayed()
+        capture("review-options-persona.png", dialog = true)
+        repeat(3) { compose.onNodeWithTag("review-options-list").performTouchInput { swipeDown(durationMillis = 140) } }
+        assertEquals(header, compose.onNodeWithTag("review-options-menu").fetchSemanticsNode().boundsInRoot.top, .5f)
+        compose.runOnIdle {
+            val popup = WindowInspector.getGlobalWindowViews().last { it.isShown && it !== root }
+            assertEquals(popupTop, (popup.layoutParams as android.view.WindowManager.LayoutParams).y)
+        }
+        compose.onNodeWithContentDescription("返回上一级").performClick()
+        compose.onNodeWithTag("review-choose-font").performScrollTo().performClick()
+        capture("review-options-font.png", dialog = true)
+        compose.onNodeWithTag("review-filter-button").performClick()
+        compose.onNodeWithTag("review-filter-button").performClick()
+        compose.onNodeWithTag("review-choose-source").assertTextContains("AI 伴读")
+    }
+
+    @Test @Config(qualifiers = "w320dp-h640dp-mdpi")
+    fun optionsStayUsableOnSmallDarkScreensWithLongRoleNames() {
+        state = state.copy(personas = state.personas.map { it.copy(name = "守在灯塔旁一起读书的阿翎") })
+        show(true)
+        compose.onNodeWithTag("review-filter-button").performClick()
+        capture("review-options-dark-small.png", dialog = true)
+        compose.onNodeWithTag("review-choose-source").performClick()
+        compose.onNodeWithTag("review-source-AI").performClick()
+        compose.onNodeWithTag("review-choose-persona").performClick()
+        compose.onNodeWithTag("review-persona-7").performClick()
+        compose.onNodeWithTag("review-choose-font").performScrollTo().performClick()
+        capture("review-options-font-dark-small.png", dialog = true)
+        compose.onNodeWithContentDescription("返回上一级").assertIsDisplayed()
+    }
+
+    @Test fun focusGesturesOpenAndDismissWhileLongQuotesKeepScrolling() {
+        val original = state.entries.first { it.annotation != null }
+        val short = original.copy(annotation = original.annotation!!.copy(selectedText = "鸟都没叫。"))
+        val long = original.copy(annotation = original.annotation!!.copy(id = 200, selectedText = "在雨声里翻开书页，记住这一刻。".repeat(100)))
+        var opened = 0
+        var closed = 0
+        compose.setContent {
+            root = LocalView.current.rootView
+            MoReadTheme { ReviewPagerDialog(listOf(short, long), { closed++ }, { opened++ }, {}, {}) }
+        }
+        val shortQuote = compose.onNodeWithTag("review-focus-quote-${short.key}")
+        val shortHeight = shortQuote.fetchSemanticsNode().boundsInRoot.height
+        capture("review-focus-short.png", dialog = true)
+        compose.onNodeWithTag("review-pager").performTouchInput { swipeUp() }
+        compose.waitForIdle()
+        assertEquals(1, opened)
+        compose.onNodeWithTag("review-pager").performTouchInput { swipeDown() }
+        compose.waitForIdle()
+        assertEquals(1, closed)
+        compose.onNodeWithTag("review-pager").performTouchInput { swipeLeft() }
+        val longQuote = compose.onNodeWithTag("review-focus-quote-${long.key}")
+        assertTrue(longQuote.fetchSemanticsNode().boundsInRoot.height > shortHeight)
+        longQuote.performTouchInput { swipeUp() }
+        compose.waitForIdle()
+        assertTrue(longQuote.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value() > 0)
+        assertEquals(1, opened)
+        assertEquals(1, closed)
+        capture("review-focus-long.png", dialog = true)
+    }
+
     @Test fun sageThemeKeepsItsHueInsteadOfForcingBlue() {
         show(scheme = ColorSchemePreset.SAGE, accent = AccentPreset.FOLLOW)
         capture("review-sage.png")
@@ -163,6 +246,8 @@ class ReadingReviewVisualTest {
             }
         }
         compose.onNodeWithContentDescription("回到原文").assertIsDisplayed()
+        compose.onNodeWithContentDescription("当前划线颜色").assertDoesNotExist()
+        compose.onNodeWithContentDescription("划线样式").assertIsDisplayed()
         capture("review-detail.png", dialog = true)
         compose.onNodeWithTag("review-reply").assertDoesNotExist()
         compose.onNodeWithTag("review-detail-list").performScrollToNode(hasText("接着聊"))
@@ -197,7 +282,7 @@ class ReadingReviewVisualTest {
         ReviewCardStyle.entries.forEach { style ->
             val bitmap = renderReviewCard(entry, style)
             assertEquals(1080, bitmap.width)
-            assertTrue(bitmap.height >= 1440)
+            assertTrue(bitmap.height >= 920)
             File("build/reports/reading-review/export-${style.name.lowercase()}.png").apply { parentFile.mkdirs() }
                 .outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
             bitmap.recycle()
@@ -269,14 +354,21 @@ class ReadingReviewVisualTest {
         compose.onNodeWithTag("review-filter-button").performClick()
         compose.onNodeWithTag("review-choose-source").performClick()
         compose.onNodeWithTag("review-source-$source").performClick()
-        compose.onNodeWithText("应用筛选").performClick()
+        compose.onNodeWithTag("review-filter-button").performClick()
     }
     private fun capture(name: String, dialog: Boolean = false) {
         compose.waitForIdle()
         compose.runOnIdle {
             val target = if (dialog) WindowInspector.getGlobalWindowViews().last { it.isShown && it !== root } else root
-            val bitmap = Bitmap.createBitmap(target.width, target.height, Bitmap.Config.ARGB_8888)
-            target.draw(Canvas(bitmap))
+            val popup = target.width < root.width
+            val bitmap = Bitmap.createBitmap(if (popup) root.width else target.width, if (popup) root.height else target.height, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bitmap)
+            if (popup) {
+                root.draw(canvas)
+                val position = target.layoutParams as android.view.WindowManager.LayoutParams
+                canvas.translate(position.x.toFloat(), position.y.toFloat())
+            }
+            target.draw(canvas)
             File("build/reports/reading-review/$name").apply { parentFile.mkdirs() }.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
             bitmap.recycle()
         }

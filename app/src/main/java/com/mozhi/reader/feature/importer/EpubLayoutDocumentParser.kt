@@ -322,7 +322,8 @@ class EpubLayoutDocumentParser @Inject constructor() {
                 bodyNode = body.toDomNode(rubyText, nodeAnchors, 0, 0),
                 textLength = extractedText.length,
                 diagnostics = chapterDiagnostics,
-                embeddedStylesheets = embeddedStylesheets
+                embeddedStylesheets = embeddedStylesheets,
+                htmlNode = body.parent()?.toRootDomNode()
             )
         )
     }
@@ -388,6 +389,16 @@ class EpubLayoutDocumentParser @Inject constructor() {
             anchors.entries.map { (node, anchor) -> NodeAnchor(node, anchor.start, anchor.end) }
         )
     }
+
+    /** The root element's own selectors and inline style; its children are the separate body tree. */
+    private fun Element.toRootDomNode(): EpubDomNode = EpubDomNode(
+        tag = normalName().lowercase(),
+        id = id().takeIf(String::isNotEmpty),
+        classes = classNames().sorted(),
+        attributes = buildMap {
+            DOM_ATTRIBUTE_WHITELIST.forEach { name -> attr(name).takeIf(String::isNotBlank)?.let { put(name, it) } }
+        }
+    )
 
     private fun Element.toDomNode(
         rubyText: IdentityHashMap<Element, String>,

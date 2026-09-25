@@ -23,7 +23,8 @@ data class EpubLayoutPackage(
 ) {
     companion object {
         const val CURRENT_SCHEMA_VERSION = 10
-        const val CURRENT_PARSER_REVISION = 1
+        /** 2: DOM records the `<html>` root so root-level writing-mode/font rules cascade. */
+        const val CURRENT_PARSER_REVISION = 2
     }
 }
 

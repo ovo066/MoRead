@@ -17,28 +17,31 @@ enum class TtsEngineMode { SYSTEM, AI }
 enum class TtsSynthesisGranularity { SENTENCE, PARAGRAPH, CHAPTER }
 
 /** 独立 TTS API 的服务商预设：MiniMax 直连、OpenAI 兼容与 GMI 请求队列。 */
-enum class TtsApiProvider { MINIMAX_CN, MINIMAX_INTL, OPENAI_COMPAT, GMI_CLOUD }
+enum class TtsApiProvider { MINIMAX_CN, MINIMAX_INTL, OPENAI_COMPAT, GMI_CLOUD, GEMINI }
 
 fun TtsApiProvider.defaultBaseUrl(): String = when (this) {
     TtsApiProvider.MINIMAX_CN -> "https://api.minimaxi.com/v1"
     TtsApiProvider.MINIMAX_INTL -> "https://api.minimax.io/v1"
     TtsApiProvider.OPENAI_COMPAT -> "https://api.openai.com/v1"
     TtsApiProvider.GMI_CLOUD -> "https://console.gmicloud.ai"
+    TtsApiProvider.GEMINI -> "https://generativelanguage.googleapis.com/v1beta"
 }
 
 fun TtsApiProvider.defaultModel(): String = when (this) {
     TtsApiProvider.MINIMAX_CN, TtsApiProvider.MINIMAX_INTL -> "speech-2.8-hd"
     TtsApiProvider.OPENAI_COMPAT -> "gpt-4o-mini-tts"
     TtsApiProvider.GMI_CLOUD -> "minimax-tts-speech-2.8-hd"
+    TtsApiProvider.GEMINI -> "gemini-3.8-flash-tts"
 }
 
 /** 语音朗读配置：引擎切换 + 各云端协议参数，替代散落在 extraJson 里的手写字段。 */
 data class TtsSettings(
-    val engineMode: TtsEngineMode = TtsEngineMode.AI,
+    val engineMode: TtsEngineMode = TtsEngineMode.SYSTEM,
     /** 系统 TTS 引擎包名；空 = 系统默认引擎（如用户设为 Multi TTS 即生效）。 */
     val systemEnginePackage: String = "",
     /** BCP-47 语言标签；空 = 引擎默认。 */
     val systemLanguageTag: String = "",
+    val systemVoiceName: String = "",
     val systemRate: Float = 1f,
     val systemPitch: Float = 1f,
     val aiVoiceId: String = "",
@@ -64,14 +67,16 @@ data class TtsSettings(
     /** Key 单独存 EncryptedSharedPreferences，可用性另行校验。 */
     val aiApiConfigured: Boolean get() = aiBaseUrl.isNotBlank() && aiModel.isNotBlank()
 
+    val aiIsGemini: Boolean get() = aiProvider == TtsApiProvider.GEMINI
+
     /** 是否按 GMI Request Queue 协议请求。 */
     val aiIsGmiCloud: Boolean
-        get() = aiProvider == TtsApiProvider.GMI_CLOUD ||
-            aiBaseUrl.contains("gmicloud.ai", ignoreCase = true)
+        get() = !aiIsGemini && (aiProvider == TtsApiProvider.GMI_CLOUD ||
+            aiBaseUrl.contains("gmicloud.ai", ignoreCase = true))
 
     /** 是否按 MiniMax t2a_v2 协议请求（自定义中转 URL 含 minimax 时也算）。 */
     val aiIsMiniMax: Boolean
-        get() = !aiIsGmiCloud && (
+        get() = !aiIsGemini && !aiIsGmiCloud && (
             aiProvider == TtsApiProvider.MINIMAX_CN ||
                 aiProvider == TtsApiProvider.MINIMAX_INTL ||
                 aiBaseUrl.contains("minimax", ignoreCase = true)
@@ -86,12 +91,39 @@ class TtsSettingsStore @Inject constructor(
 
     suspend fun current(): TtsSettings = settings.first()
 
+    /** Read a provider's saved configuration without changing the user's active reading engine/provider. */
+    suspend fun forProvider(provider: TtsApiProvider): TtsSettings {
+        val prefs = dataStore.data.first()
+        val current = readFrom(prefs)
+        if (current.aiProvider == provider) return current
+        val profile = TtsProviderProfiles.decode(prefs[KEY_AI_PROFILES])[provider.name]
+            ?: TtsProviderProfile.defaults(provider)
+        return profile.applyTo(current.copy(aiProvider = provider))
+    }
+
     suspend fun update(transform: (TtsSettings) -> TtsSettings) {
         dataStore.edit { prefs ->
-            val next = transform(readFrom(prefs))
+            val current = readFrom(prefs)
+            val requested = transform(current)
+            val profiles = TtsProviderProfiles.decode(prefs[KEY_AI_PROFILES]).toMutableMap()
+            profiles[current.aiProvider.name] = TtsProviderProfile.from(current)
+            var next = if (requested.aiProvider != current.aiProvider) {
+                (profiles[requested.aiProvider.name] ?: TtsProviderProfile.defaults(requested.aiProvider))
+                    .applyTo(requested)
+            } else requested
+            profiles[next.aiProvider.name] = TtsProviderProfile.from(next)
+            prefs[KEY_AI_PROFILES] = TtsProviderProfiles.encode(profiles)
+            val systemProfiles = TtsProviderProfiles.decodeSystem(prefs[KEY_SYSTEM_PROFILES]).toMutableMap()
+            systemProfiles[current.systemEnginePackage] = TtsSystemProfile.from(current)
+            if (next.systemEnginePackage != current.systemEnginePackage) {
+                next = (systemProfiles[next.systemEnginePackage] ?: TtsSystemProfile()).applyTo(next)
+            }
+            systemProfiles[next.systemEnginePackage] = TtsSystemProfile.from(next)
+            prefs[KEY_SYSTEM_PROFILES] = TtsProviderProfiles.encodeSystem(systemProfiles)
             prefs[KEY_ENGINE_MODE] = next.engineMode.name
             prefs[KEY_SYSTEM_ENGINE] = next.systemEnginePackage
             prefs[KEY_SYSTEM_LANGUAGE] = next.systemLanguageTag
+            prefs[KEY_SYSTEM_VOICE] = next.systemVoiceName
             prefs[KEY_SYSTEM_RATE] = next.systemRate
             prefs[KEY_SYSTEM_PITCH] = next.systemPitch
             prefs[KEY_AI_VOICE] = next.aiVoiceId
@@ -118,9 +150,10 @@ class TtsSettingsStore @Inject constructor(
     private fun readFrom(prefs: Preferences): TtsSettings = TtsSettings(
         engineMode = prefs[KEY_ENGINE_MODE]
             ?.let { raw -> TtsEngineMode.entries.firstOrNull { it.name == raw } }
-            ?: TtsEngineMode.AI,
+            ?: TtsEngineMode.SYSTEM,
         systemEnginePackage = prefs[KEY_SYSTEM_ENGINE].orEmpty(),
         systemLanguageTag = prefs[KEY_SYSTEM_LANGUAGE].orEmpty(),
+        systemVoiceName = prefs[KEY_SYSTEM_VOICE].orEmpty(),
         systemRate = prefs[KEY_SYSTEM_RATE] ?: 1f,
         systemPitch = prefs[KEY_SYSTEM_PITCH] ?: 1f,
         aiVoiceId = prefs[KEY_AI_VOICE].orEmpty(),
@@ -151,10 +184,15 @@ class TtsSettingsStore @Inject constructor(
     companion object {
         /** 独立 TTS API Key 在 EncryptedSharedPreferences 里的别名。 */
         const val API_KEY_ALIAS = "standalone-tts-api"
+        fun apiKeyAlias(provider: TtsApiProvider): String = "$API_KEY_ALIAS-${provider.name}"
+
+        private val KEY_AI_PROFILES = stringPreferencesKey("tts_ai_provider_profiles")
+        private val KEY_SYSTEM_PROFILES = stringPreferencesKey("tts_system_engine_profiles")
 
         private val KEY_ENGINE_MODE = stringPreferencesKey("tts_engine_mode")
         private val KEY_SYSTEM_ENGINE = stringPreferencesKey("tts_system_engine")
         private val KEY_SYSTEM_LANGUAGE = stringPreferencesKey("tts_system_language")
+        private val KEY_SYSTEM_VOICE = stringPreferencesKey("tts_system_voice")
         private val KEY_SYSTEM_RATE = floatPreferencesKey("tts_system_rate")
         private val KEY_SYSTEM_PITCH = floatPreferencesKey("tts_system_pitch")
         private val KEY_AI_VOICE = stringPreferencesKey("tts_ai_voice")

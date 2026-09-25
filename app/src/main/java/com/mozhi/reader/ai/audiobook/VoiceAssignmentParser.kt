@@ -3,6 +3,7 @@ package com.mozhi.reader.ai.audiobook
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -15,15 +16,15 @@ object VoiceAssignmentParser {
             is JsonObject -> {
                 val nested = root["voiceAssignments"]
                 if (nested is JsonObject) nested.entries.mapNotNull { (role, value) ->
-                    value.jsonPrimitive.contentOrNull?.let { role to it }
+                    (value as? JsonPrimitive)?.contentOrNull?.let { role to it }
                 } else root.entries.mapNotNull { (role, value) ->
-                    value.jsonPrimitive.contentOrNull?.let { role to it }
+                    (value as? JsonPrimitive)?.contentOrNull?.let { role to it }
                 }
             }
             is JsonArray -> root.mapNotNull { item ->
                 val obj = item as? JsonObject ?: return@mapNotNull null
-                val role = obj["role"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-                val voice = obj["voiceId"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+                val role = (obj["role"] as? JsonPrimitive)?.contentOrNull ?: return@mapNotNull null
+                val voice = (obj["voiceId"] as? JsonPrimitive)?.contentOrNull ?: return@mapNotNull null
                 role to voice
             }
             else -> emptyList()

@@ -32,6 +32,8 @@ class ChapterStrip(
 
     /** 页的条带占高 = 最后一行的基线推进 + 被切缝吞掉的段距/标题距。 */
     private fun pageExtent(page: TextPage): Float {
+        // 竖排页的行是物理上的列，条带里整页占一屏高，不做跨页续接。
+        if (page.isVertical) return spec.visibleHeight
         val last = page.lines.lastOrNull() ?: return spec.visibleHeight
         val naturalStep = when {
             last.inlineImage != null -> last.lineBottom - last.lineTop
@@ -62,6 +64,7 @@ class ChapterStrip(
         if (pages.isEmpty()) return 0
         var pageIndex = pageIndexAt(stripY)
         val localY = stripY - pageTops[pageIndex]
+        if (pages[pageIndex].isVertical) return pages[pageIndex].chapterPosition
         pages[pageIndex].lines
             .firstOrNull { it.charLength > 0 && it.lineBottom > localY }
             ?.let { return it.chapterPosition }
@@ -79,6 +82,7 @@ class ChapterStrip(
         if (pages.isEmpty()) return 0f
         val pageIndex = chapter.pageIndexAt(charOffset)
         val page = pages[pageIndex]
+        if (page.isVertical) return pageTops[pageIndex]
         val line = page.lines.lastOrNull { it.charLength > 0 && it.chapterPosition <= charOffset }
             ?: page.lines.firstOrNull()
         return pageTops[pageIndex] + (line?.lineTop ?: 0f)

@@ -9,7 +9,7 @@
 | 路径 | 职责 |
 | --- | --- |
 | [`app/src/main`](../app/src/main) | Android 应用、资源与清单 |
-| [`app/src/main/res`](../app/src/main/res) | 默认中文与英文字符串资源；迁移约定见 [本地化指南](LOCALIZATION.md) |
+| [`app/src/main/res`](../app/src/main/res) | 默认中文与英文字符串资源、`xml/locales_config.xml` 应用语言声明；迁移约定见 [本地化指南](LOCALIZATION.md) |
 | [`app/src/test`](../app/src/test) | JVM 单元测试：解析、检索、排版、坐标映射和状态转换等 |
 | [`app/src/androidTest`](../app/src/androidTest) | Android 数据库迁移、恢复和 Compose 交互测试 |
 | [`app/schemas`](../app/schemas) | Room 导出的各版本数据库结构 |
@@ -28,9 +28,9 @@
 - [`ui/MoReadNavigation.kt`](../app/src/main/java/com/mozhi/reader/ui/MoReadNavigation.kt)：按起止路由统一选择转场；根页互切只做淡出淡入，二级页进退使用配套的横向共享轴动画。根页安全区忽略系统栏可见性，宽屏侧栏留白属于各根页而非共享 NavHost。
 - `ui/BookNavigation` 为所有含 `{bookId}` 的二级路由声明 Long 参数，并统一读取导航与 SavedStateHandle；旧版本恢复的字符串或整数编号在这一边界兼容。
 - `ui/components/` 与 `ui/theme/`：共用页面、控件、间距和主题；新增设置页优先复用这里的组件。
-- [UI 约定](UI_GUIDELINES.md)：设置页信息层级、阅读辅助交互、主题组件入口和弹层回归要求。`ui/components/MoReadPageDialog` 统一独立整页窗口的背景；它与平板 `NavigationSheet` 共用透明系统栏和主题配置。`ReaderToolPage` 为阅读工具提供固定标题与独立滚动内容。
+- 设置页复用共用控件的信息层级、间距与主题。`ui/components/MoReadPageDialog` 统一独立整页窗口的背景；它与平板 `NavigationSheet` 共用透明系统栏和主题配置。`ReaderToolPage` 为阅读工具提供固定标题与独立滚动内容。
 - `ui/theme/AppTheme` 的 `AppearanceSettings` 将配色方案、色彩搭配、质感、导航与形状密度分别保存。`ColorSchemes` 提供三套莫兰迪日夜色板、原版灰阶及 Android 12+ 壁纸取色；`MoReadTheme` 统一装配，`Metrics` 提供随密度变化的尺寸。选择方案会套用推荐质感/形状并恢复方案主色；选择「原版」还恢复悬浮舱与默认色彩搭配，明暗和字体保留。
-- `ui/components/MoReadSurfaces` 统一处理玻璃与不透明扁平表面，`MoReadControls` 提供分段、滑条与胶囊按钮；`SemanticPalettes` 是内置标签与角色配色的公共入口。手机导航支持悬浮舱与通栏，平板保持侧栏；阅读目的地通过 `ReaderAppearanceScope` 保留纸色及原有浮层尺寸。
+- `ui/components/MoReadSurfaces` 统一处理原有玻璃、磨砂与不透明表面及页面背景，浮层不绘制阴影，`MoReadControls` 提供分段、滑条与胶囊按钮；`SemanticPalettes` 是内置标签与角色配色的公共入口。手机导航支持悬浮舱与通栏，平板保持侧栏；阅读目的地通过 `ReaderAppearanceScope` 保留纸色及原有浮层尺寸。
 - [平板与窗口适配](TABLET_UI.md)：根导航在底部导航、紧凑导航栏与完整侧栏之间切换。`TabletSettingsNavigation` 组织设置分类与详情，`CompanionWorkspace` 为书库和单书聊天复用常驻会话列表，`MoReadDetailLayout` 为书籍详情和听书提供摘要／内容分栏。`NavigationSheet` 统一宽屏侧面板与窄屏底部弹层，避免各功能复制窗口判断。
 - `core/di/`：应用协程、网络、数据库和向量存储等依赖注入。
 
@@ -38,7 +38,7 @@
 
 | 入口 | 职责与修改注意事项 |
 | --- | --- |
-| [`core/database/MoReadDatabase.kt`](../app/src/main/java/com/mozhi/reader/core/database/MoReadDatabase.kt) | Room 实体/DAO 集合与版本常量；当前 schema 为 **31** |
+| [`core/database/MoReadDatabase.kt`](../app/src/main/java/com/mozhi/reader/core/database/MoReadDatabase.kt) | Room 实体/DAO 集合与版本常量；当前 schema 为 **32** |
 | [`core/database/DatabaseMigrations.kt`](../app/src/main/java/com/mozhi/reader/core/database/DatabaseMigrations.kt) | 数据库迁移；新增迁移后在 `core/di/StorageModule.kt` 注册，并提交导出的 schema |
 | `core/database/entity/`、`core/database/dao/` | 书籍、章节、合集、标签、批注、对话、角色与有声书的数据定义和查询 |
 | [`core/datastore/ReaderSettingsRepository.kt`](../app/src/main/java/com/mozhi/reader/core/datastore/ReaderSettingsRepository.kt) | 阅读排版、主题、书架顺序及按书保存的设置 |
@@ -88,7 +88,9 @@ Room 结构、迁移、备份版本校验和实际数据文件要保持一致。
 
 - [`feature/reader/engine/`](../app/src/main/java/com/mozhi/reader/feature/reader/engine)：文本测量、分页、选区、批注几何与正文控制。
 - [`core/epub/`](../app/src/main/java/com/mozhi/reader/core/epub)：CSS 解析、级联、DOM 适配与样式解析。
-- `engine/EpubBoxLayoutBackend` 与 `engine/epub/`：EPUB 盒树、行内/块布局、分页和排版后端。`EpubLayoutCapability` 记录不支持的布局能力并选择回退（识别竖排不等于已实现竖排）；`EpubDomFragmentLocator` 用 DOM fragment id 定位目录锚点。
+- `engine/EpubBoxLayoutBackend` 与 `engine/epub/`：EPUB 盒树、行内/块布局、分页和排版后端。`EpubLayoutCapability` 记录不支持的布局能力并选择回退（目前只有 vertical-lr）；`EpubDomFragmentLocator` 用 DOM fragment id 定位目录锚点。级联从 `<html>` 开始（`EpubDomChapter.htmlNode`），`html { writing-mode }`、根字号与 `rem` 与浏览器一致。
+- 竖排（`writing-mode: vertical-rl`）不另写引擎：`engine/epub/EpubVerticalFrame` 把物理盒属性（四边、圆角、宽高、阴影、定位偏移）映射到顺时针旋转 90° 的坐标系，整章仍由横排引擎排版分页，行即物理上的列。`TextPage.verticalFrameWidth` 标记竖排页，`physicalToFrame` / `frameToPhysical`（`engine/VerticalPageGeometry`）是命中、选区、手柄和批注几何进出旋转坐标系的唯一入口。字向按 UAX #50（`engine/VerticalOrientation`，由 Unicode 数据生成）：直立字形用字体的 `vert` 替换，字体没有时退到 Unicode 竖排标点（`VerticalForms`），再没有才侧转；`text-orientation`、`text-combine-upright`（縦中横）在行内布局落到 `TextColumn`。渲染器只旋转画布，并在各自位置把直立字、图片、背景图和渐变转回物理方向；页面背景在旋转前绘制。竖排页的翻页方向为从右往左：`PageTurnDriver.mirrorProvider` 在镜像空间里处理手势，`ReaderPane` 镜像合成帧并预翻转页图，所有翻页动画共用同一套几何。滚动模式下竖排页按整屏条带拼接。回归见 `EpubVerticalWritingTest`、`VerticalOrientationTest` 与 `ReaderPageTouchTest`。
+- CSS 细节：`CssGradientParser` 解析 `linear-/radial-gradient` 及 `repeating-` 形式（含多层 `background` 取最上层有图的一层）；`border-*-style` 的 dashed/dotted/double/groove/ridge/inset/outset、`text-shadow`、`white-space: nowrap`、`position: relative/absolute`（相对最近的定位祖先，含 `transform: translate()`）进入样式与页面模型。绝对定位的行按文档序插入输出，保持 text.mz 坐标单调。边框描边落在边框盒内侧；`body` 背景图按 `background-size/repeat/position` 铺开（`TextPage.backgroundLayer`）。回归见 `CssEffectsParserTest`、`EpubCssEffectsLayoutTest`。
 - `engine/epub/EpubInlineLayout` 将纯图片段落与正文缩进分开：图片仍遵循对齐和宽度，含文字的行内图片段落仍保留正文缩进。浮动图片旁的剩余空间不足以容纳正常文字短串或下一张图片时，移到相交浮动区域下方再排，避免强制逐字换行形成窄竖列；普通图文环绕保持。回归见 `EpubImageLayoutRegressionTest`。
 - 用户排版在 EPUB 里必须可调。首行缩进统一走 `resolveFirstLineIndent`：原书优先模式照原书声明排，智能模式按用户设置与出厂值的比例缩放原书缩进（保留原书给引文等段落的相对差别），原书声明为 0 时直接用用户设置，接管模式完全采用用户设置，悬挂负缩进在所有模式保留。`text-indent` 是继承属性，祖先上的一条声明会让每个段落都算已声明，不能据此关闭用户设置。字间距按簇补偿：平台按 run 在字符之间分摊字间距，逐簇测量会全部丢失，两个 EPUB 后端都要加上 `TextMeasure.clusterLetterSpacing`。这两项只有真实 Paint 才测得出来，回归见 `engine/epub/EpubUserTypographyTest`。
 - `TextPage.fullPageArtwork`、`ImmersiveArtworkFit` 与 `PageBitmapRenderer`：大幅独立插画的整页展示与背景绘制。明确限定尺寸的小图不能被放大全屏；背景、分页和绘制缓存必须一致。
@@ -104,7 +106,7 @@ Room 结构、迁移、备份版本校验和实际数据文件要保持一致。
 - `AutoReadSession`、`AutoReadPaging` 与 `ReaderAutoReadControls`：阅读页右上角一级菜单中的自动阅读入口，支持匀速滚动、定时翻页和可选固定屏幕参考线。运行态不持久化；触摸、菜单、后台、语音播放与显式导航使会话暂停，必须手动继续。分页复用现有代次校验和位图提交，滚动复用章节条带与原文进度，计时器不直接写已读水位。参考线不生成批注，也不表示逐句跟读。
 - `ReaderTableOfContents`、`BookTextSearch`、`ReaderSearchViewModel`：目录与书内搜索。
 - `ReaderKnowledgeSheet` / `ReaderKnowledgeViewModel`：目录旁的“大纲”和“人物”页签。大纲展示连贯梗概，原文依据单独展开；人物页有“读到此处 / 全书”两档范围，支持手动提取、断点继续和查找。打开页面不调用模型，生成前显示范围、字数、模型与调用上限；“读到此处”只发送已读正文，末章截到当前进度，“全书”确认明确包含未读内容。
-- `ui/components/NavigationSheet` 固定内部内容视口并关闭父层拖动，提供明确关闭入口；ModalBottomSheet 外层保持完整窗口约束，使底边正确贴住窗口，不能在其 modifier 上限制比例高度。内部页面填满视口，列表使用自己的 `blockSheetDrag(state)`。三个页签用独立的可保存状态保留滚动位置，进度栏尺寸固定，同书刷新保留旧快照。新增导航页必须在真实弹层中验证底部贴边、边界滑动、切页与刷新，不能只检查独立列表截图。
+- `ui/components/MoReadBottomSheet` 是全部底部弹层的公共入口，自动关闭边缘拉伸并拦截列表越界滚动与惯性，保留标题／把手拖动关闭。`NavigationSheet` 在其上固定内部内容视口并提供宽屏侧栏；外层保持完整窗口约束，使底边正确贴住窗口，不能在其 modifier 上限制比例高度。内部页面填满视口，新列表无需逐页补丁。三个页签用独立的可保存状态保留滚动位置，进度栏尺寸固定，同书刷新保留旧快照。新增导航页必须在真实弹层中验证底部贴边、边界滑动、切页与刷新，不能只检查独立列表截图。
 - `ai/knowledge/ChapterKnowledgeRepository` / `ChapterKnowledgeAgent`：使用批量任务模型和独立 `AgentLoop`，每段最多两轮提交与纠错，不创建聊天记录。每章最多处理 60000 个 UTF-16 字符，按最多 10000 字的段落整理；长章额外合成为一篇连贯梗概。全部引文核对通过且来源仍有效后才原子替换；取消、失败、正文改版或水位缩小保留旧结果。
 - `KnowledgeGenerationRunner` 使用应用级作用域，每章任务和全书人物任务独立开始、停止和报错；`KnowledgeRequestLimiter` 公平限制为两个并发模型请求。离开页面继续运行，进程退出后未完成的章节需重生成，人物任务可从持久化断点继续。
 - `BookCharactersRepository` / `BookCharactersCodec`：按章读取正文，逐段提取人物；范围可收到阅读进度（`ReadingScope.uptoProgress`，末章只送已读部分）。分段结果绑定原文修订、模型、提示版本、分段范围和正文哈希，作为持久缓存跨次提取复用，复用时重新逐字核对，读过更多章节后“更新到当前进度”只为新正文计费；仅在全部章节完成后替换已发布人物资料，并把分段归到已发布的那一代，未完成的进度才算断点。按姓名精确合并，保留各人的初始介绍和后续事实，不猜测别名，聚合时不同时持有全书原文。
@@ -176,7 +178,7 @@ Room 结构、迁移、备份版本校验和实际数据文件要保持一致。
 - `core/vector/VectorQueries` 在章节范围内不超过 512 个切片时使用精确余弦排序（限制向量复制量）；较大范围使用有界 ANN 补召回，不承诺穷举。
 - `AiModelType.RERANK` / `ModelRole.RERANK` 提供独立可选重排模型；自定义供应商使用 `RerankApiClient` 调用 `/rerank` 或模型自定义路径，采用 query/documents 与 index/relevance_score 格式。`ConfiguredChunkReranker` 只重排已过滤候选的有界前缀：最多 24 段、每段 800 字、合计 12000 字、5 秒。未分配时不调用重排模型，异常、超时或不完整排名回落原融合排序；不更改向量阈值，不重建索引。书内与书库检索共用此链路，发送候选前及返回证据前再次核对正文和范围。
 - `feature/bookdetail/AnnotationIndex` 明确区分全部、我的与 AI 划线，并支持进一步按 AI 角色筛选。来源以 `personaId` 是否为空为准，不按样式、颜色或是否自动生成推断；删除角色不会将其批注算作用户内容。计数只使用已通过可见性过滤的批注。
-- `feature/review/ReadingReviewScreen` 是设置中的全局「划线与笔记」入口，手机与平板共用。`ReadingReviewModels` 统一书籍、来源、角色、类型与关键词筛选，先按每本书的可读范围过滤，再提供计数、瀑布流、全屏回顾、导出与 AI 素材；已移除正文的书仍可回顾保留记录。`ReadingReviewDetails` 复用伴读头像和段评讨论，`ReviewExporter` 生成带署名与出处的 Markdown / 图片。`ReadingReviewComposer` 仅在主动请求时把勾选素材交给 AI，草稿经编辑确认后保存，并保留 AI 来源与可读范围；保存前复查素材和范围。回归入口为 `feature/review/ReadingReviewTest`、`ReadingReviewViewModelTest` 与 `ReadingReviewVisualTest`。
+- `feature/review/ReadingReviewScreen` 是设置中的全局「划线与笔记」入口，手机与平板共用。`ReviewOptionsMenu` 复用书架的锚定悬浮菜单并提供二级选择页，`ReadingReviewPreferences` 持久化筛选与布局；`ReadingReviewModels` 统一书籍、来源、角色、类型与关键词筛选，先按每本书的可读范围过滤，再提供计数、瀑布流、全屏回顾、导出与 AI 素材；已移除正文的书仍可回顾保留记录。`ReadingReviewDetails` 复用伴读头像和段评讨论，`ReviewExporter` 生成带署名与出处的 Markdown / 图片。`ReadingReviewComposer` 仅在主动请求时把勾选素材交给 AI，草稿经编辑确认后保存，并保留 AI 来源与可读范围；保存前复查素材和范围。回归入口为 `feature/review/ReadingReviewTest`、`ReadingReviewViewModelTest` 与 `ReadingReviewVisualTest`。
 - 详情页批注使用 `AnnotationIndexSheet` / `NavigationSheet`，每个来源与角色筛选保留独立滚动状态。点击段评将原文坐标和 `textAnchorJson` 交给既有 `ReaderLocateRequest` 路径，复用繁简坐标转换与短暂高亮。段落讨论打开时预选“上次点名过的角色 → 当前伴读角色 → 第一个角色”，留空发送即请该角色点评原文，有文字时同样带上它，不落空用户消息；再点一次选中的胶囊可取消点名（只保存用户想法），取消只对当前这条发言生效、不写回记忆。
 - `AiServiceScreen` / `ProviderDetailScreen` 按供应商、用途和生成参数分组。`AiSettingsComponents` 根据模型名识别系列图标，独立于中转供应商；未知模型按能力显示图标。图标是随包分发的本地矢量资源。`ModelParameterFields` 编辑常用参数并保留其他 JSON，请求体中的同名覆盖项一并处理，防止界面值与请求值不一致。`WebSearchSettingsScreen` 使用带图标的引擎列表。
 - 图标转换脚本 `scripts/convert-ai-icons.py` 显式分隔 SVG 圆弧的两个标志位，避免紧凑的 `01` 被 Android/Compose 当成一个数而破坏轮廓；彩色品牌保留原始渐变。GLM 使用 Z.ai 标志，火山方舟与硅基流动按名称或接口主机识别，服务图标独立于兼容协议。
@@ -217,7 +219,7 @@ EPUB 兼容回归包括 `EpubImportCompatibilityTest`（资源 URI 与目录）�
 | --- | --- |
 | 合集、筛选与拖拽 | `BookCollectionModelsTest`、`ShelfCollectionDragTest`、`ShelfFilterTest`；Android 下的 `ShelfCollectionDaoTest`、`ShelfCollectionDragComposeTest`、`LibraryRepositoryDeleteBookTest` |
 | 长按菜单与书签手势 | `BookMenuPlacementTest`、`BookLongPressOverlayTest`、`PullBookmarkGestureTest`、`ReaderPageTouchTest`、`ReaderViewModelPersistenceTest`；下拉书签同时检查距离、方向和最短持续时间，回拉及多指取消不得变成翻页 |
-| 本地化资源 | `LocalizationResourcesTest`：英文、默认回退、格式参数与复数 |
+| 本地化资源 | `LocalizationResourcesTest`：英文、默认回退、格式参数与复数；`LocalizationResourceParityTest`：翻译键、占位符与 translatable；`AppLocalesTest`：语言映射、切换与 `UiText`；`HardcodedTextRatchetTest`：界面层硬编码中文只减不增。断言中文文案的 Robolectric 界面测试须用 `zh-rCN` 限定符（默认 en-US） |
 | 繁简转换与定位 | `ChineseTextConverterTest`、`ReaderTextAnchorTest`、`ChineseChapterPresenterTest`，特别是词组伸缩与重复文本 |
 | 数据结构与恢复 | Android 下的 `MigrationTest`、`BackupArchiveManagerTest`；JVM 下的 `BackupArchivePathsTest` |
 | 阅读进度与 AI 检索 | `ReadingScopeTest`、`RetrievalPipelineTest` 及对应 Agent 工具测试 |
@@ -240,7 +242,13 @@ EPUB 兼容回归包括 `EpubImportCompatibilityTest`（资源 URI 与目录）�
 
 ## 9. 本地化
 
-`res/values/strings.xml` 保留默认中文，`res/values-en/strings.xml` 提供增量英文翻译。当前范围是书籍长按菜单与阅读状态、部分合集提示、书签反馈和导入进度，尚未提供完整英文界面或应用内语言选择器。Compose 使用 `stringResource` / `pluralStringResource`，瞬态阅读消息在 UI 层解析 `ReaderEvent.ShowLocalizedMessage`；不要将本地化字符串作为数据库值。资源命名、占位符、复数和验证约定见 [Localization](LOCALIZATION.md)。
+`res/values/strings.xml` 保留默认中文，`res/values-en/strings.xml` 提供增量英文翻译。当前范围是底部导航与平板侧栏、设置首页及阅读与外观 / AI 与伴读 / 关于页、书籍长按菜单与阅读状态、部分合集提示、书签反馈、外部字体导入和导入进度，其余界面仍为硬编码中文。
+
+- `core/i18n/AppLocales` / `AppLanguage`：应用内语言（跟随系统 / 简体中文 / English）。Android 13+ 走系统 per-app language（`res/xml/locales_config.xml` 声明可选项）；Android 8–12 存私有 SharedPreferences，由 `MainActivity.attachBaseContext` 与 `MoReadApplication`（启动及配置变化后）套用。入口是 `feature/settings/AppLanguageSettings` 的 `AppLanguageBlock`，位于「阅读与外观 → 应用外观」。
+- `core/i18n/UiText`：ViewModel、Worker 等非 Compose 层传递资源编号与参数，在显示处解析（Compose 用 `ui/components/UiTextResources` 的 `asString()`）；`ReaderEvent.ShowLocalizedMessage` 携带 `UiText`。不要把解析后的字符串存入长期状态或数据库。
+- `HardcodedTextRatchetTest` 按文件统计 `feature/`、`ui/` 与 `MainActivity` 中含汉字的字符串字面量，只许减少不许增加，基线在 `app/src/test/resources/i18n/`。
+
+Compose 使用 `stringResource` / `pluralStringResource`。资源命名、占位符、复数、基线更新和验证约定见 [Localization](LOCALIZATION.md)。
 
 ## 10. 伴读稳定性与宽屏阅读边界
 
@@ -294,3 +302,26 @@ EPUB 兼容回归包括 `EpubImportCompatibilityTest`（资源 URI 与目录）�
 - 语法范围为声明列表；不支持选择器、动画、径向渐变、多层背景或远程 / 内嵌 SVG URL。用法见 [阅读样式 CSS](READER_STYLE_CSS.md)。
 
 - 分享模板：core/datastore/ReviewShareTemplate 定义持久化样式与 CSS 校验，ReaderSettingsRepository 保存独立模板列表；feature/review/ReviewTemplateEditor 提供保存、编辑和另存，ReviewTemplateRendering 与 ReviewExporter 共用预览及导出排版，复用字体库、图片库与语法高亮。ReviewTypographyTest / ReviewTemplateRenderTest 覆盖重载、更新、删除、CSS 和原生图片输出。
+
+### 本地音色与有声书选角
+
+- core/speech/SystemTtsSpeaker.kt 枚举 Android TTS 引擎及公开音色，查询独立于播放。SystemTtsVoice.kt 将角色音色绑定到引擎包名与 Voice 名称，设置、试听、听书共用解析。
+- `ai/client/GeminiTtsClient` 使用 Gemini 原生 Interactions TTS，正文与风格元数据分开，解析 REST `steps` 音频并保存 WAV；音色库支持多语言预设与分页读取在线音色，听书、选区和伴读复用现有合成缓存。新安装默认系统 TTS，已有引擎选择保留。
+- `core/speech/TtsProviderProfiles` 为云端服务和本地 TTS 应用分别保存配置。设置页切换或返回前提交输入草稿，云端密钥按服务商加密存储，旧共享密钥只迁移到切换前的服务商；切回后恢复地址、模型、音色与参数。
+- `feature/settings/VoiceDesignScreen` / `VoiceDesignViewModel` 提供音色库中的设计入口，AI 对话与手动设定共享候选试听。`ai/media/VoiceDesignAssistant` 复用 `AgentLoop.runDetached`，按需调用角色查询、声音设定、生成和获取试听工具；每轮最多创建一个候选，音色库写入只由用户确认触发。`GeminiTtsClient` 接入 Voice design 的创建、试听读取与草稿清理；已保存音色不参与草稿清理，试听由 `VoiceDesignPreviewStore` 缓存。
+- ui/components/VoiceChoiceDialog.kt 提供可搜索音色选择；feature/listen/AudiobookRoleViewModel.kt 提供显式 AI 选角与手动调整。
+- ai/audiobook/AudiobookRoleExtractor.kt 初次抽样包含当前章，精排前逐章补全角色；AudiobookScriptAgent.kt 使用稳定原文坐标，低置信度对白暂用旁白并提示校对；AudiobookAttributionPlanner.kt 限制单批对白数量。
+- core/library/AudiobookRepository.kt 增量合并角色并保留分镜；修改选角及批量改引擎均清理受影响音频。
+
+本地样书回归可通过 MOREAD_EPUB_FIXTURES 配置外部 EPUB，并运行 AudiobookEpubFixtureTest；报告区分候选对白、规则显式命中与待确认内容，不将规则命中率视作 AI 准确率。
+
+### 插图一致性与章节队列
+
+- `ai/media/ImageRecipe` 定义本书画风、按章节生效的人物形象、镜头及配方快照。`RecipeAssembler` 固定拼入外貌；`planReferences` 按主角、画风、其他人物安排参考图，并返回降级与额外费用信息。
+- `core/library/ImageConsistencyRepository` 只读取已读范围内的人物与原文依据，编排镜头、导入参考图并缓存 NovelAI Vibe。图片沿用图片库 ID，人物形象使用稳定 identity；重新提取人物不会覆盖手动定妆。Room 32 保存画风、形象版本、插图配方及队列检查点；完整备份携带图片和 Vibe 编码。
+- `feature/illustration/ImageStudio` 从选段、伴读、人物页及书籍插图廊进入；页面复用 `MoReadSecondaryPage`，生成面板是叠在当前页之上的 `MoReadBottomSheet`（`StudioState.basePage` / `panelReturn`），从画廊、画风或形象页打开时关闭后回到原页，而不是退出工作室。候选区只放「同配方重来 / 调整」，导出与「设为定妆、画风参考、封面、伴读头像、删除」在面板顶栏；画廊为两列缩略图，长按删除。
+- 画风页（`StylePage.kt`）把内置预设与「我的画风」放在同一种卡片网格里，最后一张虚线卡「新建画风」提供「从空白开始 / 以当前画风为基础」；自定义画风的编辑、删除在卡片的更多菜单。底栏在草稿未改动时显示「正在使用」且不可点。编辑页（`StyleEditorPage.kt`）填写名称、描述、参考图与折叠高级参数；试生成使用草稿快照，返回保留草稿，不提前写入本书画风。`image_style_templates` 跨书保存描述、标签、负面词、seed 与参考图快照，模板更改不会改变已应用的书籍。删书和图片库清理保留模板引用的图片，模板与参考图一起纳入备份。
+- `ai/media/IllustrationQueue` 在用户确认每章镜头与张数后顺序生成，逐张保存结果；暂停完成当前请求，重启后只继续待处理项。中断且结果未知的请求由用户手动重试；生成前重新验证原文及已读范围。
+- `NovelAiImageClient` 使用多角色 caption、seed、Precise Reference 与编码后的 Vibe。V4.5 的人物参考与 Vibe 互斥，多人场景只给主角一张人物参考；V5 不承诺未经文档确认的 Precise Reference。`OpenAiMediaClient` 在有参考图时调用 multipart `/images/edits`，对话生图发送多模态 image parts；gpt-image-2 / 2.5 不发送 `input_fidelity`。
+- 接口依据：[NovelAI OpenAPI](https://image.novelai.net/docs/index.html)、[Precise Reference](https://docs.novelai.net/en/image/precisereference/)、[Vibe Transfer](https://docs.novelai.net/en/image/vibetransfer/)、[OpenAI 图像生成](https://developers.openai.com/api/docs/guides/image-generation)。参考图提高一致性，但不保证每次输出完全相同。
+- 回归入口：`ImageRecipeTest`、`ImageReferenceProtocolTest`、`ImageConsistencyStorageTest`、`IllustrationQueueTest` 与 `ImageStudioVisualTest`；覆盖版本选择、配方快照、HTTP 请求、迁移、队列续跑和真实父弹层的滚动边界。

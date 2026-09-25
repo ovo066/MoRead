@@ -57,7 +57,10 @@ class IllustrationRepository @Inject constructor(
         val file = File(illustration.imagePath)
         val root = File(context.filesDir, "illustrations").canonicalFile
         runCatching {
-            if (file.canonicalFile.toPath().startsWith(root.toPath())) file.delete()
+            if (file.canonicalFile.toPath().startsWith(root.toPath())) {
+                file.delete()
+                File("${file.absolutePath}.recipe.json").delete()
+            }
         }
     }
 

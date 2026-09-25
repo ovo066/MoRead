@@ -8,6 +8,9 @@ enum class EpubWritingMode(val css: String) {
 
     val vertical: Boolean get() = this != HORIZONTAL_TB
 
+    /** 原生引擎能在旋转坐标系里如实排出的书写模式（vertical-lr 只见于蒙古文，仍按横排降级）。 */
+    val nativelySupported: Boolean get() = this != VERTICAL_LR
+
     companion object {
         fun parse(value: String?): EpubWritingMode? = when (value?.trim()?.lowercase()) {
             null, "", "initial", "unset", "horizontal-tb" -> HORIZONTAL_TB
@@ -20,7 +23,7 @@ enum class EpubWritingMode(val css: String) {
 
 /** 原生精排为什么没有按出版样式的书写模式排版；给诊断与后续降级策略用的结构化原因。 */
 enum class EpubLayoutFallbackReason(val description: String) {
-    VERTICAL_WRITING_MODE("vertical writing mode falls back to horizontal flow"),
+    VERTICAL_WRITING_MODE("vertical-lr writing mode falls back to horizontal flow"),
     NESTED_WRITING_MODE("nested writing-mode transition"),
     SCOPE_TOO_DEEP("style scope deeper than the native layout supports")
 }
@@ -55,8 +58,9 @@ data class EpubLayoutCapability(
  * 布局前的能力门：在级联之后、盒树之前扫一遍样式树，把「排不出来」的情况在动手前判定出来。
  *
  * 判定顺序（与可验证的成熟阅读器行为一致）：
- * 1. 章节主书写模式为竖排 → 引擎目前只有横排轴，整章降级为横排流。
- * 2. 横排章节里出现局部竖排（或竖排章节里嵌横排）→ 记为嵌套切换。
+ * 1. 章节主书写模式为 vertical-lr → 引擎只实现了 vertical-rl 的列序，整章降级为横排流。
+ *    vertical-rl 是支持的：排版器把整章放进旋转 90° 的坐标系里排（见 EpubVerticalFrame）。
+ * 2. 横排章节里出现局部竖排（或竖排章节里嵌横排）→ 记为嵌套切换，局部块跟随章节主方向。
  * 3. 样式作用域过深 → 记为超深作用域（极端嵌套的转换器产物）。
  * 其余情况视为支持。判定不阻断排版，只产出结构化结果。
  */
@@ -75,7 +79,7 @@ object EpubLayoutCapabilityAnalyzer {
         }
         walk(root, 0)
         return when {
-            chapterMode.vertical -> EpubLayoutCapability.fallback(
+            !chapterMode.nativelySupported -> EpubLayoutCapability.fallback(
                 reason = EpubLayoutFallbackReason.VERTICAL_WRITING_MODE,
                 chapterWritingMode = chapterMode,
                 detail = "chapter writing-mode ${chapterMode.css} is laid out as horizontal-tb"
@@ -89,7 +93,7 @@ object EpubLayoutCapabilityAnalyzer {
                 chapterWritingMode = chapterMode,
                 detail = "style scope depth $maxDepth exceeds $SAFE_SCOPE_DEPTH"
             )
-            else -> EpubLayoutCapability.Supported
+            else -> EpubLayoutCapability(supported = true, chapterWritingMode = chapterMode)
         }
     }
 }

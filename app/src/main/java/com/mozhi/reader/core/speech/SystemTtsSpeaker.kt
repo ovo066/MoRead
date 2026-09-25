@@ -1,11 +1,21 @@
 package com.mozhi.reader.core.speech
 
+import android.content.Intent
+import android.os.Handler
+import android.os.Looper
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import android.content.Context
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.util.Locale
+import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.resume
@@ -24,173 +34,149 @@ class SystemTtsSpeaker @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
     private var tts: TextToSpeech? = null
+    private val initMutex = Mutex()
+    private val playbackMutex = Mutex()
+    @Volatile private var finishPlayback: (() -> Unit)? = null
     private var currentEnginePackage: String? = null
 
     private val mutableSpeaking = MutableStateFlow(false)
     val isSpeaking = mutableSpeaking.asStateFlow()
 
-    /** 枚举已安装引擎；需要一个已初始化实例才能拿列表。 */
-    suspend fun engines(): List<SystemTtsEngineInfo> {
-        val instance = obtain("") ?: return emptyList()
-        return instance.engines.map { SystemTtsEngineInfo(it.name, it.label) }
+    /** Query installed services without opening or switching the playback engine. */
+    suspend fun engines(): List<SystemTtsEngineInfo> = withContext(Dispatchers.IO) {
+        context.packageManager.queryIntentServices(Intent(TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE), 0)
+            .map { SystemTtsEngineInfo(it.serviceInfo.packageName, it.loadLabel(context.packageManager).toString()) }
+            .distinctBy { it.packageName }.sortedBy { it.label }
     }
 
-    /** 按配置朗读；返回 false 表示引擎初始化失败或不支持所选语言。 */
+    /** A short-lived connection keeps voice discovery independent of active playback. */
+    suspend fun voices(enginePackage: String): List<SystemTtsVoiceInfo> = withContext(Dispatchers.Main.immediate) {
+        val instance = initialize(enginePackage) ?: error("语音引擎连接失败，请确认已安装并启用")
+        try {
+            val actualPackage = enginePackage.ifBlank { instance.defaultEngine.orEmpty() }
+            instance.voices.orEmpty().map { voice ->
+                SystemTtsVoiceInfo(actualPackage, voice.name, voice.locale.toLanguageTag(), voice.isNetworkConnectionRequired)
+            }.distinctBy { it.id }.sortedWith(compareBy<SystemTtsVoiceInfo> { !it.languageTag.startsWith("zh") }.thenBy { it.name })
+        } finally { instance.shutdown() }
+    }
+
+    private fun configure(instance: TextToSpeech, settings: TtsSettings): Boolean {
+        if (settings.systemVoiceName.isNotBlank()) {
+            val voice = instance.voices.orEmpty().firstOrNull { it.name == settings.systemVoiceName } ?: return false
+            if (instance.setVoice(voice) == TextToSpeech.ERROR) return false
+        } else if (settings.systemLanguageTag.isNotBlank()) {
+            if (instance.setLanguage(Locale.forLanguageTag(settings.systemLanguageTag)) < TextToSpeech.LANG_AVAILABLE) return false
+        } else {
+            instance.defaultVoice?.let { if (instance.setVoice(it) == TextToSpeech.ERROR) return false }
+        }
+        return instance.setSpeechRate(settings.systemRate.coerceIn(0.3f, 3f)) != TextToSpeech.ERROR &&
+            instance.setPitch(settings.systemPitch.coerceIn(0.3f, 3f)) != TextToSpeech.ERROR
+    }
+
+    /** Preview and selection reading share the same completion and cancellation handling as listening. */
     suspend fun speak(text: String, settings: TtsSettings): Boolean {
-        val clean = text.trim()
-        if (clean.isEmpty()) return false
-        val instance = obtain(settings.systemEnginePackage) ?: return false
-        if (settings.systemLanguageTag.isNotBlank()) {
-            val result = instance.setLanguage(Locale.forLanguageTag(settings.systemLanguageTag))
-            if (result == TextToSpeech.LANG_MISSING_DATA ||
-                result == TextToSpeech.LANG_NOT_SUPPORTED
-            ) {
-                return false
-            }
-        }
-        instance.setSpeechRate(settings.systemRate.coerceIn(0.3f, 3f))
-        instance.setPitch(settings.systemPitch.coerceIn(0.3f, 3f))
-        instance.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String?) {
-                mutableSpeaking.value = true
-            }
-
-            override fun onDone(utteranceId: String?) {
-                if (utteranceId == FINAL_UTTERANCE_ID) mutableSpeaking.value = false
-            }
-
-            @Deprecated("Deprecated in Java")
-            override fun onError(utteranceId: String?) {
-                mutableSpeaking.value = false
-            }
-        })
-        val maxLength = TextToSpeech.getMaxSpeechInputLength().coerceAtMost(3_500)
-        val segments = clean.chunked(maxLength)
-        val speechParams = Bundle().apply {
-            putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, settings.systemVolumeCompensation.coerceIn(0.25f, 2f))
-        }
-        segments.forEachIndexed { index, segment ->
-            val isLast = index == segments.lastIndex
-            instance.speak(
-                segment,
-                if (index == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD,
-                speechParams,
-                if (isLast) FINAL_UTTERANCE_ID else "moread-tts-$index"
-            )
-        }
-        mutableSpeaking.value = true
-        return true
+        if (text.isBlank()) return false
+        stop()
+        return speakBatch(listOf(text.trim()), settings) {}
     }
 
     fun stop() {
+        finishPlayback?.invoke()
         tts?.runCatching { stop() }
         mutableSpeaking.value = false
     }
 
-    /**
-     * 听书批量朗读：整批 QUEUE_ADD 进引擎队列（句间无停顿），每个 utterance 开播时在
-     * binder 线程回调 [onUtteranceStart]（参数为批内下标）。挂起直到整批播完；协程取消会
-     * 立刻停掉引擎队列。返回 false 表示引擎初始化失败、语言不支持或引擎报错。
-     */
     suspend fun speakBatch(
         utterances: List<String>,
         settings: TtsSettings,
         onUtteranceStart: (Int) -> Unit
-    ): Boolean {
-        if (utterances.isEmpty()) return true
-        val instance = obtain(settings.systemEnginePackage) ?: return false
-        if (settings.systemLanguageTag.isNotBlank()) {
-            val result = instance.setLanguage(Locale.forLanguageTag(settings.systemLanguageTag))
-            if (result == TextToSpeech.LANG_MISSING_DATA ||
-                result == TextToSpeech.LANG_NOT_SUPPORTED
-            ) {
-                return false
+    ): Boolean = withContext(Dispatchers.Main.immediate) {
+        playbackMutex.withLock {
+            if (utterances.isEmpty()) return@withLock true
+            val instance = obtain(settings.systemEnginePackage) ?: return@withLock false
+            if (!configure(instance, settings)) return@withLock false
+            val chunks = utterances.flatMapIndexed { index, text ->
+                text.chunked(TextToSpeech.getMaxSpeechInputLength().coerceAtMost(3_500)).map { index to it }
             }
-        }
-        instance.setSpeechRate(settings.systemRate.coerceIn(0.3f, 3f))
-        instance.setPitch(settings.systemPitch.coerceIn(0.3f, 3f))
-        return suspendCancellableCoroutine { continuation ->
-            val lastId = batchUtteranceId(utterances.lastIndex)
-            instance.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                override fun onStart(utteranceId: String?) {
-                    mutableSpeaking.value = true
-                    batchIndexOf(utteranceId)?.let(onUtteranceStart)
-                }
-
-                override fun onDone(utteranceId: String?) {
-                    if (utteranceId == lastId) {
-                        mutableSpeaking.value = false
-                        if (continuation.isActive) continuation.resume(true)
+            if (chunks.isEmpty()) return@withLock true
+            val prefix = UUID.randomUUID().toString() + ":"
+            try {
+                suspendCancellableCoroutine { continuation ->
+                    val finished = AtomicBoolean(false)
+                    fun finish(ok: Boolean) {
+                        if (finished.compareAndSet(false, true)) {
+                            mutableSpeaking.value = false
+                            if (!ok) instance.stop()
+                            if (continuation.isActive) continuation.resume(ok)
+                        }
+                    }
+                    finishPlayback = { finish(false) }
+                    instance.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                        override fun onStart(utteranceId: String?) {
+                            if (finished.get() || utteranceId?.startsWith(prefix) != true) return
+                            val chunk = utteranceId.removePrefix(prefix).toIntOrNull() ?: return
+                            chunks.getOrNull(chunk)?.first?.let(onUtteranceStart)
+                        }
+                        override fun onDone(utteranceId: String?) {
+                            if (utteranceId == prefix + chunks.lastIndex) finish(true)
+                        }
+                        @Deprecated("Deprecated in Java")
+                        override fun onError(utteranceId: String?) {
+                            if (utteranceId?.startsWith(prefix) == true) finish(false)
+                        }
+                    })
+                    continuation.invokeOnCancellation { finish(false) }
+                    val params = Bundle().apply {
+                        putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, settings.systemVolumeCompensation.coerceIn(0.25f, 2f))
+                    }
+                    if (!finished.get()) mutableSpeaking.value = true
+                    for ((index, chunk) in chunks.withIndex()) {
+                        if (finished.get()) break
+                        if (instance.speak(chunk.second, if (index == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, params, prefix + index) == TextToSpeech.ERROR) {
+                            finish(false)
+                            break
+                        }
                     }
                 }
-
-                @Deprecated("Deprecated in Java")
-                override fun onError(utteranceId: String?) {
-                    mutableSpeaking.value = false
-                    if (continuation.isActive) continuation.resume(false)
-                }
-            })
-            val speechParams = Bundle().apply {
-                putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, settings.systemVolumeCompensation.coerceIn(0.25f, 2f))
-            }
-            utterances.forEachIndexed { index, text ->
-                instance.speak(
-                    text,
-                    if (index == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD,
-                    speechParams,
-                    batchUtteranceId(index)
-                )
-            }
-            mutableSpeaking.value = true
-            continuation.invokeOnCancellation {
-                instance.runCatching { stop() }
+            } finally {
+                finishPlayback = null
                 mutableSpeaking.value = false
             }
         }
     }
 
-    private fun batchUtteranceId(index: Int): String = "$BATCH_UTTERANCE_PREFIX$index"
-
-    private fun batchIndexOf(utteranceId: String?): Int? = utteranceId
-        ?.takeIf { it.startsWith(BATCH_UTTERANCE_PREFIX) }
-        ?.removePrefix(BATCH_UTTERANCE_PREFIX)
-        ?.toIntOrNull()
-
     fun release() {
+        stop()
         tts?.runCatching { shutdown() }
         tts = null
         currentEnginePackage = null
-        mutableSpeaking.value = false
     }
 
-    /** 初始化是异步回调；挂起到 onInit，失败返回 null。 */
-    private suspend fun obtain(enginePackage: String): TextToSpeech? {
+    private suspend fun obtain(enginePackage: String): TextToSpeech? = initMutex.withLock {
         val existing = tts
-        if (existing != null && currentEnginePackage == enginePackage) return existing
+        if (existing != null && currentEnginePackage == enginePackage) return@withLock existing
         release()
-        return suspendCancellableCoroutine { continuation ->
-            var instance: TextToSpeech? = null
-            val listener = TextToSpeech.OnInitListener { status ->
-                if (status == TextToSpeech.SUCCESS) {
-                    tts = instance
-                    currentEnginePackage = enginePackage
-                    if (continuation.isActive) continuation.resume(instance)
-                } else {
-                    instance?.runCatching { shutdown() }
-                    if (continuation.isActive) continuation.resume(null)
+        initialize(enginePackage)?.also { tts = it; currentEnginePackage = enginePackage }
+    }
+
+    private suspend fun initialize(enginePackage: String): TextToSpeech? = withContext(Dispatchers.Main.immediate) {
+        if (enginePackage.isNotBlank() && engines().none { it.packageName == enginePackage }) return@withContext null
+        withTimeoutOrNull(10_000) {
+            suspendCancellableCoroutine { continuation ->
+                var instance: TextToSpeech? = null
+                val listener = TextToSpeech.OnInitListener { status ->
+                    Handler(Looper.getMainLooper()).post {
+                        if (!continuation.isActive || status != TextToSpeech.SUCCESS) {
+                            instance?.shutdown()
+                            if (continuation.isActive) continuation.resume(null)
+                        } else continuation.resume(instance)
+                    }
                 }
+                instance = if (enginePackage.isBlank()) TextToSpeech(context, listener)
+                    else TextToSpeech(context, listener, enginePackage)
+                continuation.invokeOnCancellation { instance?.shutdown() }
             }
-            instance = if (enginePackage.isBlank()) {
-                TextToSpeech(context, listener)
-            } else {
-                TextToSpeech(context, listener, enginePackage)
-            }
-            continuation.invokeOnCancellation { instance.runCatching { shutdown() } }
         }
     }
 
-    private companion object {
-        const val FINAL_UTTERANCE_ID = "moread-tts-final"
-        const val BATCH_UTTERANCE_PREFIX = "moread-listen-"
-    }
 }

@@ -171,7 +171,7 @@ fun ReaderListenOrb(
                 color = if (expanded) palette.glassStrong else palette.glass,
                 border = BorderStroke(1.dp, palette.glassBorder),
                 modifier = Modifier
-                    .shadow(14.dp, RoundedCornerShape(ORB_SIZE / 2), clip = false)
+
                     .widthIn(min = ORB_SIZE)
             ) {
                 Column(

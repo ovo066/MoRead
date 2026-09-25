@@ -42,7 +42,8 @@ internal data class ReaderKnowledgeActions(
     val previewCharacters: (Boolean) -> Unit = {}, val cancelCharacters: () -> Unit = {}, val deleteCharacters: () -> Unit = {},
     val locateCharacter: (BookCharacterGuideEntity, CharacterEvidence) -> Unit = { _, _ -> },
     val saveCharacterCard: (ExtractedCharacterCard) -> Unit = {},
-    val saveCharacter: (String?, String, String) -> Unit = { _, _, _ -> }
+    val saveCharacter: (String?, String, String) -> Unit = { _, _, _ -> },
+    val openLook: (String) -> Unit = {}
 )
 
 @Composable
@@ -52,14 +53,27 @@ internal fun ReaderKnowledgeContentsSheet(
     onLocate: (Int, Int) -> Unit, onDismiss: () -> Unit, viewModel: ReaderKnowledgeViewModel = hiltViewModel()
 ) {
     val observed by viewModel.state.collectAsStateWithLifecycle()
+    val previews: com.mozhi.reader.feature.illustration.CharacterLookPreviewViewModel = hiltViewModel()
+    val thumbnails by previews.thumbnails.collectAsStateWithLifecycle()
+    LaunchedEffect(bookId) { previews.bind(bookId) }
     val state = observed.takeIf { it.bookId == bookId } ?: KnowledgeUiState(bookId)
     val locate by rememberUpdatedState(onLocate)
+    var imageCharacter by remember(bookId) { mutableStateOf<String?>(null) }
+    imageCharacter?.let { key ->
+        com.mozhi.reader.feature.illustration.ImageStudio(bookId,
+            com.mozhi.reader.feature.illustration.StudioEntry(page = com.mozhi.reader.feature.illustration.StudioPage.LOOK, characterKey = key),
+            onDismiss = { imageCharacter = null }, onEvidence = { evidence ->
+                if (evidence.chapterIndex != null && evidence.start != null) {
+                    imageCharacter = null; onLocate(evidence.chapterIndex, evidence.start)
+                }
+            })
+    }
     LaunchedEffect(bookId, contentRevision) { viewModel.bind(bookId) }
     LaunchedEffect(viewModel) { viewModel.locateEvents.collect { (chapter, offset) -> locate(chapter, offset) } }
-    ReaderKnowledgePages(state, chapters, tocEntries, currentChapterIndex, palette, onChapterClick, onDismiss,
+    ReaderKnowledgePages(state.copy(lookThumbnails = thumbnails), chapters, tocEntries, currentChapterIndex, palette, onChapterClick, onDismiss,
         ReaderKnowledgeActions(viewModel::preview, viewModel::cancel, viewModel::delete, viewModel::locate,
             viewModel::previewCharacters, viewModel::cancelCharacters, viewModel::deleteCharacters, viewModel::locateCharacter,
-            viewModel::saveCharacterCard, viewModel::saveCharacter))
+            viewModel::saveCharacterCard, viewModel::saveCharacter, openLook = { imageCharacter = it }))
     state.pending?.let { plan -> AlertDialog(
         onDismissRequest = viewModel::dismissPreview,
         title = { Text("生成章节大纲？") },
@@ -350,8 +364,14 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
                 Surface(shape = RoundedCornerShape(18.dp), color = palette.glass, modifier = Modifier.fillMaxWidth().testTag("person-${person.name}")) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Surface(Modifier.size(42.dp), shape = CircleShape, color = palette.accentContainer) {
-                                Box(contentAlignment = Alignment.Center) { Text(person.name.take(1), color = palette.accent, style = MaterialTheme.typography.titleMedium) }
+                            Surface(onClick = { actions.openLook(person.identity) }, modifier = Modifier.size(48.dp), shape = CircleShape, color = palette.accentContainer) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text(person.name.take(1), color = palette.accent, style = MaterialTheme.typography.titleMedium)
+                                    state.lookThumbnails[person.identity]?.let { path ->
+                                        coil3.compose.AsyncImage(java.io.File(path), contentDescription = person.name,
+                                            contentScale = androidx.compose.ui.layout.ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                                    }
+                                }
                             }
                             Column(Modifier.weight(1f).padding(start = 10.dp)) {
                                 Text(person.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = palette.onBackground)

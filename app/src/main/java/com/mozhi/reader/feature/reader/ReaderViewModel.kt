@@ -3,6 +3,7 @@ package com.mozhi.reader.feature.reader
 import android.net.Uri
 import com.mozhi.reader.R
 import com.mozhi.reader.core.datastore.PageMode
+import com.mozhi.reader.core.i18n.UiText
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import com.mozhi.reader.ui.requireBookId
@@ -1141,7 +1142,7 @@ class ReaderViewModel @Inject constructor(
             } catch (_: Exception) {
                 R.string.reader_bookmark_failed
             }
-            eventChannel.send(ReaderEvent.ShowLocalizedMessage(message))
+            eventChannel.send(ReaderEvent.ShowLocalizedMessage(UiText.of(message)))
         }
     }
 

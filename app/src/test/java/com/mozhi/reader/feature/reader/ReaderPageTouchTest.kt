@@ -122,6 +122,34 @@ class ReaderPageTouchTest {
         }
     }
 
+    @Test
+    fun rightToLeftPagesTurnForwardOnARightwardDrag() {
+        mount()
+        compose.runOnIdle { driver.mirrorProvider = { true } }
+        compose.onNodeWithTag("page").performTouchInput {
+            down(Offset(50f, 150f))
+            moveTo(Offset(100f, 151f), delayMillis = 40)
+            moveTo(Offset(230f, 154f), delayMillis = 100)
+            up()
+        }
+        compose.runOnIdle {
+            // 竖排书从右往左翻：向右拖是下一页，整次翻页在镜像空间里进行。
+            assertEquals(listOf(PageTurnDirection.NEXT), filledDirections)
+            assertTrue(driver.mirrored)
+        }
+        compose.runOnIdle { driver.mirrorProvider = { false } }
+        compose.onNodeWithTag("page").performTouchInput {
+            down(Offset(50f, 150f))
+            moveTo(Offset(100f, 151f), delayMillis = 40)
+            moveTo(Offset(230f, 154f), delayMillis = 100)
+            up()
+        }
+        compose.runOnIdle {
+            assertEquals(listOf(PageTurnDirection.NEXT, PageTurnDirection.PREVIOUS), filledDirections)
+            assertFalse(driver.mirrored)
+        }
+    }
+
     @Test fun modernCurlKeepsTheDownAnchorAndLandsWithoutProjectingTheFingerOffScreen() {
         mount()
         compose.runOnIdle { driver.mode = PageTurnDriver.Mode.MODERN_CURL; driver.setViewport(300f, 400f) }

@@ -3,6 +3,7 @@ package com.mozhi.reader.feature.reader.engine.epub
 import com.mozhi.reader.core.epub.style.EpubClearValue
 import com.mozhi.reader.core.epub.style.EpubDisplay
 import com.mozhi.reader.core.epub.style.EpubFloatValue
+import com.mozhi.reader.core.epub.style.EpubPosition
 import com.mozhi.reader.core.epub.style.EpubStyle
 import com.mozhi.reader.core.epub.style.EpubVerticalAlignment
 import com.mozhi.reader.core.epub.style.ResolvedLength
@@ -21,6 +22,26 @@ import kotlin.math.min
 internal class EpubBlockLayout(private val ctx: EpubLayoutContext) {
 
     private val inline = EpubInlineLayout(ctx)
+
+    /**
+     * Absolutely positioned boxes wait for their containing block: the nearest `position:
+     * relative/absolute` ancestor laid out into the same [FlowOutput]. Its padding box is only
+     * known once its own content is done.
+     */
+    private class PendingAbsolute(
+        val box: EpubBox,
+        /** Where the box's lines join the output, so line order stays document order. */
+        val lineIndex: Int,
+        val staticY: Float,
+        val staticLeft: Float,
+        val inheritedBackgroundArgb: Int
+    )
+
+    private class PositionedContainer(val output: FlowOutput) {
+        val pending = ArrayList<PendingAbsolute>()
+    }
+
+    private val positioned = ArrayList<PositionedContainer>()
 
     fun layout(root: EpubBlockBox): FlowOutput {
         val output = FlowOutput()
@@ -50,6 +71,15 @@ internal class EpubBlockLayout(private val ctx: EpubLayoutContext) {
         inheritedBackgroundArgb: Int
     ) {
         ctx.cancellationCheck()
+        val container = positioned.lastOrNull()
+        // 行内流的 blockStyle 是它所属元素的样式，不代表流本身绝对定位，只有真正的盒子才算。
+        if (container != null && container.output === output && box !is EpubInlineFlowBox &&
+            boxStyle(box)?.position == EpubPosition.ABSOLUTE
+        ) {
+            // 不占文字流的位置，也不参与外边距折叠；等定位祖先排完再落位。
+            container.pending += PendingAbsolute(box, output.lines.size, cursor.y, cb.left, inheritedBackgroundArgb)
+            return
+        }
         when (box) {
             is EpubInlineFlowBox -> layoutFlow(box, cb, cursor, bfc, output, inheritedBackgroundArgb)
             is EpubTableBox -> layoutTable(box, cb, cursor, bfc, output, inheritedBackgroundArgb)
@@ -102,6 +132,9 @@ internal class EpubBlockLayout(private val ctx: EpubLayoutContext) {
         val contentTop = cursor.y
         val lineStartIndex = output.lines.size
         val decorationStartIndex = output.decorations.size
+        val positionedContainer = if (style.position != EpubPosition.STATIC) {
+            PositionedContainer(output).also(positioned::add)
+        } else null
 
         val childBackground = style.background.colorArgb
             ?.let(ctx::mappedBackground)
@@ -179,11 +212,149 @@ internal class EpubBlockLayout(private val ctx: EpubLayoutContext) {
                 indexInParagraph = 0, paragraphLineCount = 1, keepWithNext = false
             )
         }
-        if (style.breakInsideAvoid && borderBoxBottom > borderBoxTop) {
+        if (positionedContainer != null) {
+            positioned.remove(positionedContainer)
+            val paddingBox = ContainingBlock(
+                geometry.borderBoxLeft + style.borderWidths[3],
+                geometry.borderBoxRight - style.borderWidths[1],
+                (borderBoxBottom - borderBoxTop - geometry.borderTop - geometry.borderBottom).coerceAtLeast(0f)
+            )
+            placeAbsolutes(positionedContainer, paddingBox, borderBoxTop + geometry.borderTop, output)
+            if (style.position == EpubPosition.RELATIVE) {
+                shiftRelative(style, cb, output, lineStartIndex, if (decorationSlot >= 0) decorationSlot else decorationStartIndex)
+            }
+        }
+        if ((style.breakInsideAvoid || positionedContainer?.pending?.isNotEmpty() == true) && borderBoxBottom > borderBoxTop) {
             output.keepRanges += borderBoxTop..borderBoxBottom
         }
         if (style.breakAfter) output.forcedBreaks += cursor.y
         cursor.addGap(blockGapBottom(box, cb.width))
+    }
+
+    /** `position: relative` offsets the laid-out box without moving anything after it. */
+    private fun shiftRelative(style: EpubStyle, cb: ContainingBlock, output: FlowOutput, lineStart: Int, decorationStart: Int) {
+        val dx = style.insets[3].resolve(cb.width) ?: style.insets[1].resolve(cb.width)?.let { -it } ?: 0f
+        val dy = style.insets[0].resolveHeight(cb.height) ?: style.insets[2].resolveHeight(cb.height)?.let { -it } ?: 0f
+        if (dx == 0f && dy == 0f) return
+        for (index in lineStart until output.lines.size) {
+            output.lines[index].line = FlowOutput.translateLine(output.lines[index].line, dx, dy)
+        }
+        for (index in decorationStart until output.decorations.size) {
+            val decoration = output.decorations[index].decoration
+            output.decorations[index].decoration = decoration.copy(
+                left = decoration.left + dx, right = decoration.right + dx,
+                top = decoration.top + dy, bottom = decoration.bottom + dy
+            )
+        }
+    }
+
+    /**
+     * Places pending absolute boxes against [cb] (the container's padding box, whose top edge is
+     * [cbTop]): insets, shrink-to-fit width, static-position fallback and translate(). Their
+     * lines are inserted where the box occurred in the DOM, keeping text.mz order on the page.
+     */
+    private fun placeAbsolutes(container: PositionedContainer, cb: ContainingBlock, cbTop: Float, output: FlowOutput) {
+        // 倒序插入：先插后面的，前面记录的行号不受影响。
+        container.pending.asReversed().forEach { pending ->
+            val style = boxStyle(pending.box) ?: return@forEach
+            val cbHeight = cb.height ?: 0f
+            val marginLeft = style.marginLeft.resolve(cb.width) ?: 0f
+            val marginRight = style.marginRight.resolve(cb.width) ?: 0f
+            val marginTop = style.marginTop.resolve(cb.width) ?: 0f
+            val marginBottom = style.marginBottom.resolve(cb.width) ?: 0f
+            val paddingLeft = style.paddingLeft.resolve(cb.width) ?: 0f
+            val paddingRight = style.paddingRight.resolve(cb.width) ?: 0f
+            val paddingTop = style.paddingTop.resolve(cb.width) ?: 0f
+            val paddingBottom = style.paddingBottom.resolve(cb.width) ?: 0f
+            val borderTop = style.borderWidths[0]
+            val borderRight = style.borderWidths[1]
+            val borderBottom = style.borderWidths[2]
+            val borderLeft = style.borderWidths[3]
+            val edgeExtras = paddingLeft + paddingRight + borderLeft + borderRight
+            val left = style.insets[3].resolve(cb.width)
+            val right = style.insets[1].resolve(cb.width)
+            val top = style.insets[0].resolveHeight(cbHeight)
+            val bottom = style.insets[2].resolveHeight(cbHeight)
+            val available = (cb.width - (left ?: 0f) - (right ?: 0f) - marginLeft - marginRight).coerceAtLeast(1f)
+            val declaredWidth = style.width.resolve(cb.width)?.let { width ->
+                if (style.boxSizingBorderBox) (width - edgeExtras).coerceAtLeast(1f) else width
+            }
+            val contentWidth = (declaredWidth ?: if (left != null && right != null) {
+                available - edgeExtras
+            } else {
+                // nowrap 的内容不会折行，收缩宽度取 max-content，translate(-50%) 才能真正居中。
+                shrinkToFit(pending.box, if (style.noWrap) Float.MAX_VALUE else (available - edgeExtras).coerceAtLeast(1f))
+            }).coerceAtLeast(1f)
+
+            val sub = FlowOutput()
+            val subCursor = FlowCursor(paddingTop + borderTop)
+            val subBfc = BfcState()
+            val decorationSlot = if (style.hasDecoration()) reserveDecoration(sub) else -1
+            val childBackground = style.background.colorArgb
+                ?.let(ctx::mappedBackground)
+                ?.let { com.mozhi.reader.feature.reader.engine.EpubThemeColors.composite(it, pending.inheritedBackgroundArgb) }
+                ?: pending.inheritedBackgroundArgb
+            val subCb = ContainingBlock(0f, contentWidth, style.height.resolveHeight(cbHeight))
+            when (val box = pending.box) {
+                is EpubImageBox -> {
+                    val image = inline.resolveImage(
+                        style = style, textStart = box.textStart, altText = box.altText,
+                        attrWidth = box.attrWidth, attrHeight = box.attrHeight,
+                        percentBase = cb.width, widthLimit = contentWidth, horizontalEdges = edgeExtras,
+                        verticalEdges = paddingTop + paddingBottom + borderTop + borderBottom
+                    )
+                    val contentEnd = subCursor.y + (image?.height ?: 1f)
+                    emitImageLine(sub, box, image, -paddingLeft - borderLeft, 0f,
+                        contentEnd + paddingBottom + borderBottom, 0f, subCursor.y)
+                    subCursor.y = contentEnd
+                }
+                is EpubBlockBox -> {
+                    val nested = PositionedContainer(sub).also(positioned::add)
+                    box.children.forEach { child -> layoutChild(child, subCb, subCursor, subBfc, sub, childBackground) }
+                    subCursor.commit()
+                    positioned.remove(nested)
+                    val height = style.height.resolveHeight(cbHeight) ?: (max(subCursor.y, subBfc.lowestBottom()) - paddingTop - borderTop)
+                    placeAbsolutes(nested, ContainingBlock(-paddingLeft, contentWidth + paddingRight,
+                        height + paddingTop + paddingBottom), borderTop, sub)
+                }
+                is EpubInlineFlowBox -> layoutFlow(box, subCb, subCursor, subBfc, sub, childBackground)
+                is EpubTableBox -> layoutTable(box, subCb, subCursor, subBfc, sub, childBackground)
+            }
+            subCursor.commit()
+            var contentBottom = max(subCursor.y, subBfc.lowestBottom())
+            style.height.resolveHeight(cbHeight)?.takeIf { pending.box !is EpubImageBox }?.let { explicit ->
+                val contentHeight = if (style.boxSizingBorderBox) {
+                    (explicit - paddingTop - paddingBottom - borderTop - borderBottom).coerceAtLeast(0f)
+                } else explicit
+                contentBottom = max(contentBottom, borderTop + paddingTop + contentHeight)
+            }
+            val borderBoxHeight = contentBottom + paddingBottom + borderBottom
+            val borderBoxWidth = contentWidth + edgeExtras
+            if (decorationSlot >= 0) {
+                sub.decorations[decorationSlot].decoration = ctx.themeBlockDecoration(
+                    style = style,
+                    left = -paddingLeft - borderLeft,
+                    top = 0f,
+                    right = contentWidth + paddingRight + borderRight,
+                    bottom = borderBoxHeight
+                )
+            }
+            var x = when {
+                left != null -> cb.left + left + marginLeft
+                right != null -> cb.right - right - marginRight - borderBoxWidth
+                else -> pending.staticLeft + marginLeft
+            }
+            var y = when {
+                top != null -> cbTop + top + marginTop
+                bottom != null -> cbTop + cbHeight - bottom - marginBottom - borderBoxHeight
+                else -> pending.staticY + marginTop
+            }
+            x += style.translateX.resolve(borderBoxWidth) ?: 0f
+            y += style.translateY.resolve(borderBoxHeight) ?: 0f
+            sub.translate(x + borderLeft + paddingLeft, y)
+            output.insertFrom(sub, pending.lineIndex.coerceIn(0, output.lines.size))
+            output.keepRanges += y..(y + borderBoxHeight)
+        }
     }
 
     /** Layout a display:block replaced image with its own margins, padding, border and centering. */

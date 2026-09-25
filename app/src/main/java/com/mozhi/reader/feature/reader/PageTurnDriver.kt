@@ -74,6 +74,17 @@ class PageTurnDriver(
     var isRunning by mutableStateOf(false)
         private set
 
+    /**
+     * Right-to-left page progression (vertical-rl pages). The whole turn runs in a mirrored
+     * space: gesture x is reflected on input and the pane reflects the composited frame, so every
+     * animation keeps its geometry while the next page arrives from the left. Latched per turn.
+     */
+    var mirrorProvider: () -> Boolean = { false }
+    var mirrored by mutableStateOf(false)
+        private set
+
+    private fun mirrorX(x: Float): Float = if (mirrored) viewWidth - x else x
+
     /** Simulation corner: always the right edge; top or bottom decided per Legado's rules. */
     var cornerAtTop by mutableStateOf(false)
         private set
@@ -113,7 +124,10 @@ class PageTurnDriver(
 
     // ---- gesture entry points ----
 
-    fun onDown(x: Float, y: Float, timeMillis: Long = android.os.SystemClock.uptimeMillis()) {
+    fun onDown(rawX: Float, y: Float, timeMillis: Long = android.os.SystemClock.uptimeMillis()) {
+        // 接住仍在回弹的现代卷页时沿用这一次翻页的方向，其余按下都重新判定。
+        if (!(mode == Mode.MODERN_CURL && isAnimating && isCancel && direction != null)) mirrored = mirrorProvider()
+        val x = mirrorX(rawX)
         modernVelocity.reset(timeMillis, x)
         releaseVelocity = 0f
         if (mode == Mode.MODERN_CURL && isAnimating && isCancel && direction != null) {
@@ -141,8 +155,9 @@ class PageTurnDriver(
         downY = y
     }
 
-    fun onMove(x: Float, y: Float, touchSlop: Float, timeMillis: Long = android.os.SystemClock.uptimeMillis()) {
+    fun onMove(rawX: Float, y: Float, touchSlop: Float, timeMillis: Long = android.os.SystemClock.uptimeMillis()) {
         if (noNext) return
+        val x = mirrorX(rawX)
         if (mode == Mode.MODERN_CURL) modernVelocity.add(timeMillis, x)
         if (!isMoved) {
             val deltaX = x - startX
@@ -199,6 +214,7 @@ class PageTurnDriver(
 
     fun turnByTap(dir: PageTurnDirection) {
         abortAnimation()
+        mirrored = mirrorProvider()
         if (!callbacks.hasPage(dir)) {
             callbacks.onBoundaryHit(dir)
             return

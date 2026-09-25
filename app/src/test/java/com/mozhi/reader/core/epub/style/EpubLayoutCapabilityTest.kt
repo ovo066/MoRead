@@ -31,24 +31,37 @@ class EpubLayoutCapabilityTest {
     }
 
     @Test
-    fun `vertical chapter is reported with a structured reason and inherits through the tree`() {
+    fun `vertical-rl chapter is supported and the mode inherits through the tree`() {
         val styled = resolve("body { -epub-writing-mode: vertical-rl }", simpleBody)
         assertEquals(EpubWritingMode.VERTICAL_RL, styled.style.writingMode)
         assertEquals(EpubWritingMode.VERTICAL_RL, styled.children.single().style.writingMode)
         val capability = EpubLayoutCapabilityAnalyzer.analyze(styled)
-        assertFalse(capability.supported)
-        assertEquals(EpubLayoutFallbackReason.VERTICAL_WRITING_MODE, capability.reason)
+        assertTrue(capability.supported)
+        assertNull(capability.reason)
         assertEquals(EpubWritingMode.VERTICAL_RL, capability.chapterWritingMode)
-        assertTrue(capability.detail.contains("vertical-rl"))
     }
 
     @Test
-    fun `take over mode still sees the writing mode because it is structural`() {
-        val capability = EpubLayoutCapabilityAnalyzer.analyze(
-            resolve("body { writing-mode: vertical-lr }", simpleBody, PublisherStyleMode.TAKE_OVER)
-        )
+    fun `writing mode declared on the html root reaches the body`() {
+        val styled = EpubStyleResolver(
+            stylesheets = listOf(EpubStylesheetText("OEBPS/Styles/main.css",
+                "html { -epub-writing-mode: vertical-rl; font-size: 125% } p { font-size: 1rem }")),
+            viewportWidthPx = 300f,
+            viewportHeightPx = 500f,
+            rootFontSizePx = 20f,
+            themeTextArgb = 0xFF222222.toInt()
+        ).resolve(simpleBody, EpubDomNode("html"))
+        assertEquals(EpubWritingMode.VERTICAL_RL, styled.children.single().style.writingMode)
+        // rem 相对根元素的计算字号，与浏览器一致。
+        assertEquals(25f, styled.children.single().style.fontSizePx, .01f)
+    }
+
+    @Test
+    fun `vertical-lr is reported with a structured reason`() {
+        val capability = EpubLayoutCapabilityAnalyzer.analyze(resolve("body { writing-mode: vertical-lr }", simpleBody))
+        assertFalse(capability.supported)
         assertEquals(EpubLayoutFallbackReason.VERTICAL_WRITING_MODE, capability.reason)
-        assertEquals(EpubWritingMode.VERTICAL_LR, capability.chapterWritingMode)
+        assertTrue(capability.detail.contains("vertical-lr"))
     }
 
     @Test

@@ -11,6 +11,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProviderProtocolPolicyTest {
+    @Test fun geminiTtsIsSupportedWithoutAdvertisingGeminiImages() {
+        for (adapter in listOf(AiProviderAdapter.GEMINI, AiProviderAdapter.CUSTOM)) {
+            assertEquals(ModelProtocolRoute.Media, ProviderProtocolPolicy.route(provider(adapter, ApiDialect.GEMINI), model(AiModelType.TTS)))
+            assertTrue(ProviderProtocolPolicy.route(provider(adapter, ApiDialect.GEMINI), model(AiModelType.IMAGE)) is ModelProtocolRoute.Unsupported)
+        }
+    }
     @Test fun rerankUsesDedicatedCustomEndpointIndependentOfChatDialect() {
         assertEquals(ModelProtocolRoute.Rerank, ProviderProtocolPolicy.route(provider(AiProviderAdapter.CUSTOM, ApiDialect.CLAUDE), model(AiModelType.RERANK)))
         assertTrue(ProviderProtocolPolicy.route(provider(AiProviderAdapter.OPENAI, ApiDialect.OPENAI), model(AiModelType.RERANK)) is ModelProtocolRoute.Unsupported)

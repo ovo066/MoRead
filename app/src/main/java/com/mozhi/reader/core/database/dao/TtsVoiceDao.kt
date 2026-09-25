@@ -17,6 +17,9 @@ interface TtsVoiceDao {
     @Query("SELECT * FROM tts_voices ORDER BY pinned DESC, sortOrder, displayName")
     suspend fun getVoices(): List<TtsVoiceEntity>
 
+    @Query("SELECT * FROM tts_voices WHERE providerHint = :provider AND voiceId = :voiceId LIMIT 1")
+    suspend fun findVoice(provider: String, voiceId: String): TtsVoiceEntity?
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(voice: TtsVoiceEntity): Long
 

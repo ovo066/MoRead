@@ -1,5 +1,7 @@
 package com.mozhi.reader.feature.reader.engine
 
+import com.mozhi.reader.core.datastore.ReaderSyntaxFont
+
 /**
  * Measurement contract between the pure-Kotlin typesetter and the platform text stack.
  *
@@ -44,6 +46,19 @@ interface TextMeasure {
      */
     fun clusterLetterSpacing(style: MeasuredTextStyle): Float = 0f
 
+    /**
+     * [breakLines] with some ranges measured in their own style (syntax-highlight fonts/bold).
+     * Line breaks must see the same advances the renderer will draw, or styled Latin runs
+     * overflow the line and get squeezed by the overrun compression.
+     */
+    fun breakLines(
+        text: String,
+        isTitle: Boolean,
+        availableWidth: Float,
+        firstLineIndent: Float,
+        styledRuns: List<StyledTextRun>
+    ): IntArray = breakLines(text, isTitle, availableWidth, firstLineIndent)
+
     fun metrics(style: MeasuredTextStyle): LineMetrics {
         val base = metrics(style.isTitle)
         return LineMetrics(
@@ -65,7 +80,21 @@ data class MeasuredTextStyle(
     val fontFamily: String? = null,
     val bold: Boolean = false,
     val italic: Boolean = false,
-    val letterSpacingEm: Float = 0f
+    val letterSpacingEm: Float = 0f,
+    /**
+     * Font a syntax-highlight rule swaps in. The renderer draws with it, so measurement must too:
+     * a narrower/wider Latin face measured with the body font leaves gaps and overlaps inside
+     * words (CJK is full-width in every face, which is why only English showed it).
+     */
+    val syntaxFont: ReaderSyntaxFont = ReaderSyntaxFont.INHERIT,
+    val syntaxFontAssetId: String? = null
+)
+
+/** A `[start, end)` range of a paragraph that measures with its own [style]. */
+data class StyledTextRun(
+    val start: Int,
+    val end: Int,
+    val style: MeasuredTextStyle
 )
 
 data class LineMetrics(

@@ -213,6 +213,41 @@ class ReadingReviewVisualTest {
     @Test @Config(qualifiers = "w1000dp-h900dp-mdpi")
     fun tabletUsesRoomForThreeColumns() { show(); capture("review-tablet.png") }
 
+    @Test fun threeDimensionalStagesAreOptInAndKeepTheGestures() {
+        val entries = state.entries.filter { it.annotation != null }.take(4)
+        var chosen: ReviewFocusMotion? = null
+        var opened = 0
+        compose.setContent {
+            root = LocalView.current.rootView
+            MoReadTheme(AppearanceSettings(themeMode = ThemeMode.LIGHT, accent = AccentPreset.AZURE)) {
+                ReviewPagerDialog(entries, {}, { opened++ }, {}, {}, onMotionChange = { chosen = it })
+            }
+        }
+        // Paper stays the default: no 3D card surface until the reader opts in.
+        compose.onNodeWithTag("review-focus-card-${entries[0].key}").assertDoesNotExist()
+        compose.onNodeWithTag("review-motion-button").performClick()
+        capture("review-motion-menu.png", dialog = true)
+        compose.onNodeWithTag("review-motion-CUBE").performClick()
+        assertEquals(ReviewFocusMotion.CUBE, chosen)
+        compose.onNodeWithTag("review-focus-card-${entries[0].key}").assertIsDisplayed()
+        capture("review-cube.png", dialog = true)
+        compose.onNodeWithTag("review-pager").performTouchInput { down(center); moveBy(androidx.compose.ui.geometry.Offset(-width * .4f, 0f)) }
+        capture("review-cube-turning.png", dialog = true)
+        compose.onNodeWithTag("review-pager").performTouchInput { up() }
+        compose.onNodeWithTag("review-pager").performTouchInput { swipeLeft() }
+        compose.onNodeWithText("02 / 04").assertIsDisplayed()
+        compose.onNodeWithTag("review-motion-button").performClick()
+        compose.onNodeWithTag("review-motion-FLOW").performClick()
+        assertEquals(ReviewFocusMotion.FLOW, chosen)
+        capture("review-flow.png", dialog = true)
+        compose.onNodeWithTag("review-pager").performTouchInput { down(center); moveBy(androidx.compose.ui.geometry.Offset(width * .3f, 0f)) }
+        capture("review-flow-turning.png", dialog = true)
+        compose.onNodeWithTag("review-pager").performTouchInput { up() }
+        compose.onNodeWithTag("review-pager").performTouchInput { swipeUp() }
+        compose.waitForIdle()
+        assertEquals(1, opened)
+    }
+
     @Test fun focusCardKeepsLongTextReachableAndSupportsNext() {
         val first = state.entries.first { it.book.id == 2L && it.quote.startsWith("书页") }
         val entries = listOf(first) + state.entries.filter { it.annotation != null && it.key != first.key }.take(2)

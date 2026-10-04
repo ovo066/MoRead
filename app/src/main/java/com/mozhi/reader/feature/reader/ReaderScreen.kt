@@ -82,7 +82,6 @@ import coil3.compose.AsyncImage
 import com.mozhi.reader.R
 import com.mozhi.reader.MainActivity
 import com.mozhi.reader.ui.components.blockSheetDrag
-import com.mozhi.reader.core.database.entity.AnnotationColors
 import com.mozhi.reader.core.database.entity.AnnotationEntity
 import com.mozhi.reader.core.database.entity.AnnotationStyle
 import com.mozhi.reader.core.database.entity.BookmarkEntity
@@ -98,7 +97,6 @@ import com.mozhi.reader.core.datastore.activeThemeSlot
 import com.mozhi.reader.core.datastore.chineseConversionModeFor
 import com.mozhi.reader.core.datastore.resolveForBook
 import com.mozhi.reader.core.datastore.withBookThemeSelection
-import com.mozhi.reader.feature.reader.engine.ReaderAnnotationMark
 import com.mozhi.reader.feature.reader.engine.ReaderIllustrationMark
 import com.mozhi.reader.feature.reader.engine.InlineMarkerKind
 import com.mozhi.reader.feature.reader.engine.InlineMarkerReservation
@@ -153,9 +151,9 @@ fun ReaderScreen(
     onBack: () -> Unit,
     onOpenCompanionChat: (Long) -> Unit = {},
     onOpenListenPlayer: (Long) -> Unit = {},
-    /** 从聊天页「跳到原文」带回来的位置；消费一次后由调用方清空。 */
+    /** 详情批注、回顾或聊天「跳到原文」的位置；完成后只清空对应请求。 */
     pendingLocate: ReaderLocateRequest? = null,
-    onPendingLocateConsumed: () -> Unit = {},
+    onPendingLocateConsumed: (ReaderLocateRequest) -> Unit = {},
     viewModel: ReaderViewModel = hiltViewModel(),
     aiViewModel: ReaderAiViewModel = hiltViewModel(),
     companionViewModel: ReaderCompanionViewModel = hiltViewModel(),
@@ -398,38 +396,14 @@ fun ReaderScreen(
     val contextQuote = chapterTitle.ifBlank { state.book?.title.orEmpty() }
     val readerReady = !state.isLoading && state.errorMessage == null
 
-    LaunchedEffect(
-        pendingLocate,
-        readerReady,
-        state.isContentReady,
-        state.contentRevision,
-        conversionMode
-    ) {
-        val request = pendingLocate ?: return@LaunchedEffect
-        if (!readerReady || !state.isContentReady) return@LaunchedEffect
-        val range = viewModel.resolveSourceRange(
-            request.chapterIndex,
-            request.startCharOffset,
-            request.endCharOffset,
-            request.sourceAnchorJson
-        ) ?: return@LaunchedEffect
-        viewModel.goToPosition(request.chapterIndex, range.start)
-        screenState.locateHighlight = com.mozhi.reader.feature.reader.engine.TransientHighlightSpan(
-            chapterIndex = request.chapterIndex,
-            startCharOffset = range.start,
-            endCharOffset = range.end
-        )
-        onPendingLocateConsumed()
-    }
-
-    // 退场计时必须独立成一个 effect：它若和消费请求写在一起，onPendingLocateConsumed()
-    // 把 pendingLocate 置空会立刻改变 key、连同还没跑完的 delay 一起取消，
-    // 高亮就再也不会熄灭——那就成了「永久划线」而不是「示意一下」。
-    LaunchedEffect(screenState.locateHighlight) {
-        if (screenState.locateHighlight == null) return@LaunchedEffect
-        kotlinx.coroutines.delay(LOCATE_HIGHLIGHT_MS)
-        screenState.locateHighlight = null
-    }
+    ReaderLocateEffects(
+        request = pendingLocate, readerReady = readerReady, contentReady = state.isContentReady,
+        contentRevision = state.contentRevision, conversionMode = conversionMode, screenState = screenState,
+        resolve = { request -> viewModel.resolveSourceRange(request.chapterIndex, request.startCharOffset,
+            request.endCharOffset, request.sourceAnchorJson) },
+        jump = viewModel::goToPosition, onConsumed = onPendingLocateConsumed,
+        highlightIsVisible = { viewModel.contentController.isReady && viewModel.isShowingPosition(it.chapterIndex, it.startCharOffset) }
+    )
     val contentVisible = readerReady && state.isContentReady
     val speechActive = listenState?.isPlaying == true || selectionMediaState.isPlaying || selectionMediaState.isWorking
     val generatedImageVisible = selectionMediaState.imagePath != null
@@ -486,32 +460,10 @@ fun ReaderScreen(
         }
     }
     val markKey = conversionMode
-    // Source identity, not contentRevision (which advances on every page turn), owns range work.
-    // At most three chapters are resolved; each chapter has an independent Compose cache.
-    val annotationsByChapter = remember(visibleAnnotations) { visibleAnnotations.groupBy { it.chapterIndex } }
-    val annotationMarks = ((state.currentChapterIndex - 1)..(state.currentChapterIndex + 1)).flatMap { chapter ->
-        androidx.compose.runtime.key(chapter) {
-            val chapterAnnotations = annotationsByChapter[chapter].orEmpty()
-            val repliedIds = state.repliedAnnotationIds.intersect(chapterAnnotations.map { it.id }.toSet())
-            val source = viewModel.contentController.chapterSource(chapter)
-            remember(chapterAnnotations, repliedIds, source, markKey) {
-                chapterAnnotations.mapNotNull { annotation ->
-                    val range = viewModel.resolveAnnotationRange(annotation) ?: return@mapNotNull null
-                    ReaderAnnotationMark(
-                        id = annotation.id,
-                        chapterIndex = annotation.chapterIndex,
-                        startCharOffset = range.start,
-                        endCharOffset = range.end,
-                        hasComment = annotation.note.isNotBlank() || annotation.id in repliedIds,
-                        style = annotation.style,
-                        colorTag = annotation.colorTag.ifBlank {
-                            annotation.personaId?.let(AnnotationColors::forPersona).orEmpty()
-                        }
-                    )
-                }
-            }
-        }
-    }
+    val annotationMarks = rememberReaderAnnotationMarks(
+        visibleAnnotations, state.repliedAnnotationIds, state.currentChapterIndex,
+        state.contentRevision, conversionMode, viewModel.contentController, viewModel::resolveAnnotationRange
+    )
     val visibleIllustrations = remember(state.illustrations, state.annotations, annotationScope) {
         state.illustrations.filter {
             com.mozhi.reader.core.retrieval.AnnotationVisibility.isIllustrationVisible(it, state.annotations, annotationScope)
@@ -1592,14 +1544,3 @@ private tailrec fun Context.findComponentActivity(): ComponentActivity? = when (
     is ContextWrapper -> baseContext.findComponentActivity()
     else -> null
 }
-
-/** 聊天页「跳到原文」交回阅读页的一次性请求。 */
-data class ReaderLocateRequest(
-    val chapterIndex: Int,
-    val startCharOffset: Int,
-    val endCharOffset: Int,
-    val sourceAnchorJson: String = ""
-)
-
-/** 引文高亮只是「我把你带到这儿了」的提示，亮一下即可，不该长期占据视觉。 */
-private const val LOCATE_HIGHLIGHT_MS = 2_600L

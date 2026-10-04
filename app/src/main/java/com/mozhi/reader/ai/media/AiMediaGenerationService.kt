@@ -291,6 +291,7 @@ class AiMediaGenerationService @Inject constructor(
     }
 
     private fun audioExtension(mediaType: String?, requested: String?): String = when {
+        mediaType?.contains("ogg", true) == true || mediaType?.contains("opus", true) == true -> "ogg"
         mediaType?.contains("wav", true) == true || requested == "wav" -> "wav"
         mediaType?.contains("flac", true) == true || requested == "flac" -> "flac"
         mediaType?.contains("aac", true) == true || requested == "aac" -> "aac"
@@ -298,6 +299,7 @@ class AiMediaGenerationService @Inject constructor(
     }
 
     private fun mediaTypeForExtension(extension: String): String = when (extension.lowercase()) {
+        "ogg", "opus" -> "audio/ogg"
         "wav" -> "audio/wav"
         "flac" -> "audio/flac"
         "aac" -> "audio/aac"

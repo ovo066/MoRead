@@ -3,6 +3,7 @@ package com.mozhi.reader.ai.client
 import com.mozhi.reader.core.database.entity.AiModelEntity
 import com.mozhi.reader.core.database.entity.AiProviderAdapter
 import com.mozhi.reader.core.database.entity.AiProviderEntity
+import com.mozhi.reader.core.speech.TtsApiProvider
 import java.io.ByteArrayOutputStream
 import java.util.Base64
 import kotlinx.coroutines.Dispatchers
@@ -44,7 +45,8 @@ class OpenAiMediaClient(
     private val provider: AiProviderEntity,
     private val model: AiModelEntity,
     private val apiKey: String,
-    private val httpClient: OkHttpClient
+    private val httpClient: OkHttpClient,
+    private val ttsProvider: TtsApiProvider? = null
 ) : ImageGenerationClient {
     private val base = normalizeBase(provider.baseUrl)
     private val mergedExtraJson = mergeExtraJson(provider.extraJson, model.extraJson)
@@ -265,6 +267,17 @@ class OpenAiMediaClient(
         instruction: String? = null
     ): SynthesizedSpeech {
         require(text.isNotBlank()) { "朗读文本不能为空" }
+        if (ttsProvider == TtsApiProvider.XIAOMI_MIMO ||
+            (ttsProvider == null && (provider.baseUrl.toHttpUrlOrNull()?.host == "api.xiaomimimo.com" ||
+                model.modelName.startsWith("mimo-", true) && model.modelName.contains("tts", true)))) {
+            return MimoTtsClient(provider, model, apiKey, httpClient)
+                .synthesizeSpeech(text, voice, responseFormat, speed, volume, pitch, emotion, instruction)
+        }
+        if (ttsProvider == TtsApiProvider.FISH_AUDIO ||
+            (ttsProvider == null && provider.baseUrl.toHttpUrlOrNull()?.host == "api.fish.audio")) {
+            return FishTtsClient(provider, model, apiKey, httpClient)
+                .synthesizeSpeech(text, voice, responseFormat, speed, volume, emotion, instruction)
+        }
         if (provider.adapter == AiProviderAdapter.GEMINI ||
             (provider.adapter == AiProviderAdapter.CUSTOM && ApiDialect.fromWire(provider.apiFormat) == ApiDialect.GEMINI)) {
             return GeminiTtsClient(provider, model, apiKey, httpClient)

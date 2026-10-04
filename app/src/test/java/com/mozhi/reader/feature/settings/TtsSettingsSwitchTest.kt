@@ -29,7 +29,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35], application = Application::class, qualifiers = "w412dp-h892dp-mdpi")
+@Config(sdk = [35], application = Application::class, qualifiers = "zh-rCN-w412dp-h892dp-mdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class TtsSettingsSwitchTest {
     @get:Rule val compose = createComposeRule()
@@ -85,6 +85,68 @@ class TtsSettingsSwitchTest {
 
     @Test fun geminiVoicePickerLight() = voicePicker(false)
     @Test fun geminiVoicePickerDark() = voicePicker(true)
+
+    @Test fun nativeProvidersLight() = nativeProviders(false)
+    @Test fun nativeProvidersDark() = nativeProviders(true)
+
+    private fun nativeProviders(dark: Boolean) {
+        val data = object : DataStore<Preferences> {
+            override val data = MutableStateFlow(emptyPreferences())
+            private val lock = Mutex()
+            override suspend fun updateData(transform: suspend (Preferences) -> Preferences): Preferences =
+                lock.withLock { transform(data.value).also { data.value = it } }
+        }
+        val store = TtsSettingsStore(data)
+        runBlocking { store.update { it.copy(engineMode = TtsEngineMode.AI, aiProvider = TtsApiProvider.XIAOMI_MIMO) } }
+        val speaker = mockk<SystemTtsSpeaker>(relaxed = true)
+        val keys = mutableMapOf<String, String>()
+        val keyStore = mockk<ApiKeyStore>()
+        every { keyStore.get(any()) } answers { keys[firstArg()] }
+        every { keyStore.put(any(), any()) } answers { keys[firstArg()] = secondArg() }
+        every { keyStore.migrateAlias(any(), any()) } answers { keys[secondArg()] }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val model = TtsSettingsViewModel(store, speaker, mockk<AiMediaGenerationService>(), keyStore, scope)
+        try {
+            compose.setContent {
+                MoReadTheme(AppearanceSettings(themeMode = if (dark) ThemeMode.DARK else ThemeMode.LIGHT)) {
+                    TtsSettingsScreen({}, viewModel = model)
+                }
+            }
+            compose.onNodeWithText("小米 MiMo").performScrollTo().assertIsDisplayed()
+            compose.onNodeWithText("模型").performScrollTo().assertTextContains("mimo-v2.5-tts")
+            compose.onNodeWithText("音色 ID（可选）").performScrollTo().performTextReplacement("茉莉")
+            compose.onNodeWithText("API Key").performScrollTo().performTextReplacement("mimo-test-only")
+            compose.onNodeWithText("小米 MiMo").performScrollTo().performClick()
+            nativeScreenshot("providers-${if (dark) "dark" else "light"}")
+            compose.onNodeWithText("Fish Studio（Fish Audio）").performScrollTo().performClick()
+            compose.waitUntil { runBlocking { store.current().aiProvider == TtsApiProvider.FISH_AUDIO } }
+            assertEquals("mimo-test-only", keys[TtsSettingsStore.apiKeyAlias(TtsApiProvider.XIAOMI_MIMO)])
+            compose.onNodeWithText("模型").performScrollTo().assertTextContains("s2.1-pro")
+            compose.onNodeWithText("音色 ID（可选）").performScrollTo()
+                .performTextReplacement("fish-voice-with-a-long-custom-identifier-123456789")
+            compose.onNodeWithText("支持语速和音量调节；音色可从 Fish 音色库获取。").performScrollTo().assertIsDisplayed()
+            compose.onNodeWithText("音调：", substring = true).assertDoesNotExist()
+            nativeScreenshot("fish-${if (dark) "dark" else "light"}")
+            compose.onNodeWithText("API Key").performScrollTo().performTextReplacement("fish-test-only")
+            compose.onNodeWithText("Fish Studio（Fish Audio）").performScrollTo().performClick()
+            compose.onNodeWithText("小米 MiMo").performScrollTo().performClick()
+            compose.waitUntil { runBlocking { store.current().aiProvider == TtsApiProvider.XIAOMI_MIMO } }
+            assertEquals("fish-test-only", keys[TtsSettingsStore.apiKeyAlias(TtsApiProvider.FISH_AUDIO)])
+            compose.onNodeWithText("音色 ID（可选）").performScrollTo().assertTextContains("茉莉")
+            compose.onNodeWithText("音调风格：0").performScrollTo().assertIsDisplayed()
+            nativeScreenshot("mimo-${if (dark) "dark" else "light"}")
+        } finally { scope.cancel() }
+    }
+
+    private fun nativeScreenshot(name: String) = compose.runOnIdle {
+        val view = WindowInspector.getGlobalWindowViews().last { it.isShown && it.width > 0 }
+        val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+        view.draw(Canvas(bitmap))
+        val file = File("build/outputs/tts-visual/$name.png")
+        file.parentFile?.mkdirs()
+        file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        bitmap.recycle()
+    }
 
     private fun voicePicker(dark: Boolean) {
         var selected = ""

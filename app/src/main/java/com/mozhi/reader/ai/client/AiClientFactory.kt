@@ -243,6 +243,8 @@ class AiClientFactory @Inject constructor(
             type = AiModelType.TTS,
             endpointPath = when {
                 settings.aiIsGemini -> "/interactions"
+                settings.aiIsMimo -> "/chat/completions"
+                settings.aiIsFish -> "/tts"
                 isGmiCloud -> "/api/v1/ie/requestqueue/apikey/requests"
                 isMiniMax -> "/t2a_v2"
                 else -> "/audio/speech"
@@ -253,7 +255,7 @@ class AiClientFactory @Inject constructor(
             createdAt = 0
         )
         return ResolvedMediaClient(
-            client = OpenAiMediaClient(provider, model, apiKey, httpClient),
+            client = OpenAiMediaClient(provider, model, apiKey, httpClient, settings.aiProvider),
             provider = provider,
             model = model
         )

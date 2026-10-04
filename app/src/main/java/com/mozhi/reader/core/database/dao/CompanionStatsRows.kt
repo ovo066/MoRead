@@ -9,7 +9,9 @@ data class CompletedCompanionRound(
     val type: String,
     val bookScopesJson: String,
     val replyRoundId: String?,
-    val sourceBookIdsJson: String? = null
+    val sourceBookIdsJson: String? = null,
+    /** Companion role of the conversation; null for legacy chats without a role. */
+    val personaId: Long? = null
 )
 
 data class CompanionWordsRow(val id: Long, val roundId: String?, val createdAt: Long, val type: String, val characters: Long, val role: String = "assistant")

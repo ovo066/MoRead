@@ -109,7 +109,9 @@ internal fun ReadingReviewScreen(
         val entries = keys.mapNotNull { key -> state.entries.firstOrNull { it.key == key } }
         ReviewPagerDialog(entries, onDismiss = { reviewKeys = null },
             onOpen = { reviewKeys = null; detailKey = it.key },
-            onLocate = { reviewKeys = null; onLocate(it) }, onExport = { exportKey = it.key })
+            onLocate = { reviewKeys = null; onLocate(it) }, onExport = { exportKey = it.key },
+            motion = ReviewFocusMotion.fromWire(preferences?.focusMotion),
+            onMotionChange = { motion -> preferences?.let { viewModel.setReviewPreferences(it.copy(focusMotion = motion.name)) } })
     }
     state.entries.firstOrNull { it.key == exportKey }?.let { entry ->
         ReviewExportDialog(entry, onDismiss = { exportKey = null },
@@ -150,8 +152,9 @@ internal fun ReadingReviewContent(
     var searchOpen by rememberSaveable { mutableStateOf(false) }
     var booksOpen by rememberSaveable { mutableStateOf(false) }
     val filter = ReviewFilter(query, bookIds.toSet(), source, personaId, kind, oldest)
-    fun save(current: ReviewFilter = filter, layout: Boolean = grid) = onPreferencesChange(
-        ReadingReviewPreferences(current.source.name, current.kind.name, current.bookIds, current.personaId, current.oldestFirst, layout))
+    fun save(current: ReviewFilter = filter, layout: Boolean = grid) = onPreferencesChange(preferences.copy(
+        source = current.source.name, kind = current.kind.name, bookIds = current.bookIds, personaId = current.personaId,
+        oldestFirst = current.oldestFirst, grid = layout))
     val filtered = remember(state.entries, filter) { filterReview(state.entries, filter) }
     val bookCount = remember(filtered) { filtered.map { it.book.id }.distinct().size }
     val holder = rememberSaveableStateHolder()

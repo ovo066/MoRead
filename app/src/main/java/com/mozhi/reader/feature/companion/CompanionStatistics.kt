@@ -23,7 +23,11 @@ data class CompanionStatistics(
     val legacyRounds: Int = 0,
     val firstChatDate: LocalDate? = null,
     val chatCharacters: Long = 0L,
-    val readingDurationMs: Long = 0L
+    val readingDurationMs: Long = 0L,
+    /** Completed exchanges per local hour (24 slots) within the selected scope and period. */
+    val roundsByHour: List<Int> = List(24) { 0 },
+    /** The narrative timeline; assembled separately by [buildCompanionStory]. */
+    val story: CompanionStory = CompanionStory()
 )
 
 internal fun buildCompanionStatistics(
@@ -54,13 +58,7 @@ internal fun buildCompanionStatistics(
     val tokens = usage.sortedWith(compareBy<CompanionUsageRow> { it.createdAt }.thenBy { it.id })
         .distinctBy { it.roundId?.takeIf(String::isNotBlank) ?: "legacy:${it.id}" }
         .filter { includes(it.type, it.createdAt) }
-    val bookIds = unique.flatMap { row ->
-        row.bookId?.let(::listOf) ?: runCatching {
-            row.sourceBookIdsJson?.let { json ->
-                LibraryBookScopes.decodeTurnBooks(json)
-            } ?: LibraryBookScopes.decode(row.bookScopesJson).map { it.bookId }
-        }.getOrDefault(emptyList())
-    }.toSet().let { ids -> retainedBookIds?.let(ids::intersect) ?: ids }
+    val bookIds = unique.flatMap(::companionRoundBooks).toSet().let { ids -> retainedBookIds?.let(ids::intersect) ?: ids }
     val byDay = unique.groupingBy { date(it.createdAt) }.eachCount().toSortedMap()
     val known = tokens.mapNotNull { it.tokens?.takeIf { count -> count >= 0 } }
     return CompanionStatistics(
@@ -69,6 +67,9 @@ internal fun buildCompanionStatistics(
         knownTokens = known.takeIf { it.isNotEmpty() }?.sumOf { it.toLong() },
         unknownUsageReplies = tokens.count { it.tokens == null || it.tokens < 0 },
         roundsByDay = byDay,
+        roundsByHour = IntArray(24).also { hours ->
+            unique.forEach { hours[Instant.ofEpochMilli(it.createdAt).atZone(zone).hour]++ }
+        }.toList(),
         legacyRounds = unique.count { it.replyRoundId.isNullOrBlank() },
         firstChatDate = deduplicated.filter {
             when (selection.scope) {
@@ -87,6 +88,14 @@ internal fun buildCompanionStatistics(
         }.sumOf { it.durationMs.coerceAtLeast(0L) }
     )
 }
+
+/** Books a completed round talked about: the book of a book chat, or the recorded sources of a library turn. */
+internal fun companionRoundBooks(row: CompletedCompanionRound): List<Long> =
+    row.bookId?.let(::listOf) ?: runCatching {
+        row.sourceBookIdsJson?.let { json ->
+            LibraryBookScopes.decodeTurnBooks(json)
+        } ?: LibraryBookScopes.decode(row.bookScopesJson).map { it.bookId }
+    }.getOrDefault(emptyList())
 
 internal fun formatCompanionReadingDuration(durationMs: Long): String {
     val minutes = durationMs.coerceAtLeast(0) / 60_000

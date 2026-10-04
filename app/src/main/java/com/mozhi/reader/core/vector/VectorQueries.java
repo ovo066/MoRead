@@ -190,6 +190,19 @@ public final class VectorQueries {
     }
 
     /** 删除单条记忆（记忆管理页的左滑删除）。返回 false 表示目标本来就不存在。 */
+    /** Newest memories across every role, for the companion timeline. */
+    public static List<MemoryEntry> listRecentMemories(BoxStore store, int limit) {
+        Query<MemoryEntry> query = store.boxFor(MemoryEntry.class)
+                .query()
+                .orderDesc(MemoryEntry_.createdAt)
+                .build();
+        try {
+            return query.find(0, limit);
+        } finally {
+            query.close();
+        }
+    }
+
     public static boolean removeMemory(BoxStore store, long id) {
         return store.boxFor(MemoryEntry.class).remove(id);
     }

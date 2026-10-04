@@ -46,7 +46,7 @@ class DictionaryPagesVisualTest {
         every { vm.state } returns MutableStateFlow(EnglishLearningState(dictionaries =
             (1..12).map { LocalDictionary("$it", "本地词典 $it", 1) }))
         every { vm.readerSettings } returns MutableStateFlow(ReaderSettings(vocabulary =
-            (1..40).map { VocabularyWord("word$it", "释义 $it", "阅读语境 $it", createdAt = it.toLong()) }))
+            (1..40).map { VocabularyWord("word$it", "释义 $it", "阅读语境 $it", createdAt = it.toLong(), learned = it % 3 == 0) }))
         compose.setContent {
             MoReadTheme(AppearanceSettings(themeMode = if (dark) ThemeMode.DARK else ThemeMode.LIGHT,
                 colorScheme = ColorSchemePreset.ROSE_DUST)) {
@@ -109,9 +109,11 @@ class DictionaryPagesVisualTest {
         compose.runOnIdle { assertFalse(open) }
     }
 
-    @Test fun vocabularySearchStaysPinnedWhileScrollingAndFiltering() = checkVocabulary("phone")
+    // 生词本文案来自字符串资源，按默认中文界面断言。
+    @Test @Config(qualifiers = "zh-rCN-w411dp-h891dp-mdpi")
+    fun vocabularySearchStaysPinnedWhileScrollingAndFiltering() = checkVocabulary("phone")
 
-    @Test @Config(qualifiers = "w1400dp-h960dp-mdpi")
+    @Test @Config(qualifiers = "zh-rCN-w1400dp-h960dp-mdpi")
     fun tabletVocabularySearchStaysPinnedWhileScrollingAndFiltering() {
         checkVocabulary("tablet")
         compose.onNodeWithTag("vocabulary-search").performTextInput("word4")
@@ -133,6 +135,13 @@ class DictionaryPagesVisualTest {
         val pinned = capsule.assertIsDisplayed().fetchSemanticsNode().boundsInRoot
         list.performScrollToIndex(25)
         assertEquals(pinned, capsule.fetchSemanticsNode().boundsInRoot)
+        val phone = compose.onAllNodesWithTag("navigation-sheet").fetchSemanticsNodes().isEmpty()
+        if (phone) {
+            // 手机上顶栏随内容滚走：吸顶后只剩搜索框一层，紧贴状态栏下沿。
+            compose.onNodeWithContentDescription("返回").assertDoesNotExist()
+            assertTrue("吸顶搜索框应贴近顶部安全区", pinned.top < 32f + 24f)
+            captureRoot("vocabulary-$size-pinned.png")
+        }
         compose.onNodeWithTag("vocabulary-search").performTextInput("word40")
         compose.onNode(hasText("word40") and !hasSetTextAction()).assertIsDisplayed()
         capsule.assertIsDisplayed()
@@ -141,8 +150,18 @@ class DictionaryPagesVisualTest {
         capsule.assertIsDisplayed()
         compose.onNodeWithTag("vocabulary-search").performTextClearance()
         compose.onNodeWithText("word40").assertIsDisplayed()
+        list.performScrollToIndex(0)
         compose.runOnIdle { dark = true }
         checkWindowAndCapture("vocabulary-$size-dark.png")
+    }
+
+    private fun captureRoot(name: String) = compose.runOnIdle {
+        val root = requireNotNull(ShadowDialog.getLatestDialog().window).decorView
+        val bitmap = Bitmap.createBitmap(root.width, root.height, Bitmap.Config.ARGB_8888)
+        root.draw(Canvas(bitmap))
+        File("build/reports/tablet-ui/system-bars/$name").apply { parentFile.mkdirs() }
+            .outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        bitmap.recycle()
     }
 
     private fun checkWindowAndCapture(name: String) {

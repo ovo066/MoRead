@@ -16,8 +16,8 @@ import kotlinx.coroutines.flow.map
 enum class TtsEngineMode { SYSTEM, AI }
 enum class TtsSynthesisGranularity { SENTENCE, PARAGRAPH, CHAPTER }
 
-/** 独立 TTS API 的服务商预设：MiniMax 直连、OpenAI 兼容与 GMI 请求队列。 */
-enum class TtsApiProvider { MINIMAX_CN, MINIMAX_INTL, OPENAI_COMPAT, GMI_CLOUD, GEMINI }
+/** 独立 TTS API 的服务商预设；各服务商分别保存配置与密钥。 */
+enum class TtsApiProvider { MINIMAX_CN, MINIMAX_INTL, OPENAI_COMPAT, GMI_CLOUD, GEMINI, XIAOMI_MIMO, FISH_AUDIO }
 
 fun TtsApiProvider.defaultBaseUrl(): String = when (this) {
     TtsApiProvider.MINIMAX_CN -> "https://api.minimaxi.com/v1"
@@ -25,6 +25,8 @@ fun TtsApiProvider.defaultBaseUrl(): String = when (this) {
     TtsApiProvider.OPENAI_COMPAT -> "https://api.openai.com/v1"
     TtsApiProvider.GMI_CLOUD -> "https://console.gmicloud.ai"
     TtsApiProvider.GEMINI -> "https://generativelanguage.googleapis.com/v1beta"
+    TtsApiProvider.XIAOMI_MIMO -> "https://api.xiaomimimo.com/v1"
+    TtsApiProvider.FISH_AUDIO -> "https://api.fish.audio/v1"
 }
 
 fun TtsApiProvider.defaultModel(): String = when (this) {
@@ -32,6 +34,8 @@ fun TtsApiProvider.defaultModel(): String = when (this) {
     TtsApiProvider.OPENAI_COMPAT -> "gpt-4o-mini-tts"
     TtsApiProvider.GMI_CLOUD -> "minimax-tts-speech-2.8-hd"
     TtsApiProvider.GEMINI -> "gemini-3.8-flash-tts"
+    TtsApiProvider.XIAOMI_MIMO -> "mimo-v2.5-tts"
+    TtsApiProvider.FISH_AUDIO -> "s2.1-pro"
 }
 
 /** 语音朗读配置：引擎切换 + 各云端协议参数，替代散落在 extraJson 里的手写字段。 */
@@ -68,15 +72,20 @@ data class TtsSettings(
     val aiApiConfigured: Boolean get() = aiBaseUrl.isNotBlank() && aiModel.isNotBlank()
 
     val aiIsGemini: Boolean get() = aiProvider == TtsApiProvider.GEMINI
+    val aiIsMimo: Boolean get() = aiProvider == TtsApiProvider.XIAOMI_MIMO
+    val aiIsFish: Boolean get() = aiProvider == TtsApiProvider.FISH_AUDIO
+    val aiUsesStyleControls: Boolean get() = aiIsGemini || aiIsMimo
+    val aiSupportsVolume: Boolean get() = aiUsesStyleControls || aiIsMiniMax || aiIsGmiCloud || aiIsFish
+    val aiSupportsPitch: Boolean get() = aiUsesStyleControls || aiIsMiniMax || aiIsGmiCloud
 
     /** 是否按 GMI Request Queue 协议请求。 */
     val aiIsGmiCloud: Boolean
-        get() = !aiIsGemini && (aiProvider == TtsApiProvider.GMI_CLOUD ||
+        get() = !aiIsGemini && !aiIsMimo && !aiIsFish && (aiProvider == TtsApiProvider.GMI_CLOUD ||
             aiBaseUrl.contains("gmicloud.ai", ignoreCase = true))
 
     /** 是否按 MiniMax t2a_v2 协议请求（自定义中转 URL 含 minimax 时也算）。 */
     val aiIsMiniMax: Boolean
-        get() = !aiIsGemini && !aiIsGmiCloud && (
+        get() = !aiIsGemini && !aiIsMimo && !aiIsFish && !aiIsGmiCloud && (
             aiProvider == TtsApiProvider.MINIMAX_CN ||
                 aiProvider == TtsApiProvider.MINIMAX_INTL ||
                 aiBaseUrl.contains("minimax", ignoreCase = true)

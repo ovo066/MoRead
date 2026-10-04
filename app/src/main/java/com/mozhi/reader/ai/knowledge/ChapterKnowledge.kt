@@ -64,7 +64,7 @@ internal object ChapterKnowledgeCodec {
     /** All offsets are derived locally; fabricated, ambiguous and out-of-range quotes fail closed. */
     fun parse(raw: String, part: KnowledgePart, maxOutlineChars: Int = 2400): ChapterKnowledge {
         require(raw.length <= 64_000) { "整理结果过长" }
-        val clean = raw.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+        val clean = KnowledgeResponseJson.clean(raw)
         val draft = try { AiJson.decodeFromString<Draft>(clean) }
             catch (_: Exception) { throw IllegalArgumentException("整理结果格式不完整，请重试") }
         require(draft.summary.size in 1..8 && draft.characters.size <= 16) { "整理结果条目过多或缺少摘要" }
@@ -73,7 +73,8 @@ internal object ChapterKnowledgeCodec {
 
     fun parseCharacters(raw: String, part: KnowledgePart): List<KnowledgeCharacter> {
         require(raw.length <= 64_000) { "人物结果过长" }
-        val draft = AiJson.decodeFromString<CharacterDraft>(raw.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim())
+        val draft = try { AiJson.decodeFromString<CharacterDraft>(KnowledgeResponseJson.characters(raw)) }
+            catch (_: IllegalArgumentException) { throw IllegalArgumentException("人物结果格式不完整，请重试或提高模型输出上限") }
         return verifyCharacters(draft.characters, part)
     }
 

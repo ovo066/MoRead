@@ -141,6 +141,10 @@ class TabletSettingsVisualTest {
         assertEquals(anchor, scroll(), .01f)
         compose.runOnIdle { narrow = true }
         compose.onNodeWithTag("settings-sidebar").assertDoesNotExist()
+        // 生词本的顶栏随内容滚走：停在中段时只有吸顶搜索框，回到顶部才露出返回。
+        compose.onNodeWithTag("vocabulary-search-capsule").assertIsDisplayed()
+        compose.onNodeWithContentDescription("返回").assertDoesNotExist()
+        compose.onNodeWithTag("secondary-page-list").performScrollToIndex(0)
         compose.onNodeWithContentDescription("返回").assertIsDisplayed()
         compose.onNodeWithTag("vocabulary-search-capsule").assertIsDisplayed()
     }

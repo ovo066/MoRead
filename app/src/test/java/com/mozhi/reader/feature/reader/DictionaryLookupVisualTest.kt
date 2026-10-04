@@ -3,12 +3,14 @@ package com.mozhi.reader.feature.reader
 import android.app.Application
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebView
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
@@ -30,6 +32,8 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.shadow.api.Shadow
+import org.robolectric.util.ReflectionHelpers.ClassParameter.from
 
 @RunWith(RobolectricTestRunner::class)
 // 按默认中文界面断言文案；英文资源由 LocalizationResourcesTest 覆盖。
@@ -135,8 +139,65 @@ class DictionaryLookupVisualTest {
         compose.runOnIdle { book.value = true }
         compose.onNodeWithText("故").assertIsDisplayed()
         compose.onNodeWithText("温故而知新").assertIsDisplayed()
-        compose.onNodeWithText("移出生词本").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("「故」的更多操作").performClick()
+        compose.onNodeWithText("移出生词本").performClick()
         verify { vm.updateWord(match { it.word == "故" }, true) }
+    }
+
+    @Test fun renderedDictionaryKeepsTouchStreamInsideWebViewAndHeaderCanStillDismiss() {
+        var dismissed = 0
+        compose.setContent {
+            MoReadTheme {
+                DictionaryLookupSheet(initial, companionChatPalette(), emptyList(), {}, {}, { _, _ -> }, {}, { dismissed++ }) { entry, modifier ->
+                    val view = LocalView.current
+                    SideEffect { root = view.rootView }
+                    DictionaryWebContent(entry, false, LocalDictionaryRepository(RuntimeEnvironment.getApplication()), {}, modifier)
+                }
+            }
+        }
+        val actions = mutableListOf<Int>()
+        compose.runOnIdle {
+            val web = webView(root)!!
+            val host = web.parent as View
+            // Robolectric has no Chromium layout or touch handler. Supply its bounds and a
+            // consuming handler, but exercise the real AndroidView + parent sheet dispatch.
+            // WebView.setFrame delegates to the absent Chromium provider too, so calling
+            // layout() is a no-op. Set the actual View frame for Android hit testing.
+            Shadow.directlyOn<Boolean, View>(web, View::class.java, "setFrame",
+                from(Int::class.javaPrimitiveType, 0), from(Int::class.javaPrimitiveType, 0),
+                from(Int::class.javaPrimitiveType, host.width), from(Int::class.javaPrimitiveType, host.height))
+            assertEquals(host.width, web.width)
+            assertEquals(host.height, web.height)
+            web.setOnTouchListener { _, event -> actions += event.actionMasked; true }
+        }
+        val viewport = compose.onNodeWithTag("navigation-viewport").fetchSemanticsNode().boundsInRoot
+        val tabs = compose.onNodeWithTag("dictionary-sources").fetchSemanticsNode().boundsInRoot
+        val target = compose.onNodeWithTag("dictionary-definition")
+        for (dy in listOf(120f, -120f, 180f, -180f)) {
+            actions.clear()
+            target.performTouchInput {
+                down(center)
+                moveBy(Offset(0f, dy / 2))
+                moveBy(Offset(0f, dy / 2))
+            }
+            compose.runOnIdle {
+                assertTrue("WebView must receive down: $actions", MotionEvent.ACTION_DOWN in actions)
+                assertTrue("WebView must keep move events: $actions", MotionEvent.ACTION_MOVE in actions)
+                assertFalse("Sheet must not cancel WebView scrolling: $actions", MotionEvent.ACTION_CANCEL in actions)
+            }
+            assertEquals(viewport.top, compose.onNodeWithTag("navigation-viewport").fetchSemanticsNode().boundsInRoot.top, .5f)
+            target.performTouchInput { up() }
+            compose.runOnIdle { assertEquals(MotionEvent.ACTION_UP, actions.last()) }
+        }
+        target.performTouchInput { down(center); moveBy(Offset(0f, 60f)); cancel() }
+        compose.runOnIdle { assertEquals(MotionEvent.ACTION_CANCEL, actions.last()) }
+        assertEquals(tabs.top, compose.onNodeWithTag("dictionary-sources").fetchSemanticsNode().boundsInRoot.top, .5f)
+        assertEquals(root.height.toFloat(), compose.onNodeWithTag("navigation-viewport").fetchSemanticsNode().boundsInRoot.bottom, 1f)
+        assertEquals(0, dismissed)
+        compose.onNodeWithText("故", substring = false).performTouchInput {
+            swipe(Offset(centerX, centerY), Offset(centerX, centerY + 700f), durationMillis = 400)
+        }
+        compose.waitUntil(5000) { dismissed > 0 }
     }
 
     @Test fun aiDictionaryRendersMarkdownHeadingsAndExamplesInsideTheRealSheet() {
@@ -167,6 +228,7 @@ class DictionaryLookupVisualTest {
         assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, web.layoutParams.width)
         assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, web.layoutParams.height)
         assertEquals(View.LAYER_TYPE_SOFTWARE, web.layerType)
+        assertEquals(View.OVER_SCROLL_NEVER, web.overScrollMode)
         val request = mockk<android.webkit.WebResourceRequest>()
         every { request.url } returns android.net.Uri.parse(Shadows.shadowOf(web).lastLoadedUrl)
         every { request.isForMainFrame } returns true

@@ -2,6 +2,7 @@ package com.mozhi.reader.feature.reader
 
 import android.net.Uri
 import android.webkit.*
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import androidx.compose.foundation.layout.*
@@ -42,8 +43,21 @@ internal fun DictionaryWebContent(entry: DictionaryDefinition, dark: Boolean, re
                 SelectionContainer { Text(plain, style = MaterialTheme.typography.bodyLarge) }
             }
         } else AndroidView(modifier = Modifier.weight(1f).fillMaxWidth(), factory = { context ->
-        runCatching { WebView(context).apply {
+        runCatching { object : WebView(context) {
+            override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+                // WebView does not participate in Compose nested scrolling. Claim the whole
+                // touch stream before the sheet's draggable can intercept and cancel it,
+                // including at document edges; Chromium still handles links, zoom and fling.
+                parent?.requestDisallowInterceptTouchEvent(true)
+                val handled = super.dispatchTouchEvent(event)
+                if (!handled || event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+                    parent?.requestDisallowInterceptTouchEvent(false)
+                }
+                return handled
+            }
+        }.apply {
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            overScrollMode = View.OVER_SCROLL_NEVER
             // Static dictionary pages do not need a GPU layer. Software compositing avoids
             // blank/black WebView surfaces inside a translated Compose dialog on some devices.
             setLayerType(View.LAYER_TYPE_SOFTWARE, null)

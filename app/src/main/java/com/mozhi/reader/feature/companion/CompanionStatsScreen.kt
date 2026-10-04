@@ -22,6 +22,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import com.mozhi.reader.ui.components.FrostedSurface
 import com.mozhi.reader.ui.components.MoReadSecondaryPage
+import com.mozhi.reader.ui.theme.MoReadTokens
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 import java.util.Locale
@@ -32,6 +33,8 @@ fun CompanionStatsScreen(onBack: () -> Unit, viewModel: CompanionStatsViewModel 
     val stats by viewModel.statistics.collectAsStateWithLifecycle()
     var info by remember { mutableStateOf(false) }
     var scopeMenu by remember { mutableStateOf(false) }
+    val reveal = remember(selected) { CompanionStoryReveal() }
+    var visibleDays by remember(selected) { mutableIntStateOf(COMPANION_STORY_INITIAL_DAYS) }
     MoReadSecondaryPage(
         title = "陪伴足迹", onBack = onBack,
         actions = { IconButton(onClick = { info = true }) { Icon(Icons.Outlined.Info, "统计说明") } }
@@ -69,6 +72,7 @@ fun CompanionStatsScreen(onBack: () -> Unit, viewModel: CompanionStatsViewModel 
                 }
             }
         }
+        companionStoryItems(stats, reveal, visibleDays, MoReadTokens.SectionGap) { visibleDays += COMPANION_STORY_PAGE_DAYS }
         item {
             Text(
                 if (stats.rounds == 0) "下一页，也一起读。" else "交换了 " + stats.rounds + " 次想法，留下 " + stats.conversations + " 段对话。",

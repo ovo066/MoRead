@@ -72,7 +72,7 @@ This list describes the current source tree. For features in a packaged release,
 - **Ask about a selection:** translation, explanations, questions, suggested replies, and one-tap plot summaries.
 - **Illustration studio:** save a style for each book, upload character references or generate turnaround candidates, and reuse appearance versions and generation recipes. A dedicated DIY editor creates reusable style templates with descriptions, reference images, and optional advanced parameters. Preview chapter plans, then generate a resumable illustration queue for the read portion of a book.
 - **Image providers:** OpenAI image generation and editing, image output through chat endpoints, and NovelAI reference/Vibe features where supported by the selected model. Reference support and consistency vary by provider and model.
-- **Speech and voice design:** system engines, MiniMax, OpenAI-compatible endpoints, and Gemini TTS; browse available voices, preview custom Gemini voice designs, and save selected voices to the voice library. Speech and image generation can also be configured independently of model assignments.
+- **Speech and voice design:** system engines, MiniMax, OpenAI-compatible endpoints, Gemini TTS, Xiaomi MiMo, and Fish Studio (Fish Audio); browse available voices, preview custom Gemini voice designs, and save selected voices to the voice library. Speech and image generation can also be configured independently of model assignments.
 
 ### Privacy
 

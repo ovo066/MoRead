@@ -140,6 +140,13 @@ import com.mozhi.reader.ui.components.MoReadStableDropdownMenu
 import com.mozhi.reader.ui.components.safeTopPadding
 import com.mozhi.reader.ui.theme.MoReadTokens
 import com.mozhi.reader.ui.theme.sealColor
+import com.mozhi.reader.ui.theme.isDarkTheme
+import com.mozhi.reader.R
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.compositeOver
 import java.io.File
 import java.time.Instant
 import java.time.LocalDate
@@ -235,18 +242,23 @@ internal fun DetailHero(
     description: String,
     onEditReadState: (BookReadState?) -> Unit,
     onListen: () -> Unit,
-    onContinueReading: () -> Unit
+    onContinueReading: () -> Unit,
+    progress: Float = 0f,
+    chapterTitle: String = ""
 ) {
     var descriptionExpanded by remember(book.id, description) { mutableStateOf(false) }
+    val accent = MaterialTheme.colorScheme.primary
+    val wide = com.mozhi.reader.ui.rememberMoReadWindowWidth() == com.mozhi.reader.ui.MoReadWindowWidth.EXPANDED
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        HeroCover(
+        DetailBookObject(
             book = book,
-            modifier = if (com.mozhi.reader.ui.rememberMoReadWindowWidth() == com.mozhi.reader.ui.MoReadWindowWidth.EXPANDED)
-                Modifier.padding(top = 24.dp).size(width = 180.dp, height = 254.dp)
-            else Modifier.size(width = 116.dp, height = 164.dp)
+            glow = accent.copy(alpha = 0.6f),
+            modifier = Modifier
+                .padding(top = if (wide) 24.dp else 6.dp)
+                .size(width = if (wide) 176.dp else 134.dp, height = if (wide) 250.dp else 190.dp)
         )
         Text(
             text = book.title,
@@ -254,56 +266,69 @@ internal fun DetailHero(
             textAlign = TextAlign.Center,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(top = 14.dp, start = 24.dp, end = 24.dp)
+            modifier = Modifier.padding(top = 26.dp, start = 24.dp, end = 24.dp)
         )
         Text(
             text = "${book.author.ifBlank { "未知作者" }} · ${book.totalChapters} 章",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 5.dp)
+            modifier = Modifier.padding(top = 6.dp)
         )
         FlowRow(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 10.dp, start = 20.dp, end = 20.dp),
+                .padding(top = 12.dp, start = 20.dp, end = 20.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             ReadStateChip(state = book.readState(), onSelect = onEditReadState)
             tags.forEach { tag -> TagChip(tag) }
         }
+        DetailProgressLine(
+            book = book,
+            progress = progress,
+            chapterTitle = chapterTitle,
+            modifier = Modifier.padding(top = 22.dp, start = 28.dp, end = 28.dp)
+        )
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 16.dp, start = 20.dp, end = 20.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                .padding(top = 18.dp, start = 20.dp, end = 20.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            OutlinedButton(
-                onClick = onListen,
-                enabled = book.removedAt == 0L,
-                shape = MoReadTokens.CapsuleShape,
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 13.dp),
-                modifier = Modifier.weight(0.42f).heightIn(min = 52.dp)
-            ) {
-                Icon(Icons.Outlined.Headphones, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(7.dp))
-                Text("听书", maxLines = 1)
+            FrostedSurface(shape = MoReadTokens.CapsuleShape, shadowElevation = 4.dp) {
+                Row(
+                    modifier = Modifier
+                        .clickable(enabled = book.removedAt == 0L, onClick = onListen)
+                        .heightIn(min = 54.dp)
+                        .padding(horizontal = 20.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Outlined.Headphones, contentDescription = null, modifier = Modifier.size(19.dp), tint = accent)
+                    Spacer(Modifier.width(8.dp))
+                    Text("听书", style = MaterialTheme.typography.labelLarge, maxLines = 1)
+                }
             }
             Button(
                 onClick = onContinueReading,
                 enabled = book.removedAt == 0L,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
+                    containerColor = accent,
                     contentColor = MaterialTheme.colorScheme.onPrimary
                 ),
                 shape = MoReadTokens.CapsuleShape,
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 13.dp),
-                modifier = Modifier.weight(0.58f).heightIn(min = 52.dp)
+                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 54.dp)
+                    .shadow(14.dp, MoReadTokens.CapsuleShape, ambientColor = accent, spotColor = accent)
             ) {
-                Icon(Icons.Outlined.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(7.dp))
+                Icon(Icons.Outlined.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
                 Text(
                     text = if (book.removedAt > 0L) "正文已移除" else if (book.lastReadAt == 0L) "开始阅读" else "继续阅读",
+                    style = MaterialTheme.typography.labelLarge,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -313,25 +338,38 @@ internal fun DetailHero(
             FrostedSurface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 14.dp, start = 20.dp, end = 20.dp)
+                    .padding(top = 20.dp, start = 20.dp, end = 20.dp)
                     .clickable { descriptionExpanded = !descriptionExpanded },
-                shape = RoundedCornerShape(moReadMetrics().radiusFor(20)),
+                shape = RoundedCornerShape(moReadMetrics().radiusFor(22)),
                 shadowElevation = 3.dp
             ) {
-                Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
-                    Text("简介", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Column(Modifier.padding(start = 18.dp, end = 18.dp, top = 14.dp, bottom = 12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "“",
+                            fontFamily = FontFamily.Serif,
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = accent.copy(alpha = 0.55f),
+                            modifier = Modifier.height(26.dp)
+                        )
+                        Text(
+                            stringResource(R.string.detail_description),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 6.dp)
+                        )
+                    }
                     Text(
                         text = description,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyMedium.copy(lineHeight = MaterialTheme.typography.bodyMedium.lineHeight * 1.15f),
                         maxLines = if (descriptionExpanded) Int.MAX_VALUE else 4,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 6.dp)
+                        modifier = Modifier.padding(top = 4.dp)
                     )
                     Text(
-                        text = if (descriptionExpanded) "收起" else "展开",
+                        text = stringResource(if (descriptionExpanded) R.string.detail_description_less else R.string.detail_description_more),
                         style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
+                        color = accent,
                         modifier = Modifier.align(Alignment.End).padding(top = 6.dp)
                     )
                 }
@@ -339,6 +377,54 @@ internal fun DetailHero(
         }
     }
 }
+
+/** Where the reader is: chapter, percentage and a hairline bar in the book's own colour. */
+@Composable
+internal fun DetailProgressLine(book: BookEntity, progress: Float, chapterTitle: String, modifier: Modifier = Modifier) {
+    val accent = MaterialTheme.colorScheme.primary
+    val started = book.lastReadAt != 0L
+    Column(modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(
+                if (started) stringResource(R.string.detail_progress_chapter, book.lastReadChapterIndex + 1, book.totalChapters)
+                else stringResource(R.string.detail_progress_not_started),
+                style = MaterialTheme.typography.labelLarge,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                "${readPercent(progress)}%",
+                style = MaterialTheme.typography.titleMedium,
+                fontFamily = FontFamily.Serif,
+                color = accent
+            )
+        }
+        Box(
+            Modifier
+                .padding(top = 8.dp)
+                .fillMaxWidth()
+                .height(5.dp)
+                .clip(CircleShape)
+                .background(accent.copy(alpha = 0.14f))
+        ) {
+            Box(
+                Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth(progress.coerceIn(0f, 1f))
+                    .clip(CircleShape)
+                    .background(Brush.horizontalGradient(listOf(accent.copy(alpha = 0.55f), accent)))
+            )
+        }
+        if (started && chapterTitle.isNotBlank()) Text(
+            chapterTitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 6.dp)
+        )
+    }
+}
+
 @Composable
 internal fun ReadStateChip(state: BookReadState, onSelect: (BookReadState?) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
@@ -403,14 +489,19 @@ internal fun TagChip(tag: String) {
 }
 
 @Composable
-internal fun HeroCover(book: BookEntity, modifier: Modifier = Modifier) {
+internal fun HeroCover(
+    book: BookEntity,
+    modifier: Modifier = Modifier,
+    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(moReadMetrics().radiusFor(14)),
+    shadow: Boolean = true
+) {
     val coverFile = remember(book.coverPath) {
         book.coverPath?.let(::File)?.takeIf(File::isFile)
     }
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(moReadMetrics().radiusFor(14)),
-        shadowElevation = 18.dp,
+        shape = shape,
+        shadowElevation = if (shadow) 18.dp else 0.dp,
         color = com.mozhi.reader.feature.bookshelf.coverColor(book.title)
     ) {
         Box(Modifier.fillMaxSize()) {
@@ -517,89 +608,52 @@ internal fun BookAnnotationLimitsCard(
     }
 }
 
-/** 双环卡（§3.3）：全书进度环（moss）+ 连续阅读环（seal）。 */
+/** One glass strip with the reading numbers that used to fill two ring cards and a row of tiles. */
 @Composable
-internal fun RingRow(
-    book: BookEntity,
+internal fun DetailGlance(
+    totalDurationMs: Long,
+    readingDays: Int,
     streakDays: Int,
-    readSpan: BookReadSpan?,
     modifier: Modifier = Modifier
 ) {
-    // 与书架、阅读页页脚同一口径：按字符累计，不把当前章算作已读完。
-    val progress = readFraction(book, readSpan)
     val seal = sealColor()
-    Row(modifier = modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        FrostedSurface(
-            modifier = Modifier.weight(1f),
-            shape = RoundedCornerShape(moReadMetrics().radiusFor(24)),
-            shadowElevation = 6.dp
+    FrostedSurface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(moReadMetrics().radiusFor(22)),
+        shadowElevation = 5.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(vertical = 16.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                RingGauge(
-                    progress = progress,
-                    ringColor = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(96.dp)
-                ) {
-                    Text(
-                        text = "${readPercent(progress)}%",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontFamily = FontFamily.Serif,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-                Text(
-                    text = "全书进度",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 10.dp)
-                )
-                Text(
-                    text = "第 ${book.lastReadChapterIndex + 1} / ${book.totalChapters} 章",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 2.dp)
-                )
-            }
-        }
-        FrostedSurface(
-            modifier = Modifier.weight(1f),
-            shape = RoundedCornerShape(moReadMetrics().radiusFor(24)),
-            shadowElevation = 6.dp
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                RingGauge(
-                    progress = (streakDays / 30f).coerceIn(0f, 1f),
-                    ringColor = seal,
-                    modifier = Modifier.size(96.dp)
-                ) {
-                    Text(
-                        text = "$streakDays",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontFamily = FontFamily.Serif,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-                Text(
-                    text = "连续阅读",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 10.dp)
-                )
-                Text(
-                    text = "天",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 2.dp)
-                )
-            }
+            GlanceMetric(formatDuration(totalDurationMs), stringResource(R.string.detail_glance_time), Modifier.weight(1f))
+            GlanceDivider()
+            GlanceMetric(pluralStringResource(R.plurals.detail_days, readingDays, readingDays), stringResource(R.string.detail_glance_days), Modifier.weight(1f))
+            GlanceDivider()
+            GlanceMetric(
+                pluralStringResource(R.plurals.detail_days, streakDays, streakDays),
+                stringResource(R.string.detail_glance_streak),
+                Modifier.weight(1f),
+                dot = seal.takeIf { streakDays > 0 }
+            )
         }
     }
+}
+
+@Composable
+private fun GlanceMetric(value: String, label: String, modifier: Modifier, dot: Color? = null) {
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(value, style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Serif, maxLines = 1)
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+            dot?.let { Box(Modifier.padding(end = 5.dp).size(6.dp).clip(CircleShape).background(it)) }
+            Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun GlanceDivider() {
+    Box(Modifier.width(1.dp).height(30.dp).background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)))
 }
 
 @Composable
@@ -638,43 +692,41 @@ internal fun ReadingAssetsEntry(
     onBookmarks: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    FrostedSurface(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(moReadMetrics().radiusFor(22)),
-        shadowElevation = 5.dp
-    ) {
-        Row(modifier = Modifier.padding(8.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            AssetEntryCell(Icons.Outlined.EditNote, "笔记", "$noteCount 条", onNotes, Modifier.weight(1f))
-            AssetEntryCell(
-                Icons.Outlined.ChatBubbleOutline,
-                "批注",
-                "$annotationCount 条",
-                onAnnotations,
-                Modifier.weight(1f)
-            )
-            AssetEntryCell(Icons.Outlined.Image, "插图", "$illustrationCount 张", onGallery, Modifier.weight(1f))
-            AssetEntryCell(Icons.Outlined.Bookmarks, "书签", "$bookmarkCount 个", onBookmarks, Modifier.weight(1f))
-        }
+    Row(modifier = modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        AssetEntryCell(Icons.Outlined.EditNote, stringResource(R.string.detail_asset_notes), noteCount, onNotes, Modifier.weight(1f).testTag("detail-asset-notes"))
+        AssetEntryCell(Icons.Outlined.ChatBubbleOutline, stringResource(R.string.detail_asset_annotations), annotationCount, onAnnotations, Modifier.weight(1f).testTag("detail-asset-annotations"))
+        AssetEntryCell(Icons.Outlined.Image, stringResource(R.string.detail_asset_illustrations), illustrationCount, onGallery, Modifier.weight(1f).testTag("detail-asset-illustrations"))
+        AssetEntryCell(Icons.Outlined.Bookmarks, stringResource(R.string.detail_asset_bookmarks), bookmarkCount, onBookmarks, Modifier.weight(1f).testTag("detail-asset-bookmarks"))
     }
 }
 
+/** A small tile tinted with the book's colour: icon, a big count, and what it counts. */
 @Composable
 internal fun AssetEntryCell(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
-    count: String,
+    count: Int,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Column(
-        modifier = modifier
-            .clickable(onClick = onClick)
-            .padding(horizontal = 4.dp, vertical = 9.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+    val accent = MaterialTheme.colorScheme.primary
+    Surface(
+        onClick = onClick,
+        modifier = modifier,
+        shape = RoundedCornerShape(moReadMetrics().radiusFor(18)),
+        color = accent.copy(alpha = if (isDarkTheme()) 0.16f else 0.10f).compositeOver(MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)),
+        contentColor = MaterialTheme.colorScheme.onSurface
     ) {
-        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-        Text(label, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(top = 5.dp))
-        Text(count, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Column(Modifier.padding(start = 12.dp, end = 8.dp, top = 12.dp, bottom = 10.dp)) {
+            Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(19.dp))
+            Text(
+                "$count",
+                style = MaterialTheme.typography.titleLarge,
+                fontFamily = FontFamily.Serif,
+                modifier = Modifier.padding(top = 10.dp)
+            )
+            Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+        }
     }
 }
 

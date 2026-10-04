@@ -1,6 +1,17 @@
 package com.mozhi.reader.feature.settings
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import com.mozhi.reader.R
+import com.mozhi.reader.ui.theme.MoReadSpacing
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
@@ -35,11 +46,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mozhi.reader.core.datastore.AnnotationContextMode
 import com.mozhi.reader.core.datastore.ProactiveAnnotationContextSettings
 import com.mozhi.reader.core.datastore.BookProactiveAnnotationLimits
-import com.mozhi.reader.core.datastore.ProactiveAnnotationLimitSteps
 import com.mozhi.reader.core.datastore.ProactiveAnnotationLimits
 import com.mozhi.reader.core.datastore.ProactiveAnnotationNotice
 import com.mozhi.reader.core.datastore.ProactiveAnnotationTiming
 import com.mozhi.reader.ui.components.MoReadBlock
+import com.mozhi.reader.ui.components.MoReadNumberRow
 import com.mozhi.reader.ui.components.MoReadRow
 import com.mozhi.reader.ui.components.MoReadRowDivider
 import com.mozhi.reader.ui.components.MoReadSecondaryPage
@@ -100,7 +111,6 @@ internal fun ProactiveAnnotationSettingsContent(
 
     var page by rememberSaveable(bookId) { mutableStateOf("overview") }
     var help by rememberSaveable { mutableStateOf(false) }
-    var advanced by rememberSaveable(bookId) { mutableStateOf(false) }
     val pages = rememberSaveableStateHolder()
     val editable = bookId == null || perBookActive
     val title = when (page) {
@@ -201,15 +211,12 @@ internal fun ProactiveAnnotationSettingsContent(
                     }
                 }
                 if (editing.timing == ProactiveAnnotationTiming.ON_CHAPTER_ENTRY) item {
-                    MoReadSection(title = "提前生成") {
-                        MoReadRow(title = "额外提前 ${editing.aheadChapters} 章", subtitle = if (advanced) "收起设置" else "展开设置",
-                            onClick = { advanced = !advanced })
-                        if (advanced) {
-                            LimitSlider("额外提前", editing.aheadChapters, 0, 5, false, editable, "章") {
-                                commit(editing.copy(aheadChapters = it))
-                            }
-                            MoReadValueRow(title = "提前范围", value = "0 = 仅本章")
-                        }
+                    MoReadSection(title = stringResource(R.string.annotation_ahead_section)) {
+                        MoReadNumberRow(title = stringResource(R.string.annotation_ahead_title),
+                            subtitle = stringResource(R.string.annotation_ahead_summary),
+                            value = editing.aheadChapters, range = 0..ProactiveAnnotationLimits.MAX_AHEAD_CHAPTERS,
+                            unit = stringResource(R.string.annotation_unit_chapter), enabled = editable,
+                            onValueChange = { next -> next?.let { commit(editing.copy(aheadChapters = it).normalized()) } })
                     }
                 }
             }
@@ -228,26 +235,45 @@ internal fun ProactiveAnnotationSettingsContent(
                 }
             }
             if (page == "limits") {
+                item { AnnotationUsageCard(editing, usedToday) }
                 item {
-                    MoReadSection(title = "每章条数", footer = "每位伴读分别生效；下限是期望数量。") {
-                        LimitSlider("下限", editing.minPerChapter, 0,
-                            if (editing.chapterUnlimited) ProactiveAnnotationLimits.MAX_PER_CHAPTER else editing.maxPerChapter, false, editable) {
-                            commit(editing.copy(minPerChapter = it).normalized())
-                        }
-                        MoReadRowDivider()
-                        LimitSlider("上限", editing.maxPerChapter, 1, ProactiveAnnotationLimits.MAX_PER_CHAPTER, true, editable) {
-                            commit(editing.copy(maxPerChapter = it).normalized())
-                        }
+                    val unit = stringResource(R.string.annotation_unit_count)
+                    MoReadSection(title = stringResource(R.string.annotation_limits_chapter_section),
+                        footer = stringResource(R.string.annotation_limits_chapter_footer)) {
+                        MoReadNumberRow(title = stringResource(R.string.annotation_limits_min),
+                            subtitle = stringResource(R.string.annotation_limits_min_summary),
+                            value = editing.minPerChapter, range = 0..ProactiveAnnotationLimits.MAX_PER_CHAPTER,
+                            unit = unit, enabled = editable,
+                            onValueChange = { next -> next?.let { commit(editing.withMinPerChapter(it)) } })
+                        MoReadRowDivider(inset = MoReadSpacing.l)
+                        MoReadNumberRow(title = stringResource(R.string.annotation_limits_max),
+                            subtitle = stringResource(R.string.annotation_limits_max_summary),
+                            value = editing.maxPerChapter.orNullIfUnlimited(), range = 1..ProactiveAnnotationLimits.MAX_PER_CHAPTER,
+                            unit = unit, allowUnlimited = true, enabled = editable,
+                            onValueChange = { commit(editing.copy(maxPerChapter = it.orUnlimited()).normalized()) })
                     }
                 }
                 item {
-                    MoReadSection(title = "每日上限", footer = "按自然日归零；达到上限后暂停生成。") {
-                        LimitSlider("段评", editing.dailyMax, 1, ProactiveAnnotationLimits.MAX_DAILY, true, editable) { commit(editing.copy(dailyMax = it).normalized()) }
-                        MoReadValueRow(title = "今日已生成", value = "$usedToday 条")
-                        MoReadRowDivider()
-                        LimitSlider("语音", editing.dailyVoiceMax, 0, ProactiveAnnotationLimits.MAX_DAILY, true, editable) { commit(editing.copy(dailyVoiceMax = it).normalized()) }
-                        MoReadRowDivider()
-                        LimitSlider("插图", editing.dailyImageMax, 0, ProactiveAnnotationLimits.MAX_DAILY, true, editable) { commit(editing.copy(dailyImageMax = it).normalized()) }
+                    val unit = stringResource(R.string.annotation_unit_count)
+                    MoReadSection(title = stringResource(R.string.annotation_limits_daily_section),
+                        footer = stringResource(R.string.annotation_limits_daily_footer)) {
+                        MoReadNumberRow(title = stringResource(R.string.annotation_limits_daily_comments),
+                            subtitle = stringResource(R.string.annotation_limits_daily_comments_summary),
+                            value = editing.dailyMax.orNullIfUnlimited(), range = 1..ProactiveAnnotationLimits.MAX_DAILY,
+                            unit = unit, allowUnlimited = true, enabled = editable,
+                            onValueChange = { commit(editing.copy(dailyMax = it.orUnlimited()).normalized()) })
+                        MoReadRowDivider(inset = MoReadSpacing.l)
+                        MoReadNumberRow(title = stringResource(R.string.annotation_limits_daily_voice),
+                            subtitle = stringResource(R.string.annotation_limits_daily_voice_summary),
+                            value = editing.dailyVoiceMax.orNullIfUnlimited(), range = 0..ProactiveAnnotationLimits.MAX_DAILY,
+                            unit = unit, allowUnlimited = true, enabled = editable,
+                            onValueChange = { commit(editing.copy(dailyVoiceMax = it.orUnlimited()).normalized()) })
+                        MoReadRowDivider(inset = MoReadSpacing.l)
+                        MoReadNumberRow(title = stringResource(R.string.annotation_limits_daily_image),
+                            subtitle = stringResource(R.string.annotation_limits_daily_image_summary),
+                            value = editing.dailyImageMax.orNullIfUnlimited(), range = 0..ProactiveAnnotationLimits.MAX_DAILY,
+                            unit = unit, allowUnlimited = true, enabled = editable,
+                            onValueChange = { commit(editing.copy(dailyImageMax = it.orUnlimited()).normalized()) })
                     }
                 }
             }
@@ -291,31 +317,50 @@ private fun noticeLabel(mode: ProactiveAnnotationNotice): String = when (mode) {
     ProactiveAnnotationNotice.FAST_MODEL -> "快速模型 · 角色互动"
 }
 
+private fun Int.orNullIfUnlimited(): Int? = takeUnless { it == ProactiveAnnotationLimits.UNLIMITED }
+private fun Int?.orUnlimited(): Int = this ?: ProactiveAnnotationLimits.UNLIMITED
+
+/** 额度页顶部的今日用量：大号计数 + 一条进度轨，让「还剩多少」不用自己算。 */
 @Composable
-private fun LimitSlider(
-    label: String,
-    value: Int,
-    from: Int,
-    to: Int,
-    allowUnlimited: Boolean,
-    enabled: Boolean,
-    unit: String = "条",
-    onValueChange: (Int) -> Unit
-) {
-    val steps = ProactiveAnnotationLimitSteps.steps(from, to, allowUnlimited)
-    val index = ProactiveAnnotationLimitSteps.indexOf(steps, value)
-    MoReadBlock {
-        MoReadSlider(
-            label = label,
-            valueText = ProactiveAnnotationLimitSteps.label(
-                ProactiveAnnotationLimitSteps.valueAt(steps, index), unit
-            ),
-            value = index.toFloat(),
-            range = 0f..(steps.size - 1).coerceAtLeast(1).toFloat(),
-            step = 1f,
-            onValueChange = { next ->
-                if (enabled) onValueChange(ProactiveAnnotationLimitSteps.valueAt(steps, next.toInt()))
+private fun AnnotationUsageCard(limits: ProactiveAnnotationLimits, usedToday: Int) {
+    val reached = !limits.dailyUnlimited && usedToday >= limits.dailyMax
+    MoReadSection {
+        MoReadBlock {
+            Text(stringResource(R.string.annotation_usage_title), style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row {
+                Text(usedToday.toString(), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Medium,
+                    color = if (reached) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.alignByBaseline())
+                Text(
+                    if (limits.dailyUnlimited) stringResource(R.string.annotation_usage_unlimited)
+                    else stringResource(R.string.annotation_usage_of, limits.dailyMax),
+                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.alignByBaseline().padding(start = MoReadSpacing.xs).weight(1f)
+                )
+                if (!limits.dailyUnlimited) Text(
+                    if (reached) stringResource(R.string.annotation_usage_reached)
+                    else stringResource(R.string.annotation_usage_remaining, limits.dailyMax - usedToday),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (reached) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.alignByBaseline()
+                )
             }
-        )
+            if (!limits.dailyUnlimited) {
+                val fraction = (usedToday.toFloat() / limits.dailyMax.coerceAtLeast(1)).coerceIn(0f, 1f)
+                Box(Modifier.fillMaxWidth().height(6.dp).clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.16f))) {
+                    Box(Modifier.fillMaxWidth(fraction).height(6.dp).clip(CircleShape)
+                        .background(if (reached) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary))
+                }
+            }
+            val noLimit = stringResource(R.string.annotation_usage_extra_unlimited)
+            Text(
+                limits.summary() + " · " + stringResource(R.string.annotation_usage_extras,
+                    limits.dailyVoiceMax.orNullIfUnlimited()?.toString() ?: noLimit,
+                    limits.dailyImageMax.orNullIfUnlimited()?.toString() ?: noLimit),
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }

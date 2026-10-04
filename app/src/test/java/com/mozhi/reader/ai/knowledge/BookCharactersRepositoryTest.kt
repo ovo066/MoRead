@@ -183,6 +183,22 @@ class BookCharactersRepositoryTest {
         assertTrue(BookCharactersCodec.visible(result, revision)!!.guide.characters.isEmpty())
     }
 
+    @Test fun malformedLaterChapterKeepsCompletedPartsAndResumeOnlyRequestsTheFailedChapter() = runBlocking {
+        client.malformedChapter = "小满带来一封信。"
+        val failure = runCatching { repository.generate(repository.preview(1)) }.exceptionOrNull()
+        assertTrue(failure!!.message.orEmpty().contains("不是完整的 JSON 对象"))
+        assertEquals(3, client.requests) // first chapter plus two attempts for the second
+        assertEquals(1, database.bookCharacterDao().getParts(1).size)
+        assertNull(database.bookCharacterDao().getGuide(1))
+        val resume = repository.preview(1)
+        assertTrue(resume.resuming)
+        assertEquals(1, resume.completedParts)
+        client.malformedChapter = null
+        val saved = repository.generate(resume)
+        assertEquals(4, client.requests)
+        assertEquals(listOf("林舟", "小满"), BookCharactersCodec.visible(saved, revision)!!.guide.characters.map { it.name })
+    }
+
     @Test fun permanentDeletionCascadesGuidesAndPendingParts() = runBlocking {
         repository.generate(repository.preview(1))
         database.bookCharacterDao().deleteParts(1)
@@ -238,13 +254,18 @@ class BookCharactersRepositoryTest {
     private inner class CharacterClient : ChatApiClient {
         var requests = 0
         var empty = false
+        var malformedChapter: String? = null
         var onStream: suspend () -> Unit = {}
         val received = mutableListOf<String>()
         override fun chatStream(messages: List<ChatMessage>, tools: List<ToolSpec>, options: ChatOptions): Flow<ChatDelta> = flow {
             requests++
-            val source = messages.last { it.role == ChatRole.USER }.content
+            val source = messages.first { it.role == ChatRole.USER }.content
             received += source
             onStream()
+            if (malformedChapter?.let(source::contains) == true) {
+                emit(ChatDelta.Text("这段有人物，但结果未按格式返回。"))
+                return@flow
+            }
             val name = if ("小满带来一封信。" in source) "小满" else "林舟"
             val quote = if (name == "小满") "小满带来一封信。" else "林舟在灯塔等候。"
             val json = if (empty) """{"characters":[]}""" else """{"characters":[{"name":"$name","facts":[{"text":"$quote","quote":"$quote"}]}]}"""

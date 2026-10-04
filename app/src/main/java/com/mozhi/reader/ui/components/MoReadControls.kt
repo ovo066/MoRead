@@ -6,8 +6,12 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
@@ -22,8 +26,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Remove
@@ -36,20 +44,50 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.mozhi.reader.R
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import com.mozhi.reader.ui.theme.ColorSchemePreset
 import com.mozhi.reader.ui.theme.LocalMoReadColors
 import com.mozhi.reader.ui.theme.MoReadSpacing
@@ -355,6 +393,311 @@ private fun SliderTrack(
     }
 }
 
+/**
+ * 数值输入行：左侧标题与说明，右侧一枚胶囊 `− [数字] ＋`，中间的数字点一下就能直接填。
+ *
+ * 滑条适合「拖着看效果」的连续量；条数、额度这种用户心里已经有个数的量，在几十格里找一格
+ * 反而难调，这里改成直接输入 + 单步微调（按住连发，越按越快）。
+ *
+ * [value] 为 null 表示「不限」，仅在 [allowUnlimited] 时出现：右侧多一枚「不限」胶囊，
+ * 再点一次、按 ＋/−、或填入数字都会回到有限值（回到切换前的那个数）。
+ *
+ * 输入只在按「完成」、失焦或离开页面时提交——把 3 改成 12 时先打出的 1 不会落库，
+ * 否则上下限互相牵制的设置会被中间值改乱。按住连发期间也只在松手时提交一次。
+ */
+@Composable
+fun MoReadNumberRow(
+    title: String,
+    value: Int?,
+    range: IntRange,
+    onValueChange: (Int?) -> Unit,
+    modifier: Modifier = Modifier,
+    subtitle: String? = null,
+    unit: String? = null,
+    allowUnlimited: Boolean = false,
+    enabled: Boolean = true
+) {
+    MoReadRow(
+        title = title,
+        modifier = modifier,
+        subtitle = subtitle,
+        trailing = {
+            MoReadNumberStepper(
+                label = title,
+                value = value,
+                range = range,
+                onValueChange = onValueChange,
+                unit = unit,
+                allowUnlimited = allowUnlimited,
+                enabled = enabled
+            )
+        }
+    )
+}
+
+@Composable
+fun MoReadNumberStepper(
+    label: String,
+    value: Int?,
+    range: IntRange,
+    onValueChange: (Int?) -> Unit,
+    modifier: Modifier = Modifier,
+    unit: String? = null,
+    allowUnlimited: Boolean = false,
+    enabled: Boolean = true
+) {
+    val metrics = moReadMetrics()
+    val latestChange by rememberUpdatedState(onValueChange)
+    // 本地显示值：连发时先在这里走，松手才提交；外部值变化（落库回显、别处改动）即覆盖。
+    var shown by remember(value) { mutableStateOf(value) }
+    var lastFinite by rememberSaveable { mutableIntStateOf((value ?: range.first).coerceIn(range)) }
+    SideEffect { if (value != null) lastFinite = value }
+    var focused by remember { mutableStateOf(false) }
+    var draft by remember { mutableStateOf(TextFieldValue("")) }
+    val maxDigits = range.last.toString().length
+    val focusRequester = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
+
+    fun commit(next: Int?) {
+        shown = next
+        if (next != value) latestChange(next)
+    }
+    fun commitDraft() {
+        committedNumber(draft.text, shown, range)?.let(::commit)
+    }
+    val latestCommitDraft by rememberUpdatedState(::commitDraft)
+    DisposableEffect(Unit) { onDispose { if (focused) latestCommitDraft() } }
+
+    val unlimited = allowUnlimited && shown == null
+    val text = shown?.toString().orEmpty()
+    Row(
+        modifier = modifier.let { if (enabled) it else it.alpha(0.38f) },
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(MoReadSpacing.s)
+    ) {
+        if (allowUnlimited) {
+            UnlimitedToggle(
+                selected = unlimited,
+                enabled = enabled,
+                height = metrics.sliderHeight,
+                onToggle = { commit(if (unlimited) lastFinite else null) }
+            )
+        }
+        Row(
+            modifier = Modifier
+                .height(metrics.sliderHeight)
+                .clip(CircleShape)
+                .background(fieldContainerColor())
+                .border(
+                    if (focused) 1.dp else 0.5.dp,
+                    if (focused) MaterialTheme.colorScheme.primary else sectionHairline(),
+                    CircleShape
+                ),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            NumberNudge(
+                icon = Icons.Outlined.Remove,
+                description = stringResource(R.string.number_stepper_decrease, label),
+                enabled = enabled && (shown == null || shown!! > range.first),
+                onStep = { shown = steppedNumber(shown, lastFinite, -1, range) },
+                onRelease = { commit(shown) }
+            )
+            val inputDescription = stringResource(R.string.number_stepper_input, label)
+            Row(
+                modifier = Modifier
+                    .widthIn(min = 44.dp)
+                    .height(metrics.sliderHeight)
+                    .clickable(
+                        enabled = enabled,
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { focusRequester.requestFocus() },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                val numberStyle = MaterialTheme.typography.titleSmall.copy(
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.End
+                )
+                // 按区间内最宽的数定宽：自适应宽度的输入框在「不限」往返后会残留横向滚动，把数字裁掉一半。
+                val measurer = rememberTextMeasurer()
+                val density = LocalDensity.current
+                val fieldWidth = remember(maxDigits, numberStyle, density) {
+                    with(density) { measurer.measure("8".repeat(maxDigits), numberStyle).size.width.toDp() } + 2.dp
+                }
+                BasicTextField(
+                    value = if (focused) draft else TextFieldValue(text),
+                    onValueChange = { next ->
+                        if (focused) draft = next.copy(text = next.text.filter(Char::isDigit).take(maxDigits))
+                    },
+                    enabled = enabled,
+                    singleLine = true,
+                    textStyle = numberStyle,
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+                    decorationBox = { inner ->
+                        Box(contentAlignment = Alignment.Center) {
+                            val placeholder = if (unlimited) "∞" else ""
+                            if ((if (focused) draft.text else text).isEmpty() && placeholder.isNotEmpty()) {
+                                Text(placeholder, style = numberStyle.copy(color = MaterialTheme.colorScheme.onSurfaceVariant))
+                            }
+                            inner()
+                        }
+                    },
+                    modifier = Modifier
+                        .width(fieldWidth)
+                        .focusRequester(focusRequester)
+                        .semantics { contentDescription = inputDescription }
+                        .onFocusChanged { state ->
+                            if (state.isFocused == focused) return@onFocusChanged
+                            if (state.isFocused) draft = TextFieldValue(text, TextRange(0, text.length))
+                            focused = state.isFocused
+                            if (!state.isFocused) commitDraft()
+                        }
+                )
+                if (!unit.isNullOrBlank() && !unlimited) {
+                    Text(
+                        text = unit,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 3.dp)
+                    )
+                }
+            }
+            NumberNudge(
+                icon = Icons.Outlined.Add,
+                description = stringResource(R.string.number_stepper_increase, label),
+                enabled = enabled && (shown == null || shown!! < range.last),
+                onStep = { shown = steppedNumber(shown, lastFinite, 1, range) },
+                onRelease = { commit(shown) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun UnlimitedToggle(
+    selected: Boolean,
+    enabled: Boolean,
+    height: Dp,
+    onToggle: () -> Unit
+) {
+    // 选中态与 MoReadSegment 同一套：扁平质感淡底深字，玻璃质感实色强调。
+    val flat = isFlatSurface()
+    val container by animateColorAsState(
+        targetValue = when {
+            !selected -> fieldContainerColor()
+            flat -> MaterialTheme.colorScheme.primaryContainer
+            else -> MaterialTheme.colorScheme.primary
+        },
+        animationSpec = tween(160),
+        label = "unlimited-container"
+    )
+    val content = when {
+        !selected -> MaterialTheme.colorScheme.onSurfaceVariant
+        flat -> MaterialTheme.colorScheme.onPrimaryContainer
+        else -> MaterialTheme.colorScheme.primary.onAccent()
+    }
+    Box(
+        modifier = Modifier
+            .height(height)
+            .clip(CircleShape)
+            .background(container)
+            .border(0.5.dp, if (selected) Color.Transparent else sectionHairline(), CircleShape)
+            .toggleable(value = selected, enabled = enabled, role = Role.Switch, onValueChange = { onToggle() })
+            .padding(horizontal = MoReadSpacing.m),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = stringResource(R.string.number_stepper_unlimited),
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            color = content,
+            maxLines = 1
+        )
+    }
+}
+
+/** 按下即走一格，按住约 0.4 秒后开始连发并逐步加速；松手（或手势被滚动抢走）时回调 [onRelease] 提交。 */
+@Composable
+private fun NumberNudge(
+    icon: ImageVector,
+    description: String,
+    enabled: Boolean,
+    onStep: () -> Unit,
+    onRelease: () -> Unit
+) {
+    val step by rememberUpdatedState(onStep)
+    val release by rememberUpdatedState(onRelease)
+    val active by rememberUpdatedState(enabled)
+    var pressed by remember { mutableStateOf(false) }
+    val pressTint by animateColorAsState(
+        targetValue = if (pressed) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f) else Color.Transparent,
+        animationSpec = tween(90),
+        label = "nudge-press"
+    )
+    Box(
+        modifier = Modifier
+            .size(width = 40.dp, height = moReadMetrics().sliderHeight)
+            .background(pressTint)
+            .semantics {
+                role = Role.Button
+                contentDescription = description
+                if (!enabled) disabled()
+                onClick {
+                    if (active) { step(); release() }
+                    active
+                }
+            }
+            // 不以 enabled 作 key：到达边界时按钮变灰，若因此重启手势协程，松手提交会被一并取消。
+            .pointerInput(Unit) {
+                coroutineScope {
+                    val scope = this
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false)
+                        if (!active) return@awaitEachGesture
+                        pressed = true
+                        step()
+                        val repeat = scope.launch {
+                            delay(NUDGE_REPEAT_DELAY_MS)
+                            var interval = NUDGE_REPEAT_START_MS
+                            while (true) {
+                                step()
+                                delay(interval)
+                                interval = (interval * 4 / 5).coerceAtLeast(NUDGE_REPEAT_MIN_MS)
+                            }
+                        }
+                        try {
+                            waitForUpOrCancellation()
+                        } finally {
+                            repeat.cancel()
+                            pressed = false
+                            release()
+                        }
+                    }
+                }
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = if (enabled) {
+                MaterialTheme.colorScheme.onSurface
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+            },
+            modifier = Modifier.size(16.dp)
+        )
+    }
+}
+
+private const val NUDGE_REPEAT_DELAY_MS = 420L
+private const val NUDGE_REPEAT_START_MS = 120L
+private const val NUDGE_REPEAT_MIN_MS = 35L
+
 /** 胶囊标签：只读的状态标记（「伴读中」「已连接」），不可点。 */
 @Composable
 fun MoReadPill(
@@ -442,3 +785,14 @@ private fun snap(raw: Float, range: ClosedFloatingPointRange<Float>, step: Float
 }
 
 private const val STEP_EPSILON = 1e-4f
+
+/**
+ * 数字输入框提交时的取值：空串或非数字＝放弃编辑（还原显示），越界夹回区间；
+ * 与当前值相同返回 null，免得无意义写一次。
+ */
+internal fun committedNumber(draft: String, current: Int?, range: IntRange): Int? =
+    draft.trim().toIntOrNull()?.coerceIn(range)?.takeIf { it != current }
+
+/** 点 −/＋：「不限」状态下先回到切换前的有限值，否则走一格并夹在区间内。 */
+internal fun steppedNumber(current: Int?, lastFinite: Int, delta: Int, range: IntRange): Int =
+    if (current == null) lastFinite.coerceIn(range) else (current + delta).coerceIn(range)

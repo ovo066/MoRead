@@ -135,6 +135,8 @@ import com.mozhi.reader.ui.components.MoReadMenuItem
 import com.mozhi.reader.ui.components.MoReadStableDropdownMenu
 import com.mozhi.reader.ui.theme.MoReadTokens
 import com.mozhi.reader.ui.theme.sealColor
+import com.mozhi.reader.ui.theme.onAccent
+import androidx.compose.ui.graphics.compositeOver
 import java.io.File
 import java.time.Instant
 import java.time.LocalDate
@@ -221,7 +223,26 @@ fun BookDetailScreen(
             .getOrNull(book.lastReadChapterIndex)
             ?.title
             .orEmpty()
-
+        val progress = com.mozhi.reader.core.library.readFraction(book, state.readSpan)
+        val baseScheme = MaterialTheme.colorScheme
+        val dark = com.mozhi.reader.ui.theme.isDarkTheme()
+        val coverArt = rememberCoverArt(book.coverPath)
+        val atmosphere = remember(coverArt, baseScheme.background, baseScheme.primary, dark) {
+            coverAtmosphere(coverArt?.palette, baseScheme.background, dark, baseScheme.primary)
+        }
+        val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+        BookDetailAtmosphere(coverArt, atmosphere) {
+            if (listState.firstVisibleItemIndex > 1) 1f
+            else (listState.firstVisibleItemIndex * 360 + listState.firstVisibleItemScrollOffset) / 900f
+        }
+        // The page borrows the cover's hue as its accent, so every button and icon below belongs to this book.
+        val container = atmosphere.accent.copy(alpha = if (dark) 0.24f else 0.16f).compositeOver(baseScheme.surface)
+        MaterialTheme(colorScheme = baseScheme.copy(
+            primary = atmosphere.accent,
+            onPrimary = atmosphere.accent.onAccent(),
+            primaryContainer = container,
+            onPrimaryContainer = com.mozhi.reader.ui.theme.readableOn(container, atmosphere.accent)
+        )) {
         com.mozhi.reader.ui.components.MoReadDetailLayout(
             header = {
                 DetailTopBar(
@@ -241,11 +262,14 @@ fun BookDetailScreen(
                     description = state.description,
                     onEditReadState = viewModel::setReadState,
                     onListen = { onListen(book.id) },
-                    onContinueReading = { onContinueReading(book.id) }
+                    onContinueReading = { onContinueReading(book.id) },
+                    progress = progress,
+                    chapterTitle = chapterTitle
                 )
             }
         ) { split ->
         LazyColumn(
+            state = listState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(top = if (split) 24.dp else 0.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -269,29 +293,18 @@ fun BookDetailScreen(
                     description = state.description,
                     onEditReadState = viewModel::setReadState,
                     onListen = { onListen(book.id) },
-                    onContinueReading = { onContinueReading(book.id) }
+                    onContinueReading = { onContinueReading(book.id) },
+                    progress = progress,
+                    chapterTitle = chapterTitle
                 )
             }
-            item(key = "detail-progress") {
-                RingRow(
-                    book = book,
+            item(key = "detail-glance") {
+                DetailGlance(
+                    totalDurationMs = state.totalDurationMs,
+                    readingDays = state.readingDays,
                     streakDays = state.streakDays,
-                    readSpan = state.readSpan,
-                    modifier = Modifier.padding(horizontal = 20.dp)
+                    modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 8.dp)
                 )
-            }
-            item(key = "detail-totals") {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    StatCell(formatDuration(state.totalDurationMs), "阅读时长", Modifier.weight(1f))
-                    StatCell("${state.readingDays}", "阅读天数", Modifier.weight(1f))
-                    StatCell("${state.bookmarks.size}", "书签", Modifier.weight(1f))
-                    StatCell("${state.notes.size}", "笔记", Modifier.weight(1f))
-                }
             }
             item(key = "detail-assets") {
                 ReadingAssetsEntry(
@@ -343,6 +356,7 @@ fun BookDetailScreen(
                     modifier = Modifier.padding(horizontal = 20.dp)
                 )
             }        }
+        }
         }
 
         if (showMoreInfo) {

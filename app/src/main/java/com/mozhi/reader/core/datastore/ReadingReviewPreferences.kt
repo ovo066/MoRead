@@ -10,7 +10,9 @@ data class ReadingReviewPreferences(
     val bookIds: Set<Long> = emptySet(),
     val personaId: Long? = null,
     val oldestFirst: Boolean = false,
-    val grid: Boolean = true
+    val grid: Boolean = true,
+    /** Full-screen review transition: PAPER (original handoff), CUBE or FLOW. */
+    val focusMotion: String = "PAPER"
 )
 
 object ReadingReviewPreferencesCodec {
@@ -21,6 +23,7 @@ object ReadingReviewPreferencesCodec {
     }.getOrDefault(ReadingReviewPreferences()).let {
         it.copy(source = it.source.takeIf { value -> value in setOf("MINE", "ALL", "AI") } ?: "MINE",
             kind = it.kind.takeIf { value -> value in setOf("ALL", "HIGHLIGHT", "NOTE") } ?: "ALL",
-            bookIds = it.bookIds.filter { id -> id > 0 }.toSet(), personaId = it.personaId?.takeIf { id -> id > 0 })
+            bookIds = it.bookIds.filter { id -> id > 0 }.toSet(), personaId = it.personaId?.takeIf { id -> id > 0 },
+            focusMotion = it.focusMotion.takeIf { value -> value in setOf("PAPER", "CUBE", "FLOW") } ?: "PAPER")
     }
 }

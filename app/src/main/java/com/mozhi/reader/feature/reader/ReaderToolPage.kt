@@ -10,7 +10,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.mozhi.reader.ui.theme.MoReadTokens
 import com.mozhi.reader.ui.MoReadWindowWidth
 import com.mozhi.reader.ui.rememberMoReadWindowWidth
 import com.mozhi.reader.ui.components.*
@@ -42,12 +44,17 @@ internal fun ReaderToolPage(
     listState: LazyListState = rememberLazyListState(),
     applyTopInset: Boolean = true,
     panelBack: Boolean = false,
+    /** null 时沿用两种外壳各自的默认间距。 */
+    itemSpacing: Dp? = null,
+    /** 见 [MoReadSecondaryPage] 同名参数；平板侧栏的面板标题本就不随滚动出现第二层，不受影响。 */
+    scrollingTopBar: Boolean = false,
     content: LazyListScope.() -> Unit
 ) {
     val dismiss = LocalReaderToolDismiss.current
     if (dismiss == null) {
         MoReadSecondaryPage(title, onBack, modifier, listState = listState,
-            applyTopInset = applyTopInset, content = content)
+            applyTopInset = applyTopInset, itemSpacing = itemSpacing ?: MoReadTokens.SectionGap,
+            scrollingTopBar = scrollingTopBar, content = content)
     } else {
         Column(modifier.fillMaxSize()) {
             Row(Modifier.fillMaxWidth().height(72.dp).padding(start = if (panelBack) 8.dp else 24.dp, end = 8.dp)
@@ -59,7 +66,7 @@ internal fun ReaderToolPage(
             LazyColumn(state = listState,
                 modifier = Modifier.weight(1f).fillMaxWidth().blockSheetDrag(listState).testTag("secondary-page-list"),
                 contentPadding = PaddingValues(start = 24.dp, end = 24.dp, bottom = 24.dp),
-                verticalArrangement = Arrangement.spacedBy(20.dp), content = content)
+                verticalArrangement = Arrangement.spacedBy(itemSpacing ?: 20.dp), content = content)
         }
     }
 }

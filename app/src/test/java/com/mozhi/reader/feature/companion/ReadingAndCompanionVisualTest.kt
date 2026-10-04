@@ -266,6 +266,48 @@ class ReadingAndCompanionVisualTest {
         compose.onNodeWithText("非同步在线计时", substring = true).assertIsDisplayed()
     }
 
+    @Test @Config(qualifiers = "zh-rCN-w411dp-h891dp-mdpi")
+    fun storyTimelineReadsLikeADiaryAlongTheClockThread() {
+        val vm = mockk<CompanionStatsViewModel>(relaxed = true)
+        val today = LocalDate.now()
+        val zone = java.time.ZoneId.systemDefault()
+        fun at(day: LocalDate, hour: Int, minute: Int) = day.atTime(hour, minute).atZone(zone).toInstant().toEpochMilli()
+        val rounds = buildList {
+            var id = 0L
+            fun add(day: LocalDate, hour: Int, minute: Int, book: Long?, role: Long, type: String = "COMPANION") =
+                add(com.mozhi.reader.core.database.dao.CompletedCompanionRound(++id, if (type == "COMPANION") role else 9, at(day, hour, minute),
+                    book, type, "[]", "r$id", if (book == null) "[]" else null, role))
+            listOf(0, 7, 12, 21, 33).forEach { add(today.minusDays(9), 22, it, 1, 3) }
+            listOf(5, 18).forEach { add(today.minusDays(9), 23, it, 2, 4) }
+            listOf(0, 4).forEach { add(today.minusDays(4), 8, it, null, 3, "LIBRARY_COMPANION") }
+            listOf(30, 41, 52, 58).forEach { add(today.minusDays(1), 21, it, 1, 3) }
+            listOf(10, 15, 26).forEach { add(today, 0, it, 2, 4) }
+        }
+        val memories = listOf(CompanionMemoryNote(1, 3, 3, 1, "你说灯塔守夜人像极了外公，读到他点灯那段会放慢速度。", at(today.minusDays(1), 22, 5)))
+        val titles = mapOf(1L to book.title, 2L to "远行笔记")
+        val roles = mapOf(3L to CompanionPersonaInfo(persona.name, null), 4L to CompanionPersonaInfo("拾光", null))
+        val selection = CompanionStatsSelection()
+        val reading = listOf(ReadingDailyEntity(1, today.minusDays(1).toEpochDay(), 4_860_000, 0))
+        val stats = buildCompanionStatistics(rounds, emptyList(), selection, readingDays = reading, retainedBookIds = titles.keys)
+            .let { it.copy(story = buildCompanionStory(rounds, memories, selection, titles, roles, reading)) }
+        every { vm.selection } returns MutableStateFlow(selection)
+        every { vm.statistics } returns MutableStateFlow(stats)
+        show { CompanionStatsScreen({}, vm) }
+        val list = compose.onNode(hasScrollToNodeAction())
+        list.performScrollToNode(hasTestTag("companion-story"))
+        compose.onNodeWithText("一起走过的时间").assertIsDisplayed()
+        capture("companion-story-clock.png")
+        list.performScrollToNode(hasText("知秋悄悄记下了"))
+        capture("companion-story-timeline.png")
+        list.performScrollToNode(hasText("第一次和知秋聊起《雨夜里的灯塔》", substring = true))
+        compose.onNodeWithText("第一次和知秋聊起《雨夜里的灯塔》", substring = true).assertIsDisplayed()
+        list.performScrollToNode(hasText("第一次和拾光聊起《远行笔记》", substring = true))
+        list.performScrollToNode(hasText("在书库里和知秋聊了", substring = true))
+        list.performScrollToNode(hasText("和知秋说了第一句话", substring = true))
+        capture("companion-story-first-words.png")
+        list.performScrollToNode(hasText("第 10 次交换想法"))
+    }
+
     private fun capture(name: String) {
         compose.waitForIdle()
         compose.runOnIdle {

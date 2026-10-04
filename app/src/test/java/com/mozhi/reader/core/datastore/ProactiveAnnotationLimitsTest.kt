@@ -83,17 +83,24 @@ class ProactiveAnnotationLimitsTest {
     }
 
     @Test
-    fun sliderStepsPutUnlimitedLast() {
-        val steps = ProactiveAnnotationLimitSteps.steps(from = 1, to = 3, allowUnlimited = true)
-        assertEquals(listOf(1, 2, 3, ProactiveAnnotationLimits.UNLIMITED), steps)
-        assertEquals(3, ProactiveAnnotationLimitSteps.indexOf(steps, ProactiveAnnotationLimits.UNLIMITED))
-        assertEquals(1, ProactiveAnnotationLimitSteps.indexOf(steps, 2))
-        assertEquals("不限制", ProactiveAnnotationLimitSteps.label(ProactiveAnnotationLimits.UNLIMITED))
-        assertEquals("2 条", ProactiveAnnotationLimitSteps.label(2))
-        assertEquals(
-            ProactiveAnnotationLimits.UNLIMITED,
-            ProactiveAnnotationLimitSteps.valueAt(steps, 99)
-        )
+    fun raisingTheLowerBoundPushesAFiniteUpperBound() {
+        val limits = ProactiveAnnotationLimits(minPerChapter = 1, maxPerChapter = 3)
+        assertEquals(5 to 5, limits.withMinPerChapter(5).let { it.minPerChapter to it.maxPerChapter })
+        // 下限回落不动上限；「不限」上限保持不限。
+        assertEquals(0 to 3, limits.withMinPerChapter(0).let { it.minPerChapter to it.maxPerChapter })
+        val open = limits.copy(maxPerChapter = ProactiveAnnotationLimits.UNLIMITED).withMinPerChapter(12)
+        assertEquals(12, open.minPerChapter)
+        assertTrue(open.chapterUnlimited)
+        assertEquals(ProactiveAnnotationLimits.MAX_PER_CHAPTER, limits.withMinPerChapter(10_000).maxPerChapter)
+    }
+
+    @Test
+    fun typedValuesAboveTheOldSliderCeilingsSurvive() {
+        val limits = ProactiveAnnotationLimits(maxPerChapter = 25, dailyMax = 300, dailyVoiceMax = 120).normalized()
+        assertEquals(25, limits.maxPerChapter)
+        assertEquals(300, limits.dailyMax)
+        assertEquals(120, limits.dailyVoiceMax)
+        assertEquals(ProactiveAnnotationLimits.MAX_DAILY, limits.copy(dailyMax = 1_000_000).normalized().dailyMax)
     }
 
     @Test

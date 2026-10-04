@@ -36,6 +36,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -78,6 +79,13 @@ fun MoReadSecondaryPage(
     actions: @Composable RowScope.() -> Unit = {},
     bottomBar: @Composable (() -> Unit)? = null,
     applyTopInset: Boolean = true,
+    /** 列表项间距。逐条卡片的列表（如生词本）传 0，自己控制卡间距与分组留白。 */
+    itemSpacing: Dp = MoReadTokens.SectionGap,
+    /**
+     * 顶栏随内容滚走、不再固定。页面自带吸顶条（如生词本的常驻搜索框）时用：
+     * 否则下滑后「返回 + 紧凑标题」与吸顶条叠成两层固定栏。返回交给系统手势，回到顶部即可见。
+     */
+    scrollingTopBar: Boolean = false,
     content: LazyListScope.() -> Unit
 ) {
     val collapsedAlpha by remember(listState) {
@@ -96,28 +104,51 @@ fun MoReadSecondaryPage(
                     .widthIn(max = if (settingsPane) 920.dp else MoReadLayoutPolicy.FormMaxWidthDp.dp)
                     .fillMaxSize()
             ) {
-                MoReadTopBar(
-                    title = title,
-                    titleAlpha = collapsedAlpha,
-                    onBack = onBack,
-                    actions = actions,
-                    applyTopInset = applyTopInset,
-                    showBack = !detailRoot
-                )
+                if (!scrollingTopBar) {
+                    MoReadTopBar(
+                        title = title,
+                        titleAlpha = collapsedAlpha,
+                        onBack = onBack,
+                        actions = actions,
+                        applyTopInset = applyTopInset,
+                        showBack = !detailRoot
+                    )
+                } else if (applyTopInset) {
+                    // 只留状态栏高度的一截空白：列表内容被裁在它下面，不会从状态栏底下透出来。
+                    Box(Modifier.fillMaxWidth().safeTopPadding())
+                }
+                val gutter = if (settingsPane) 40.dp else MoReadTokens.PageGutter
                 Box(Modifier.fillMaxWidth().weight(1f)) {
                     LazyColumn(
                         state = listState,
                         modifier = Modifier.fillMaxSize().testTag("secondary-page-list"),
                         contentPadding = PaddingValues(
-                            start = if (settingsPane) 40.dp else MoReadTokens.PageGutter,
-                            end = if (settingsPane) 40.dp else MoReadTokens.PageGutter,
-                            top = 4.dp,
+                            start = gutter,
+                            end = gutter,
+                            top = if (scrollingTopBar) 0.dp else 4.dp,
                             bottom = if (bottomBar == null) 32.dp else 12.dp
                         ),
-                        verticalArrangement = Arrangement.spacedBy(MoReadTokens.SectionGap)
+                        verticalArrangement = Arrangement.spacedBy(itemSpacing)
                     ) {
                         item(key = "page-hero", contentType = "hero") {
-                            PageHeroTitle(title = title, subtitle = subtitle)
+                            if (scrollingTopBar) {
+                                Column {
+                                    // 与固定顶栏同一套版式，只是跟着大标题一起滚；横向撑出页边距，
+                                    // 让返回键停在与其他二级页相同的位置。
+                                    MoReadTopBar(
+                                        title = title,
+                                        titleAlpha = 0f,
+                                        onBack = onBack,
+                                        actions = actions,
+                                        applyTopInset = false,
+                                        showBack = !detailRoot,
+                                        modifier = Modifier.bleedHorizontally(gutter)
+                                    )
+                                    Box(Modifier.padding(top = 4.dp)) { PageHeroTitle(title = title, subtitle = subtitle) }
+                                }
+                            } else {
+                                PageHeroTitle(title = title, subtitle = subtitle)
+                            }
                         }
                         content()
                     }
@@ -193,9 +224,10 @@ private fun MoReadTopBar(
     onBack: () -> Unit,
     actions: @Composable RowScope.() -> Unit,
     applyTopInset: Boolean,
-    showBack: Boolean = true
+    showBack: Boolean = true,
+    modifier: Modifier = Modifier
 ) {
-    Column(if (applyTopInset) Modifier.safeTopPadding() else Modifier) {
+    Column(modifier.then(if (applyTopInset) Modifier.safeTopPadding() else Modifier)) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -232,6 +264,14 @@ private fun MoReadTopBar(
             )
         }
     }
+}
+
+/** 在列表的横向内边距里向两侧各撑出 [amount]，让列表项里的内容贴到页壳边缘。 */
+private fun Modifier.bleedHorizontally(amount: Dp): Modifier = layout { measurable, constraints ->
+    val extra = (amount * 2).roundToPx()
+    val width = constraints.maxWidth + extra
+    val placeable = measurable.measure(constraints.copy(minWidth = width, maxWidth = width))
+    layout(constraints.maxWidth, placeable.height) { placeable.place(-extra / 2, 0) }
 }
 
 /** 大标题：衬线，作为列表首项跟着内容一起滚。 */

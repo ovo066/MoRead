@@ -44,11 +44,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mozhi.reader.core.speech.TtsApiProvider
+import com.mozhi.reader.R
 import com.mozhi.reader.core.speech.TtsEngineMode
 import com.mozhi.reader.ui.components.MoReadBackdrop
 import com.mozhi.reader.ui.components.TtsTuningActions
@@ -289,6 +291,8 @@ fun TtsSettingsScreen(
                                     TtsApiProvider.OPENAI_COMPAT -> "OpenAI 官方或任意兼容中转"
                                     TtsApiProvider.GMI_CLOUD -> "GMI Cloud，或兼容其 Request Queue 协议的地址"
                                     TtsApiProvider.GEMINI -> "Google 官方地址，也可填写兼容 Gemini 原生协议的地址"
+                                    TtsApiProvider.XIAOMI_MIMO -> stringResource(R.string.tts_mimo_base_url_hint)
+                                    TtsApiProvider.FISH_AUDIO -> stringResource(R.string.tts_fish_base_url_hint)
                                 }
                             )
                         },
@@ -341,6 +345,8 @@ fun TtsSettingsScreen(
                                     TtsApiProvider.OPENAI_COMPAT -> "如 gpt-4o-mini-tts / tts-1"
                                     TtsApiProvider.GMI_CLOUD -> "如 minimax-tts-speech-2.8-hd"
                                     TtsApiProvider.GEMINI -> "gemini-3.8-flash-tts；更快可用 gemini-3.8-flash-lite-tts"
+                                    TtsApiProvider.XIAOMI_MIMO -> stringResource(R.string.tts_mimo_model_hint)
+                                    TtsApiProvider.FISH_AUDIO -> stringResource(R.string.tts_fish_model_hint)
                                     else -> if ("turbo" in settings.aiModel.lowercase()) {
                                         "Turbo 更偏速度；有声书表演推荐 speech-2.8-hd"
                                     } else {
@@ -371,8 +377,12 @@ fun TtsSettingsScreen(
                         keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                         label = { Text("音色 ID（可选）") },
                         supportingText = {
-                            Text(if (settings.aiIsGemini) "也可填写音色库或自定义 voice_… ID；留空使用 Sulafat"
-                                else "OpenAI 如 alloy / nova；MiniMax 与 GMI 可填系统或克隆音色 ID")
+                            Text(when {
+                                settings.aiIsGemini -> "也可填写音色库或自定义 voice_… ID；留空使用 Sulafat"
+                                settings.aiIsMimo -> stringResource(R.string.tts_mimo_voice_hint)
+                                settings.aiIsFish -> stringResource(R.string.tts_fish_voice_hint)
+                                else -> "OpenAI 如 alloy / nova；MiniMax 与 GMI 可填系统或克隆音色 ID"
+                            })
                         },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().committedDraft(aiVoiceIdDraft)
@@ -383,15 +393,15 @@ fun TtsSettingsScreen(
                         range = 0.5f..2f,
                         onChange = viewModel::setAiSpeed
                     )
-                    LabeledSlider(
-                        label = if (settings.aiIsGemini) "音量风格" else "音量（MiniMax / GMI）",
+                    if (settings.aiSupportsVolume) LabeledSlider(
+                        label = if (settings.aiUsesStyleControls) "音量风格" else "音量",
                         value = settings.aiVolume,
                         range = 0.5f..2f,
                         onChange = viewModel::setAiVolume
                     )
-                    Column {
+                    if (settings.aiSupportsPitch) Column {
                         Text(
-                            (if (settings.aiIsGemini) "音调风格：" else "音调（MiniMax / GMI）：") + settings.aiPitch,
+                            (if (settings.aiUsesStyleControls) "音调风格：" else "音调：") + settings.aiPitch,
                             style = MaterialTheme.typography.bodySmall
                         )
                         Slider(
@@ -402,10 +412,14 @@ fun TtsSettingsScreen(
                         )
                     }
                     Text(
-                        if (settings.aiIsGemini) {
+                        if (settings.aiUsesStyleControls) {
                             "语速、音量与音调通过风格指令引导，实际效果以试听为准。"
                         } else if (settings.aiProvider == TtsApiProvider.GMI_CLOUD) {
                             "GMI 请求会自动等待任务完成并下载音频，默认情绪为 auto。"
+                        } else if (settings.aiIsFish) {
+                            stringResource(R.string.tts_fish_controls_hint)
+                        } else if (settings.aiIsMiniMax) {
+                            stringResource(R.string.tts_minimax_controls_hint)
                         } else {
                             "OpenAI 不支持音量与音调。"
                         },
@@ -472,10 +486,13 @@ private fun LabeledSlider(
     }
 }
 
+@Composable
 private fun TtsApiProvider.label(): String = when (this) {
     TtsApiProvider.MINIMAX_CN -> "MiniMax（国内）"
     TtsApiProvider.MINIMAX_INTL -> "MiniMax（海外）"
     TtsApiProvider.OPENAI_COMPAT -> "OpenAI 兼容"
     TtsApiProvider.GMI_CLOUD -> "GMI Cloud（自定义 TTS）"
     TtsApiProvider.GEMINI -> "Gemini TTS"
+    TtsApiProvider.XIAOMI_MIMO -> stringResource(R.string.tts_provider_mimo)
+    TtsApiProvider.FISH_AUDIO -> stringResource(R.string.tts_provider_fish)
 }

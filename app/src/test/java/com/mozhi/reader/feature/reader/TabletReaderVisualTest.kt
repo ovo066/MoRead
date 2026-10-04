@@ -231,7 +231,9 @@ class TabletReaderVisualTest {
         bounds.zipWithNext().forEach { (left, right) -> assertTrue("悬浮按钮不能重叠", left.right < right.left) }
     }
 
-    @Test fun readingAidsOpensVocabularyWithinTheSamePanelAndReturns() {
+    // 生词本标题来自字符串资源，按默认中文界面断言。
+    @Test @Config(qualifiers = "zh-rCN-w1400dp-h960dp-mdpi")
+    fun readingAidsOpensVocabularyWithinTheSamePanelAndReturns() {
         show()
         compose.runOnIdle { controlsVisible = false; panel = "aids" }
         val bounds = assertRightToolPanel()

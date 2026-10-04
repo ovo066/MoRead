@@ -23,7 +23,9 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
 import com.mozhi.reader.core.datastore.PageTurnAnimation
 import com.mozhi.reader.core.datastore.ReaderSettings
+import com.mozhi.reader.core.datastore.ChineseConversionMode
 import com.mozhi.reader.core.database.entity.AnnotationEntity
+import com.mozhi.reader.core.library.ResolvedTextAnchor
 import com.mozhi.reader.core.retrieval.AnnotationVisibility
 import com.mozhi.reader.core.retrieval.ReadingScope
 import com.mozhi.reader.feature.reader.engine.ChapterMeta
@@ -58,12 +60,23 @@ class ReaderAnnotationStabilityTest {
     private lateinit var holder: ReaderPaneHolder
     private lateinit var root: View
     private var contentHook: ((Int) -> Unit)? = null
+    private val contentRevision = mutableIntStateOf(0)
+    private val currentChapter = mutableIntStateOf(0)
+    private var resolvedMarks: List<ReaderAnnotationMark> = emptyList()
+    private var resolutionCalls = 0
 
-    private fun mount(showFooter: Boolean = true) {
-        val body = List(45) {
+    private fun mount(showFooter: Boolean = true, initialChapter: Int = 0, chapterCount: Int = 1,
+        storedMarks: Boolean = false) {
+        val body = List(if (storedMarks) 6 else 45) {
             "夜色渐深，河岸的灯火映在水面上。她停下脚步，听见远处传来一阵钟声，" +
                 "才发觉信里提到的渡口就在眼前。风翻动书页，而她仍记得刚才读到的那句话。"
         }.joinToString("\n")
+        val persisted = if (storedMarks) List(chapterCount) { chapter ->
+            AnnotationEntity(id = chapter + 100L, bookId = 1, chapterIndex = chapter,
+                startCharOffset = 1, endCharOffset = 5, selectedText = body.substring(1, 5),
+                note = "早已保存的批注", style = "UNDERLINE", createdAt = 1)
+        } else emptyList()
+        currentChapter.intValue = initialChapter
         compose.setContent {
             val view = LocalView.current
             SideEffect { root = view.rootView }
@@ -75,24 +88,39 @@ class ReaderAnnotationStabilityTest {
                             "Reader publication ran on ${Thread.currentThread().name} instead of the main looper"
                         }
                         contentHook?.invoke(relativePosition)
+                        contentRevision.intValue++
                     }
                     override fun onPositionChanged(chapterIndex: Int, charOffset: Int, pageIndex: Int,
-                        pageCount: Int, bookProgress: Float) = Unit
+                        pageCount: Int, bookProgress: Float) { currentChapter.intValue = chapterIndex }
                     override fun onContentError(chapterIndex: Int, error: Throwable) {
                         throw AssertionError("Reader content failed to load", error)
                     }
-                }).also { it.setChapters(listOf(ChapterMeta(0, "河岸", body.length))) }
+                }).also {
+                    it.setChapters(List(chapterCount) { chapter -> ChapterMeta(chapter, "第 ${chapter + 1} 章 河岸", body.length) })
+                    it.openPosition(initialChapter, 0)
+                }
             }
             controller = reader
             holder = remember(reader) { ReaderPaneHolder(reader) }
             DisposableEffect(holder) { onDispose { holder.release() } }
             val settings = ReaderSettings(pageTurnAnimation = animation.value, showFooter = showFooter)
+            val resolve: (AnnotationEntity) -> ResolvedTextAnchor? = remember(reader) {
+                { annotation ->
+                    resolutionCalls++
+                    reader.chapterBody(annotation.chapterIndex)?.let {
+                        ResolvedTextAnchor(annotation.startCharOffset, annotation.endCharOffset)
+                    }
+                }
+            }
+            val persistedMarks = rememberReaderAnnotationMarks(persisted, emptySet(), currentChapter.intValue,
+                contentRevision.intValue, ChineseConversionMode.OFF, reader, resolve)
+            SideEffect { resolvedMarks = persistedMarks }
             ReaderPane(
                 controller = reader, holder = holder, settings = settings,
                 palette = readerPalette(settings.theme, false, Color(0xff526d58)), enabled = true,
                 registerContentHook = { contentHook = it },
                 onCenterTap = {}, onAddBookmark = {}, onBoundary = {}, onNotice = {},
-                annotations = marks.value + aiAnnotations.value.filter {
+                annotations = persistedMarks + marks.value + aiAnnotations.value.filter {
                     AnnotationVisibility.isVisible(it, ReadingScope.upto(0, readEnd.intValue))
                 }.map {
                     ReaderAnnotationMark(it.id, it.chapterIndex, it.startCharOffset, it.endCharOffset,
@@ -112,6 +140,59 @@ class ReaderAnnotationStabilityTest {
                 controller.nextPage() is RenderPage.Laid
         }
         compose.waitForIdle()
+    }
+
+    @Test
+    fun openingChapterElevenWithoutAnAnnotationLinkDrawsSavedInkAndRetainsItAfterReturning() {
+        mount(initialChapter = 10, chapterCount = 17, storedMarks = true)
+        assertStoredMark(10)
+        compose.runOnIdle { controller.jumpToChapter(0) }
+        awaitChapter(0)
+        assertStoredMark(0)
+        compose.runOnIdle { controller.jumpToChapter(10) }
+        awaitChapter(10)
+        assertStoredMark(10)
+        compose.runOnIdle { save(holder.curBitmap!!, "chapter-11-reentry") }
+    }
+
+    @Test
+    fun ordinaryPageTurnsPastTheInitialWindowKeepSavedAnnotationsThroughChapterEleven() {
+        mount(chapterCount = 17, storedMarks = true)
+        for (chapter in 0..10) {
+            awaitChapter(chapter)
+            assertStoredMark(chapter)
+            if (chapter == 10) break
+            var turns = 0
+            while (controller.chapterIndex == chapter) {
+                compose.waitUntil(15_000) { controller.nextPage() is RenderPage.Laid }
+                compose.waitForIdle()
+                val before = resolutionCalls
+                compose.runOnIdle { assertTrue(controller.moveToNextPage()) }
+                compose.waitForIdle()
+                if (controller.chapterIndex == chapter) {
+                    assertEquals("Same-chapter paging must reuse resolved anchors", before, resolutionCalls)
+                }
+                assertTrue("Chapter did not advance", ++turns < 30)
+            }
+        }
+        compose.runOnIdle { save(holder.curBitmap!!, "chapter-11-sequential") }
+    }
+
+    private fun awaitChapter(chapter: Int) {
+        compose.waitUntil(15_000) {
+            controller.chapterIndex == chapter && controller.isReady &&
+                controller.chapterSource(chapter + 1) != null &&
+                resolvedMarks.any { it.id == chapter + 100L }
+        }
+        compose.waitForIdle()
+    }
+
+    private fun assertStoredMark(chapter: Int) {
+        compose.runOnIdle {
+            val page = (controller.curPage() as RenderPage.Laid).page
+            assertEquals(chapter, controller.chapterIndex)
+            assertEquals(listOf(chapter + 100L), holder.annotationIdsAt(markPoint(page)))
+        }
     }
 
     @Test

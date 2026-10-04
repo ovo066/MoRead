@@ -30,7 +30,7 @@
 - `ui/components/` 与 `ui/theme/`：共用页面、控件、间距和主题；新增设置页优先复用这里的组件。
 - 设置页复用共用控件的信息层级、间距与主题。`ui/components/MoReadPageDialog` 统一独立整页窗口的背景；它与平板 `NavigationSheet` 共用透明系统栏和主题配置。`ReaderToolPage` 为阅读工具提供固定标题与独立滚动内容。
 - `ui/theme/AppTheme` 的 `AppearanceSettings` 将配色方案、色彩搭配、质感、导航与形状密度分别保存。`ColorSchemes` 提供三套莫兰迪日夜色板、原版灰阶及 Android 12+ 壁纸取色；`MoReadTheme` 统一装配，`Metrics` 提供随密度变化的尺寸。选择方案会套用推荐质感/形状并恢复方案主色；选择「原版」还恢复悬浮舱与默认色彩搭配，明暗和字体保留。
-- `ui/components/MoReadSurfaces` 统一处理原有玻璃、磨砂与不透明表面及页面背景，浮层不绘制阴影，`MoReadControls` 提供分段、滑条与胶囊按钮；`SemanticPalettes` 是内置标签与角色配色的公共入口。手机导航支持悬浮舱与通栏，平板保持侧栏；阅读目的地通过 `ReaderAppearanceScope` 保留纸色及原有浮层尺寸。
+- `ui/components/MoReadSurfaces` 统一处理原有玻璃、磨砂与不透明表面及页面背景，浮层不绘制阴影，`MoReadControls` 提供分段、滑条、数字输入（`MoReadNumberRow`，支持「不限」）与胶囊按钮；`SemanticPalettes` 是内置标签与角色配色的公共入口。手机导航支持悬浮舱与通栏，平板保持侧栏；阅读目的地通过 `ReaderAppearanceScope` 保留纸色及原有浮层尺寸。
 - [平板与窗口适配](TABLET_UI.md)：根导航在底部导航、紧凑导航栏与完整侧栏之间切换。`TabletSettingsNavigation` 组织设置分类与详情，`CompanionWorkspace` 为书库和单书聊天复用常驻会话列表，`MoReadDetailLayout` 为书籍详情和听书提供摘要／内容分栏。`NavigationSheet` 统一宽屏侧面板与窄屏底部弹层，避免各功能复制窗口判断。
 - `core/di/`：应用协程、网络、数据库和向量存储等依赖注入。
 
@@ -123,7 +123,7 @@ Room 结构、迁移、备份版本校验和实际数据文件要保持一致。
 - `core/dictionary/MdictReader` 按块读取 MDX/MDD v1/v2；`LocalDictionaryRepository` 负责导入、索引缓存和本地资源读取。`DictionaryWebContent` 限制脚本及外部请求，保留词典 HTML/CSS 排版。
 - `AiDictionaryEntry` 解析独立的中文标注、音标和 Markdown 释义字段；`WordGlossExtraction` 兼容旧格式并过滤元数据字段。`VocabularyCodec` 修复旧版误存的字段名标注；`AiDictionaryEntryTest`、`DictionaryWordGlossTest` 覆盖 `tugs`、富文本与旧收藏兼容。
 - 切换词典后保存已有生词，`EnglishLearningViewModel.saveWord` 同步替换完整释义、词下短释义及音标，保留学习状态与收藏来源；设置变化经 `ReaderPageStyle.wordGlosses` 触发正文重排。
-- `EnglishLearningViewModel` 共用词典与生词数据，AI 词典使用 `ModelRole.CHEAP`；`DictionaryLookupDialog` 承接分页、滚动阅读的划线查词，不限制语言，AI 释义复用 `AiRichText` 并保持切换后的滚动位置。`DictionaryManagerPage` 支持多本 MDX / MDD 管理，`VocabularyPage` 管理收藏，设置导航分别注册词典与生词本目的地，平板保留分类侧栏。阅读中的对应 Dialog、中英对照和单段译文操作复用 `ReaderToolDialog` 右侧面板；阅读辅助进入生词本时保留返回、搜索与滚动状态。`EnglishLearningDialog` 仅管理可选英文阅读辅助；`ReaderSyntaxHighlighter` 提供生词划线及英文词首加粗。
+- `EnglishLearningViewModel` 共用词典与生词数据，AI 词典使用 `ModelRole.CHEAP`；`DictionaryLookupDialog` 承接分页、滚动阅读的划线查词，不限制语言，AI 释义复用 `AiRichText` 并保持切换后的滚动位置。`DictionaryManagerPage` 支持多本 MDX / MDD 管理，`VocabularyPage` 管理收藏（概览三格兼作全部/学习中/已掌握筛选，词卡按收藏时间分段；分段、筛选、释义摘要与语境高亮是 `VocabularyBook.kt` 的纯函数，由 `VocabularyBookTest` 覆盖；掌握、移出即时生效并可撤销），设置导航分别注册词典与生词本目的地，平板保留分类侧栏。阅读中的对应 Dialog、中英对照和单段译文操作复用 `ReaderToolDialog` 右侧面板；阅读辅助进入生词本时保留返回、搜索与滚动状态。`EnglishLearningDialog` 仅管理可选英文阅读辅助；`ReaderSyntaxHighlighter` 提供生词划线及英文词首加粗。
 - `ParagraphTranslationRepository` 将译文缓存放在 `reader-custom/translations`，与原文分离并校验段落摘要。`ReaderViewModel` 管理单段、当前页、当前章请求及取消，`BilingualReadingDialog` 管理本书显示开关；长按译文或正文选区的“本段对照”进入单段重翻译、显示/隐藏和删除操作。
 - `ModelRole.TRANSLATION` 独立分配阅读翻译模型，未分配时回落 CHAT 模型且不注入聊天预设；`TranslationModelSelector` 与 AI 服务页共用模型选择行，选文翻译也走此角色。更多选项可重新翻译已有段落。
 - `engine/WordGlossLayout` 在排版时预留词下标注高度；`ParagraphTranslationLayout` 为 TXT 和 EPUB 生成零源长度译文行，保留英文复制、朗读、阅读位置和书签坐标。
@@ -156,7 +156,7 @@ Room 结构、迁移、备份版本校验和实际数据文件要保持一致。
 | 协议客户端 | `ai/client/` 的 OpenAI 兼容、Responses、Claude、Gemini 客户端；`AiClientFactory` 和 `ai/provider/ProviderProtocolPolicy` 负责选择 |
 | 对话 | `ai/chat/AiChatRepository`、`ai/prompt/CompanionContextBuilder`；UI 为 `ReaderCompanionViewModel`、`CompanionChatScreen` 和相关组件 |
 | 书库伴读 | `feature/companion/LibraryCompanion*`、`LibraryChat*`；`ai/companion/LibraryCompanionRunner` 管理与页面分离的单次生成，`LibraryScopeGuard` 校验来源范围 |
-| 陪伴足迹 | `feature/companion/CompanionStatistics`、`CompanionStatsScreen` / `CompanionStatsViewModel`；`ChatDao` 只向统计层返回消息元数据和字数，不加载正文 |
+| 陪伴足迹 | `feature/companion/CompanionStatistics`、`CompanionStory`、`CompanionStatsScreen` / `CompanionStoryTimeline` / `CompanionStatsViewModel`；`ChatDao` 只向统计层返回消息元数据和字数，不加载正文 |
 | 工具调用 | `ai/agent/AgentLoop`、`AgentToolExecutor`、`ToolResult`、`CompanionToolRouter`、`ReaderToolset`、`ReaderToolsetReadback` |
 | 阅读范围与检索 | `core/retrieval/ReadingScope`、`ReadableCorpus`（位于 `ai/agent/`）、`RetrievalPipeline` 与 `BookGrep` |
 | 书籍向量 | `ai/embedding/` 负责章节切分后的嵌入、进度与增量续跑；`core/vector/` 提供切分和向量相关数据 |
@@ -174,11 +174,13 @@ Room 结构、迁移、备份版本校验和实际数据文件要保持一致。
 - `LibraryCitationParser` / `LibraryCitationVerifier` 仅识别显式书籍编号、章节号和逐字引文；点击来源时才读取对应章，在正确书籍的已读范围内匹配，再携带原文 UTF-16 锚点进入阅读页。不存在或过期的引用不会跳转。书库消息复用 `CompanionChatScroll` 的稳定 key、手势优先和贴底逻辑。
 - 书库气泡支持复制、编辑、删除、分支与重新生成，失败或停止后可重试。历史修改由 `LibraryCompanionRunner` 与发送共用互斥区；重生成前核对来源和角色，复用原用户消息，并清掉旧生成事件缓存。用户编辑截断后文，AI 编辑保留后文；分支保留工具结果与消息身份，但清空滚动摘要。已知书籍来源按保留轮次过滤，未知旧记录保守保留范围；已应用的书架整理不因聊天历史修改而撤销。
 - “陪伴足迹”展示一起读过的书、阅读时长、聊天字数及交流日，支持全部 / 书内 / 书库与近 7 天 / 30 天 / 全部筛选。保留记录的已移除书籍仍计入，彻底删除书籍记录后不再计入书数和阅读时长，独立保存的跨书对话仍可保留。时长来自关联书籍在所选日期内的 `reading_daily`，不是 AI 同时在线的计时；字数由 SQLite 统计保留的双方正文，不含思考过程、工具结果和系统上限提示。有效交流要求用户在下一条用户消息前收到非空、非工具调用的回复，选段问答和段评不计。可识别分支按消息身份去重，未知旧身份只能按现存记录计。`messages.sourceBookIdsJson` 保存当前轮重点与实际查阅书籍的并集；`null` 为旧记录未知，`[]` 为明确未关联，不能用后续查到的书反填早期闲聊。界面不是模型用量或费用账单。
+- 陪伴足迹的时间线由纯函数 `buildCompanionStory` 生成：完成轮次按同一角色、同一本书、间隔不超过 30 分钟合并为一次“共读”，并标出每本书第一次被聊起；首句、第 10/50/100… 次交流在所选范围的全部历史中计数，再按时段筛选展示；长期记忆摘要（`PersonaMemoryRepository.recent`，经 `VectorQueries.listRecentMemories` 跨角色读取）按其来源会话类型归入书内或书库范围。每天一个节点，节点上的 24 小时小表盘标出交流的时段（`companionHourArcs` 合并跨午夜的连续小时），顶部表盘展示全部交流的小时分布与高峰时段。当天阅读时长只计当天聊到的书。时间线文案均在字符串资源中；进入视口时的连线与指针动画只在绘制阶段读取进度。回归见 `CompanionStoryTest` 与 `ReadingAndCompanionVisualTest`。
 - `ai/agent/ChapterSearchBounds` 解析 `search_book` / `grep_book` 的章节区间，并与阅读水位求交。正文加载从实际起始章开始；Grep 游标绑定上下界，阅读进度增长不会扩大旧查询。`RetrievalRequest.firstChapterIndex` 在融合前和邻居扩展后都执行下界检查。
 - `core/vector/VectorQueries` 在章节范围内不超过 512 个切片时使用精确余弦排序（限制向量复制量）；较大范围使用有界 ANN 补召回，不承诺穷举。
 - `AiModelType.RERANK` / `ModelRole.RERANK` 提供独立可选重排模型；自定义供应商使用 `RerankApiClient` 调用 `/rerank` 或模型自定义路径，采用 query/documents 与 index/relevance_score 格式。`ConfiguredChunkReranker` 只重排已过滤候选的有界前缀：最多 24 段、每段 800 字、合计 12000 字、5 秒。未分配时不调用重排模型，异常、超时或不完整排名回落原融合排序；不更改向量阈值，不重建索引。书内与书库检索共用此链路，发送候选前及返回证据前再次核对正文和范围。
 - `feature/bookdetail/AnnotationIndex` 明确区分全部、我的与 AI 划线，并支持进一步按 AI 角色筛选。来源以 `personaId` 是否为空为准，不按样式、颜色或是否自动生成推断；删除角色不会将其批注算作用户内容。计数只使用已通过可见性过滤的批注。
-- `feature/review/ReadingReviewScreen` 是设置中的全局「划线与笔记」入口，手机与平板共用。`ReviewOptionsMenu` 复用书架的锚定悬浮菜单并提供二级选择页，`ReadingReviewPreferences` 持久化筛选与布局；`ReadingReviewModels` 统一书籍、来源、角色、类型与关键词筛选，先按每本书的可读范围过滤，再提供计数、瀑布流、全屏回顾、导出与 AI 素材；已移除正文的书仍可回顾保留记录。`ReadingReviewDetails` 复用伴读头像和段评讨论，`ReviewExporter` 生成带署名与出处的 Markdown / 图片。`ReadingReviewComposer` 仅在主动请求时把勾选素材交给 AI，草稿经编辑确认后保存，并保留 AI 来源与可读范围；保存前复查素材和范围。回归入口为 `feature/review/ReadingReviewTest`、`ReadingReviewViewModelTest` 与 `ReadingReviewVisualTest`。
+- `feature/review/ReadingReviewScreen` 是设置中的全局「划线与笔记」入口，手机与平板共用。`ReviewOptionsMenu` 复用书架的锚定悬浮菜单并提供二级选择页，`ReadingReviewPreferences` 持久化筛选与布局；`ReadingReviewModels` 统一书籍、来源、角色、类型与关键词筛选，先按每本书的可读范围过滤，再提供计数、瀑布流、全屏回顾、导出与 AI 素材；已移除正文的书仍可回顾保留记录。`ReadingReviewDetails` 复用伴读头像和段评讨论；全屏回顾默认保留纸页交接，右上角可切换「立方」「长廊」两种 3D 舞台（`ReviewCardMotion.reviewCard3d` 纯函数给出每帧旋转、枢轴、明暗与光泽位置，选择存入 `ReadingReviewPreferences.focusMotion`），3D 模式下重力传感器让居中卡片轻微倾斜（`ReviewCardTilt`，只在 3D 模式注册，读数只在图层/绘制阶段读取），上下滑仍是打开与返回；`ReviewExporter` 生成带署名与出处的 Markdown / 图片。`ReadingReviewComposer` 仅在主动请求时把勾选素材交给 AI，草稿经编辑确认后保存，并保留 AI 来源与可读范围；保存前复查素材和范围。回归入口为 `feature/review/ReadingReviewTest`、`ReadingReviewViewModelTest` 与 `ReadingReviewVisualTest`。
+- 书籍详情页按封面取色：`feature/bookdetail/CoverPalette` 从降采样封面中提取主色调与按饱和度加权的特征色（米白纸色、灰阶不算），再按当前明暗生成页顶色调与满足 WCAG AA 的强调色；没有封面或封面为灰阶时退回应用强调色并减弱色调。`BookDetailAtmosphere` 把 36 px 缩略图先做 CPU 盒式模糊再放大铺满页顶（Android 12+ 叠加 `Modifier.blur`），色调层与遮罩都渐隐为透明以衔接页面背景，随滚动淡出；整页在 `MaterialTheme` 中把 primary 换成封面强调色。`DetailBookObject` 把封面画成带书脊折痕、书页厚度与同色投影的实体书，按压处会 3D 倾斜（只观察触点、不消费，页面照常滚动）。缩略图与色板按文件路径、修改时间与大小缓存。回归见 `CoverPaletteTest`、`BookDetailVisualTest` 与 `BookDetailNavigationTest`。
 - 详情页批注使用 `AnnotationIndexSheet` / `NavigationSheet`，每个来源与角色筛选保留独立滚动状态。点击段评将原文坐标和 `textAnchorJson` 交给既有 `ReaderLocateRequest` 路径，复用繁简坐标转换与短暂高亮。段落讨论打开时预选“上次点名过的角色 → 当前伴读角色 → 第一个角色”，留空发送即请该角色点评原文，有文字时同样带上它，不落空用户消息；再点一次选中的胶囊可取消点名（只保存用户想法），取消只对当前这条发言生效、不写回记忆。
 - `AiServiceScreen` / `ProviderDetailScreen` 按供应商、用途和生成参数分组。`AiSettingsComponents` 根据模型名识别系列图标，独立于中转供应商；未知模型按能力显示图标。图标是随包分发的本地矢量资源。`ModelParameterFields` 编辑常用参数并保留其他 JSON，请求体中的同名覆盖项一并处理，防止界面值与请求值不一致。`WebSearchSettingsScreen` 使用带图标的引擎列表。
 - 图标转换脚本 `scripts/convert-ai-icons.py` 显式分隔 SVG 圆弧的两个标志位，避免紧凑的 `01` 被 Android/Compose 当成一个数而破坏轮廓；彩色品牌保留原始渐变。GLM 使用 Z.ai 标志，火山方舟与硅基流动按名称或接口主机识别，服务图标独立于兼容协议。
@@ -228,6 +230,7 @@ EPUB 兼容回归包括 `EpubImportCompatibilityTest`（资源 URI 与目录）�
 | 排版与导入 | `EpubLegacyStyleBridgeTest`、`EpubArchiveImageReaderTest`、`EpubDomFragmentLocatorTest`、`EpubLayoutCapabilityTest`、`ImmersiveArtworkFitTest` 与对应引擎测试；真实样书与设备阅读回归 |
 | 布局压缩兼容 | `BookLayoutStoreTest`、`GzipTextFilesTest`：旧索引、明文/gzip 混合、缺失或损坏文件、重试及新导入 |
 | 按需布局与归档图片 | `BookLayoutArchiveCacheTest`、`BookMediaArchiveTest`、`EpubImportPipelineTest`：缓存淘汰/版本、正文坐标、归档 PNG/SVG 渲染、旧副本校验和缺省 schema |
+| 书籍详情配色 | `CoverPaletteTest`、`BookDetailVisualTest`（生成的封面、日夜两色与无封面回退） |
 | 阅读统计 | `StatsViewModelTest`、`StatsSettingsStoreTest`、`StatsScreenVisualTest`、`ReadingTimeSlicesTest`、`BookStorageAndTimeMigrationTest`：周期聚合、整月封面数据、跨周/年连续阅读区间、组件持久化、大格热力、真实日期/时间线弹层、跨午夜/夏令时及历史数据迁移 |
 | 页面切换稳定性 | `NavigationMotionTest`、`NavigationStabilityTest`、`BookDetailNavigationTest`：真实 NavHost 内逐帧检查根页不缩放、阅读返回的系统栏留白与列表锚点、书籍详情标题与正文位置、宽屏视口、Dock 退场选中态和快速切页恢复 |
 | 正文压缩与设置交互 | `BookTextArchiveTest`、`BookTextStoreCompressionTest`：跨块读取、内容哈希、坐标与中断保护；`AiSettingsVisualTest`：图标、参数编辑、小屏与深色界面；`AnnotationNavigationSheetTest`：真实弹层贴底、边界滑动、筛选与进度刷新 |
@@ -308,6 +311,7 @@ Compose 使用 `stringResource` / `pluralStringResource`。资源命名、占位
 - core/speech/SystemTtsSpeaker.kt 枚举 Android TTS 引擎及公开音色，查询独立于播放。SystemTtsVoice.kt 将角色音色绑定到引擎包名与 Voice 名称，设置、试听、听书共用解析。
 - `ai/client/GeminiTtsClient` 使用 Gemini 原生 Interactions TTS，正文与风格元数据分开，解析 REST `steps` 音频并保存 WAV；音色库支持多语言预设与分页读取在线音色，听书、选区和伴读复用现有合成缓存。新安装默认系统 TTS，已有引擎选择保留。
 - `core/speech/TtsProviderProfiles` 为云端服务和本地 TTS 应用分别保存配置。设置页切换或返回前提交输入草稿，云端密钥按服务商加密存储，旧共享密钥只迁移到切换前的服务商；切回后恢复地址、模型、音色与参数。
+- `ai/client/MimoTtsClient` 通过小米 MiMo 聊天接口合成语音，正文放在 assistant 消息、风格放在 user 消息，解析 Base64 音频；`FishTtsClient` 使用 Fish Studio / Fish Audio 的 `/tts`、模型请求头与 `reference_id`，适配 S1/S2 情绪标记及语速、音量。两者由 `AiClientFactory` 接入统一朗读出口，`TtsHttpTransport` 负责可取消请求、响应大小限制及错误处理。协议参考：[MiMo](https://mimo.mi.com/docs/en-US/api/audio/tts)、[Fish Audio](https://docs.fish.audio/api-reference/endpoint/openapi-v1/text-to-speech)。
 - `feature/settings/VoiceDesignScreen` / `VoiceDesignViewModel` 提供音色库中的设计入口，AI 对话与手动设定共享候选试听。`ai/media/VoiceDesignAssistant` 复用 `AgentLoop.runDetached`，按需调用角色查询、声音设定、生成和获取试听工具；每轮最多创建一个候选，音色库写入只由用户确认触发。`GeminiTtsClient` 接入 Voice design 的创建、试听读取与草稿清理；已保存音色不参与草稿清理，试听由 `VoiceDesignPreviewStore` 缓存。
 - ui/components/VoiceChoiceDialog.kt 提供可搜索音色选择；feature/listen/AudiobookRoleViewModel.kt 提供显式 AI 选角与手动调整。
 - ai/audiobook/AudiobookRoleExtractor.kt 初次抽样包含当前章，精排前逐章补全角色；AudiobookScriptAgent.kt 使用稳定原文坐标，低置信度对白暂用旁白并提示校对；AudiobookAttributionPlanner.kt 限制单批对白数量。

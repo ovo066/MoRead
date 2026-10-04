@@ -13,7 +13,7 @@ data class ConversationStorageOwner(val id: Long, val bookId: Long?)
 interface ChatDao {
     @Query("""
         SELECT u.id, u.conversationId, u.createdAt, c.bookId, c.type, c.bookScopesJson,
-               r.clientRoundId AS replyRoundId, u.sourceBookIdsJson
+               r.clientRoundId AS replyRoundId, u.sourceBookIdsJson, c.personaId
         FROM messages u JOIN conversations c ON c.id = u.conversationId
         JOIN messages r ON r.id = (
             SELECT MIN(a.id) FROM messages a

@@ -6,12 +6,13 @@ import com.mozhi.reader.ai.agent.AgentTool
 import com.mozhi.reader.ai.agent.ToolResult
 import com.mozhi.reader.ai.client.AiJson
 import com.mozhi.reader.ai.client.ChatMessage
+import com.mozhi.reader.ai.client.ChatDelta
 import com.mozhi.reader.ai.client.ChatRole
 import com.mozhi.reader.ai.client.ResolvedChatClient
+import com.mozhi.reader.ai.client.ToolCall
 import com.mozhi.reader.ai.client.ToolSpec
 import javax.inject.Inject
 import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.withTimeoutOrNull
@@ -48,7 +49,7 @@ class ChapterKnowledgeAgent @Inject constructor(
         validate: suspend () -> Unit): List<KnowledgeCharacter> = submit(model, "save_book_characters", CHARACTER_SCHEMA,
         """
             你在扫描整本书，整理人物资料。本段只是全书的一部分，不能依据书外知识补全。
-            从 source 中识别人名或稳定称呼，提取原文明确交代的身份、行为和关系；没有人物就返回空数组。
+            从 source 中识别人名或稳定称呼，提取原文明确交代的身份、行为和关系；始终提交包含 characters 字段的对象，没有人物就提交 {"characters":[]}。
             每人优先保留1–2条重要且不重复的事实，text简洁具体，不超过120字。人名必须逐字出现在原文中；不使用他、她、我、旁白等泛称，不猜测别名属于同一人。
             每条事实附4–300字的连续 quote，必须逐字照录且在这段 source 中唯一。不要改标点或用省略号代替原文。
             另用 attributes 提取明确的别名(ALIAS)、年龄(AGE)、性别(GENDER)、身份(IDENTITY)、外貌(APPEARANCE，发色/瞳色/身形/服饰/标志物)，每项含 kind、value、quote。外貌只用明确原文，不推断。
@@ -64,7 +65,8 @@ class ChapterKnowledgeAgent @Inject constructor(
     private suspend fun <T : Any> submit(model: ResolvedChatClient, name: String, schema: JsonObject,
         system: String, user: String, validate: suspend () -> Unit, parse: (String) -> T): T = limiter.request {
         var submitted: T? = null
-        val fallback = StringBuilder()
+        var failure = "模型未返回可用的整理结果，请重试"
+        val textReplies = mutableMapOf<String, String>()
         val submit = object : AgentTool {
             override val displayName = "核对并保存整理结果"
             override val spec = ToolSpec(name, "提交有原文依据的整理结果。核对失败时只修正错误，不编造原文。", schema)
@@ -80,18 +82,54 @@ class ChapterKnowledgeAgent @Inject constructor(
                 tools = listOf(submit), maxRounds = 2,
                 resolve = { AgentLoop.Streamer { messages, specs -> flow {
                     validate()
-                    emitAll(model.client.chatStream(messages, specs,
-                        model.options.copy(temperature = 0.2f, maxTokens = minOf(model.options.maxTokens ?: 6000, 6000))))
+                    // Text-only providers must get the same validation/correction round as tools.
+                    // Keep each round separate: preambles and failed replies are never concatenated.
+                    val text = StringBuilder()
+                    var calls = emptyList<ToolCall>()
+                    // A local text submission is not a provider-issued tool call (and has no
+                    // native reasoning signature). Request its correction as ordinary dialogue.
+                    val history = messages.mapNotNull { message ->
+                        val textCall = message.toolCalls.singleOrNull()?.takeIf { it.id in textReplies }
+                        when {
+                            textCall != null -> textReplies.getValue(textCall.id).takeIf(String::isNotBlank)
+                                ?.let { ChatMessage(ChatRole.ASSISTANT, it) }
+                            message.role == ChatRole.TOOL && message.toolCallId in textReplies ->
+                                ChatMessage(ChatRole.USER, "上次整理未通过核对：${message.content}\n请修正后重新提交完整 JSON，保留必要信息并缩短输出，不加解释。")
+                            else -> message
+                        }
+                    }
+                    model.client.chatStream(history, specs,
+                        model.options.copy(temperature = 0.2f, maxTokens = minOf(model.options.maxTokens ?: 6000, 6000)))
+                        .collect { delta ->
+                            when (delta) {
+                                is ChatDelta.Text -> {
+                                    require(text.length + delta.text.length <= 64_000) { "整理结果过长" }
+                                    text.append(delta.text)
+                                }
+                                is ChatDelta.ToolCalls -> calls = delta.calls
+                                else -> emit(delta)
+                            }
+                        }
                     validate()
+                    emit(ChatDelta.ToolCalls(calls.ifEmpty {
+                        val id = "knowledge-text-${textReplies.size + 1}"
+                        textReplies[id] = text.toString()
+                        listOf(ToolCall(id, name, text.toString()))
+                    }.map { call ->
+                        if (call.name == name) call.copy(arguments =
+                            if (name == "save_book_characters") KnowledgeResponseJson.characters(call.arguments)
+                            else KnowledgeResponseJson.clean(call.arguments)) else call
+                    }))
                 } } }
             ).takeWhile { submitted == null }.collect { event ->
-                if (event is AgentEvent.Text) {
-                    require(fallback.length + event.text.length <= 64_000) { "整理结果过长" }
-                    fallback.append(event.text)
+                if (event is AgentEvent.ToolFinished && !event.succeeded) {
+                    failure = if (event.detail.startsWith("工具参数必须")) {
+                        "模型返回的整理结果不是完整的 JSON 对象，请重试或提高模型输出上限"
+                    } else event.detail.removePrefix("工具执行失败：")
                 }
             }
             validate()
-            submitted ?: parse(fallback.toString())
+            submitted ?: error(failure)
         } ?: error("本次整理超时，已保存的结果会保留")
     }
 
@@ -109,7 +147,7 @@ class ChapterKnowledgeAgent @Inject constructor(
             quote 必须是4–300字连续原文，在本段唯一，不改标点、不加省略号；text 是简短说明。依据独立于正文，不把它们当大纲逐条罗列。
             引文核对失败时修正一次。只能输出文本时，返回与工具参数一致的JSON，不加解释。
         """.trimIndent()
-        fun cleanJson(raw: String) = raw.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+        fun cleanJson(raw: String) = KnowledgeResponseJson.clean(raw)
         fun factSchema() = buildJsonObject {
             put("type", "object")
             putJsonObject("properties") {

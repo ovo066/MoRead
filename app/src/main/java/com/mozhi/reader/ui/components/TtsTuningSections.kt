@@ -84,8 +84,8 @@ fun TtsTuningSections(
                 TuningSlider("音调", settings.systemPitch, 0.5f..2f, actions.onSystemPitchChange)
             } else {
                 TuningSlider("语速", settings.aiSpeed, 0.5f..2f, actions.onAiSpeedChange)
-                TuningSlider("音量", settings.aiVolume, 0.5f..2f, actions.onAiVolumeChange)
-                TuningSlider(
+                if (settings.aiSupportsVolume) TuningSlider("音量", settings.aiVolume, 0.5f..2f, actions.onAiVolumeChange)
+                if (settings.aiSupportsPitch) TuningSlider(
                     "音调",
                     settings.aiPitch.toFloat(),
                     -12f..12f,

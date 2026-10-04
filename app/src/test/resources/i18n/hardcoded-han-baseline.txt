@@ -2,10 +2,10 @@
 feature/bookdetail/AnnotationIndex.kt	22
 feature/bookdetail/BookDescriptionExtractor.kt	12
 feature/bookdetail/BookDetailAssets.kt	26
-feature/bookdetail/BookDetailContent.kt	53
+feature/bookdetail/BookDetailContent.kt	37
 feature/bookdetail/BookDetailCover.kt	42
 feature/bookdetail/BookDetailMetadata.kt	20
-feature/bookdetail/BookDetailScreen.kt	35
+feature/bookdetail/BookDetailScreen.kt	31
 feature/bookdetail/BookDetailViewModel.kt	41
 feature/bookshelf/BookCollectionComponents.kt	18
 feature/bookshelf/BookshelfScreen.kt	76
@@ -131,7 +131,6 @@ feature/reader/ReaderViewModel.kt	64
 feature/reader/TextCleanupPreviewDialog.kt	10
 feature/reader/TextReplacementRuleAgent.kt	11
 feature/reader/TranslationModelSelector.kt	3
-feature/reader/VocabularyDialog.kt	16
 feature/reader/engine/AndroidTextMeasure.kt	3
 feature/reader/engine/ChapterTypesetter.kt	1
 feature/reader/engine/EpubBoxLayoutBackend.kt	1
@@ -172,7 +171,7 @@ feature/settings/ImageGenSettingsViewModel.kt	10
 feature/settings/ImageLibraryScreen.kt	32
 feature/settings/ImageLibraryViewModel.kt	13
 feature/settings/ModelParameterFields.kt	16
-feature/settings/ProactiveAnnotationSettingsScreen.kt	95
+feature/settings/ProactiveAnnotationSettingsScreen.kt	74
 feature/settings/ProviderDetailScreen.kt	78
 feature/settings/ProviderDetailViewModel.kt	12
 feature/settings/ProviderLabels.kt	18

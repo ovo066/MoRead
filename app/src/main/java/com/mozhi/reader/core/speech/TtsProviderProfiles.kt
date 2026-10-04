@@ -37,7 +37,11 @@ internal data class TtsProviderProfile(
         )
         fun defaults(provider: TtsApiProvider) = TtsProviderProfile(
             baseUrl = provider.defaultBaseUrl(), model = provider.defaultModel(),
-            voiceId = if (provider == TtsApiProvider.GEMINI) "Sulafat" else ""
+            voiceId = when (provider) {
+                TtsApiProvider.GEMINI -> "Sulafat"
+                TtsApiProvider.XIAOMI_MIMO -> "mimo_default"
+                else -> ""
+            }
         )
     }
 }

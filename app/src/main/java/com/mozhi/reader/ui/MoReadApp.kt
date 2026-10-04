@@ -80,6 +80,10 @@ import com.mozhi.reader.feature.listen.ListenPlayerScreen
 import com.mozhi.reader.feature.reader.CompanionChatScreen
 import com.mozhi.reader.feature.reader.ReaderCompanionViewModel
 import com.mozhi.reader.feature.reader.ReaderLocateRequest
+import com.mozhi.reader.feature.reader.readerLocateRequest
+import com.mozhi.reader.feature.reader.readerLocateRequests
+import com.mozhi.reader.feature.reader.requestReaderLocate
+import com.mozhi.reader.feature.reader.consumeReaderLocate
 import com.mozhi.reader.feature.reader.ReaderScreen
 import com.mozhi.reader.feature.settings.AboutSettingsScreen
 import com.mozhi.reader.feature.settings.AiAndCompanionSettingsScreen
@@ -118,12 +122,6 @@ import com.mozhi.reader.ui.theme.sectionDivider
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
-
-/** 聊天页 →（返回）→ 阅读页的一次性跳转参数。 */
-private const val LOCATE_CHAPTER_KEY = "locate-chapter"
-private const val LOCATE_START_KEY = "locate-start"
-private const val LOCATE_END_KEY = "locate-end"
-private const val LOCATE_ANCHOR_KEY = "locate-anchor"
 
 internal enum class RootDestination(
     val route: String,
@@ -270,13 +268,12 @@ fun MoReadApp(
                     com.mozhi.reader.feature.review.ReadingReviewScreen(
                         onBack = { navController.popBackStack() },
                         onLocate = { item ->
-                            if (item.canLocate) {
+                            val chapter = item.chapter
+                            if (item.canLocate && chapter != null) {
                                 navController.navigate("reader/${item.book.id}")
                                 navController.currentBackStackEntry?.savedStateHandle?.let { handle ->
-                                    handle[LOCATE_START_KEY] = item.offset
-                                    handle[LOCATE_END_KEY] = item.annotation?.endCharOffset ?: item.offset
-                                    handle[LOCATE_ANCHOR_KEY] = item.annotation?.textAnchorJson.orEmpty()
-                                    handle[LOCATE_CHAPTER_KEY] = item.chapter
+                                    handle.requestReaderLocate(ReaderLocateRequest(chapter, item.offset,
+                                        item.annotation?.endCharOffset ?: item.offset, item.annotation?.textAnchorJson.orEmpty()))
                                 }
                             }
                         }
@@ -439,10 +436,7 @@ fun MoReadApp(
                         onLocateAnnotation = { annotation ->
                             navController.navigate("reader/${annotation.bookId}")
                             navController.currentBackStackEntry?.savedStateHandle?.let { handle ->
-                                handle[LOCATE_START_KEY] = annotation.startCharOffset
-                                handle[LOCATE_END_KEY] = annotation.endCharOffset
-                                handle[LOCATE_ANCHOR_KEY] = annotation.textAnchorJson
-                                handle[LOCATE_CHAPTER_KEY] = annotation.chapterIndex
+                                handle.requestReaderLocate(annotation.readerLocateRequest())
                             }
                         },
                         onListen = { bookId -> navController.navigate("listen/$bookId") },
@@ -488,20 +482,8 @@ fun MoReadApp(
                     )
                 }
                 pushComposable("reader/{bookId}") { entry ->
-                    // 聊天页是压在阅读页之上的二级页，跳转请求经它的 savedStateHandle 回传；
-                    // 这样阅读页不必常驻监听，也不会在没打开过聊天时凭空多一条状态。
-                    val locateChapter = entry.savedStateHandle
-                        .getStateFlow<Int?>(LOCATE_CHAPTER_KEY, null)
-                        .collectAsStateWithLifecycle()
-                    val locateStart = entry.savedStateHandle
-                        .getStateFlow<Int?>(LOCATE_START_KEY, null)
-                        .collectAsStateWithLifecycle()
-                    val locateEnd = entry.savedStateHandle
-                        .getStateFlow<Int?>(LOCATE_END_KEY, null)
-                        .collectAsStateWithLifecycle()
-                    val locateAnchor = entry.savedStateHandle
-                        .getStateFlow<String?>(LOCATE_ANCHOR_KEY, null)
-                        .collectAsStateWithLifecycle()
+                    val locateRequest by remember(entry) { entry.savedStateHandle.readerLocateRequests() }
+                        .collectAsStateWithLifecycle(initialValue = null)
                     val readerBookId = entry.bookIdOrNull() ?: return@pushComposable
                     ReaderAppearanceScope {
                         ReaderScreen(
@@ -511,20 +493,8 @@ fun MoReadApp(
                                 navController.navigate("companion-chat/$bookId")
                             },
                             onOpenListenPlayer = { bookId -> navController.navigate("listen/$bookId") },
-                            pendingLocate = locateChapter.value?.let { chapter ->
-                                ReaderLocateRequest(
-                                    chapterIndex = chapter,
-                                    startCharOffset = locateStart.value ?: 0,
-                                    endCharOffset = locateEnd.value ?: 0,
-                                    sourceAnchorJson = locateAnchor.value.orEmpty()
-                                )
-                            },
-                            onPendingLocateConsumed = {
-                                entry.savedStateHandle[LOCATE_CHAPTER_KEY] = null
-                                entry.savedStateHandle[LOCATE_START_KEY] = null
-                                entry.savedStateHandle[LOCATE_END_KEY] = null
-                                entry.savedStateHandle[LOCATE_ANCHOR_KEY] = null
-                            }
+                            pendingLocate = locateRequest,
+                            onPendingLocateConsumed = entry.savedStateHandle::consumeReaderLocate
                         )
                     }
                 }
@@ -618,10 +588,7 @@ fun MoReadApp(
                             onBack = navController::popBackStack,
                             onLocateInBook = { chapterIndex, start, end, sourceAnchorJson ->
                                 navController.previousBackStackEntry?.savedStateHandle?.let { handle ->
-                                    handle[LOCATE_START_KEY] = start
-                                    handle[LOCATE_END_KEY] = end
-                                    handle[LOCATE_ANCHOR_KEY] = sourceAnchorJson
-                                    handle[LOCATE_CHAPTER_KEY] = chapterIndex
+                                    handle.requestReaderLocate(ReaderLocateRequest(chapterIndex, start, end, sourceAnchorJson))
                                 }
                                 navController.popBackStack()
                             }
@@ -635,10 +602,8 @@ fun MoReadApp(
                         onLocate = { location ->
                             navController.navigate("reader/${location.bookId}")
                             navController.currentBackStackEntry?.savedStateHandle?.let { handle ->
-                                handle[LOCATE_START_KEY] = location.start
-                                handle[LOCATE_END_KEY] = location.end
-                                handle[LOCATE_ANCHOR_KEY] = location.sourceAnchorJson
-                                handle[LOCATE_CHAPTER_KEY] = location.chapterIndex
+                                handle.requestReaderLocate(ReaderLocateRequest(location.chapterIndex,
+                                    location.start, location.end, location.sourceAnchorJson))
                             }
                         }
                     )

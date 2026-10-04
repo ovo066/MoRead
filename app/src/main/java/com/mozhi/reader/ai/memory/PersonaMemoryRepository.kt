@@ -16,7 +16,9 @@ data class StoredMemory(
     val createdAt: Long,
     val bookId: Long?,
     /** 0 = 本人层；非 0 表示这条出自某个用户面具下的扮演。 */
-    val maskId: Long
+    val maskId: Long,
+    val personaId: Long = 0,
+    val conversationId: Long = 0
 )
 
 /**
@@ -39,6 +41,11 @@ class PersonaMemoryRepository @Inject constructor(
                     .map(MemoryEntry::toStored)
             }.getOrDefault(emptyList())
         }
+
+    /** 陪伴足迹时间线用：跨角色取最近的记忆，只读元数据与摘要。 */
+    suspend fun recent(limit: Int): List<StoredMemory> = withContext(Dispatchers.IO) {
+        runCatching { VectorQueries.listRecentMemories(vectorStore, limit).map(MemoryEntry::toStored) }.getOrDefault(emptyList())
+    }
 
     /**
      * 「删除」按真正遗忘处理。用户画像是从多条记忆派生的自由文本，没有可靠的逐条来源，
@@ -69,5 +76,7 @@ private fun MemoryEntry.toStored(): StoredMemory = StoredMemory(
     summary = summary.orEmpty(),
     createdAt = createdAt,
     bookId = bookId,
-    maskId = maskId
+    maskId = maskId,
+    personaId = personaId,
+    conversationId = conversationId
 )

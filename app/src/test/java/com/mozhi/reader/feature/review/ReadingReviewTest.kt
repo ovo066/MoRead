@@ -31,6 +31,49 @@ class ReadingReviewTest {
         assertEquals(reviewCardMotion(1f), reviewCardMotion(3f))
         assertEquals(reviewCardMotion(0f), reviewCardMotion(Float.NaN))
     }
+    @Test fun cubeFacesHingeOnTheSharedEdgeAndHideOnceTurnedAway() {
+        val centred = reviewCard3d(ReviewFocusMotion.CUBE, 0f)
+        assertEquals(0f, centred.rotationY, 0f)
+        assertEquals(0f, centred.shade, 0f)
+        assertEquals(1f, centred.alpha, 0f)
+        // Swiping left: the outgoing page sits left of centre (offset > 0), the incoming one right of it.
+        val outgoing = reviewCard3d(ReviewFocusMotion.CUBE, .4f)
+        val incoming = reviewCard3d(ReviewFocusMotion.CUBE, -.6f)
+        assertEquals(1f, outgoing.pivotX, 0f)
+        assertEquals(0f, incoming.pivotX, 0f)
+        assertEquals(90f, incoming.rotationY - outgoing.rotationY, .001f) // Faces stay at a right angle mid-turn.
+        assertEquals(0f, reviewCard3d(ReviewFocusMotion.CUBE, -1f).alpha, 0f)
+        assertEquals(reviewCard3d(ReviewFocusMotion.CUBE, 0f), reviewCard3d(ReviewFocusMotion.CUBE, Float.NaN))
+    }
+    @Test fun galleryIsSymmetricAndOnlyTheCentredCardFollowsTiltAndLift() {
+        val left = reviewCard3d(ReviewFocusMotion.FLOW, 1f)
+        val right = reviewCard3d(ReviewFocusMotion.FLOW, -1f)
+        assertEquals(-left.rotationY, right.rotationY, .001f)
+        assertEquals(-left.translationX, right.translationX, .001f)
+        assertTrue(right.translationX < 0f && right.scale < 1f && right.alpha > .5f) // Peeks in from the right edge.
+        assertEquals(0f, reviewCard3d(ReviewFocusMotion.FLOW, -2f).alpha, 0f)
+        val tilted = reviewCard3d(ReviewFocusMotion.FLOW, 0f, tiltX = 40f, tiltY = -40f, lift = 3f)
+        assertEquals(REVIEW_TILT_LIMIT + 12f, tilted.rotationX, .001f)
+        assertEquals(-REVIEW_TILT_LIMIT, tilted.rotationY, .001f)
+        assertEquals(right.rotationY, reviewCard3d(ReviewFocusMotion.FLOW, -1f, tiltX = 8f, tiltY = 8f, lift = 1f).rotationY, .001f)
+        assertEquals(0f, reviewCard3d(ReviewFocusMotion.FLOW, -1f, tiltX = 8f, lift = 1f).rotationX, .001f)
+    }
+    @Test fun tiltIsRelativeToTheRestingPostureAndClamped() {
+        reviewTiltDegrees(0f, 7f, 7f).let { (restX, restY) -> assertEquals(0f, restX, 0f); assertEquals(0f, restY, 0f) }
+        val (x, y) = reviewTiltDegrees(-9.81f, 20f, 7f)
+        assertEquals(REVIEW_TILT_LIMIT, x, 0f)
+        assertEquals(REVIEW_TILT_LIMIT, y, 0f)
+        assertEquals(0f to 0f, reviewTiltDegrees(Float.NaN, 7f, 7f))
+    }
+    @Test fun focusMotionSurvivesPreferencesAndUnknownValuesFallBackToPaper() {
+        val codec = com.mozhi.reader.core.datastore.ReadingReviewPreferencesCodec
+        val saved = com.mozhi.reader.core.datastore.ReadingReviewPreferences(grid = false, focusMotion = "CUBE")
+        assertEquals(saved, codec.decode(codec.encode(saved)))
+        assertEquals("PAPER", codec.decode("""{"focusMotion":"SPIN"}""").focusMotion)
+        assertEquals("PAPER", codec.decode("""{"grid":false}""").focusMotion)
+        assertEquals(ReviewFocusMotion.FLOW, ReviewFocusMotion.fromWire("FLOW"))
+        assertEquals(ReviewFocusMotion.PAPER, ReviewFocusMotion.fromWire(null))
+    }
     @Test fun sourceAndBookFiltersUseIdentityAndKeepDeletedPersonasSeparateFromMine() {
         val entries = reviewEntries(listOf(reviewTestBook(), reviewTestBook(2, "雨落书页")),
             listOf(reviewTestAnnotation(1), reviewTestAnnotation(2, personaId = 7), reviewTestAnnotation(3, 2, 99)),

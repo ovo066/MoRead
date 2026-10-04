@@ -38,9 +38,19 @@ data class ProactiveAnnotationLimits(
             dailyVoiceMax = if (dailyVoiceMax == UNLIMITED) UNLIMITED else dailyVoiceMax.coerceIn(0, MAX_DAILY),
             dailyImageMax = if (dailyImageMax == UNLIMITED) UNLIMITED else dailyImageMax.coerceIn(0, MAX_DAILY),
             timing = timing,
-            aheadChapters = aheadChapters.coerceIn(0, 5),
+            aheadChapters = aheadChapters.coerceIn(0, MAX_AHEAD_CHAPTERS),
             context = context.normalized()
         )
+    }
+
+    /**
+     * 调下限时把有限的上限一并推高：用户明说「每章至少 5 条」，不该被旧上限 3 悄悄压回去。
+     * 反方向（调低上限）交给 [normalized] 把下限压下来。
+     */
+    fun withMinPerChapter(value: Int): ProactiveAnnotationLimits {
+        val min = value.coerceIn(0, MAX_PER_CHAPTER)
+        val max = if (chapterUnlimited || maxPerChapter >= min) maxPerChapter else min
+        return copy(minPerChapter = min, maxPerChapter = max).normalized()
     }
 
     fun timingSummary(): String = when (timing) {
@@ -62,8 +72,10 @@ data class ProactiveAnnotationLimits(
 
     companion object {
         const val UNLIMITED = -1
-        const val MAX_PER_CHAPTER = 10
-        const val MAX_DAILY = 50
+        // 设置页改为直接填数字后放宽：旧上界 10/50 是滑条格数的妥协，不是成本上的硬约束。
+        const val MAX_PER_CHAPTER = 99
+        const val MAX_DAILY = 999
+        const val MAX_AHEAD_CHAPTERS = 5
     }
 }
 
@@ -80,29 +92,6 @@ fun resolveProactiveAnnotationLimits(
     perBook: BookProactiveAnnotationLimits?
 ): ProactiveAnnotationLimits =
     (perBook?.takeIf(BookProactiveAnnotationLimits::enabled)?.limits ?: global).normalized()
-
-/**
- * 滑条档位：把「1、2、…、上界、不限制」摊成一串取值，界面只管在下标之间滑。
- * 「不限制」占最右一格，滑到头即无上限——比再单独放一个开关省一整行。
- */
-object ProactiveAnnotationLimitSteps {
-    fun steps(from: Int, to: Int, allowUnlimited: Boolean): List<Int> {
-        val values = (from..to.coerceAtLeast(from)).toMutableList()
-        if (allowUnlimited) values += ProactiveAnnotationLimits.UNLIMITED
-        return values
-    }
-
-    fun indexOf(steps: List<Int>, value: Int): Int =
-        steps.indexOf(value).takeIf { it >= 0 } ?: steps.indexOfFirst { it >= value }
-            .takeIf { it >= 0 } ?: (steps.size - 1).coerceAtLeast(0)
-
-    fun valueAt(steps: List<Int>, index: Int): Int =
-        steps.getOrNull(index.coerceIn(0, (steps.size - 1).coerceAtLeast(0)))
-            ?: ProactiveAnnotationLimits.UNLIMITED
-
-    fun label(value: Int, unit: String = "条"): String =
-        if (value == ProactiveAnnotationLimits.UNLIMITED) "不限制" else "$value $unit"
-}
 
 object ProactiveAnnotationLimitsCodec {
     private val json = Json { ignoreUnknownKeys = true }

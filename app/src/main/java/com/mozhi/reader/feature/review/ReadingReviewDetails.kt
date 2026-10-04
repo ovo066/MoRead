@@ -31,6 +31,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.res.stringResource
+import androidx.compose.foundation.BorderStroke
+import com.mozhi.reader.R
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -278,9 +285,36 @@ private fun ReviewEditDialog(entry: ReviewEntry, onDismiss: () -> Unit, onSave: 
 
 @Composable
 internal fun ReviewPagerDialog(entries: List<ReviewEntry>, onDismiss: () -> Unit,
-    onOpen: (ReviewEntry) -> Unit, onLocate: (ReviewEntry) -> Unit, onExport: (ReviewEntry) -> Unit) {
+    onOpen: (ReviewEntry) -> Unit, onLocate: (ReviewEntry) -> Unit, onExport: (ReviewEntry) -> Unit,
+    motion: ReviewFocusMotion = ReviewFocusMotion.PAPER, onMotionChange: (ReviewFocusMotion) -> Unit = {}) {
     val pager = rememberPagerState { entries.size }
-    ReviewPageDialog(if (entries.isEmpty()) "回顾完成" else "%02d / %02d".format(pager.currentPage + 1, entries.size), onDismiss, closeAtEnd = true) {
+    var stage by remember(motion) { mutableStateOf(motion) }
+    var motionMenu by remember { mutableStateOf(false) }
+    val tilt = rememberReviewTilt(stage != ReviewFocusMotion.PAPER && entries.isNotEmpty())
+    ReviewPageDialog(if (entries.isEmpty()) "回顾完成" else "%02d / %02d".format(pager.currentPage + 1, entries.size), onDismiss, closeAtEnd = true, actions = {
+        Box {
+            IconButton(onClick = { motionMenu = true }, modifier = Modifier.testTag("review-motion-button")) {
+                Icon(Icons.Outlined.ViewInAr, stringResource(R.string.review_focus_motion), Modifier.size(24.dp),
+                    tint = LocalReadingReviewStyle.current.toolbarInk)
+            }
+            DropdownMenu(motionMenu, { motionMenu = false }) {
+                ReviewFocusMotion.entries.forEach { option ->
+                    DropdownMenuItem(
+                        text = {
+                            Column(Modifier.widthIn(max = 220.dp).padding(vertical = 4.dp)) {
+                                Text(stringResource(option.label()), style = MaterialTheme.typography.labelLarge)
+                                Text(stringResource(option.description()), style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        },
+                        leadingIcon = { Icon(option.icon(), null, Modifier.size(20.dp)) },
+                        trailingIcon = if (option == stage) { { Icon(Icons.Outlined.Check, null, Modifier.size(18.dp)) } } else null,
+                        onClick = { motionMenu = false; if (option != stage) { stage = option; onMotionChange(option) } },
+                        modifier = Modifier.testTag("review-motion-${option.name}"))
+                }
+            }
+        }
+    }) {
         if (entries.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("这些记录已移除或不在当前可读范围内") }
         else {
             Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -292,53 +326,57 @@ internal fun ReviewPagerDialog(entries: List<ReviewEntry>, onDismiss: () -> Unit
                 val dismiss by rememberUpdatedState(onDismiss)
                 val density = LocalDensity.current
                 val swipeThreshold = with(density) { 88.dp.toPx() }
-                BoxWithConstraints(Modifier.fillMaxSize()
-                    .pointerInput(entry.key, swipeThreshold) {
-                        detectVerticalDragGestures(
-                            onDragStart = { verticalDrag = 0f },
-                            onDragCancel = { verticalDrag = 0f },
-                            onDragEnd = {
-                                val distance = verticalDrag
-                                verticalDrag = 0f
-                                if (distance <= -swipeThreshold) openEntry(entry)
-                                else if (distance >= swipeThreshold) dismiss()
-                            }
-                        ) { change, amount -> change.consume(); verticalDrag += amount }
-                    }
-                    .padding(horizontal = 32.dp, vertical = 24.dp).graphicsLayer {
-                        val motion = reviewCardMotion(pager.currentPage - index + pager.currentPageOffsetFraction)
-                        scaleX = motion.scale; scaleY = motion.scale; alpha = motion.alpha
-                        rotationZ = motion.rotation; translationY = motion.dropDp.dp.toPx() + verticalDrag * .16f
-                    }) {
-                    val quote = entry.quote.ifBlank { reviewPlainText(entry.body) }
-                    val base = reviewQuoteStyle(entry.book.id, MaterialTheme.typography.headlineSmall)
-                    val measurer = rememberTextMeasurer()
-                    val widthPx = with(density) { maxWidth.roundToPx() }
-                    val targetHeight = with(density) { (maxHeight * .60f).roundToPx() }
-                    val quoteStyle = remember(quote, base, widthPx, targetHeight, density) {
-                        listOf(32, 30, 28, 26, 24).map { base.copy(fontSize = it.sp, lineHeight = (it * 1.65f).sp) }
-                            .firstOrNull { measurer.measure(quote, it, constraints = Constraints(maxWidth = widthPx)).size.height <= targetHeight }
-                            ?: base.copy(fontSize = 24.sp, lineHeight = 39.sp)
-                    }
-                    val longQuote = measurer.measure(quote, quoteStyle, constraints = Constraints(maxWidth = widthPx)).size.height > targetHeight
-                    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {
-                        Text("“", fontFamily = FontFamily.Serif, fontSize = 52.sp, lineHeight = 42.sp,
-                            color = LocalReadingReviewStyle.current.accent.copy(alpha = .48f), modifier = Modifier.padding(start = 12.dp))
-                        Spacer(Modifier.height(20.dp))
-                        Column(Modifier.weight(1f, fill = false).fillMaxWidth().verticalScroll(rememberScrollState(), enabled = longQuote)
-                            .testTag("review-focus-quote-${entry.key}")) {
-                            SelectionContainer { Text(quote, style = quoteStyle) }
+                val gestures = Modifier.pointerInput(entry.key, swipeThreshold) {
+                    detectVerticalDragGestures(
+                        onDragStart = { verticalDrag = 0f },
+                        onDragCancel = { verticalDrag = 0f },
+                        onDragEnd = {
+                            val distance = verticalDrag
+                            verticalDrag = 0f
+                            if (distance <= -swipeThreshold) openEntry(entry)
+                            else if (distance >= swipeThreshold) dismiss()
                         }
-                        Spacer(Modifier.height(32.dp))
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .5f))
-                        Text(entry.book.title, style = MaterialTheme.typography.titleMedium.copy(fontSize = 18.sp, fontWeight = FontWeight.Bold),
-                            maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(top = 18.dp))
-                        val date = SimpleDateFormat("MM-dd", Locale.getDefault()).format(Date(entry.timestamp))
-                        Text("${entry.locationLabel} · $date ${if (entry.annotation != null) "划下" else "写下"}" +
-                            if (entry.annotation != null && entry.body.isNotBlank()) " · ${if (entry.personaId == null) "有一条笔记" else entry.author}" else "",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = LocalReadingReviewStyle.current.caption, modifier = Modifier.padding(top = 6.dp))
+                    ) { change, amount -> change.consume(); verticalDrag += amount }
+                }
+                if (stage == ReviewFocusMotion.PAPER) BoxWithConstraints(Modifier.fillMaxSize().then(gestures)
+                    .padding(horizontal = 32.dp, vertical = 24.dp).graphicsLayer {
+                        val paper = reviewCardMotion(pager.currentPage - index + pager.currentPageOffsetFraction)
+                        scaleX = paper.scale; scaleY = paper.scale; alpha = paper.alpha
+                        rotationZ = paper.rotation; translationY = paper.dropDp.dp.toPx() + verticalDrag * .16f
+                    }) {
+                    ReviewFocusQuote(entry, maxWidth, maxHeight)
+                } else {
+                    // Every per-frame value (pager offset, finger, gravity) is read inside layer/draw blocks only.
+                    fun frame() = reviewCard3d(stage, pager.currentPage - index + pager.currentPageOffsetFraction,
+                        tilt.x, tilt.y, -verticalDrag / swipeThreshold)
+                    val front by remember(pager, index) {
+                        derivedStateOf { kotlin.math.abs(pager.currentPage - index + pager.currentPageOffsetFraction) < .5f }
+                    }
+                    val shape = MaterialTheme.shapes.extraLarge
+                    val sheen = Color.White.copy(alpha = if (isDarkTheme()) .07f else .26f)
+                    Box(Modifier.fillMaxSize().zIndex(if (front) 1f else 0f).then(gestures).graphicsLayer {
+                        val card = frame()
+                        rotationX = card.rotationX; rotationY = card.rotationY
+                        scaleX = card.scale; scaleY = card.scale; alpha = card.alpha
+                        translationX = card.translationX * size.width; translationY = verticalDrag * .16f
+                        transformOrigin = TransformOrigin(card.pivotX, .5f)
+                        cameraDistance = 14f * this.density
+                    }.padding(horizontal = if (stage == ReviewFocusMotion.FLOW) 40.dp else 22.dp, vertical = 18.dp)) {
+                        Surface(Modifier.fillMaxSize().testTag("review-focus-card-${entry.key}"), shape = shape,
+                            color = MaterialTheme.colorScheme.surface, shadowElevation = 12.dp,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = .55f))) {
+                            BoxWithConstraints(Modifier.fillMaxSize().drawWithContent {
+                                drawContent()
+                                val card = frame()
+                                if (card.shade > 0f) drawRect(Color.Black.copy(alpha = card.shade))
+                                val centre = card.glare * size.width
+                                val band = size.width * .7f
+                                drawRect(Brush.linearGradient(listOf(Color.Transparent, sheen, Color.Transparent),
+                                    start = Offset(centre - band, 0f), end = Offset(centre + band, size.height)))
+                            }.padding(horizontal = 26.dp, vertical = 30.dp)) {
+                                ReviewFocusQuote(entry, maxWidth, maxHeight)
+                            }
+                        }
                     }
                 }
             }
@@ -369,6 +407,60 @@ internal fun ReviewPagerDialog(entries: List<ReviewEntry>, onDismiss: () -> Unit
             }
         }
     }
+}
+
+/** The quote, book and date of one review page; shared by the paper handoff and the 3D stages. */
+@Composable
+private fun ReviewFocusQuote(entry: ReviewEntry, maxWidth: Dp, maxHeight: Dp) {
+    val density = LocalDensity.current
+    val quote = entry.quote.ifBlank { reviewPlainText(entry.body) }
+    val base = reviewQuoteStyle(entry.book.id, MaterialTheme.typography.headlineSmall)
+    val measurer = rememberTextMeasurer()
+    val widthPx = with(density) { maxWidth.roundToPx() }
+    val targetHeight = with(density) { (maxHeight * .60f).roundToPx() }
+    val quoteStyle = remember(quote, base, widthPx, targetHeight, density) {
+        listOf(32, 30, 28, 26, 24).map { base.copy(fontSize = it.sp, lineHeight = (it * 1.65f).sp) }
+            .firstOrNull { measurer.measure(quote, it, constraints = Constraints(maxWidth = widthPx)).size.height <= targetHeight }
+            ?: base.copy(fontSize = 24.sp, lineHeight = 39.sp)
+    }
+    val longQuote = measurer.measure(quote, quoteStyle, constraints = Constraints(maxWidth = widthPx)).size.height > targetHeight
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {
+        Text("“", fontFamily = FontFamily.Serif, fontSize = 52.sp, lineHeight = 42.sp,
+            color = LocalReadingReviewStyle.current.accent.copy(alpha = .48f), modifier = Modifier.padding(start = 12.dp))
+        Spacer(Modifier.height(20.dp))
+        Column(Modifier.weight(1f, fill = false).fillMaxWidth().verticalScroll(rememberScrollState(), enabled = longQuote)
+            .testTag("review-focus-quote-${entry.key}")) {
+            SelectionContainer { Text(quote, style = quoteStyle) }
+        }
+        Spacer(Modifier.height(32.dp))
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .5f))
+        Text(entry.book.title, style = MaterialTheme.typography.titleMedium.copy(fontSize = 18.sp, fontWeight = FontWeight.Bold),
+            maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 18.dp))
+        val date = SimpleDateFormat("MM-dd", Locale.getDefault()).format(Date(entry.timestamp))
+        Text("${entry.locationLabel} · $date ${if (entry.annotation != null) "划下" else "写下"}" +
+            if (entry.annotation != null && entry.body.isNotBlank()) " · ${if (entry.personaId == null) "有一条笔记" else entry.author}" else "",
+            style = MaterialTheme.typography.labelMedium,
+            color = LocalReadingReviewStyle.current.caption, modifier = Modifier.padding(top = 6.dp))
+    }
+}
+
+private fun ReviewFocusMotion.label() = when (this) {
+    ReviewFocusMotion.PAPER -> R.string.review_focus_motion_paper
+    ReviewFocusMotion.CUBE -> R.string.review_focus_motion_cube
+    ReviewFocusMotion.FLOW -> R.string.review_focus_motion_flow
+}
+
+private fun ReviewFocusMotion.description() = when (this) {
+    ReviewFocusMotion.PAPER -> R.string.review_focus_motion_paper_summary
+    ReviewFocusMotion.CUBE -> R.string.review_focus_motion_cube_summary
+    ReviewFocusMotion.FLOW -> R.string.review_focus_motion_flow_summary
+}
+
+private fun ReviewFocusMotion.icon(): ImageVector = when (this) {
+    ReviewFocusMotion.PAPER -> Icons.Outlined.Style
+    ReviewFocusMotion.CUBE -> Icons.Outlined.ViewInAr
+    ReviewFocusMotion.FLOW -> Icons.Outlined.ViewCarousel
 }
 
 @Composable

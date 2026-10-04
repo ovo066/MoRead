@@ -12,6 +12,27 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 
 class TtsProviderProfilesTest {
+    @Test fun mimoAndFishProfilesRestoreTheirOwnVoiceAndModel() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        try {
+            val store = TtsSettingsStore(data(scope, File(temporary.root, "native.preferences_pb")))
+            store.update { it.copy(aiProvider = TtsApiProvider.XIAOMI_MIMO) }
+            assertEquals("mimo_default", store.current().aiVoiceId)
+            assertEquals(TtsApiProvider.XIAOMI_MIMO.defaultModel(), store.current().aiModel)
+            store.update { it.copy(aiVoiceId = "茉莉", aiSpeed = 1.2f) }
+            store.update { it.copy(aiProvider = TtsApiProvider.FISH_AUDIO) }
+            assertEquals("", store.current().aiVoiceId)
+            assertEquals(TtsApiProvider.FISH_AUDIO.defaultBaseUrl(), store.current().aiBaseUrl)
+            store.update { it.copy(aiVoiceId = "fish-voice", aiModel = "s2-pro", aiVolume = 0.8f) }
+            store.update { it.copy(aiProvider = TtsApiProvider.XIAOMI_MIMO) }
+            assertEquals("茉莉", store.current().aiVoiceId)
+            assertEquals(1.2f, store.current().aiSpeed)
+            store.update { it.copy(aiProvider = TtsApiProvider.FISH_AUDIO) }
+            assertEquals("fish-voice", store.current().aiVoiceId)
+            assertEquals("s2-pro", store.current().aiModel)
+            assertEquals(0.8f, store.current().aiVolume)
+        } finally { scope.coroutineContext.job.cancelAndJoin() }
+    }
     @get:Rule val temporary = TemporaryFolder()
     private fun data(scope: CoroutineScope, file: File) = PreferenceDataStoreFactory.create(
         storage = OkioStorage(FileSystem.SYSTEM, PreferencesSerializer, producePath = { file.absolutePath.toPath() }), scope = scope)

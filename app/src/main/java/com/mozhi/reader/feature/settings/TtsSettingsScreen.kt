@@ -17,6 +17,14 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.outlined.RestartAlt
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -80,6 +88,7 @@ fun TtsSettingsScreen(
     val focusManager = LocalFocusManager.current
     // Secret drafts stay in memory and are encrypted before switching or leaving the page.
     var apiKeyInput by remember { mutableStateOf("") }
+    var showResetConfirm by remember { mutableStateOf(false) }
     val systemLanguageTagDraft = rememberCommittedTextFieldState(drafts, "systemLanguageTag", settings.systemLanguageTag,
         trim = true, onCommit = viewModel::setSystemLanguage)
     val aiBaseUrlDraft = rememberCommittedTextFieldState(drafts, "aiBaseUrl", settings.aiBaseUrl,
@@ -456,22 +465,85 @@ fun TtsSettingsScreen(
                     )
                 )
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = { afterDrafts(viewModel::preview) }, enabled = !state.isPreviewing) {
-                        Icon(Icons.Outlined.PlayArrow, contentDescription = null)
-                        Text(if (state.isPreviewing) "正在试听…" else "试听")
-                    }
-                    state.message?.let { message ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Button(
+                        onClick = { afterDrafts(viewModel::preview) },
+                        enabled = !state.isPreviewing,
+                        contentPadding = PaddingValues(horizontal = 8.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Icon(
+                            Icons.Outlined.PlayArrow,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp)
+                        )
                         Text(
-                            message,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(start = 8.dp)
+                            if (state.isPreviewing) "正在试听…" else "试听",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.padding(start = 6.dp)
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = { showResetConfirm = true },
+                        contentPadding = PaddingValues(horizontal = 8.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Icon(
+                            Icons.Outlined.RestartAlt,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Text(
+                            "恢复默认参数",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.padding(start = 6.dp)
                         )
                     }
                 }
+
+                state.message?.let { message ->
+                    Text(
+                        message,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
+    }
+
+    if (showResetConfirm) {
+        AlertDialog(
+            onDismissRequest = { showResetConfirm = false },
+            title = { Text("恢复默认参数？") },
+            text = {
+                Text("语速、音量、音调、合成粒度与各项数量将恢复默认值；引擎、服务商、密钥与音色保持不变。")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showResetConfirm = false
+                        afterDrafts(viewModel::restoreDefaultTuning)
+                    }
+                ) { Text("恢复") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showResetConfirm = false }) { Text("取消") }
+            }
+        )
     }
 }
 

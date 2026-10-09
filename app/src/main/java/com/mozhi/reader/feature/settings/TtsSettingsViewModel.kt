@@ -148,6 +148,12 @@ class TtsSettingsViewModel @Inject constructor(
     fun setAiGroupId(value: String) = update("setAiGroupId") { it.copy(aiGroupId = value) }
     fun setAiModel(value: String) = update("setAiModel") { it.copy(aiModel = value) }
 
+    /** 恢复默认参数：保留引擎、服务商与密钥等用户配置，仅重置可调参数。 */
+    fun restoreDefaultTuning() = writes.enqueue("restoreDefaultTuning") {
+        settingsStore.update { it.withDefaultTuning() }
+        message.value = "已恢复默认参数"
+    }
+
     fun saveApiKey(raw: String) {
         val key = raw.trim()
         if (key.isEmpty()) return

@@ -95,6 +95,26 @@ data class TtsSettings(
                 aiProvider == TtsApiProvider.MINIMAX_INTL ||
                 aiBaseUrl.contains("minimax", ignoreCase = true)
             )
+
+    /** 恢复默认参数：只重置可调参数，保留引擎、服务商、密钥、Base URL、模型与音色。 */
+    fun withDefaultTuning(): TtsSettings {
+        val defaults = TtsSettings()
+        return copy(
+            systemRate = defaults.systemRate,
+            systemPitch = defaults.systemPitch,
+            aiSpeed = defaults.aiSpeed,
+            aiVolume = defaults.aiVolume,
+            aiPitch = defaults.aiPitch,
+            allowAudioMixing = defaults.allowAudioMixing,
+            trimSilence = defaults.trimSilence,
+            synthesisGranularity = defaults.synthesisGranularity,
+            maxSynthesisChars = defaults.maxSynthesisChars,
+            synthesisConcurrency = defaults.synthesisConcurrency,
+            retryCount = defaults.retryCount,
+            prefetchCount = defaults.prefetchCount,
+            systemVolumeCompensation = defaults.systemVolumeCompensation
+        )
+    }
 }
 
 @Singleton

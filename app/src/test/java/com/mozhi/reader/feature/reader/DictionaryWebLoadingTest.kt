@@ -38,4 +38,14 @@ class DictionaryWebLoadingTest {
         assertEquals(404, dictionaryWebResponse("one", "", request("https://example.com/data", false)) { error("No external fetch") }.statusCode)
         assertEquals(404, dictionaryWebResponse("one", "", request("https://$DICTIONARY_HOST/two/entry.html", true)) { error("Wrong dictionary") }.statusCode)
     }
+    @Test fun nightThemeAlsoAdaptsExternalStylesheetsAndKeepsTheirHierarchy() {
+        val response = dictionaryWebResponse("one", "", request("https://$DICTIONARY_HOST/one/entry.css", false), true) {
+            "h2{color:teal}p{color:black;background-color:white}".toByteArray()
+        }
+        assertEquals(200, response.statusCode)
+        val css = response.data.reader().readText()
+        assertFalse(css.contains("color:black"))
+        assertFalse(css.contains("background-color:white"))
+        assertFalse(css.contains("inherit!important"))
+    }
 }

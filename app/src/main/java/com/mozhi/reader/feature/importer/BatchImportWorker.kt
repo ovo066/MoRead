@@ -87,6 +87,7 @@ class BatchImportWorker(
             setForeground(foregroundInfo(0, uris.size, ""))
             var succeeded = 0
             val failures = mutableListOf<String>()
+            val skipped = mutableListOf<String>()
 
             uris.forEachIndexed { index, raw ->
                 val uri = Uri.parse(raw)
@@ -106,6 +107,10 @@ class BatchImportWorker(
                     }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
+                } catch (duplicate: com.mozhi.reader.core.importer.DuplicateBookException) {
+                    // 同一本书已在库里：跳过，不占用空间；局域网收件箱的临时副本照样清掉。
+                    skipped += label
+                    if (deleteAfterImport) runCatching { uri.path?.let { File(it).delete() } }
                 } catch (error: Throwable) {
                     failures += "$label：${error.message ?: "导入失败"}"
                 }
@@ -115,7 +120,9 @@ class BatchImportWorker(
                 summaryData(
                     succeeded,
                     failures.size,
-                    failures.take(MAX_REPORTED_FAILURES).joinToString("\n")
+                    (failures.take(MAX_REPORTED_FAILURES) +
+                        listOfNotNull(skipped.takeIf { it.isNotEmpty() }?.let { applicationContext.getString(com.mozhi.reader.R.string.import_skipped_duplicates, it.size, it.take(MAX_REPORTED_FAILURES).joinToString(", ")) }))
+                        .joinToString("\n")
                 )
             )
         } finally {

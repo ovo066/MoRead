@@ -44,7 +44,7 @@ class ImageConsistencyStorageTest {
             old.execSQL("INSERT INTO illustrations (id,bookId,chapterIndex,charOffset,sourceText,prompt,imagePath,mediaType,pixelWidth,pixelHeight,createdByPersonaId,textAnchorJson,createdAt) VALUES (1,1,0,5,'source','prompt','old.png','image/png',100,200,NULL,'anchor',123)")
             old.version = 31
         }
-        val db = Room.databaseBuilder(context, MoReadDatabase::class.java, "migration.db").addMigrations(DatabaseMigrations.Migration31To32).build()
+        val db = Room.databaseBuilder(context, MoReadDatabase::class.java, "migration.db").addMigrations(DatabaseMigrations.Migration31To32, DatabaseMigrations.Migration32To33).build()
         try {
             val old = db.illustrationDao().get(1)!!
             assertEquals("old.png", old.imagePath)

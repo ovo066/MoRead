@@ -2,15 +2,22 @@ package com.mozhi.reader.core.library
 
 import android.database.sqlite.SQLiteException
 import androidx.room.Room
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.mozhi.reader.core.IsolatedTestContext
 import com.mozhi.reader.core.database.MoReadDatabase
 import com.mozhi.reader.core.database.entity.BookEntity
 import com.mozhi.reader.core.database.entity.BookSourceType
+import com.mozhi.reader.core.datastore.ReaderSettingsRepository
 import dagger.Lazy
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import java.io.File
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -24,14 +31,20 @@ class LibraryRepositoryDeleteBookTest {
     private val database = Room.inMemoryDatabaseBuilder(context, MoReadDatabase::class.java).build()
     private val bookDao = database.bookDao()
     private val shelfDao = database.shelfOrganizationDao()
+    private val settingsScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val settings = ReaderSettingsRepository(PreferenceDataStoreFactory.create(scope = settingsScope) {
+        File(context.filesDir, "cleanup.preferences_pb")
+    })
     private val repository = LibraryRepository(
         context, database, bookDao, BookTextStore(context), BookTextWriter(),
         BookMediaStore(context), BookLayoutStore(context),
-        Lazy { error("No vector store is needed for collection cleanup") }
+        Lazy { error("No vector store is needed for collection cleanup") },
+        Lazy { ImageReferenceCleanup(context, database, settings) }
     )
 
     @After
     fun closeDatabase() {
+        settingsScope.cancel()
         database.close()
         context.root.deleteRecursively()
     }

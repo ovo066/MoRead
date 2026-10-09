@@ -17,6 +17,7 @@
 - Lobe Icons 1.95.0（MIT，Copyright (c) 2023 LobeHub）：AI 供应商、模型系列与搜索引擎图标，转换为本地 Android 矢量资源（`licenses/lobe-icons-MIT.txt`）。
 - ZXing core（Apache-2.0）：局域网传书页的二维码矩阵生成（只用纯 Java 的 `core`，绘制由应用自己完成）。
 - multiplatform-markdown-renderer（Apache-2.0）：AI 输出的 Markdown 渲染。
+- Vico（Apache-2.0，[patrykandpatrick/vico](https://github.com/patrykandpatrick/vico)）：伴读图表中的柱状图与折线图；饼图、雷达图、关系图与时间线由应用自绘。
 - ObjectBox（Java/Android 绑定 Apache-2.0，数据库核心为免费专有二进制）：向量索引存储。
 - kotlinx.coroutines / kotlinx.serialization（Apache-2.0）。
 - AndroidX、Jetpack Compose、Room、DataStore、WorkManager、Hilt、Material Icons（Apache-2.0）：Android 官方组件。

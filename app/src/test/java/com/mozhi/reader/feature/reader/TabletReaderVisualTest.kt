@@ -243,7 +243,7 @@ class TabletReaderVisualTest {
         compose.onNodeWithTag("vocabulary-search").performTextInput("serendipity")
         capture("tablet-reader-vocabulary.png")
         compose.onNodeWithContentDescription("返回").performClick()
-        compose.onNodeWithText("英文仿生阅读").assertIsDisplayed()
+        compose.onNodeWithText("仿生阅读").assertIsDisplayed()
         compose.onNodeWithText("生词本").performClick()
         compose.onNodeWithTag("vocabulary-search").assertTextContains("serendipity")
         compose.onNodeWithContentDescription("关闭生词本").performClick()

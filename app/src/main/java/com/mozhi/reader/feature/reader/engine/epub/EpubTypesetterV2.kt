@@ -57,7 +57,7 @@ internal class EpubTypesetterV2(
             rootFontSizePx = spec.contentFontSizePx,
             themeTextArgb = spec.themeTextArgb,
             publisherStyleMode = spec.publisherStyleMode,
-            preParsedPublisherRules = cachedRules(stylesheets),
+            preParsedPublisherRules = cachedRules(stylesheets, availableStylesheets),
             documentHref = bundle.document.href
         ).resolve(dom.bodyNode, dom.htmlNode)
         val immersive = bundle.document.immersivePage || isBackgroundArtwork(publisherRoot)
@@ -272,14 +272,14 @@ internal class EpubTypesetterV2(
             ): Boolean = size > 8
         }
 
-        fun cachedRules(stylesheets: List<EpubStylesheetText>): List<CssRule> {
-            val key = stylesheets.map { it.href to it.css.hashCode() }
+        fun cachedRules(stylesheets: List<EpubStylesheetText>, available: List<EpubStylesheetText> = stylesheets): List<CssRule> {
+            val key = stylesheets.map { it.href to it.css.hashCode() } + listOf("imports" to 0) + available.map { it.href to it.css.hashCode() }
             synchronized(ruleCache) {
                 ruleCache[key]?.let { return it }
             }
             var order = 0
             val rules = stylesheets.flatMap { sheet ->
-                val parsed = CssParser(sheet.href, order).parse(sheet.css).stylesheet.rules
+                val parsed = CssParser(sheet.href, order, { href -> available.firstOrNull { it.href == href }?.css }).parse(sheet.css).stylesheet.rules
                 order += parsed.size
                 parsed
             }

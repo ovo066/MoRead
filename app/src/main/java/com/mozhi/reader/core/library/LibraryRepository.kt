@@ -83,6 +83,14 @@ class LibraryRepository @Inject constructor(
 
     suspend fun getBooks(): List<BookEntity> = bookDao.getBooks()
 
+    suspend fun findBookBySourceHash(sha256: String): BookEntity? = bookDao.findBySourceHash(sha256)
+
+    suspend fun getEpubBooksWithoutSource(): List<BookEntity> = bookDao.getEpubBooksWithoutSource()
+
+    suspend fun updateBookSource(bookId: Long, sha256: String, size: Long) = bookDao.updateSource(bookId, sha256, size)
+
+    suspend fun getAllBooksIncludingRemoved(): List<BookEntity> = bookDao.getAllBooks()
+
     fun observeBook(bookId: Long): Flow<BookEntity?> = bookDao.observeBook(bookId)
 
     fun observeChapters(bookId: Long): Flow<List<ChapterEntity>> =

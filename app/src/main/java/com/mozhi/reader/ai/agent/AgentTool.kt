@@ -12,5 +12,8 @@ interface AgentTool {
     val spec: ToolSpec
     val displayName: String
 
+    /** true = 只读、无副作用，可与同一轮的其他只读调用并发执行（见 [ParallelToolRunner]）。 */
+    val concurrencySafe: Boolean get() = spec.name in ConcurrencySafeTools.NAMES
+
     suspend fun execute(arguments: JsonObject): ToolResult
 }

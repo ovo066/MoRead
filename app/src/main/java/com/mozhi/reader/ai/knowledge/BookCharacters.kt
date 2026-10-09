@@ -25,8 +25,20 @@ data class BookCharacterGuide(
     val scannedChapters: Int,
     val sourceCharacters: Long,
     /** true = 只扫到阅读进度为止，资料不含未读情节；旧存档解码成 false（全书）。 */
-    val progressBounded: Boolean = false
-)
+    val progressBounded: Boolean = false,
+    /** 联网查到的书外资料：单独展示，不作为原文依据，也不混进人物事实。 */
+    val externalNotes: List<ExternalCharacterNote> = emptyList(),
+    /** QUICK = 主 agent 检索主要人物；FULL = 逐段扫描。旧存档都是逐段扫描。 */
+    val mode: String = MODE_FULL
+) {
+    companion object {
+        const val MODE_FULL = "FULL"
+        const val MODE_QUICK = "QUICK"
+    }
+}
+
+@Serializable
+data class ExternalCharacterNote(val text: String, val character: String = "", val url: String = "", val title: String = "")
 data class VisibleBookCharacters(val entry: BookCharacterGuideEntity, val guide: BookCharacterGuide)
 data class BookCharactersSnapshot(val saved: VisibleBookCharacters? = null, val outdated: Boolean = false, val checkpointParts: Int = 0)
 

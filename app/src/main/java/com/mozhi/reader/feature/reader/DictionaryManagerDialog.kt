@@ -8,6 +8,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import com.mozhi.reader.R
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mozhi.reader.core.dictionary.LocalDictionary
@@ -29,12 +31,19 @@ internal fun DictionaryManagerPage(onBack: () -> Unit, viewModel: EnglishLearnin
     val importMdd = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         resourceTarget?.let { if (uris.isNotEmpty()) viewModel.importMdd(it, uris) }
     }
+    val importFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) viewModel.importDictionaryFolder(uri)
+    }
     LaunchedEffect(Unit) { viewModel.refresh() }
     ReaderToolPage(title = "词典管理", onBack = onBack) {
         item {
             MoReadSection(title = "本地词典", footer = "相同文件内容自动去重；不同版本可同时保留。阅读时长按划线，选择「词典」查阅。") {
-                MoReadRow(title = if (state.importing) "正在导入…" else "导入 MDX 词典（可多选）",
+                MoReadRow(title = if (state.importing) "正在导入…" else "导入词典文件（可多选）",
+                    subtitle = stringResource(R.string.dictionary_import_files_hint),
                     onClick = { if (!state.importing) importMdx.launch(arrayOf("*/*")) })
+                MoReadRowDivider()
+                MoReadRow(title = stringResource(R.string.dictionary_import_folder), subtitle = stringResource(R.string.dictionary_import_folder_hint),
+                    onClick = { if (!state.importing) importFolder.launch(null) })
             }
         }
         state.message?.let { message -> item { MoReadBlock { Text(message, style = MaterialTheme.typography.bodySmall) } } }
@@ -43,7 +52,7 @@ internal fun DictionaryManagerPage(onBack: () -> Unit, viewModel: EnglishLearnin
                 MoReadSwitchRow(title = "参与查词", subtitle = if (dictionary.enabled) "划线查词时可切换到此词典" else "保留文件，暂停查询",
                     checked = dictionary.enabled, onCheckedChange = { viewModel.setDictionaryEnabled(dictionary.id, it) })
                 MoReadRowDivider()
-                MoReadRow(title = "添加 MDD 资源包", subtitle = "已导入 ${dictionary.resourceCount} 个 · 图片、样式、字体",
+                MoReadRow(title = "添加配套资源", subtitle = "已导入 ${dictionary.resourceCount} 个 · MDD、样式、图片、字体",
                     onClick = { if (!state.importing) { resourceTarget = dictionary.id; importMdd.launch(arrayOf("*/*")) } })
                 MoReadRowDivider()
                 MoReadRow(title = "删除词典", onClick = { if (!state.importing) deleting = dictionary })

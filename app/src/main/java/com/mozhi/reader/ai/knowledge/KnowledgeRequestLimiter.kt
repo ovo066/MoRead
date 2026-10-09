@@ -8,6 +8,6 @@ import kotlinx.coroutines.sync.withPermit
 /** Different chapters are independent; only model requests share a bounded, fair queue. */
 @Singleton
 class KnowledgeRequestLimiter @Inject constructor() {
-    private val permits = Semaphore(2)
+    private val permits = Semaphore(3)
     suspend fun <T> request(block: suspend () -> T): T = permits.withPermit { block() }
 }

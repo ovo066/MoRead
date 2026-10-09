@@ -3,11 +3,14 @@ package com.mozhi.reader.feature.reader
 import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
+import android.view.MotionEvent
+import android.view.InputDevice
 import android.webkit.WebView
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -55,7 +58,9 @@ class DictionaryWebScrollDeviceTest {
         fun assertSheetStable() {
             assertEquals(viewport.top, bounds("navigation-viewport").top, 1f)
             assertEquals(tabs.top, bounds("dictionary-sources").top, 1f)
-            assertEquals(dialogView.height.toFloat(), bounds("navigation-sheet").bottom, 1f)
+            val location = IntArray(2)
+            compose.runOnIdle { dialogView.getLocationInWindow(location) }
+            assertEquals((location[1] + dialogView.height).toFloat(), bounds("navigation-sheet").bottom, 1f)
             assertEquals(0, dismissed)
         }
 
@@ -64,11 +69,11 @@ class DictionaryWebScrollDeviceTest {
         assertSheetStable()
         target.performTouchInput { up() }
         repeat(3) {
-            target.performTouchInput { swipeUp(durationMillis = 350) }
+            swipeWeb(up = true, duration = 350)
             settleWebScroll()
             val below = compose.runOnIdle { web().scrollY }
             assertTrue("HTML must scroll down", below > 0)
-            target.performTouchInput { swipeDown(durationMillis = 350) }
+            swipeWeb(up = false, duration = 350)
             settleWebScroll()
             assertTrue("HTML must scroll back up", compose.runOnIdle { web().scrollY } < below)
             assertSheetStable()
@@ -76,14 +81,14 @@ class DictionaryWebScrollDeviceTest {
         // Reach the real document bottom, then fling beyond it repeatedly.
         repeat(24) {
             if (compose.runOnIdle { web().canScrollVertically(1) }) {
-                target.performTouchInput { swipeUp(durationMillis = 100) }
+                swipeWeb(up = true, duration = 100)
                 settleWebScroll()
             }
         }
         assertFalse("Long definition must be readable to the end", compose.runOnIdle { web().canScrollVertically(1) })
-        repeat(2) { target.performTouchInput { swipeUp(durationMillis = 100) }; settleWebScroll() }
+        repeat(2) { swipeWeb(up = true, duration = 100); settleWebScroll() }
         assertSheetStable()
-        target.performTouchInput { swipeDown(durationMillis = 500) }
+        swipeWeb(up = false, duration = 500)
         settleWebScroll()
         val anchor = compose.runOnIdle { web().scrollY }
         assertTrue(anchor > 0)
@@ -101,7 +106,8 @@ class DictionaryWebScrollDeviceTest {
         assertEquals(1, dismissed)
     }
 
-    private fun bounds(tag: String) = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot
+    // Material translates the sheet's root. Window coordinates include that translation.
+    private fun bounds(tag: String) = compose.onNodeWithTag(tag).fetchSemanticsNode().layoutInfo.coordinates.boundsInWindow()
 
     private fun web(): WebView = findWebView(dialogView) ?: error("Dictionary WebView is missing")
 
@@ -126,5 +132,34 @@ class DictionaryWebScrollDeviceTest {
             if (current != last) { last = current; changed = SystemClock.uptimeMillis() }
             SystemClock.uptimeMillis() - changed > 250
         }
+    }
+
+    /** Real screen coordinates avoid the translated Material root's local gesture coordinates. */
+    private fun swipeWeb(up: Boolean, duration: Long) {
+        val location = IntArray(2)
+        var width = 0
+        var height = 0
+        compose.runOnIdle {
+            web().getLocationOnScreen(location)
+            width = web().width
+            height = web().height
+        }
+        val x = location[0] + width * .5f
+        val start = location[1] + height * if (up) .75f else .25f
+        val end = location[1] + height * if (up) .25f else .75f
+        val down = SystemClock.uptimeMillis()
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        fun event(action: Int, y: Float) {
+            val motion = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, x, y, 0)
+            motion.source = InputDevice.SOURCE_TOUCHSCREEN
+            automation.injectInputEvent(motion, true)
+            motion.recycle()
+        }
+        event(MotionEvent.ACTION_DOWN, start)
+        for (step in 1..16) {
+            SystemClock.sleep((duration / 16).coerceAtLeast(1))
+            event(MotionEvent.ACTION_MOVE, start + (end - start) * step / 16)
+        }
+        event(MotionEvent.ACTION_UP, end)
     }
 }

@@ -1,5 +1,6 @@
 package com.mozhi.reader.feature.settings
 
+import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mozhi.reader.ai.embedding.EmbeddingProgressTracker
@@ -56,6 +57,8 @@ data class SettingsUiState(
     /** 多气泡回复；默认关。 */
     val multiBubbleEnabled: Boolean = false,
     val companionTokenUsageEnabled: Boolean = false,
+    val processDisplay: com.mozhi.reader.core.datastore.CompanionProcessDisplay = com.mozhi.reader.core.datastore.CompanionProcessDisplay(),
+    val translationTarget: String = com.mozhi.reader.core.dictionary.TranslationTarget.ZH_HANS.code,
     /** agent 主动调用开关矩阵；全部默认关。 */
     val autonomy: CompanionAutonomySettings = CompanionAutonomySettings(),
     val personas: List<PersonaEntity> = emptyList(),
@@ -101,27 +104,33 @@ class SettingsViewModel @Inject constructor(
         val memory: CompanionMemorySettings,
         val multiBubbleEnabled: Boolean,
         val autonomy: CompanionAutonomySettings,
-        val companionTokenUsageEnabled: Boolean
+        val companionTokenUsageEnabled: Boolean,
+        val processDisplay: com.mozhi.reader.core.datastore.CompanionProcessDisplay,
+        val translationTarget: String
     )
 
     private val appPrefs = combine(
         readerSettingsRepository.settings.map { it.shelfLayout },
+        readerSettingsRepository.settings.map { it.translationTarget }.distinctUntilChanged(),
         readerSettingsRepository.suggestionRepliesEnabled,
         readerSettingsRepository.showAiAnnotations,
         readerSettingsRepository.companionMemorySettings,
         readerSettingsRepository.companionMultiBubbleEnabled,
         readerSettingsRepository.companionAutonomySettings,
-        readerSettingsRepository.companionTokenUsageEnabled
+        readerSettingsRepository.companionTokenUsageEnabled,
+        readerSettingsRepository.companionProcessDisplay
     ) { values ->
         @Suppress("UNCHECKED_CAST")
         AppPrefs(
             shelfLayout = values[0] as ShelfLayout,
-            suggestionRepliesEnabled = values[1] as Boolean,
-            showAiAnnotations = values[2] as Boolean,
-            memory = values[3] as CompanionMemorySettings,
-            multiBubbleEnabled = values[4] as Boolean,
-            autonomy = values[5] as CompanionAutonomySettings,
-            companionTokenUsageEnabled = values[6] as Boolean
+            translationTarget = values[1] as String,
+            suggestionRepliesEnabled = values[2] as Boolean,
+            showAiAnnotations = values[3] as Boolean,
+            memory = values[4] as CompanionMemorySettings,
+            multiBubbleEnabled = values[5] as Boolean,
+            autonomy = values[6] as CompanionAutonomySettings,
+            companionTokenUsageEnabled = values[7] as Boolean,
+            processDisplay = values[8] as com.mozhi.reader.core.datastore.CompanionProcessDisplay
         )
     }
 
@@ -160,11 +169,13 @@ class SettingsViewModel @Inject constructor(
             embeddingProgress = ai.embeddingProgress,
             appearance = appearance,
             shelfLayout = prefs.shelfLayout,
+            translationTarget = prefs.translationTarget,
             suggestionRepliesEnabled = prefs.suggestionRepliesEnabled,
             showAiAnnotations = prefs.showAiAnnotations,
             memory = prefs.memory,
             multiBubbleEnabled = prefs.multiBubbleEnabled,
             companionTokenUsageEnabled = prefs.companionTokenUsageEnabled,
+            processDisplay = prefs.processDisplay,
             autonomy = prefs.autonomy,
             isWorking = isWorking,
             localStorageBytes = usage?.totalBytes
@@ -242,6 +253,14 @@ class SettingsViewModel @Inject constructor(
 
     fun setSuggestionReplies(enabled: Boolean) {
         viewModelScope.launch { readerSettingsRepository.setSuggestionRepliesEnabled(enabled) }
+    }
+
+    fun setTranslationTarget(target: com.mozhi.reader.core.dictionary.TranslationTarget) {
+        viewModelScope.launch { readerSettingsRepository.setTranslationTarget(target) }
+    }
+
+    fun setProcessDisplay(value: com.mozhi.reader.core.datastore.CompanionProcessDisplay) {
+        viewModelScope.launch { readerSettingsRepository.setCompanionProcessDisplay(value) }
     }
 
     fun setCompanionTokenUsage(enabled: Boolean) {

@@ -52,7 +52,9 @@ data class LibraryChatSession(
 data class LibraryChatCatalog(val books: List<BookEntity> = emptyList(), val personas: List<PersonaEntity> = emptyList(), val activePersonaId: Long? = null,
     val settings: com.mozhi.reader.core.datastore.ReaderSettings = com.mozhi.reader.core.datastore.ReaderSettings())
 data class LibraryChatMessages(val rows: List<MessageEntity> = emptyList(), val reply: LibraryReplyState = LibraryReplyState(), val conversationId: Long? = null,
-    val organizationPlans: List<LibraryOrganizationMessage> = emptyList())
+    val organizationPlans: List<LibraryOrganizationMessage> = emptyList(),
+    /** 本话题里画出的图：（发起调用的消息编号，图表）。 */
+    val charts: List<Pair<Long, com.mozhi.reader.ai.agent.ChartSpec>> = emptyList())
 
 sealed interface LibraryChatEvent {
     data class Notice(val text: String) : LibraryChatEvent
@@ -90,7 +92,7 @@ class LibraryCompanionViewModel @Inject constructor(
             val reply = states[id] ?: LibraryReplyState()
             LibraryChatMessages((rows + reply.committed).distinctBy { it.id }.sortedBy { it.id }
                 .filter { it.role in setOf("user", "assistant") && it.content.isNotBlank() }, reply, id,
-                rows.mapNotNull(LibraryOrganizationPlans::fromMessage))
+                rows.mapNotNull(LibraryOrganizationPlans::fromMessage), libraryCharts(rows))
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LibraryChatMessages())
 
@@ -266,6 +268,20 @@ class LibraryCompanionViewModel @Inject constructor(
                 channel.send(if (result == null) LibraryChatEvent.Notice("未找到已读原文，无法跳转") else LibraryChatEvent.OpenSource(result))
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { channel.send(LibraryChatEvent.Notice(error.message ?: "无法核对引文")) }
+        }
+    }
+}
+
+internal fun libraryCharts(rows: List<MessageEntity>): List<Pair<Long, com.mozhi.reader.ai.agent.ChartSpec>> {
+    val results = rows.filter { it.role == "tool" && !it.toolCallId.isNullOrBlank() }.associateBy { it.toolCallId.orEmpty() }
+    return rows.filter { it.role == "assistant" && it.toolCallsJson != null }.flatMap { message ->
+        val calls = runCatching {
+            com.mozhi.reader.ai.client.AiJson.decodeFromString(
+                kotlinx.serialization.builtins.ListSerializer(com.mozhi.reader.ai.client.ToolCall.serializer()), message.toolCallsJson!!
+            )
+        }.getOrDefault(emptyList())
+        calls.filter { it.name == "create_chart" }.mapNotNull { call ->
+            com.mozhi.reader.ai.agent.ChartSpecCodec.fromToolCall(call.arguments, results[call.id]?.content)?.let { message.id to it }
         }
     }
 }

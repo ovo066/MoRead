@@ -293,6 +293,7 @@ fun TtsSettingsScreen(
                                     TtsApiProvider.GEMINI -> "Google 官方地址，也可填写兼容 Gemini 原生协议的地址"
                                     TtsApiProvider.XIAOMI_MIMO -> stringResource(R.string.tts_mimo_base_url_hint)
                                     TtsApiProvider.FISH_AUDIO -> stringResource(R.string.tts_fish_base_url_hint)
+                                    TtsApiProvider.ELEVENLABS -> stringResource(R.string.tts_elevenlabs_base_url_hint)
                                 }
                             )
                         },
@@ -347,6 +348,7 @@ fun TtsSettingsScreen(
                                     TtsApiProvider.GEMINI -> "gemini-3.8-flash-tts；更快可用 gemini-3.8-flash-lite-tts"
                                     TtsApiProvider.XIAOMI_MIMO -> stringResource(R.string.tts_mimo_model_hint)
                                     TtsApiProvider.FISH_AUDIO -> stringResource(R.string.tts_fish_model_hint)
+                                    TtsApiProvider.ELEVENLABS -> stringResource(R.string.tts_elevenlabs_model_hint)
                                     else -> if ("turbo" in settings.aiModel.lowercase()) {
                                         "Turbo 更偏速度；有声书表演推荐 speech-2.8-hd"
                                     } else {
@@ -375,22 +377,23 @@ fun TtsSettingsScreen(
                         onValueChange = aiVoiceIdDraft::edit,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Done),
                         keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
-                        label = { Text("音色 ID（可选）") },
+                        label = { Text(if (settings.aiIsElevenLabs) stringResource(R.string.tts_elevenlabs_voice_label) else "音色 ID（可选）") },
                         supportingText = {
                             Text(when {
                                 settings.aiIsGemini -> "也可填写音色库或自定义 voice_… ID；留空使用 Sulafat"
                                 settings.aiIsMimo -> stringResource(R.string.tts_mimo_voice_hint)
                                 settings.aiIsFish -> stringResource(R.string.tts_fish_voice_hint)
+                                settings.aiIsElevenLabs -> stringResource(R.string.tts_elevenlabs_voice_hint)
                                 else -> "OpenAI 如 alloy / nova；MiniMax 与 GMI 可填系统或克隆音色 ID"
                             })
                         },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().committedDraft(aiVoiceIdDraft)
                     )
-                    LabeledSlider(
+                    if (settings.aiSupportsSpeed) LabeledSlider(
                         label = "语速",
                         value = settings.aiSpeed,
-                        range = 0.5f..2f,
+                        range = settings.aiSpeedRange,
                         onChange = viewModel::setAiSpeed
                     )
                     if (settings.aiSupportsVolume) LabeledSlider(
@@ -418,6 +421,8 @@ fun TtsSettingsScreen(
                             "GMI 请求会自动等待任务完成并下载音频，默认情绪为 auto。"
                         } else if (settings.aiIsFish) {
                             stringResource(R.string.tts_fish_controls_hint)
+                        } else if (settings.aiIsElevenLabs) {
+                            stringResource(R.string.tts_elevenlabs_controls_hint)
                         } else if (settings.aiIsMiniMax) {
                             stringResource(R.string.tts_minimax_controls_hint)
                         } else {
@@ -495,4 +500,5 @@ private fun TtsApiProvider.label(): String = when (this) {
     TtsApiProvider.GEMINI -> "Gemini TTS"
     TtsApiProvider.XIAOMI_MIMO -> stringResource(R.string.tts_provider_mimo)
     TtsApiProvider.FISH_AUDIO -> stringResource(R.string.tts_provider_fish)
+    TtsApiProvider.ELEVENLABS -> stringResource(R.string.tts_provider_elevenlabs)
 }

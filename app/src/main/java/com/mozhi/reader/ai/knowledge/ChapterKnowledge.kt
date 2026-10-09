@@ -31,6 +31,9 @@ data class VisibleChapterKnowledge(val entry: ChapterKnowledgeEntity, val conten
 
 internal data class KnowledgePart(val start: Int, val text: String)
 
+/** 从某章 [start] 处截出的一段已读正文，供子 agent 整理单个人物。 */
+internal data class SourcePassage(val chapterIndex: Int, val start: Int, val text: String)
+
 internal object ChapterKnowledgeCodec {
     const val PROMPT_VERSION = 2
     const val MAX_SOURCE_CHARS = 60_000
@@ -83,6 +86,46 @@ internal object ChapterKnowledgeCodec {
         require(clean.length in 1..limit) { "请按要求生成长度适中的章节梗概" }
         require(!Regex("(?m)^\\s*(?:[-*•]|[0-9]+[.)、])\\s+").containsMatchIn(clean)) { "请写成连贯自然段，不要罗列分散要点" }
         return clean
+    }
+
+    /** 检索段落之间的分隔；引文跨过它就说明模型把两段拼在了一起。 */
+    private const val PASSAGE_SEPARATOR = "\n\n〔……〕\n\n"
+
+    /**
+     * 子 agent 读的是从全书检索来的若干段落，不是一段连续正文。引文必须完整落在某一段里且全文唯一，
+     * 再换算回（章节, 章内字符偏移），这样人物资料仍能逐条跳回原文。
+     */
+    fun parseCharactersAcross(raw: String, passages: List<SourcePassage>): List<Pair<Int, KnowledgeCharacter>> {
+        require(passages.isNotEmpty()) { "没有可供核对的原文段落" }
+        val joined = StringBuilder()
+        val segments = ArrayList<IntRange>(passages.size)
+        passages.forEach { passage ->
+            if (joined.isNotEmpty()) joined.append(PASSAGE_SEPARATOR)
+            val start = joined.length
+            joined.append(passage.text)
+            segments += start until joined.length
+        }
+        val verified = parseCharacters(raw, KnowledgePart(0, joined.toString()))
+        fun locate(fact: KnowledgeFact): Pair<Int, KnowledgeFact> {
+            val index = segments.indexOfFirst { fact.start >= it.first && fact.end <= it.last + 1 }
+            require(index >= 0) { "引文跨越了两段原文，请只引用其中一段里的连续文字" }
+            val passage = passages[index]
+            val delta = passage.start - segments[index].first
+            return passage.chapterIndex to fact.copy(start = fact.start + delta, end = fact.end + delta)
+        }
+        return verified.flatMap { person ->
+            val facts = person.facts.map(::locate)
+            val attributes = person.attributes.map { attribute -> locate(attribute.fact).let { (chapter, fact) -> chapter to attribute.copy(fact = fact) } }
+            val relationships = person.relationships.map { relation -> locate(relation.fact).let { (chapter, fact) -> chapter to relation.copy(fact = fact) } }
+            (facts.map { it.first } + attributes.map { it.first } + relationships.map { it.first }).distinct().sorted().map { chapter ->
+                chapter to KnowledgeCharacter(
+                    person.name,
+                    facts.filter { it.first == chapter }.map { it.second },
+                    attributes.filter { it.first == chapter }.map { it.second },
+                    relationships.filter { it.first == chapter }.map { it.second }
+                )
+            }
+        }
     }
 
     private fun verify(fact: DraftFact, part: KnowledgePart): KnowledgeFact {

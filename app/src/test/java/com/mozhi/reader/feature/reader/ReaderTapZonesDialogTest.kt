@@ -21,7 +21,7 @@ import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowDialog
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35], application = Application::class, qualifiers = "w411dp-h891dp-mdpi")
+@Config(sdk = [35], application = Application::class, qualifiers = "zh-rCN-w411dp-h891dp-mdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ReaderTapZonesDialogTest {
     @get:Rule val compose = createComposeRule()
@@ -48,13 +48,13 @@ class ReaderTapZonesDialogTest {
         } }
         dispatchVisibleSystemInsets()
         assertTrue(compose.onNodeWithContentDescription("返回").fetchSemanticsNode().boundsInRoot.top < 16f)
-        compose.onNodeWithText("英文仿生阅读").assertIsDisplayed()
+        compose.onNodeWithText("仿生阅读").assertIsDisplayed()
         capture("reading-aids-fullscreen.png")
         compose.onNodeWithContentDescription("返回").performClick()
         assertEquals(1, dismissed)
     }
 
-    @Test @Config(qualifiers = "w891dp-h411dp-mdpi")
+    @Test @Config(qualifiers = "zh-rCN-w891dp-h411dp-mdpi")
     fun landscapeKeepsCompletionAndAllZonesReachable() {
         compose.setContent { MoReadTheme { ReaderTapZonesDialog(null, {}, {}) } }
         compose.onNodeWithText("完成配置").assertIsDisplayed()

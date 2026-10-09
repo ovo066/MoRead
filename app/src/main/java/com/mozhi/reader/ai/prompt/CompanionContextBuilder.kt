@@ -217,6 +217,7 @@ class CompanionContextBuilder @Inject constructor(
                     append("\n查人物、场景、错名或同义改述用 search_book；已知原文、数字串的定位与字面计数用 grep_book。")
                     append("只有 grep_book 的 complete/exact 才能报告确切次数；partial 只是下界，字面次数不等于事件数量。")
                     append("检索候选是待核验的证据，不表示问题前提已被证实；无候选或零字面命中也不能证明事件不存在。")
+                    append("\n互不依赖的多个查询（例如同时查两个人物，或检索与读目录）请在同一轮里一起发起工具调用，它们会并行执行；需要前一步结果才能决定的查询再分轮。")
                 }
             }
             var memoryBlock = memoryBlock(memories)

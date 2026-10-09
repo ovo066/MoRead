@@ -73,13 +73,13 @@ class KnowledgeGenerationRunnerTest {
         assertEquals("已保存", runner.states.value.getValue(KnowledgeTaskKey(1)).progress)
     }
 
-    @Test fun modelLimiterAllowsTwoConcurrentRequestsAndReleasesCancelledSlots() = runTest {
+    @Test fun modelLimiterAllowsThreeConcurrentRequestsAndReleasesCancelledSlots() = runTest {
         val limiter = KnowledgeRequestLimiter()
         val entered = mutableListOf<Int>()
-        val gates = List(3) { CompletableDeferred<Unit>() }
+        val gates = List(4) { CompletableDeferred<Unit>() }
         var active = 0
         var peak = 0
-        val jobs = List(3) { index -> launch {
+        val jobs = List(4) { index -> launch {
             limiter.request {
                 active++
                 peak = maxOf(peak, active)
@@ -88,14 +88,15 @@ class KnowledgeGenerationRunnerTest {
             }
         } }
         runCurrent()
-        assertEquals(listOf(0, 1), entered)
+        assertEquals(listOf(0, 1, 2), entered)
         jobs[0].cancelAndJoin()
         runCurrent()
-        assertEquals(listOf(0, 1, 2), entered)
+        assertEquals(listOf(0, 1, 2, 3), entered)
         gates[1].complete(Unit)
         gates[2].complete(Unit)
+        gates[3].complete(Unit)
         jobs.joinAll()
-        assertEquals(2, peak)
+        assertEquals(3, peak)
         assertEquals(0, active)
     }
 }

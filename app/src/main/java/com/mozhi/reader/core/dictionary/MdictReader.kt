@@ -25,6 +25,7 @@ internal class MdictReader(private val file: File, private val resource: Boolean
     private var caseSensitive = false
     private var stripKeys = true
     private var totalRecordBytes = 0L
+    private var stylesheet: Map<String, Pair<String, String>> = emptyMap()
     val title: String
     val declaredTitle: String
 
@@ -35,6 +36,7 @@ internal class MdictReader(private val file: File, private val resource: Boolean
             verify(header, checksum)
             val xml = header.toString(Charsets.UTF_16LE)
             val attrs = Regex("([A-Za-z]+)=\"([^\"]*)\"").findAll(xml).associate { it.groupValues[1] to it.groupValues[2] }
+            stylesheet = mdictStylesheet(org.jsoup.parser.Parser.unescapeEntities(attrs["StyleSheet"].orEmpty(), false))
             version = attrs["GeneratedByEngineVersion"]?.toDoubleOrNull() ?: 1.2
             require(version < 3) { "暂不支持 MDX 3.0，请导出为 MDX 2.0" }
             val encrypted = when (val value = attrs["Encrypted"]) { "Yes" -> 1; else -> value?.toIntOrNull() ?: 0 }
@@ -122,10 +124,15 @@ internal class MdictReader(private val file: File, private val resource: Boolean
         repeat(8) {
             if (!visited.add(normalize(current))) return null
             val value = lookup(current)?.toString(charset)?.trimEnd('\u0000') ?: return null
-            if (!value.startsWith("@@@LINK=")) return value
+            if (!value.startsWith("@@@LINK=")) return applyMdictStyles(value, stylesheet)
             current = value.removePrefix("@@@LINK=").trim()
         }
         return null
+    }
+
+    /** Inspect a small set of records to discover CSS/image references at import time. */
+    fun sampleDefinitions(): List<String> = RandomAccessFile(file, "r").use { input ->
+        if (keys.isEmpty()) emptyList() else readKeys(input, 0).take(16).mapNotNull { definition(it.text)?.take(128 * 1024) }
     }
 
     private fun readKeys(input: RandomAccessFile, index: Int): List<Key> {

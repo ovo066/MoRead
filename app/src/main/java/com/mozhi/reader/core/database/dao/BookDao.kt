@@ -76,6 +76,15 @@ interface BookDao {
     @Query("SELECT * FROM books WHERE id = :bookId")
     suspend fun getBook(bookId: Long): BookEntity?
 
+    @Query("SELECT * FROM books WHERE sourceSha256 = :sha256 ORDER BY removedAt ASC, importedAt ASC LIMIT 1")
+    suspend fun findBySourceHash(sha256: String): BookEntity?
+
+    @Query("SELECT * FROM books WHERE sourceSha256 IS NULL AND sourceType = 'EPUB' AND epubPath != ''")
+    suspend fun getEpubBooksWithoutSource(): List<BookEntity>
+
+    @Query("UPDATE books SET sourceSha256 = :sha256, sourceByteSize = :size WHERE id = :bookId")
+    suspend fun updateSource(bookId: Long, sha256: String, size: Long)
+
     @Insert
     suspend fun insertBook(book: BookEntity): Long
 

@@ -105,7 +105,12 @@ data class BookEntity(
     val collectionOrder: Int = 0,
     /** Nonzero: local book content removed, personal records retained outside the bookshelf. */
     @ColumnInfo(defaultValue = "0")
-    val removedAt: Long = 0L
+    val removedAt: Long = 0L,
+    /** 导入源文件的 SHA-256（小写十六进制），用于重复导入检测；旧书为 null。 */
+    @ColumnInfo(defaultValue = "NULL")
+    val sourceSha256: String? = null,
+    @ColumnInfo(defaultValue = "NULL")
+    val sourceByteSize: Long? = null
 )
 
 /** 书架阅读状态。搁置只能手动设，自动推导永远不会得到它。 */

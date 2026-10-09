@@ -267,6 +267,11 @@ class OpenAiMediaClient(
         instruction: String? = null
     ): SynthesizedSpeech {
         require(text.isNotBlank()) { "朗读文本不能为空" }
+        if (ttsProvider == TtsApiProvider.ELEVENLABS ||
+            (ttsProvider == null && provider.baseUrl.toHttpUrlOrNull()?.host == "api.elevenlabs.io")) {
+            return ElevenLabsTtsClient(provider, model, apiKey, httpClient)
+                .synthesizeSpeech(text, voice, responseFormat, speed)
+        }
         if (ttsProvider == TtsApiProvider.XIAOMI_MIMO ||
             (ttsProvider == null && (provider.baseUrl.toHttpUrlOrNull()?.host == "api.xiaomimimo.com" ||
                 model.modelName.startsWith("mimo-", true) && model.modelName.contains("tts", true)))) {

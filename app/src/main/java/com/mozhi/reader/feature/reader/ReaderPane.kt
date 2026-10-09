@@ -1,5 +1,9 @@
 package com.mozhi.reader.feature.reader
 
+import androidx.compose.material.icons.outlined.MoreHoriz
+import com.mozhi.reader.R
+import androidx.compose.ui.res.stringResource
+import com.mozhi.reader.core.datastore.SelectionToolbarItems
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -605,6 +609,7 @@ internal fun ReaderPane(
             SelectionToolbar(
                 palette = controlsPalette,
                 topPx = toolbarTopPx,
+                extras = settings.selectionToolbarExtras,
                 onDictionary = {
                     val text = selection.selectedText()
                     selection.bodyRange()?.let { range ->
@@ -679,8 +684,25 @@ internal fun BoxScope.SelectionToolbar(
     onEdit: (() -> Unit)?,
     onCopy: () -> Unit,
     onDismiss: () -> Unit,
-    onDictionary: () -> Unit = {}
+    onDictionary: () -> Unit = {},
+    extras: Set<String> = emptySet()
 ) {
+    // 第一排只放常用几项，其余收进「更多」；不再放「取消」——点选区外或按返回键即可退出。
+    val (primary, overflow) = remember(extras, onEdit != null) { SelectionToolbarItems.split(extras, onEdit != null) }
+    var moreOpen by remember { mutableStateOf(false) }
+    val actions: Map<String, () -> Unit> = mapOf(
+        SelectionToolbarItems.ANNOTATE to onAnnotation,
+        SelectionToolbarItems.COPY to onCopy,
+        SelectionToolbarItems.DICTIONARY to onDictionary,
+        SelectionToolbarItems.TRANSLATE to { onAi(SelectionAiAction.TRANSLATE) },
+        SelectionToolbarItems.ASK to { onAi(SelectionAiAction.ASK) },
+        SelectionToolbarItems.ANALYZE to { onAi(SelectionAiAction.ANALYZE) },
+        SelectionToolbarItems.PARAGRAPH to onParagraphTranslation,
+        SelectionToolbarItems.SPEAK to onTts,
+        SelectionToolbarItems.IMAGE to onImage,
+        SelectionToolbarItems.EDIT to { onEdit?.invoke(); Unit }
+    )
+    androidx.activity.compose.BackHandler(onBack = onDismiss)
     Surface(
         modifier = Modifier
             .align(Alignment.TopCenter)
@@ -695,30 +717,62 @@ internal fun BoxScope.SelectionToolbar(
     ) {
         Row(
             modifier = Modifier
+                .fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 4.dp, vertical = 5.dp)
+                .padding(horizontal = 4.dp, vertical = 5.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly
         ) {
-            SelectionToolItem(Icons.AutoMirrored.Outlined.MenuBook, "词典", palette.accent, palette, onDictionary)
-            SelectionToolItem(Icons.Outlined.Translate, "本段对照", palette.accent, palette, onParagraphTranslation)
-            SelectionAiAction.entries.forEach { action ->
-                SelectionToolItem(
-                    icon = action.toolbarIcon(),
-                    label = action.label,
-                    iconTint = palette.accent,
-                    palette = palette
-                ) { onAi(action) }
+            primary.forEach { id ->
+                SelectionToolItem(selectionToolIcon(id), selectionToolLabel(id),
+                    if (id == SelectionToolbarItems.COPY) palette.onBackground else palette.accent, palette, actions.getValue(id))
             }
-            SelectionToolItem(Icons.Outlined.BorderColor, "划线", palette.accent, palette, onAnnotation)
-            SelectionToolItem(Icons.Outlined.Headphones, "朗读", palette.accent, palette, onTts)
-            SelectionToolItem(Icons.Outlined.Image, "生图", palette.accent, palette, onImage)
-            onEdit?.let { edit ->
-                SelectionToolItem(Icons.Outlined.Edit, "编辑", palette.accent, palette, edit)
+            if (overflow.isNotEmpty()) Box {
+                SelectionToolItem(Icons.Outlined.MoreHoriz, stringResource(R.string.selection_more), palette.muted, palette) { moreOpen = true }
+                com.mozhi.reader.ui.components.MoReadDropdownMenu(
+                    expanded = moreOpen,
+                    onDismissRequest = { moreOpen = false },
+                    containerColor = palette.glassStrong,
+                    contentColor = palette.onBackground,
+                    borderColor = palette.glassBorder,
+                    minWidth = 180.dp,
+                    maxWidth = 240.dp
+                ) {
+                    overflow.forEach { id ->
+                        com.mozhi.reader.ui.components.MoReadMenuItem(text = selectionToolLabel(id), icon = selectionToolIcon(id),
+                            onClick = { moreOpen = false; actions.getValue(id)() })
+                    }
+                }
             }
-            SelectionToolItem(Icons.Outlined.ContentCopy, "复制", palette.onBackground, palette, onCopy)
-            SelectionToolItem(Icons.Outlined.Close, "取消", palette.muted, palette, onDismiss)
         }
     }
 }
+
+private fun selectionToolIcon(id: String): ImageVector = when (id) {
+    SelectionToolbarItems.ANNOTATE -> Icons.Outlined.BorderColor
+    SelectionToolbarItems.COPY -> Icons.Outlined.ContentCopy
+    SelectionToolbarItems.DICTIONARY -> Icons.AutoMirrored.Outlined.MenuBook
+    SelectionToolbarItems.TRANSLATE -> SelectionAiAction.TRANSLATE.toolbarIcon()
+    SelectionToolbarItems.ASK -> SelectionAiAction.ASK.toolbarIcon()
+    SelectionToolbarItems.ANALYZE -> SelectionAiAction.ANALYZE.toolbarIcon()
+    SelectionToolbarItems.PARAGRAPH -> Icons.Outlined.Translate
+    SelectionToolbarItems.SPEAK -> Icons.Outlined.Headphones
+    SelectionToolbarItems.IMAGE -> Icons.Outlined.Image
+    else -> Icons.Outlined.Edit
+}
+
+@Composable
+internal fun selectionToolLabel(id: String): String = stringResource(when (id) {
+    SelectionToolbarItems.ANNOTATE -> R.string.selection_annotate
+    SelectionToolbarItems.COPY -> R.string.selection_copy
+    SelectionToolbarItems.DICTIONARY -> R.string.selection_dictionary
+    SelectionToolbarItems.TRANSLATE -> R.string.selection_translate
+    SelectionToolbarItems.ASK -> R.string.selection_ask
+    SelectionToolbarItems.ANALYZE -> R.string.selection_analyze
+    SelectionToolbarItems.PARAGRAPH -> R.string.selection_paragraph
+    SelectionToolbarItems.SPEAK -> R.string.selection_speak
+    SelectionToolbarItems.IMAGE -> R.string.selection_image
+    else -> R.string.selection_edit
+})
 
 /** 图标在上、小字在下的选区操作项，替代早期的纯文字按钮。 */
 @Composable

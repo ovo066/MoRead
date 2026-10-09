@@ -195,7 +195,7 @@ class ReaderAiViewModel @Inject constructor(
                             )
                         }
                         is AgentEvent.ToolRun -> mutableState.value = mutableState.value.copy(
-                            toolStatus = "正在${event.displayName}…",
+                            toolStatus = runningToolStatus(event.displayName),
                             executionSteps = mutableState.value.executionSteps
                                 .filterNot { it.callId == event.callId } + AgentExecutionStep(
                                 callId = event.callId,
@@ -206,7 +206,9 @@ class ReaderAiViewModel @Inject constructor(
                             )
                         )
                         is AgentEvent.ToolFinished -> mutableState.value = mutableState.value.copy(
-                            toolStatus = null,
+                            toolStatus = mutableState.value.executionSteps
+                                .lastOrNull { it.state == AgentStepState.RUNNING && it.callId != event.callId }
+                                ?.let { runningToolStatus(it.displayName) },
                             executionSteps = mutableState.value.executionSteps.map { step ->
                                 if (step.callId == event.callId) {
                                     step.copy(
@@ -270,3 +272,5 @@ class ReaderAiViewModel @Inject constructor(
         const val CONVERSATION_TYPE = "SELECTION"
     }
 }
+
+private fun runningToolStatus(displayName: String): String = "正在$displayName…"

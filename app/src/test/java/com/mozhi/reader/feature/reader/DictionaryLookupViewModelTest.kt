@@ -31,7 +31,7 @@ class DictionaryLookupViewModelTest {
             coEvery { repository.lookup("book") } returns listOf(
                 DictionaryDefinition("one", "词典一", "<p>book /bʊk/ 书本</p>"),
                 DictionaryDefinition("two", "词典二", "<p>book 预订</p>"))
-            val model = EnglishLearningViewModel(repository, settings, mockk())
+            val model = EnglishLearningViewModel(repository, settings, mockk(), mockk(relaxed = true))
             store.put("dictionary", model)
             model.lookup(DictionaryLookupHit("book", "Please book a room.", 4, 22))
             runCurrent()
@@ -65,7 +65,7 @@ class DictionaryLookupViewModelTest {
             coEvery { client.chat(any(), any()) } returns buildJsonObject {
                 put("gloss", "轻拽"); put("phonetic", "/tʌɡz/"); put("definition", definition)
             }.toString()
-            val model = EnglishLearningViewModel(repository, settings, clients)
+            val model = EnglishLearningViewModel(repository, settings, clients, mockk(relaxed = true))
             store.put("dictionary", model)
             model.lookup(DictionaryLookupHit("tugs", "He tugs her sleeve.", 3, 12))
             runCurrent()
@@ -95,7 +95,7 @@ class DictionaryLookupViewModelTest {
             coEvery { repository.list() } returns listOf(LocalDictionary("first", "古汉语", 0), LocalDictionary("second", "汉语", 0))
             coEvery { repository.lookup("故") } returns listOf(DictionaryDefinition("first", "古汉语", "<b>故</b> 旧的"), DictionaryDefinition("second", "汉语", "<b>故</b> 缘故"))
             coEvery { settings.saveVocabulary(any(), any()) } just Runs
-            val model = EnglishLearningViewModel(repository, settings, mockk())
+            val model = EnglishLearningViewModel(repository, settings, mockk(), mockk(relaxed = true))
             store.put("dictionary", model)
             model.lookup(DictionaryLookupHit(" 故 ", "温故而知新", 3, 12))
             runCurrent()

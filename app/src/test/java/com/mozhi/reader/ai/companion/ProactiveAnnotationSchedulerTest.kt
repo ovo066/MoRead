@@ -20,13 +20,12 @@ class ProactiveAnnotationSchedulerTest {
         assertTrue(annotationChapterRange(9, 5, 8).isEmpty())
     }
     @Test fun durableSuccessNeverRetriesAndFailureHasTwoAttemptCeiling() {
-        assertTrue(job.canAttempt(10))
-        assertFalse(job.copy(attempts = 2).canAttempt(10))
-        assertFalse(job.copy(status = "DONE").canAttempt(Long.MAX_VALUE))
+        assertTrue(job.canAttempt())
+        assertFalse(job.copy(attempts = 2).canAttempt())
+        assertFalse(job.copy(status = "DONE").canAttempt())
     }
-    @Test fun interruptedPendingWaitsTenMinutes() {
-        assertFalse(job.copy(status = "PENDING").canAttempt(599_999))
-        assertTrue(job.copy(status = "PENDING").canAttempt(600_000))
+    @Test fun soleWorkerCanResumeInterruptedPendingImmediately() {
+        assertTrue(job.copy(status = "PENDING").canAttempt())
     }
     @Test fun personaAndSourceArePartOfDurableIdentity() {
         assertNotEquals(job, job.copy(personaId = 4))

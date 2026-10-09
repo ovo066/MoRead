@@ -131,3 +131,7 @@ internal fun reviewSourceText(entries: List<ReviewEntry>): String = entries.mapI
         if (entry.body.isNotBlank()) append("\n笔记 / 想法：").append(entry.body)
     }
 }.joinToString("\n\n")
+
+/** 多选只认当前筛选结果里仍可见的条目，顺序跟随列表；筛选或数据变化后自然收窄。 */
+internal fun reviewSelection(visible: List<ReviewEntry>, keys: Set<String>): List<ReviewEntry> =
+    if (keys.isEmpty()) emptyList() else visible.filter { it.key in keys }

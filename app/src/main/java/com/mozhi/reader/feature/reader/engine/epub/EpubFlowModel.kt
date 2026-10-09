@@ -238,7 +238,10 @@ internal class FlowOutput {
                         linkHref = column.linkHref,
                         verticalOrientation = column.verticalOrientation,
                         combineUpright = column.combineUpright,
-                        textShadows = column.textShadows
+                        textShadows = column.textShadows,
+                        decorationStyle = column.decorationStyle,
+                        decorationColorArgb = column.decorationColorArgb,
+                        linkUnderlineOverride = column.linkUnderlineOverride
                     )
                 },
                 lineTop = line.lineTop,
@@ -276,7 +279,10 @@ internal data class ResolvedRunStyle(
     val lineHeightPx: Float?,
     val paintSpan: com.mozhi.reader.core.datastore.ReaderPaintSpan? = null,
     val opacity: Float,
-    val textShadows: List<TextBoxShadow> = emptyList()
+    val textShadows: List<TextBoxShadow> = emptyList(),
+    val decorationStyle: com.mozhi.reader.core.epub.style.EpubDecorationStyle = com.mozhi.reader.core.epub.style.EpubDecorationStyle.SOLID,
+    val decorationColorArgb: Int? = null,
+    val linkUnderlineOverride: Boolean? = null
 )
 
 /** Shared services for the block/inline/pagination layers of one chapter layout run. */
@@ -298,10 +304,12 @@ internal class EpubLayoutContext(
 
     fun syntaxAt(offset: Int): ReaderSyntaxStyleSpan? = syntax.at(offset)
 
-    fun mappedBackground(color: Int?): Int? = EpubThemeColors.background(color, spec.darkTheme)
+    fun mappedBackground(color: Int?): Int? =
+        if (spec.publisherStyleMode == PublisherStyleMode.RESPECT) color else EpubThemeColors.background(color, spec.darkTheme)
 
     fun mappedForeground(color: Int?, background: Int?): Int? = color?.let {
-        EpubThemeColors.foreground(it, background ?: spec.themeBackgroundArgb, spec.themeTextArgb)
+        if (spec.publisherStyleMode == PublisherStyleMode.RESPECT) it
+        else EpubThemeColors.foreground(it, background ?: spec.themeBackgroundArgb, spec.themeTextArgb)
     }
 
     fun baseFontSize(isTitle: Boolean): Float =
@@ -394,6 +402,12 @@ internal class EpubLayoutContext(
             backgroundArgb = adaptedBackground ?: syntaxSpan?.backgroundArgb,
             underline = style.underline || syntaxSpan?.underline == true,
             strikethrough = style.strikethrough || syntaxSpan?.strikethrough == true,
+            decorationStyle = style.decorationStyle,
+            decorationColorArgb = style.decorationColorArgb?.let {
+                if (spec.publisherStyleMode == PublisherStyleMode.RESPECT) it else mappedForeground(it, actualBackground)
+            },
+            linkUnderlineOverride = style.underline.takeIf { spec.publisherStyleMode != PublisherStyleMode.TAKE_OVER &&
+                style.appliedProperties.any { it == "text-decoration" || it == "text-decoration-line" } },
             syntaxFont = syntaxFont,
             syntaxFontAssetId = syntaxFontAssetId,
             baselineShiftPx = shift,

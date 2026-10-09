@@ -580,4 +580,80 @@ class AgentLoopTest {
         }
         assertTrue(result.exceptionOrNull() is AiClientException.Empty)
     }
+
+    private class NamedTool(name: String, private val onRun: suspend () -> String) : AgentTool {
+        override val displayName: String = name
+        override val spec: ToolSpec = ToolSpec(name = name, description = "test", parameters = buildJsonObject { put("type", "object") })
+        override suspend fun execute(arguments: JsonObject): ToolResult = ToolResult.Success(onRun())
+    }
+
+    @Test
+    fun `read-only calls of one round run concurrently and persist in call order`() = runTest {
+        val dao = FakeChatDao(seed(ChatRole.USER to "比较两个人物"))
+        var running = 0
+        var maxRunning = 0
+        suspend fun work(value: String): String {
+            running++
+            maxRunning = maxOf(maxRunning, running)
+            kotlinx.coroutines.yield()
+            running--
+            return value
+        }
+        val tools = listOf(
+            NamedTool("search_book") { work("甲") },
+            NamedTool("grep_book") { work("乙") },
+            NamedTool("list_chapters") { work("丙") }
+        )
+        var round = 0
+        loop(dao).runWith(1, tools) {
+            AgentLoop.Streamer { _, _ ->
+                if (round++ == 0) flowOf(ChatDelta.ToolCalls(listOf(
+                    ToolCall("c1", "search_book", "{}"), ToolCall("c2", "grep_book", "{}"), ToolCall("c3", "list_chapters", "{}")
+                ))) else flowOf(ChatDelta.Text("好"))
+            }
+        }.toList()
+        assertEquals(3, maxRunning)
+        val toolRows = dao.messages.filter { it.role == ChatRole.TOOL.wire }
+        assertEquals(listOf("c1", "c2", "c3"), toolRows.map { it.toolCallId })
+        assertEquals(listOf("甲", "乙", "丙"), toolRows.map { it.content })
+    }
+
+    @Test
+    fun `write calls are not run alongside other calls`() = runTest {
+        val dao = FakeChatDao(seed(ChatRole.USER to "记下来"))
+        var running = 0
+        var overlap = false
+        suspend fun work(): String {
+            running++
+            if (running > 1) overlap = true
+            kotlinx.coroutines.yield()
+            running--
+            return "ok"
+        }
+        val tools = listOf(NamedTool("write_note") { work() }, NamedTool("add_annotation") { work() })
+        var round = 0
+        loop(dao).runWith(1, tools) {
+            AgentLoop.Streamer { _, _ ->
+                if (round++ == 0) flowOf(ChatDelta.ToolCalls(listOf(
+                    ToolCall("w1", "write_note", "{}"), ToolCall("w2", "add_annotation", "{}")
+                ))) else flowOf(ChatDelta.Text("好"))
+            }
+        }.toList()
+        assertTrue(!overlap)
+    }
+
+    @Test
+    fun `interrupted tool calls are paired before the next request`() {
+        val history = listOf(
+            ChatMessage(ChatRole.USER, "问"),
+            ChatMessage(ChatRole.ASSISTANT, "", toolCalls = listOf(ToolCall("a", "search_book", "{}"), ToolCall("b", "grep_book", "{}"))),
+            ChatMessage(ChatRole.TOOL, "结果a", toolCallId = "a"),
+            ChatMessage(ChatRole.TOOL, "孤立", toolCallId = "zzz"),
+            ChatMessage(ChatRole.USER, "继续")
+        )
+        val repaired = loop(FakeChatDao(emptyList())).pairToolResults(history)
+        assertEquals(listOf(ChatRole.USER, ChatRole.ASSISTANT, ChatRole.TOOL, ChatRole.TOOL, ChatRole.USER), repaired.map { it.role })
+        assertEquals(listOf("a", "b"), repaired.filter { it.role == ChatRole.TOOL }.map { it.toolCallId })
+        assertEquals("结果a", repaired[2].content)
+    }
 }

@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 
@@ -157,6 +158,12 @@ data class ReaderSettings(
     val englishLearningEnabled: Boolean = false,
     val englishBionicEnabled: Boolean = false,
     val bilingualBooks: Set<Long> = emptySet(),
+    /** 选区工具栏里额外放到第一排的操作（[SelectionToolbarItems.OPTIONAL] 中的 id）；其余收进「更多」。 */
+    val selectionToolbarExtras: Set<String> = emptySet(),
+    /** 按书设置的学习语言（[com.mozhi.reader.core.dictionary.LearningLanguage.code]）；没有记录 = 自动识别。 */
+    val learningLanguages: Map<Long, String> = emptyMap(),
+    /** 段落对照的译文语言（[com.mozhi.reader.core.dictionary.TranslationTarget.code]）。 */
+    val translationTarget: String = com.mozhi.reader.core.dictionary.TranslationTarget.ZH_HANS.code,
     val wordAnnotationMode: com.mozhi.reader.core.dictionary.WordAnnotationMode = com.mozhi.reader.core.dictionary.WordAnnotationMode.INLINE,
     val vocabulary: List<com.mozhi.reader.core.dictionary.VocabularyWord> = emptyList(),
     /**
@@ -309,6 +316,11 @@ class ReaderSettingsRepository @Inject constructor(
             englishLearningEnabled = preferences[Keys.EnglishLearning] ?: false,
             englishBionicEnabled = preferences[Keys.EnglishBionic] ?: false,
             bilingualBooks = preferences[Keys.BilingualBooks].orEmpty().mapNotNull { it.toLongOrNull() }.toSet(),
+            selectionToolbarExtras = preferences[Keys.SelectionToolbarExtras].orEmpty().filter { it in SelectionToolbarItems.OPTIONAL }.toSet(),
+            learningLanguages = preferences[Keys.LearningLanguages].orEmpty().mapNotNull { entry ->
+                entry.substringBefore('=').toLongOrNull()?.let { it to entry.substringAfter('=') }
+            }.toMap(),
+            translationTarget = preferences[Keys.TranslationTarget] ?: com.mozhi.reader.core.dictionary.TranslationTarget.ZH_HANS.code,
             wordAnnotationMode = preferences[Keys.WordAnnotationMode]?.let { name ->
                 com.mozhi.reader.core.dictionary.WordAnnotationMode.entries.firstOrNull { it.name == name }
             } ?: com.mozhi.reader.core.dictionary.WordAnnotationMode.INLINE,
@@ -1143,6 +1155,20 @@ class ReaderSettingsRepository @Inject constructor(
         prefs[Keys.BilingualBooks] = if (visible) books + bookId.toString() else books - bookId.toString()
     } }
 
+    /** AUTO 删除记录，回到自动识别。 */
+    suspend fun setLearningLanguage(bookId: Long, language: com.mozhi.reader.core.dictionary.LearningLanguage) { dataStore.edit { prefs ->
+        val rest = prefs[Keys.LearningLanguages].orEmpty().filterNot { it.substringBefore('=') == bookId.toString() }.toSet()
+        prefs[Keys.LearningLanguages] = if (language == com.mozhi.reader.core.dictionary.LearningLanguage.AUTO) rest else rest + "$bookId=${language.code}"
+    } }
+
+    suspend fun setSelectionToolbarExtras(extras: Set<String>) {
+        dataStore.edit { it[Keys.SelectionToolbarExtras] = extras.filter { id -> id in SelectionToolbarItems.OPTIONAL }.toSet() }
+    }
+
+    suspend fun setTranslationTarget(target: com.mozhi.reader.core.dictionary.TranslationTarget) {
+        dataStore.edit { it[Keys.TranslationTarget] = target.code }
+    }
+
     suspend fun setWordAnnotationMode(mode: com.mozhi.reader.core.dictionary.WordAnnotationMode) { dataStore.edit { it[Keys.WordAnnotationMode] = mode.name } }
     suspend fun saveVocabulary(word: com.mozhi.reader.core.dictionary.VocabularyWord, remove: Boolean = false) {
         dataStore.edit { prefs ->
@@ -1321,6 +1347,14 @@ class ReaderSettingsRepository @Inject constructor(
 
     suspend fun setCompanionTokenUsageEnabled(value: Boolean) {
         dataStore.edit { it[Keys.CompanionTokenUsage] = value }
+    }
+
+    /** 伴读「过程」卡的显示程度；书内伴读、书库伴读与段评讨论共用。 */
+    val companionProcessDisplay: Flow<CompanionProcessDisplay> =
+        dataStore.data.map { CompanionProcessDisplay.decode(it[Keys.CompanionProcessDisplay]) }.distinctUntilChanged()
+
+    suspend fun setCompanionProcessDisplay(value: CompanionProcessDisplay) {
+        dataStore.edit { it[Keys.CompanionProcessDisplay] = CompanionProcessDisplay.encode(value) }
     }
 
     /** Atomically edit the selected preset, including a book-specific or night preset. */
@@ -1544,6 +1578,9 @@ class ReaderSettingsRepository @Inject constructor(
         val EnglishLearning = booleanPreferencesKey("reader_english_learning")
         val EnglishBionic = booleanPreferencesKey("reader_english_bionic")
         val BilingualBooks = androidx.datastore.preferences.core.stringSetPreferencesKey("reader_bilingual_books")
+        val SelectionToolbarExtras = androidx.datastore.preferences.core.stringSetPreferencesKey("reader_selection_toolbar_extras")
+        val LearningLanguages = androidx.datastore.preferences.core.stringSetPreferencesKey("reader_learning_languages")
+        val TranslationTarget = stringPreferencesKey("reader_translation_target")
         val WordAnnotationMode = stringPreferencesKey("reader_word_annotation_mode")
         val Vocabulary = stringPreferencesKey("reader_vocabulary")
         val ThemeMode = stringPreferencesKey("app_theme_mode")
@@ -1559,6 +1596,7 @@ class ReaderSettingsRepository @Inject constructor(
         val DiscussionPersonaId = longPreferencesKey("companion_discussion_persona_id")
         val SuggestionReplies = booleanPreferencesKey("companion_suggestion_replies")
         val CompanionTokenUsage = booleanPreferencesKey("companion_token_usage")
+        val CompanionProcessDisplay = stringPreferencesKey("companion_process_display")
         val CompanionSpoilerProtection = booleanPreferencesKey("companion_spoiler_protection")
         val ShowAiAnnotations = booleanPreferencesKey("companion_show_ai_annotations")
         val CompanionLongTermMemory = booleanPreferencesKey("companion_long_term_memory")

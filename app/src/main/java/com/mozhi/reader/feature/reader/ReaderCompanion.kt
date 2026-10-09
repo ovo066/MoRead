@@ -1,5 +1,8 @@
 package com.mozhi.reader.feature.reader
 
+import com.mozhi.reader.ai.companion.CompanionFootnotes
+import com.mozhi.reader.ai.companion.Footnote
+import androidx.compose.ui.platform.LocalUriHandler
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -165,6 +168,13 @@ internal sealed interface CompanionTimelineItem {
     ) : CompanionTimelineItem {
         override val key: String = "media-$callId"
     }
+
+    data class Chart(
+        val callId: String,
+        val spec: com.mozhi.reader.ai.agent.ChartSpec
+    ) : CompanionTimelineItem {
+        override val key: String = "chart-$callId"
+    }
 }
 
 internal fun buildCompanionTimeline(messages: List<MessageEntity>): List<CompanionTimelineItem> {
@@ -214,6 +224,10 @@ internal fun buildCompanionTimeline(messages: List<MessageEntity>): List<Compani
                         toolResults[call.id]?.content
                             ?.let(AgentMediaResult::decode)
                             ?.let { add(CompanionTimelineItem.Media(call.id, it)) }
+                        if (call.name == "create_chart") {
+                            com.mozhi.reader.ai.agent.ChartSpecCodec.fromToolCall(call.arguments, toolResults[call.id]?.content)
+                                ?.let { add(CompanionTimelineItem.Chart(call.id, it)) }
+                        }
                     }
                 }
             }
@@ -251,7 +265,7 @@ private fun toolDisplayName(name: String): String = when (name) {
     "synthesize_speech" -> "合成并缓存语音"
     "web_search" -> "搜索互联网"
     "web_scrape" -> "抓取网页正文"
-    else -> "调用 $name"
+    else -> com.mozhi.reader.ai.agent.ToolDisplayNames.of(name) ?: "调用 $name"
 }
 
 /**
@@ -279,7 +293,9 @@ internal fun CompanionChatBubble(
     onRegenerateVoice: () -> Unit = {},
     onPlayVoice: (String) -> Unit = {},
     readOnlyActions: Boolean = false,
-    footer: (@Composable () -> Unit)? = null
+    footer: (@Composable () -> Unit)? = null,
+    /** 书库伴读用自己的引用格式与来源解析；书内伴读留空。 */
+    libraryFootnotes: (@Composable (List<Footnote>) -> List<FootnoteDisplay>)? = null
 ) {
     val fromUser = entry.fromUser
     val message = entry.message
@@ -350,7 +366,8 @@ internal fun CompanionChatBubble(
                                     voiceClip = voiceClip,
                                     onPrepareVoice = onPrepareVoice,
                                     onRegenerateVoice = onRegenerateVoice,
-                                    onPlayVoice = onPlayVoice
+                                    onPlayVoice = onPlayVoice,
+                                    libraryFootnotes = libraryFootnotes
                                 )
                                 footer?.invoke()
                                 if (message?.editedAt != null && entry.isTail) {
@@ -421,7 +438,8 @@ private fun BubbleBody(
     voiceClip: VoiceClipState?,
     onPrepareVoice: () -> Unit,
     onRegenerateVoice: () -> Unit,
-    onPlayVoice: (String) -> Unit
+    onPlayVoice: (String) -> Unit,
+    libraryFootnotes: (@Composable (List<Footnote>) -> List<FootnoteDisplay>)?
 ) {
     val text = entry.part.text
     when {
@@ -439,17 +457,26 @@ private fun BubbleBody(
             )
         }
         else -> {
-            // 引用标记是给程序看的，渲染前摘掉；引文本身留在正文里保持句子通顺。
-            val parsed = remember(text) { CompanionCitationParser.parse(text) }
+            // 引用标记是给程序看的：换成引文 + 上标编号，编号按整条消息统一分配。
+            val messageText = entry.message?.content ?: text
+            val dialect = if (libraryFootnotes != null) CompanionFootnotes.Dialect.LIBRARY else CompanionFootnotes.Dialect.READER
+            val footnotes = remember(messageText, dialect) { CompanionFootnotes.footnotes(messageText, dialect) }
+            val rendered = remember(text, footnotes, dialect) { CompanionFootnotes.render(text, footnotes, dialect) }
+            val uriHandler = LocalUriHandler.current
+            val displays = libraryFootnotes?.invoke(footnotes) ?: readerFootnoteDisplays(
+                footnotes = footnotes,
+                located = locatedCitations,
+                webSources = LocalCompanionWebSources.current,
+                onLocate = onLocateCitation,
+                onOpenUrl = { runCatching { uriHandler.openUri(it) } }
+            )
             // Keep the exact same block tree at commit; only the unfinished block changes.
-            StreamingAiRichText(content = parsed.displayText, palette = palette)
-            if (locatedCitations.isNotEmpty() && entry.isTail) {
-                CitationChips(
-                    citations = locatedCitations,
-                    palette = palette,
-                    onClick = onLocateCitation
-                )
-            }
+            FootnotedRichText(
+                content = rendered,
+                palette = palette,
+                footnotes = displays,
+                showList = entry.isLastMessagePart && entry.message != null
+            )
         }
     }
 }
@@ -583,49 +610,6 @@ private fun BubbleActionIcon(
     }
 }
 
-
-/** 「跳到原文」胶囊：一条引用一枚，点了退回阅读页并高亮那句话。 */
-@Composable
-private fun CitationChips(
-    citations: List<LocatedCompanionCitation>,
-    palette: ReaderPalette,
-    onClick: (LocatedCompanionCitation) -> Unit
-) {
-    Column(
-        modifier = Modifier.padding(top = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        citations.forEach { citation ->
-            Surface(
-                onClick = { onClick(citation) },
-                shape = RoundedCornerShape(9.dp),
-                color = palette.glass,
-                contentColor = palette.onBackground,
-                border = BorderStroke(1.dp, palette.glassBorder)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        Icons.AutoMirrored.Outlined.MenuBook,
-                        contentDescription = null,
-                        tint = palette.accent,
-                        modifier = Modifier.size(13.dp)
-                    )
-                    Text(
-                        text = CompanionCitationParser.label(citation.citation),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = palette.muted,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(start = 5.dp)
-                    )
-                }
-            }
-        }
-    }
-}
 
 /**
  * 默认外观下必须与改动前逐像素一致，因此把阅读页调色板作为「未自定义」时的取值传进去，

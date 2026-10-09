@@ -31,6 +31,7 @@ espresso = "3.7.0"
 objectbox = "4.3.0"
 androidSvg = "1.4"
 zxing = "3.5.3"
+vico = "3.3.0"
 openccJava = "1.4.2"
 
 [libraries]
@@ -87,6 +88,9 @@ objectbox-linux = { module = "io.objectbox:objectbox-linux", version.ref = "obje
 android-svg = { module = "com.caverock:androidsvg-aar", version.ref = "androidSvg" }
 # 只用 core：纯 Java 编码器，把矩阵交给 Compose Canvas 自己画，不引 zxing-android-embedded
 zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
+# 伴读图表：柱状/折线/饼图；关系图、时间线与雷达图在 Canvas 上自绘
+vico-compose = { module = "com.patrykandpatrick.vico:compose", version.ref = "vico" }
+vico-compose-m3 = { module = "com.patrykandpatrick.vico:compose-m3", version.ref = "vico" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

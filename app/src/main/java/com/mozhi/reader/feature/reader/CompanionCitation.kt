@@ -24,7 +24,10 @@ data class LocatedCompanionCitation(
     val chapterIndex: Int,
     val startCharOffset: Int,
     val endCharOffset: Int,
-    val sourceAnchorJson: String = ""
+    val sourceAnchorJson: String = "",
+    /** 引文前后的少量可读正文，只供脚注弹卡展示；永远截在阅读范围以内。 */
+    val contextBefore: String = "",
+    val contextAfter: String = ""
 )
 
 /** 一条消息拆出的展示文本与引用列表。 */
@@ -88,6 +91,9 @@ object CompanionCitationParser {
 
 /** 把格式正确的候选引用再次与真实正文核对，未命中的候选不会进入 UI。 */
 object CompanionCitationVerifier {
+    /** 弹卡里引文前后各带多少字；只取阅读范围以内的正文。 */
+    const val CONTEXT_CHARS = 60
+
     fun locate(
         citations: List<CompanionCitation>,
         chapters: List<QuoteChapter>,
@@ -106,6 +112,7 @@ object CompanionCitationVerifier {
             }
             location?.let {
                 val body = chapters.first { chapter -> chapter.chapterIndex == it.chapterIndex }.body
+                val readableBody = readable.first { chapter -> chapter.chapterIndex == it.chapterIndex }.body
                 LocatedCompanionCitation(
                     citation = citation.copy(chapterNumber = it.chapterIndex + 1),
                     chapterIndex = it.chapterIndex,
@@ -118,7 +125,10 @@ object CompanionCitationVerifier {
                             it.endCharOffset,
                             ChineseConversionMode.OFF
                         )
-                    )
+                    ),
+                    contextBefore = readableBody.substring((it.startCharOffset - CONTEXT_CHARS).coerceAtLeast(0), it.startCharOffset.coerceAtMost(readableBody.length)),
+                    contextAfter = if (it.endCharOffset >= readableBody.length) "" else
+                        readableBody.substring(it.endCharOffset, (it.endCharOffset + CONTEXT_CHARS).coerceAtMost(readableBody.length))
                 )
             }
         }

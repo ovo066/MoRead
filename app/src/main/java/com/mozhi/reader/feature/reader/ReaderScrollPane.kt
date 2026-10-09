@@ -76,6 +76,8 @@ import com.mozhi.reader.feature.reader.engine.textPosAtBodyOffset
 import com.mozhi.reader.feature.reader.engine.wordSelectionAt
 import com.mozhi.reader.feature.reader.engine.translationAt
 import com.mozhi.reader.feature.reader.engine.ReaderParagraphTranslation
+import com.mozhi.reader.feature.reader.engine.ReaderVisibleReadSnapshot
+import com.mozhi.reader.feature.reader.engine.visibleReadEnd
 import com.mozhi.reader.feature.reader.engine.charOffsetOf
 import com.mozhi.reader.feature.reader.render.PageBitmapRenderer
 import com.mozhi.reader.feature.reader.render.ReaderPageStyle
@@ -126,6 +128,8 @@ internal fun ReaderScrollPane(
     onEditText: ((selection: String, range: IntRange) -> Unit)?,
     pageTurnRequest: ReaderPageTurnRequest? = null,
     autoRead: AutoReadSession? = null,
+    onVisiblePagesDrawn: (ReaderVisibleReadSnapshot) -> Unit = {},
+    readTrackingEnabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -138,8 +142,15 @@ internal fun ReaderScrollPane(
     val statusBarPx = safeInsets.topPx
     val navBarPx = safeInsets.bottomPx
     val flingDecay = rememberSplineBasedDecay<Float>()
-
+    val visiblePagesCallback by androidx.compose.runtime.rememberUpdatedState(onVisiblePagesDrawn)
+    val trackVisibleRead by androidx.compose.runtime.rememberUpdatedState(readTrackingEnabled)
     var frameTick by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(readTrackingEnabled) {
+        // A stationary frame must be drawn again when returning from a sheet/background.
+        if (readTrackingEnabled) frameTick++
+    }
+
     var backgroundTick by remember { mutableIntStateOf(0) }
     var viewport by remember(holder) { mutableStateOf(IntSize(holder.viewWidth, holder.viewHeight)) }
     val selection = remember(controller) {
@@ -527,6 +538,7 @@ internal fun ReaderScrollPane(
                     holder.anchorY // 滚动逐帧值同样只在 draw phase 读
                     val canvas = drawContext.canvas.nativeCanvas
                     holder.drawFrame(canvas, size.width, size.height)
+                    if (trackVisibleRead) holder.onFrameDrawn({ trackVisibleRead }) { visiblePagesCallback(it) }
                     selection.drawHighlight(this, controlsPalette)
                 }
         )
@@ -536,6 +548,7 @@ internal fun ReaderScrollPane(
             SelectionToolbar(
                 palette = controlsPalette,
                 topPx = toolbarTopPx,
+                extras = settings.selectionToolbarExtras,
                 onDictionary = {
                     val text = selection.selectedText()
                     selection.bodyRange()?.let { range ->
@@ -625,6 +638,8 @@ internal data class VisibleScrollPage(
  * 里的 Y。跨章由 applyScroll 归一化，controller 滑窗跟着走。
  */
 internal class ScrollPaneHolder(private val controller: ReaderContentController) {
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var pendingDrawnSnapshot: ReaderVisibleReadSnapshot? = null
     var viewWidth = 0
         private set
     var viewHeight = 0
@@ -707,6 +722,7 @@ internal class ScrollPaneHolder(private val controller: ReaderContentController)
     }
 
     fun detach() {
+        pendingDrawnSnapshot = null
         if (dragging || flinging || autoScrolling) syncPosition()
         interruptScroll()
         dragging = false
@@ -956,6 +972,46 @@ internal class ScrollPaneHolder(private val controller: ReaderContentController)
         } }
         val first = lines.minOfOrNull { it.chapterPosition } ?: return null
         return first until lines.maxOf { it.chapterPosition + it.charLength }
+    }
+
+    /** Capture only the source prefix actually painted inside the clipped content band. */
+    fun captureVisibleRead(): ReaderVisibleReadSnapshot? {
+        if (!controller.isReady || renderer == null || viewWidth <= 0 || viewHeight <= 0) return null
+        var result: ReaderVisibleReadSnapshot? = null
+        for (block in visibleBlocks()) {
+            val strip = block.strip ?: break
+            val source = controller.chapterSource(block.chapterIndex) ?: break
+            val pages = mutableListOf<RenderPage.Laid>()
+            var end: Int? = null
+            for ((index, page) in strip.chapter.pages.withIndex()) {
+                val origin = contentTop + block.originY + strip.pageTops[index]
+                if (origin >= contentBottom) break
+                val extent = if (index + 1 < strip.pageTops.size) strip.pageTops[index + 1] - strip.pageTops[index]
+                    else strip.totalHeight - strip.pageTops[index]
+                if (origin + extent <= contentTop) continue
+                val visibleEnd = page.visibleReadEnd(contentTop - origin, contentBottom - origin) ?: continue
+                end = maxOf(end ?: 0, visibleEnd)
+                pages += RenderPage.Laid(block.chapterIndex, strip.chapter.title, index, strip.chapter.pageCount, page)
+            }
+            if (end != null) result = ReaderVisibleReadSnapshot(controller.layoutGeneration,
+                block.chapterIndex, pages, end, source)
+        }
+        return result
+    }
+
+    fun isCurrentVisibleRead(snapshot: ReaderVisibleReadSnapshot): Boolean = snapshot == captureVisibleRead()
+
+    /** Called after drawFrame, never from loading, pagination, hit testing or prefetch. */
+    fun onFrameDrawn(isVisible: () -> Boolean, onVisible: (ReaderVisibleReadSnapshot) -> Unit) {
+        if (!isVisible()) return
+        val drawn = captureVisibleRead() ?: return
+        if (pendingDrawnSnapshot == drawn) return
+        pendingDrawnSnapshot = drawn
+        mainHandler.post {
+            if (pendingDrawnSnapshot != drawn) return@post
+            pendingDrawnSnapshot = null
+            if (isVisible() && isCurrentVisibleRead(drawn)) onVisible(drawn)
+        }
     }
 
     /** 选区/绘制用：页的内容原点（视图坐标）；该页当前不可见时返回 null。 */

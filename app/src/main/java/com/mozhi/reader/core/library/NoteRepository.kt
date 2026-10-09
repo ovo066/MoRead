@@ -92,6 +92,11 @@ class NoteRepository @Inject constructor(
         noteDao.delete(noteId)
     }
 
+    /** 撤销批量删除：按原编号写回笔记。 */
+    suspend fun restore(note: NoteEntity) {
+        if (noteDao.getNote(note.id) == null) noteDao.insert(note)
+    }
+
     companion object {
         const val KIND_NOTE = "NOTE"
         const val KIND_PLOT_SUMMARY = "PLOT_SUMMARY"

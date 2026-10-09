@@ -808,7 +808,10 @@ internal class EpubInlineLayout(private val ctx: EpubLayoutContext) {
                 linkHref = cluster.linkHref,
                 verticalOrientation = cluster.verticalOrientation,
                 combineUpright = cluster.combineUpright,
-                textShadows = style.textShadows
+                textShadows = style.textShadows,
+                decorationStyle = style.decorationStyle,
+                decorationColorArgb = style.decorationColorArgb,
+                linkUnderlineOverride = style.linkUnderlineOverride
             )
             cluster.image?.let { image ->
                 val (imageAscent, _) = imageExtents(image, cluster)

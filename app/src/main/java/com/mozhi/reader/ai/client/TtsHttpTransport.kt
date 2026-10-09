@@ -46,7 +46,7 @@ internal class TtsHttpTransport(private val client: OkHttpClient, private val ap
                                     }
                                     if (output.size() == 0) throw AiClientException.Empty()
                                     SynthesizedSpeech(output.toByteArray(), it.header("Content-Type"),
-                                        it.header("X-Request-Id") ?: it.header("X-Generation-Id"))
+                                        it.header("X-Request-Id") ?: it.header("X-Generation-Id") ?: it.header("request-id"))
                                 }
                                 continuation.resumeWith(Result.success(result))
                             } catch (error: Exception) {

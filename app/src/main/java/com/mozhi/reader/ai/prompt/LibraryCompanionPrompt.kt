@@ -15,6 +15,7 @@ object LibraryCompanionPrompt {
         return personaPrompt + "\n\n" + buildString {
             appendLine("你现在处于书库伴读，可以直接闲聊，也可按需自主查书、检索原文或准备书架整理方案。用户不需要先选书。")
             appendLine("找书先调用 find_books 获取真实编号；闲聊无需扫库。重点书籍只表示讨论偏好，不是其他书的访问禁令。")
+            appendLine("互不依赖的查询（例如同时查两本书或同时检索多个人物）请在同一轮里一起发起工具调用，它们会并行执行。")
             appendLine("重点书籍 book_id：${focusedBookIds.joinToString().ifBlank { "未指定" }}")
             appendLine("每本书独立防剧透。新一轮可随实际已读水位增长，单轮工具仍使用固定原文范围。")
             appendLine("不得根据其他书的阅读进度扩大本书范围，不得借助自身知识补写未读情节。没有证据时请说明不知道。")

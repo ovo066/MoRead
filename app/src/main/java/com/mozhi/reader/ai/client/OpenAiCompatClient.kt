@@ -21,7 +21,6 @@ import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
 import java.io.IOException
 import java.util.concurrent.TimeUnit
-import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 /**
@@ -207,18 +206,12 @@ internal val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 /** Reads a successful body or throws the mapped dialect-agnostic error. */
 internal suspend fun execute(client: OkHttpClient, request: Request): String =
     withContext(Dispatchers.IO) {
-        val response = try {
-            client.newCall(request).await()
+        try {
+            client.newCall(request).awaitBody()
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             throw cancelled
         } catch (error: Throwable) {
             throw mapTransportError(error)
-        }
-        response.use {
-            val body = it.body?.string().orEmpty()
-            if (!it.isSuccessful) throw httpError(it.code, extractErrorMessage(body))
-            if (body.isBlank()) throw AiClientException.Empty()
-            body
         }
     }
 
@@ -241,15 +234,27 @@ internal fun extractErrorMessage(body: String?): String? {
     }.getOrNull() ?: body.take(200)
 }
 
-private suspend fun Call.await(): Response = suspendCancellableCoroutine { continuation ->
+private suspend fun Call.awaitBody(): String = suspendCancellableCoroutine { continuation ->
+    // Keep cancellation attached until the body is consumed, not only until headers arrive.
+    // Otherwise a slow body keeps a timed-out annotation job holding the sole worker.
+    continuation.invokeOnCancellation { runCatching(::cancel) }
     enqueue(object : Callback {
         override fun onFailure(call: Call, e: IOException) {
             if (continuation.isActive) continuation.resumeWithException(e)
         }
 
         override fun onResponse(call: Call, response: Response) {
-            continuation.resume(response)
+            try {
+                val body = response.use {
+                    val text = it.body?.string().orEmpty()
+                    if (!it.isSuccessful) throw httpError(it.code, extractErrorMessage(text))
+                    if (text.isBlank()) throw AiClientException.Empty()
+                    text
+                }
+                continuation.resumeWith(Result.success(body))
+            } catch (error: Exception) {
+                if (continuation.isActive) continuation.resumeWithException(error)
+            }
         }
     })
-    continuation.invokeOnCancellation { runCatching(::cancel) }
 }

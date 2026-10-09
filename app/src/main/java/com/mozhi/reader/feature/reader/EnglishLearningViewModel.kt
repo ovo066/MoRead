@@ -1,6 +1,8 @@
 package com.mozhi.reader.feature.reader
 
+import android.content.Context
 import android.net.Uri
+import com.mozhi.reader.R
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mozhi.reader.ai.client.*
@@ -8,6 +10,7 @@ import com.mozhi.reader.core.database.entity.ModelRole
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
 import com.mozhi.reader.core.dictionary.*
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -24,7 +27,8 @@ data class EnglishLearningState(
 @HiltViewModel
 class EnglishLearningViewModel @Inject constructor(
     val dictionaries: LocalDictionaryRepository, private val settings: ReaderSettingsRepository,
-    private val clients: AiClientFactory
+    private val clients: AiClientFactory,
+    @ApplicationContext private val context: Context
 ) : ViewModel() {
     private val mutable = MutableStateFlow(EnglishLearningState())
     val state = mutable.asStateFlow()
@@ -79,12 +83,19 @@ class EnglishLearningViewModel @Inject constructor(
     fun setEnabled(enabled: Boolean) = action { settings.setEnglishLearning(enabled) }
     fun setBionic(enabled: Boolean) = action { settings.setEnglishBionic(enabled) }
     fun setAnnotationMode(mode: WordAnnotationMode) = action { settings.setWordAnnotationMode(mode) }
+    fun setLearningLanguage(bookId: Long, language: LearningLanguage) = action { if (bookId > 0) settings.setLearningLanguage(bookId, language) }
+    fun setTranslationTarget(target: TranslationTarget) = action { settings.setTranslationTarget(target) }
     fun saveWord(bookId: Long, dictionaryId: String?, preferAi: Boolean) = action {
         val current = mutable.value
         val hit = current.hit ?: return@action
         if (dictionaryQuery(hit.word) == null) return@action
         val word = EnglishWords.normalize(hit.word)
-        val existing = settings.settings.first().vocabulary.firstOrNull { it.word == word }?.repairMetadataGloss()
+        val snapshot = settings.settings.first()
+        val existing = snapshot.vocabulary.firstOrNull { it.word == word }?.repairMetadataGloss()
+        // 生词归入本书的学习语言；自动模式按查词语境识别，识别不出就留空（按英文旧数据处理）。
+        val language = LearningLanguage.fromCode(snapshot.learningLanguages[bookId])
+            .takeUnless { it == LearningLanguage.AUTO } ?: ScriptDetector.detect(hit.context + " " + hit.word)
+        val languageCode = language.takeUnless { it == LearningLanguage.AUTO }?.code.orEmpty()
         val definition = if (preferAi) current.aiDefinition.orEmpty() else
             current.definitions.firstOrNull { it.dictionaryId == dictionaryId }?.html?.let { org.jsoup.Jsoup.parse(it).text() }.orEmpty()
         require(definition.isNotBlank()) { "所选词典尚无可保存的释义" }
@@ -92,30 +103,30 @@ class EnglishLearningViewModel @Inject constructor(
         // Saving a chosen source replaces all definition fields together, including absent phonetics.
         // Keeping nonblank old glosses made the reader continue showing a different dictionary.
         settings.saveVocabulary(existing?.copy(definition = definition.take(12_000),
-            gloss = brief.meaning, phonetic = brief.phonetic) ?: VocabularyWord(
-            word, definition.take(12_000), hit.context, bookId, hit.chapterIndex, hit.offset, gloss = brief.meaning, phonetic = brief.phonetic))
+            gloss = brief.meaning, phonetic = brief.phonetic, language = existing.language.ifBlank { languageCode }) ?: VocabularyWord(
+            word, definition.take(12_000), hit.context, bookId, hit.chapterIndex, hit.offset, gloss = brief.meaning, phonetic = brief.phonetic,
+            language = languageCode))
         mutable.update { it.copy(message = if (existing == null) "已加入生词本" else "已更新生词释义与词下标注") }
     }
     fun updateWord(word: VocabularyWord, remove: Boolean = false) = action { settings.saveVocabulary(word, remove) }
     fun importMdx(uri: Uri, mimeType: String? = null) = importAction {
         val result = dictionaries.importMdxResult(uri, mimeType)
-        if (result.duplicate) "「${result.dictionary.title}」已存在，已跳过重复导入"
-        else "已导入「${result.dictionary.title}」，可添加对应的 MDD 资源包"
+        context.getString(if (result.duplicate) R.string.dictionary_import_existing else R.string.dictionary_import_completed, result.dictionary.title) +
+            context.getString(R.string.dictionary_import_companions, result.resourcesImported) +
+            importWarnings(result.resourceWarnings)
     }
     fun importMdx(uris: List<Uri>) = importAction {
-        var imported = 0
-        var duplicates = 0
-        val failures = mutableListOf<String>()
-        uris.forEachIndexed { index, uri ->
-            try { if (dictionaries.importMdxResult(uri).duplicate) duplicates++ else imported++ }
-            catch (cancelled: CancellationException) { throw cancelled }
-            catch (error: Exception) { failures += "第 ${index + 1} 本：${error.message ?: "导入失败"}" }
-        }
-        "已导入 $imported 本词典，跳过 $duplicates 本重复词典" + if (failures.isEmpty()) "" else "；${failures.joinToString("；")}"
+        dictionaryImportMessage(dictionaries.importFiles(uris))
     }
+    fun importDictionaryFolder(uri: Uri) = importAction { dictionaryImportMessage(dictionaries.importFolder(uri)) }
+    private fun dictionaryImportMessage(result: DictionaryBatchImportResult) =
+        context.getString(R.string.dictionary_import_batch_completed, result.imported, result.duplicates, result.resources) +
+            importWarnings(result.failures)
+    private fun importWarnings(warnings: List<String>): String = if (warnings.isEmpty()) "" else
+        context.getString(R.string.dictionary_import_warnings, warnings.joinToString(context.getString(R.string.dictionary_import_warning_separator)))
     fun importMdd(id: String, uris: List<Uri>) = importAction {
         val result = dictionaries.importResources(id, uris)
-        "已导入 ${result.imported} 个资源包，跳过 ${result.duplicates} 个重复资源包"
+        context.getString(R.string.dictionary_import_resources_completed, result.imported, result.duplicates)
     }
     fun setDictionaryEnabled(id: String, enabled: Boolean) = action {
         dictionaries.setEnabled(id, enabled)

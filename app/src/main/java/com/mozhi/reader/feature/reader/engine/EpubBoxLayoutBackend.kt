@@ -1516,7 +1516,10 @@ internal class EpubBoxLayoutBackend(
         sourceLength = sourceLength,
         inlineMarkerKind = inlineMarkerKind,
         inlineMarkerOffset = inlineMarkerOffset,
-        linkHref = linkHref
+        linkHref = linkHref,
+        decorationStyle = decorationStyle,
+        decorationColorArgb = decorationColorArgb,
+        linkUnderlineOverride = linkUnderlineOverride
     )
 
     private data class BlockGeometry(

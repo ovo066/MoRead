@@ -134,7 +134,7 @@ class CompanionContextBuilderTest {
             scene = "景".repeat(600),
             memories = emptyList(),
             annotations = annotations,
-            budgetChars = 650
+            budgetChars = 720
         )
         assertFalse(tight.contains("【用户划线】"))
         assertTrue(tight.contains("【当前场景】"))

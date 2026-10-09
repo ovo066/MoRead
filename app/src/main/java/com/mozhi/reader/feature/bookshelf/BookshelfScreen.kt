@@ -181,6 +181,7 @@ fun BookshelfScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var deleteTarget by remember { mutableStateOf<BookEntity?>(null) }
+    var duplicateImport by remember { mutableStateOf<com.mozhi.reader.core.importer.PreparedImport.Duplicate?>(null) }
     var longPressTarget by remember { mutableStateOf<BookLongPressTarget?>(null) }
     var showTagPicker by remember { mutableStateOf(false) }
     var showGroupPicker by remember { mutableStateOf(false) }
@@ -252,8 +253,17 @@ fun BookshelfScreen(
                 is BookshelfEvent.OpenImportPreview -> onOpenImportPreview(event.sessionId)
                 is BookshelfEvent.OpenBook -> onOpenBook(event.bookId)
                 is BookshelfEvent.ShowMessage -> snackbarHostState.showSnackbar(event.message)
+                is BookshelfEvent.DuplicateFound -> duplicateImport = event.duplicate
             }
         }
+    }
+    duplicateImport?.let { duplicate ->
+        DuplicateImportDialog(
+            duplicate = duplicate,
+            onOpenExisting = { duplicateImport = null; onOpenBook(duplicate.bookId) },
+            onImportAnyway = { duplicateImport = null; viewModel.importDocument(duplicate.uri, allowDuplicate = true) },
+            onDismiss = { duplicateImport = null }
+        )
     }
 
     // 搜索是叠在筛选之上的第二层过滤，留在 UI 层：输入是本地状态，没必要绕一圈 VM。

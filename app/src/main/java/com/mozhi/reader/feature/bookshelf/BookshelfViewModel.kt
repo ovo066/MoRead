@@ -74,6 +74,7 @@ sealed interface BookshelfEvent {
     data class OpenImportPreview(val sessionId: String) : BookshelfEvent
     data class OpenBook(val bookId: Long) : BookshelfEvent
     data class ShowMessage(val message: String) : BookshelfEvent
+    data class DuplicateFound(val duplicate: PreparedImport.Duplicate) : BookshelfEvent
 }
 
 @HiltViewModel
@@ -182,16 +183,18 @@ class BookshelfViewModel @Inject constructor(
         }
     }
 
-    fun importDocument(uri: Uri) {
+    fun importDocument(uri: Uri, allowDuplicate: Boolean = false) {
         viewModelScope.launch {
             importing.value = true
-            runCatching { importGateway.prepare(uri) }
+            runCatching { importGateway.prepare(uri, allowDuplicate) }
                 .onSuccess { prepared ->
                     when (prepared) {
                         is PreparedImport.PreviewReady ->
                             eventChannel.send(BookshelfEvent.OpenImportPreview(prepared.sessionId))
                         is PreparedImport.BookImported ->
                             eventChannel.send(BookshelfEvent.OpenBook(prepared.bookId))
+                        is PreparedImport.Duplicate ->
+                            eventChannel.send(BookshelfEvent.DuplicateFound(prepared))
                     }
                 }
                 .onFailure { error ->

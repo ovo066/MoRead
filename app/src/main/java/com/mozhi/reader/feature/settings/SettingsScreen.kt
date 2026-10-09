@@ -1,5 +1,8 @@
 package com.mozhi.reader.feature.settings
 
+import com.mozhi.reader.ui.components.MoReadChoice
+import com.mozhi.reader.ui.components.MoReadChoiceDialog
+import com.mozhi.reader.ui.components.MoReadChoiceRow
 import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -54,6 +57,7 @@ import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.RecordVoiceOver
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Storage
+import androidx.compose.material.icons.outlined.Translate
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
@@ -132,7 +136,8 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel(),
     onOpenDictionaries: () -> Unit = {},
     onOpenVocabulary: () -> Unit = {},
-    onOpenReadingReview: () -> Unit = {}
+    onOpenReadingReview: () -> Unit = {},
+    onOpenLanguage: () -> Unit = onOpenDictionaries
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     MoReadRootPage(title = stringResource(R.string.nav_settings), contentPadding = contentPadding) {
@@ -155,11 +160,9 @@ fun SettingsScreen(
                     onClick = onOpenTts
                 )
                 MoReadRowDivider()
-                MoReadRow(icon = Icons.AutoMirrored.Outlined.MenuBook, title = stringResource(R.string.settings_dictionaries),
-                    subtitle = stringResource(R.string.settings_dictionaries_summary), onClick = onOpenDictionaries)
-                MoReadRowDivider()
-                MoReadRow(icon = Icons.Outlined.Bookmarks, title = stringResource(R.string.settings_vocabulary),
-                    subtitle = stringResource(R.string.settings_vocabulary_summary), onClick = onOpenVocabulary)
+                // 词典与生词本同属外语学习，首页只留一个入口。
+                MoReadRow(icon = Icons.Outlined.Translate, title = stringResource(R.string.settings_language_learning),
+                    subtitle = stringResource(R.string.settings_language_learning_summary), onClick = onOpenLanguage)
             }
         }
         item {
@@ -220,9 +223,13 @@ fun AiAndCompanionSettingsScreen(
     onOpenTtsSettings: () -> Unit,
     onOpenVoiceLibrary: () -> Unit,
     onOpenImageGenSettings: () -> Unit,
-    viewModel: SettingsViewModel = hiltViewModel()
+    viewModel: SettingsViewModel = hiltViewModel(),
+    onOpenChatDisplay: () -> Unit = {},
+    onOpenProactive: () -> Unit = {},
+    onOpenMemory: () -> Unit = {}
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    // 一级只放入口与一行状态摘要；开关都收进二级页，第一次打开不必读完二十行。
     MoReadSecondaryPage(title = stringResource(R.string.settings_ai_companion_title), onBack = onBack) {
         item {
             MoReadSection(title = stringResource(R.string.settings_ai_services), icon = Icons.Outlined.AutoAwesome, tone = SemanticSlot.AI) {
@@ -233,137 +240,23 @@ fun AiAndCompanionSettingsScreen(
                 MoReadRow(icon = Icons.Outlined.Tune, title = stringResource(R.string.settings_global_presets), subtitle = stringResource(R.string.settings_global_presets_summary), onClick = onOpenGlobalPresets)
                 MoReadRowDivider()
                 MoReadRow(icon = Icons.Outlined.PersonOutline, title = stringResource(R.string.settings_user_masks), subtitle = stringResource(R.string.settings_user_masks_summary), onClick = onOpenUserMasks)
+            }
+        }
+        item {
+            MoReadSection(title = stringResource(R.string.settings_section_companion_behavior), icon = Icons.Outlined.Psychology, tone = SemanticSlot.READING) {
+                MoReadRow(icon = Icons.Outlined.ChatBubbleOutline, title = stringResource(R.string.settings_chat_display), subtitle = stringResource(R.string.settings_chat_display_summary), onClick = onOpenChatDisplay)
                 MoReadRowDivider()
-                MoReadSwitchRow(
-                    icon = Icons.Outlined.Bolt,
-                    title = stringResource(R.string.settings_suggested_replies),
-                    subtitle = stringResource(R.string.settings_suggested_replies_summary),
-                    checked = state.suggestionRepliesEnabled,
-                    onCheckedChange = viewModel::setSuggestionReplies
-                )
+                MoReadRow(icon = Icons.Outlined.Bolt, title = stringResource(R.string.settings_section_proactive), subtitle = proactiveSummary(state), onClick = onOpenProactive)
                 MoReadRowDivider()
-                MoReadSwitchRow(
-                    icon = Icons.Outlined.BorderColor,
-                    title = stringResource(R.string.settings_show_ai_annotations),
-                    subtitle = stringResource(R.string.settings_show_ai_annotations_summary),
-                    checked = state.showAiAnnotations,
-                    onCheckedChange = viewModel::setShowAiAnnotations
-                )
-                MoReadRowDivider()
-                MoReadSwitchRow(
-                    icon = Icons.Outlined.ChatBubbleOutline,
-                    title = stringResource(R.string.settings_multi_bubble),
-                    subtitle = stringResource(R.string.settings_multi_bubble_summary),
-                    checked = state.multiBubbleEnabled,
-                    onCheckedChange = viewModel::setMultiBubble
-                )
-                MoReadRowDivider()
-                MoReadSwitchRow(
-                    icon = Icons.Outlined.Bolt,
-                    title = stringResource(R.string.settings_token_usage),
-                    subtitle = stringResource(R.string.settings_token_usage_summary),
-                    checked = state.companionTokenUsageEnabled,
-                    onCheckedChange = viewModel::setCompanionTokenUsage
-                )
+                MoReadRow(icon = Icons.Outlined.Bookmarks, title = stringResource(R.string.settings_section_memory), subtitle = memorySummary(state), onClick = onOpenMemory)
             }
         }
         item {
             MoReadSection(title = stringResource(R.string.settings_section_voice_image), icon = Icons.Outlined.GraphicEq, tone = SemanticSlot.KNOWLEDGE) {
-                MoReadRow(icon = Icons.Outlined.RecordVoiceOver, title = stringResource(R.string.settings_tts_engine), subtitle = stringResource(R.string.settings_tts_engine_summary), onClick = onOpenTtsSettings)
-                MoReadRowDivider()
+                // 朗读引擎与首页「朗读」是同一页，这里只留音色库与生图。
                 MoReadRow(icon = Icons.Outlined.LibraryMusic, title = stringResource(R.string.settings_voice_library), subtitle = stringResource(R.string.settings_voice_library_summary), onClick = onOpenVoiceLibrary)
                 MoReadRowDivider()
                 MoReadRow(icon = Icons.Outlined.Brush, title = stringResource(R.string.settings_image_gen), subtitle = stringResource(R.string.settings_image_gen_summary), onClick = onOpenImageGenSettings)
-            }
-        }
-        item {
-            // 这一组专收「应用替用户掏钱」的行为：每一项都默认关，副标题写清代价。
-            MoReadSection(
-                title = stringResource(R.string.settings_section_proactive),
-                icon = Icons.Outlined.Bolt,
-                tone = SemanticSlot.CAUTION,
-                footer = stringResource(R.string.settings_section_proactive_footer)
-            ) {
-                MoReadSwitchRow(
-                    icon = Icons.Outlined.GraphicEq,
-                    title = stringResource(R.string.settings_voice_replies),
-                    subtitle = stringResource(R.string.settings_voice_replies_summary),
-                    checked = state.autonomy.voiceRepliesEnabled,
-                    onCheckedChange = viewModel::setVoiceReplies
-                )
-                MoReadRowDivider()
-                MoReadSwitchRow(
-                    icon = Icons.Outlined.Brush,
-                    title = stringResource(R.string.settings_image_replies),
-                    subtitle = stringResource(R.string.settings_image_replies_summary),
-                    checked = state.autonomy.imageRepliesEnabled,
-                    onCheckedChange = viewModel::setImageReplies
-                )
-                MoReadRowDivider()
-                MoReadSwitchRow(
-                    icon = Icons.Outlined.BorderColor,
-                    title = stringResource(R.string.settings_proactive_annotations),
-                    subtitle = state.autonomy.annotationLimits.timingSummary(),
-                    checked = state.autonomy.proactiveAnnotationsEnabled,
-                    onCheckedChange = viewModel::setProactiveAnnotations
-                )
-                MoReadRowDivider()
-                MoReadRow(
-                    icon = Icons.Outlined.Tune,
-                    title = stringResource(R.string.settings_proactive_annotation_settings),
-                    subtitle = stringResource(
-                        R.string.settings_proactive_annotation_settings_summary,
-                        state.autonomy.annotationLimits.summary()
-                    ),
-                    onClick = onOpenAnnotationLimits
-                )
-                MoReadRowDivider()
-                MoReadSwitchRow(
-                    icon = Icons.Outlined.RecordVoiceOver,
-                    title = stringResource(R.string.settings_annotation_voice),
-                    subtitle = stringResource(R.string.settings_annotation_voice_summary),
-                    checked = state.autonomy.proactiveAnnotationVoiceEnabled,
-                    enabled = state.autonomy.proactiveAnnotationsEnabled,
-                    onCheckedChange = viewModel::setProactiveAnnotationVoice
-                )
-                MoReadRowDivider()
-                MoReadSwitchRow(
-                    icon = Icons.Outlined.Image,
-                    title = stringResource(R.string.settings_annotation_image),
-                    subtitle = stringResource(R.string.settings_annotation_image_summary),
-                    checked = state.autonomy.proactiveAnnotationImageEnabled,
-                    enabled = state.autonomy.proactiveAnnotationsEnabled,
-                    onCheckedChange = viewModel::setProactiveAnnotationImage
-                )
-            }
-        }
-        item {
-            MoReadSection(title = stringResource(R.string.settings_section_memory), icon = Icons.Outlined.Psychology, tone = SemanticSlot.READING) {
-                MoReadSwitchRow(
-                    icon = Icons.Outlined.Bookmarks,
-                    title = stringResource(R.string.settings_long_term_memory),
-                    subtitle = stringResource(R.string.settings_long_term_memory_summary),
-                    checked = state.memory.longTermEnabled,
-                    onCheckedChange = viewModel::setLongTermMemory
-                )
-                MoReadRowDivider()
-                MoReadSwitchRow(
-                    icon = Icons.AutoMirrored.Outlined.MenuBook,
-                    title = stringResource(R.string.settings_cross_book_memory),
-                    subtitle = stringResource(R.string.settings_cross_book_memory_summary),
-                    checked = state.memory.crossBookEnabled,
-                    enabled = state.memory.longTermEnabled,
-                    onCheckedChange = viewModel::setCrossBookMemory
-                )
-                MoReadRowDivider()
-                MoReadSwitchRow(
-                    icon = Icons.Outlined.Search,
-                    title = stringResource(R.string.settings_cross_book_search),
-                    subtitle = stringResource(R.string.settings_cross_book_search_summary),
-                    checked = state.memory.crossBookChatSearchEnabled,
-                    enabled = state.memory.longTermEnabled,
-                    onCheckedChange = viewModel::setCrossBookChatSearch
-                )
             }
         }
     }
@@ -907,4 +800,46 @@ private fun ThemeMode.labelRes(): Int = when (this) {
     ThemeMode.SYSTEM -> R.string.settings_theme_system
     ThemeMode.LIGHT -> R.string.settings_theme_light
     ThemeMode.DARK -> R.string.settings_theme_dark
+}
+
+/** 外语学习：词典、生词本与默认译文语言。 */
+@Composable
+fun LanguageLearningSettingsScreen(
+    onBack: () -> Unit,
+    onOpenDictionaries: () -> Unit,
+    onOpenVocabulary: () -> Unit,
+    viewModel: SettingsViewModel = hiltViewModel()
+) {
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    var picking by remember { mutableStateOf(false) }
+    val targets = com.mozhi.reader.core.dictionary.TranslationTarget.entries
+    val labels = mapOf(
+        com.mozhi.reader.core.dictionary.TranslationTarget.ZH_HANS to stringResource(R.string.translation_target_zh_hans),
+        com.mozhi.reader.core.dictionary.TranslationTarget.ZH_HANT to stringResource(R.string.translation_target_zh_hant),
+        com.mozhi.reader.core.dictionary.TranslationTarget.EN to stringResource(R.string.translation_target_en)
+    )
+    val badges = mapOf(
+        com.mozhi.reader.core.dictionary.TranslationTarget.ZH_HANS to stringResource(R.string.translation_target_zh_hans_badge),
+        com.mozhi.reader.core.dictionary.TranslationTarget.ZH_HANT to stringResource(R.string.translation_target_zh_hant_badge),
+        com.mozhi.reader.core.dictionary.TranslationTarget.EN to "En"
+    )
+    val target = com.mozhi.reader.core.dictionary.TranslationTarget.fromCode(state.translationTarget)
+    MoReadSecondaryPage(title = stringResource(R.string.settings_language_learning), onBack = onBack) {
+        item {
+            MoReadSection(title = stringResource(R.string.settings_language_learning), icon = Icons.Outlined.Translate, tone = SemanticSlot.READING) {
+                MoReadRow(icon = Icons.AutoMirrored.Outlined.MenuBook, title = stringResource(R.string.settings_dictionaries),
+                    subtitle = stringResource(R.string.settings_dictionaries_summary), onClick = onOpenDictionaries)
+                MoReadRowDivider()
+                MoReadRow(icon = Icons.Outlined.Bookmarks, title = stringResource(R.string.settings_vocabulary),
+                    subtitle = stringResource(R.string.settings_vocabulary_summary), onClick = onOpenVocabulary)
+                MoReadRowDivider()
+                MoReadChoiceRow(title = stringResource(R.string.language_translation_target), value = labels.getValue(target),
+                    badge = badges.getValue(target), subtitle = stringResource(R.string.settings_translation_target_summary),
+                    onClick = { picking = true })
+            }
+        }
+    }
+    if (picking) MoReadChoiceDialog(stringResource(R.string.language_translation_target),
+        targets.map { MoReadChoice(it, labels.getValue(it), badge = badges.getValue(it)) }, target,
+        onSelect = viewModel::setTranslationTarget, onDismiss = { picking = false })
 }

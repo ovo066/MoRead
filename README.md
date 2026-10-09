@@ -41,15 +41,15 @@ This list describes the current source tree. For features in a packaged release,
 
 - **Automatic reading:** adjustable continuous scrolling or timed page turns, with a compact reader control sheet and explicit pause behavior.
 - **Chapter outlines:** open **Contents → Outline** to save coherent chapter recaps with expandable source evidence. Chapters generate independently, with up to two model requests at a time; the navigation panel keeps its position while scrolling or switching tabs.
-- **Whole-book characters:** the adjacent **Characters** tab can scan the entire book, including unread chapters, after confirmation. Stop and resume extraction, search saved character cards, and open their source passages.
+- **Whole-book characters:** the adjacent **Characters** tab offers quick research or a full scan, including unread chapters after confirmation. Stop and resume extraction, search saved character cards, and open their source passages.
 
-- **TXT and EPUB import:** automatic encoding detection, regex-based chapter splitting using Legado’s rule set, and a preview with customizable chapter rules.
+- **TXT and EPUB import:** automatic encoding detection, regex-based chapter splitting using Legado’s rule set, a preview with customizable chapter rules, and duplicate detection. Font, image, and persona-card imports also detect duplicates.
 - **Native rendering:** classic and modern page-curl, cover, and slide animations; EPUB parsing and layout for supported CSS, block/inline content, floats, tables, backgrounds, and images. Includes text-selection handles, paragraph annotations and comments, bookmarks, and in-book search.
 - **EPUB typography:** right-to-left vertical writing with vertical punctuation, text selection, and page turns; supported CSS gradients, borders, text shadows, and positioned elements.
 - **Quick bookmarks:** in paginated mode, pull down until the release cue appears, then release to add a bookmark. Repeating the gesture never removes an existing bookmark. It is disabled in continuous vertical scrolling mode.
 - **Typography and themes:** font size, line spacing, margins, light/dark themes, custom three-color reading palettes, and generated vertical-text covers for books without artwork.
-- **Reading tools:** local MDX/MDD dictionaries, selection lookup, saved vocabulary, and optional bilingual reading with paragraph translation, glosses, and phonetics. Customize tap zones, physical page-turn keys, heading styles, and gradient or image highlighting; preview text cleanup before applying.
-- **Highlights and notes review:** filter by books, companions, and content; browse cards or full-screen excerpts, invite companion commentary and co-writing, and export with reusable share templates.
+- **Reading tools:** local MDX/MDD dictionaries with companion CSS, fonts, and images; selection lookup, saved vocabulary, and optional multilingual reading with paragraph translation, glosses, and phonetics. Set learning and translation languages, customize tap zones, physical page-turn keys, heading styles, and gradient or image highlighting; preview text cleanup before applying.
+- **Highlights and notes review:** filter by books, companions, and content; browse cards or full-screen excerpts, manage multiple records at once, invite companion commentary and co-writing, and export with reusable share templates.
 - **Continuous read-aloud:** system TTS or cloud AI TTS, sentence highlighting, automatic page/chapter advancement, and notification playback controls.
 - **Library organization:** groups, collections, drag-to-reorder, pinning, and reading states. Collection targets stay in place while a book is dragged into them; long-press menus adapt to available space and appear above the bottom navigation. Simplified/Traditional Chinese conversion preserves reading position.
 - **Large-screen support:** adaptive bookshelf grids, settings and conversation sidebars, split book-detail and audiobook views, optional two-page spreads, and side-by-side reading and companion chat.
@@ -67,12 +67,13 @@ This list describes the current source tree. For features in a packaged release,
 - **Spoiler boundaries:** companion conversations and chapter outlines respect your reading progress. Whole-book character extraction has a separate confirmation and can include later plot details.
 - **Proactive paragraph annotations:** character-voiced comments within the read portion of the book, with highlights, wavy underlines, or straight underlines. Global and per-book quotas, serialized background jobs, deduplication, and cancellation keep generation bounded.
 - **Character reactions:** free, built-in count notices by default; optionally use a fast model for a short in-character reaction, or turn notices off entirely.
-- **Chat experience:** streaming responses, conversation history, manual scrolling, stop controls, stable positioning when opening history, and reuse of layout caches when returning to the reader.
+- **Chat experience:** streaming responses, configurable process displays, footnote citations, conversation history, manual scrolling, stop controls, stable positioning when opening history, and reuse of layout caches when returning to the reader. Independent read-only tools can run in parallel.
+- **Companion charts:** bar, line, pie, radar, relationship, and timeline charts with enlargement and image export.
 - **Long-term memory:** conversations are summarized into retrievable memories, scoped to the book, character, and user persona.
 - **Ask about a selection:** translation, explanations, questions, suggested replies, and one-tap plot summaries.
 - **Illustration studio:** save a style for each book, upload character references or generate turnaround candidates, and reuse appearance versions and generation recipes. A dedicated DIY editor creates reusable style templates with descriptions, reference images, and optional advanced parameters. Preview chapter plans, then generate a resumable illustration queue for the read portion of a book.
 - **Image providers:** OpenAI image generation and editing, image output through chat endpoints, and NovelAI reference/Vibe features where supported by the selected model. Reference support and consistency vary by provider and model.
-- **Speech and voice design:** system engines, MiniMax, OpenAI-compatible endpoints, Gemini TTS, Xiaomi MiMo, and Fish Studio (Fish Audio); browse available voices, preview custom Gemini voice designs, and save selected voices to the voice library. Speech and image generation can also be configured independently of model assignments.
+- **Speech and voice design:** system engines, MiniMax, OpenAI-compatible endpoints, Gemini TTS, Xiaomi MiMo, Fish Studio (Fish Audio), and ElevenLabs; browse available voices, preview custom Gemini voice designs, and save selected voices to the voice library. Speech and image generation can also be configured independently of model assignments.
 
 ### Privacy
 

@@ -300,6 +300,15 @@ class PersonaEditorViewModel @Inject constructor(
                 return@launch
             }
 
+            // 同一张卡已经建过角色：不再重复导入（也不再落一份立绘），提示用户直接用已有角色。
+            val existing = runCatching { personaRepository.getPersonas() }.getOrDefault(emptyList()).firstOrNull { persona ->
+                persona.id != personaId && com.mozhi.reader.ai.persona.PersonaCardIdentity.same(
+                    persona.name, persona.personality, persona.greeting, card.name, card.personality, card.greeting)
+            }
+            if (existing != null) {
+                eventChannel.send(PersonaEditorEvent.Message(context.getString(com.mozhi.reader.R.string.persona_card_duplicate, existing.name)))
+                return@launch
+            }
             // 立绘落盘失败不阻断导入，人设照填。
             card.avatarPng?.let { png ->
                 runCatching { avatarStore.saveBytes(png) }

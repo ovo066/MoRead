@@ -20,7 +20,7 @@ feature/companion/CompanionScreen.kt	20
 feature/companion/CompanionStatistics.kt	9
 feature/companion/CompanionStatsScreen.kt	26
 feature/companion/LibraryChatComponents.kt	6
-feature/companion/LibraryChatConversation.kt	22
+feature/companion/LibraryChatConversation.kt	20
 feature/companion/LibraryChatHistory.kt	4
 feature/companion/LibraryCompanionScreen.kt	16
 feature/companion/LibraryCompanionViewModel.kt	12
@@ -75,7 +75,7 @@ feature/reader/CompanionCitation.kt	3
 feature/reader/CompanionComposer.kt	6
 feature/reader/CompanionMessageParts.kt	4
 feature/reader/CompanionOrb.kt	1
-feature/reader/CompanionProcessCard.kt	21
+feature/reader/CompanionProcessCard.kt	8
 feature/reader/CompanionTokenUsage.kt	1
 feature/reader/CompanionToolPresentation.kt	49
 feature/reader/CompanionVoiceBubble.kt	5
@@ -83,15 +83,14 @@ feature/reader/CompanionWorkspace.kt	6
 feature/reader/DictionaryLookupDialog.kt	16
 feature/reader/DictionaryManagerDialog.kt	17
 feature/reader/DictionaryWebContent.kt	6
-feature/reader/EnglishLearningDialog.kt	8
-feature/reader/EnglishLearningViewModel.kt	21
+feature/reader/EnglishLearningViewModel.kt	11
 feature/reader/ExtractedCharacterCardDialog.kt	9
 feature/reader/ReaderAiSheet.kt	6
 feature/reader/ReaderAiViewModel.kt	4
 feature/reader/ReaderAnnotationNoticeCapsule.kt	1
 feature/reader/ReaderAutoReadControls.kt	20
 feature/reader/ReaderBookDetail.kt	21
-feature/reader/ReaderChrome.kt	31
+feature/reader/ReaderChrome.kt	18
 feature/reader/ReaderCompanion.kt	37
 feature/reader/ReaderCompanionViewModel.kt	14
 feature/reader/ReaderComposerBar.kt	2
@@ -102,7 +101,7 @@ feature/reader/ReaderKnowledgeSheet.kt	135
 feature/reader/ReaderKnowledgeViewModel.kt	5
 feature/reader/ReaderListenOrb.kt	13
 feature/reader/ReaderNavigationSheets.kt	23
-feature/reader/ReaderPane.kt	11
+feature/reader/ReaderPane.kt	3
 feature/reader/ReaderPhysicalKeysSheet.kt	35
 feature/reader/ReaderScreen.kt	11
 feature/reader/ReaderScrollPane.kt	4
@@ -127,7 +126,7 @@ feature/reader/ReaderTypographyMainPanel.kt	19
 feature/reader/ReaderTypographySheet.kt	7
 feature/reader/ReaderTypographyStepper.kt	3
 feature/reader/ReaderTypographyThemePage.kt	25
-feature/reader/ReaderViewModel.kt	64
+feature/reader/ReaderViewModel.kt	63
 feature/reader/TextCleanupPreviewDialog.kt	10
 feature/reader/TextReplacementRuleAgent.kt	11
 feature/reader/TranslationModelSelector.kt	3

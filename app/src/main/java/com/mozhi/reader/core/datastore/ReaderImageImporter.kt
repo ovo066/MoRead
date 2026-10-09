@@ -1,5 +1,6 @@
 package com.mozhi.reader.core.datastore
 
+import kotlinx.coroutines.flow.first
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -152,6 +153,17 @@ class ReaderImageImporter @Inject constructor(
         ownerBookId: Long? = null
     ): ReaderImageAsset = withContext(Dispatchers.IO) {
         val source = checkedPendingFile(pending)
+        val fingerprint = com.mozhi.reader.core.importer.SourceFingerprints.of(source)
+        // 同一用途下已有同一张图：复用已有条目，不再写入新文件（用途不同的保持独立，避免删除时互相牵连）。
+        ReaderAssetDedup.find(
+            settingsRepository.settings.first().imageLibrary.filter { it.purpose == purpose && it.ownerBookId == ownerBookId },
+            fingerprint, filePath = { it.filePath }, sha256 = { it.sha256 }
+        )?.let { existing ->
+            source.delete()
+            val stamped = if (existing.sha256.isBlank()) existing.copy(sha256 = fingerprint.sha256) else existing
+            settingsRepository.addReaderImage(stamped, selectAsBackground)
+            return@withContext stamped
+        }
         val displayName = customName.trim().take(48).ifBlank { pending.detectedName }
         val directory = imageDirectory().canonicalFile
         val id = UUID.randomUUID().toString()
@@ -167,7 +179,8 @@ class ReaderImageImporter @Inject constructor(
                 height = pending.height,
                 importedAt = System.currentTimeMillis(),
                 purpose = purpose,
-                ownerBookId = ownerBookId
+                ownerBookId = ownerBookId,
+                sha256 = fingerprint.sha256
             )
             settingsRepository.addReaderImage(asset, selectAsBackground)
             if (source.exists()) source.delete()

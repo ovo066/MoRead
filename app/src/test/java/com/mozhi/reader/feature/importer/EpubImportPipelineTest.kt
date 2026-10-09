@@ -87,6 +87,8 @@ class EpubImportPipelineTest {
         val text = slot<List<ChapterTextInput>>()
         val library = mockk<LibraryRepository>(relaxed = true)
         coEvery { library.insertBook(any(), any(), any()) } returns 1L
+        coEvery { library.findBookBySourceHash(any()) } returns null
+        coEvery { library.getEpubBooksWithoutSource() } returns emptyList()
         coEvery { library.materializeBookText(1, capture(text), false) } just Runs
         val importer = ImportCoordinator(context, mockk(), mockk(), mockk(), EpubTextExtractor(), EpubLayoutDocumentParser(),
             EpubPackageInspector(), layouts, media, mockk(), ReadiumServices(context), library)
@@ -134,6 +136,8 @@ class EpubImportPipelineTest {
             val text = slot<List<ChapterTextInput>>()
             val library = mockk<LibraryRepository>(relaxed = true)
             coEvery { library.insertBook(any(), any(), any()) } returns bookId
+            coEvery { library.findBookBySourceHash(any()) } returns null
+            coEvery { library.getEpubBooksWithoutSource() } returns emptyList()
             coEvery { library.materializeBookText(bookId, capture(text), false) } just Runs
             val importer = ImportCoordinator(
                 context, mockk(), mockk(), mockk(), EpubTextExtractor(),

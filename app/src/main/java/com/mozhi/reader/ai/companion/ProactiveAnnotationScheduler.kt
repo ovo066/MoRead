@@ -14,7 +14,9 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -45,8 +47,11 @@ data class ProactiveAnnotationBatchResult(
 internal fun annotationChapterRange(chapterIndex: Int, ahead: Int, lastIndex: Int): IntRange =
     chapterIndex.coerceAtLeast(0)..minOf(chapterIndex + ahead.coerceIn(0, 5), lastIndex)
 
-internal fun ProactiveAnnotationJobEntity.canAttempt(now: Long): Boolean =
-    status != "DONE" && attempts < 2 && (status != "PENDING" || now - updatedAt >= 10 * 60_000)
+// The sole worker cannot race another attempt. A PENDING row is an interrupted process's
+// checkpoint, so waiting ten minutes only leaves a freshly reopened chapter without notes.
+internal fun ProactiveAnnotationJobEntity.canAttempt(): Boolean = status != "DONE" && attempts < 2
+
+internal const val PROACTIVE_ANNOTATION_RETRY_DELAY_MS = 2_000L
 
 internal fun annotationBudgetShare(remaining: Int, personas: Int): Int =
     if (remaining == Int.MAX_VALUE) Int.MAX_VALUE
@@ -81,6 +86,7 @@ class ProactiveAnnotationScheduler @Inject constructor(
     private data class Trigger(val bookId: Long, val chapterIndex: Int, val timing: ProactiveAnnotationTiming)
     private val lock = Any()
     private val pending = linkedSetOf<Trigger>()
+    private val retries = mutableMapOf<Trigger, Job>()
     private val wake = Channel<Unit>(Channel.CONFLATED)
     private var readerBook: Long? = null
     private var active: Trigger? = null
@@ -111,6 +117,7 @@ class ProactiveAnnotationScheduler @Inject constructor(
                     val trigger = synchronized(lock) {
                         pending.firstOrNull()?.also {
                             pending.remove(it)
+                            retries.remove(it)?.cancel()
                             active = it
                             activeVersion = policyVersion to readerVersion
                         }
@@ -138,6 +145,7 @@ class ProactiveAnnotationScheduler @Inject constructor(
         observedPolicy = resolved
         policyVersion++
         pending.clear()
+        retries.values.forEach { it.cancel() }; retries.clear()
         if (resolved.enabled) listOfNotNull(lastEntered, lastCompleted).filter { it.timing == resolved.limits.timing }
         else emptyList()
     }
@@ -146,6 +154,7 @@ class ProactiveAnnotationScheduler @Inject constructor(
         synchronized(lock) {
             if (readerBook != bookId) {
                 pending.clear(); readerVersion++
+                retries.values.forEach { it.cancel() }; retries.clear()
                 lastEntered = null; lastCompleted = null; observedPolicy = null
             }
             readerBook = bookId
@@ -163,6 +172,10 @@ class ProactiveAnnotationScheduler @Inject constructor(
         synchronized(lock) {
             if (readerBook != bookId) return
             lastEntered = trigger // Remember even with master off or AFTER timing.
+            if (observedPolicy?.limits?.timing == trigger.timing) {
+                pending.removeAll { !wanted(it) }
+                retries.keys.filter { !wanted(it) }.forEach { retries.remove(it)?.cancel() }
+            }
         }
         enqueue(trigger)
     }
@@ -191,6 +204,12 @@ class ProactiveAnnotationScheduler @Inject constructor(
             synchronized(lock) {
                 if (readerBook != trigger.bookId || readerEpoch != readerVersion ||
                     version != (policyVersion to readerVersion) || observedPolicy != policy) return@synchronized
+                if (trigger.timing == ProactiveAnnotationTiming.ON_CHAPTER_ENTRY) {
+                    // Async repository reads may finish out of order. Only the latest entry owns
+                    // the window; replace old lookahead instead of dropping the new chapter.
+                    if (lastEntered != trigger) return@synchronized
+                    pending.clear()
+                }
                 for (index in annotationChapterRange(trigger.chapterIndex, ahead, last)) {
                     val next = trigger.copy(chapterIndex = index)
                     if ((next != active || activeVersion != version) && pending.size < 6) pending.add(next)
@@ -198,6 +217,45 @@ class ProactiveAnnotationScheduler @Inject constructor(
             }
             wake.trySend(Unit)
         }
+    }
+
+    /** Called under lock. Entry-mode work follows the current chapter and its lookahead. */
+    private fun wanted(trigger: Trigger): Boolean {
+        if (readerBook != trigger.bookId) return false
+        if (trigger.timing != ProactiveAnnotationTiming.ON_CHAPTER_ENTRY) return true
+        val entered = lastEntered ?: return false
+        val ahead = observedPolicy?.limits?.aheadChapters ?: 0
+        return trigger.chapterIndex in annotationChapterRange(entered.chapterIndex, ahead, Int.MAX_VALUE)
+    }
+
+    private fun retry(trigger: Trigger, version: Pair<Long, Long>) {
+        synchronized(lock) {
+            if (version != (policyVersion to readerVersion) || !wanted(trigger) || trigger in retries) return
+            retries[trigger] = applicationScope.launch {
+                delay(PROACTIVE_ANNOTATION_RETRY_DELAY_MS)
+                synchronized(lock) {
+                    if (version != (policyVersion to readerVersion) || !wanted(trigger)) return@launch
+                    retries.remove(trigger)
+                    if (pending.size < 6) addPending(trigger)
+                }
+                wake.trySend(Unit)
+            }
+        }
+    }
+
+    /** Called under lock; retries and resumed lookahead never jump ahead of the visible chapter. */
+    private fun addPending(trigger: Trigger) {
+        pending.add(trigger)
+        if (trigger.timing == ProactiveAnnotationTiming.ON_CHAPTER_ENTRY) {
+            val ordered = pending.sortedBy { it.chapterIndex }
+            pending.clear()
+            pending.addAll(ordered)
+        }
+    }
+
+    private fun shouldYield(trigger: Trigger): Boolean = synchronized(lock) {
+        trigger.timing == ProactiveAnnotationTiming.ON_CHAPTER_ENTRY &&
+            lastEntered?.let { it != trigger && it in pending } == true
     }
 
     /**
@@ -210,19 +268,20 @@ class ProactiveAnnotationScheduler @Inject constructor(
         version: Pair<Long, Long>
     ) {
         val today = java.time.LocalDate.now().toEpochDay()
-        synchronized(lock) {
-            if (exhaustedNoticeDay != today) {
-                exhaustedNoticeDay = today
-                exhaustedNoticeBooks.clear()
-            }
-            if (!exhaustedNoticeBooks.add(trigger.bookId)) return
-        }
         val autonomy = settings.companionAutonomySettings.first()
         if (!autonomy.noticeActive) return
         if (personaId !in autonomy.annotationPersonasFor(settings.activePersonaId.first())) return
         val persona = personas.getPersona(personaId) ?: return
         synchronized(lock) {
             if (version.second != readerVersion || noticeEpoch != noticeVersion || readerBook != trigger.bookId) return
+            // Lookahead may spend the budget while the current chapter still has notes.
+            // Keep the once-a-day notice for the chapter the reader actually enters.
+            if (trigger.timing == ProactiveAnnotationTiming.ON_CHAPTER_ENTRY && trigger != lastEntered) return
+            if (exhaustedNoticeDay != today) {
+                exhaustedNoticeDay = today
+                exhaustedNoticeBooks.clear()
+            }
+            if (!exhaustedNoticeBooks.add(trigger.bookId)) return
             mutableResults.tryEmit(
                 ProactiveAnnotationBatchResult(
                     bookId = trigger.bookId, chapterIndex = trigger.chapterIndex,
@@ -238,19 +297,19 @@ class ProactiveAnnotationScheduler @Inject constructor(
     private suspend fun run(trigger: Trigger) {
         val policy = settings.companionAutonomySettings.first().policyFor(trigger.bookId, settings.activePersonaId.first())
         for ((index, personaId) in policy.personaIds.withIndex()) {
-            if (synchronized(lock) { observedPolicy != policy || readerBook != trigger.bookId }) break
+            if (synchronized(lock) { observedPolicy != policy || !wanted(trigger) }) break
             runForPersona(trigger, personaId, policy.personaIds.size - index)
         }
     }
 
     private suspend fun runForPersona(trigger: Trigger, personaId: Long, remainingPersonas: Int) {
         val version = synchronized(lock) {
-            if (readerBook != trigger.bookId) return
+            if (!wanted(trigger)) return
             policyVersion to readerVersion
         }
         val noticeEpoch = synchronized(lock) { noticeVersion }
         fun readerContextValid(): Boolean = synchronized(lock) {
-            version == (policyVersion to readerVersion) && readerBook == trigger.bookId
+            version == (policyVersion to readerVersion) && wanted(trigger)
         }
         val initial = settings.companionAutonomySettings.first().policyFor(trigger.bookId, settings.activePersonaId.first())
         if (!initial.enabled || initial.limits.timing != trigger.timing) return
@@ -278,7 +337,7 @@ class ProactiveAnnotationScheduler @Inject constructor(
         if (!readerContextValid()) return
         val now = System.currentTimeMillis()
         val old = dao.find(trigger.bookId, trigger.chapterIndex, personaId, revision)
-        if (old != null && !old.canAttempt(now)) return
+        if (old != null && !old.canAttempt()) return
         // attempts counts completed FAILED generation rounds, not lifecycle/policy/quota interruptions.
         var job = (old ?: ProactiveAnnotationJobEntity(
             bookId = trigger.bookId, chapterIndex = trigger.chapterIndex, personaId = personaId,
@@ -304,8 +363,13 @@ class ProactiveAnnotationScheduler @Inject constructor(
             val current = library.getChapter(trigger.bookId, trigger.chapterIndex) ?: return false
             return ProactiveAnnotationParagraphs.revision(library.readChapterText(trigger.bookId, current)) == revision && readerContextValid()
         }
-        suspend fun allowance(): com.mozhi.reader.core.datastore.ProactiveAnnotationAllowance? {
+        var yielded = false
+        suspend fun allowance(preferCurrent: Boolean = true): com.mozhi.reader.core.datastore.ProactiveAnnotationAllowance? {
             if (!valid()) return null
+            if (preferCurrent && shouldYield(trigger)) {
+                yielded = true
+                return null
+            }
             val limits = initial.limits
             val chapterCap = if (limits.chapterUnlimited) Int.MAX_VALUE else limits.maxPerChapter
             if (done.size >= chapterCap) return null
@@ -327,7 +391,8 @@ class ProactiveAnnotationScheduler @Inject constructor(
                     quota.recordCreated(0, voices, images)
                 },
                 commit = { row, end, illustration ->
-                    if (end in done || allowance() == null) false
+                    // Finish a paid paragraph before yielding to a newly entered chapter.
+                    if (end in done || allowance(preferCurrent = false) == null) false
                     else {
                         // Source validation, SHA, DataStore and JSON encoding are outside SQLite's write lock.
                         val updated = job.copy(doneParagraphEnds = Json.encodeToString((done + end).sorted()), updatedAt = System.currentTimeMillis())
@@ -345,7 +410,10 @@ class ProactiveAnnotationScheduler @Inject constructor(
                 }
             )
         } catch (cancelled: CancellationException) {
-            throw cancelled // PENDING restarts after timeout without consuming a generation failure.
+            // Scope shutdown still propagates. A request-local timeout must finish the ledger
+            // and schedule its bounded retry without requiring another chapter-entry event.
+            currentCoroutineContext().ensureActive()
+            outcome = ProactiveAnnotationGenerationResult(failed = true, stopped = false)
         } catch (_: Exception) {
             outcome = ProactiveAnnotationGenerationResult(failed = true, stopped = false)
         }
@@ -357,6 +425,11 @@ class ProactiveAnnotationScheduler @Inject constructor(
             else -> job.copy(status = "FAILED", attempts = job.attempts + 1, failureReason = "generation_failed")
         }
         dao.update(job.copy(updatedAt = System.currentTimeMillis()))
+        if (job.status == "FAILED" && job.canAttempt() && readerContextValid()) retry(trigger, version)
+        if (job.status == "PAUSED" && yielded && readerContextValid()) {
+            synchronized(lock) { if (readerContextValid() && pending.size < 6) addPending(trigger) }
+            wake.trySend(Unit)
+        }
         // Quota/timing/media/notice-copy edits don't invalidate a count notice for already committed rows.
         // Disabled master, persona change or any reader lifecycle transition still suppress publication.
         val autonomy = settings.companionAutonomySettings.first()

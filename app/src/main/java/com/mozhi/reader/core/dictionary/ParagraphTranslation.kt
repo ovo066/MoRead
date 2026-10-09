@@ -20,15 +20,21 @@ data class EnglishParagraph(val start: Int, val end: Int, val text: String) {
     val key: String get() = paragraphKey(text)
 }
 
-fun englishParagraphs(body: String): List<EnglishParagraph> = Regex("[^\\r\\n]+").findAll(body)
-    .filter { EnglishWords.pattern.containsMatchIn(it.value) }
+/** 含外语的段落（字母文字或日文假名）；纯汉字段落不算。 */
+fun foreignParagraphs(body: String): List<EnglishParagraph> = Regex("[^\\r\\n]+").findAll(body)
+    .filter { ForeignWords.containsForeign(it.value) }
     .map { EnglishParagraph(it.range.first, it.range.last + 1, it.value) }.toList()
+
+fun englishParagraphs(body: String): List<EnglishParagraph> = foreignParagraphs(body)
 
 fun paragraphKey(text: String): String = MessageDigest.getInstance("SHA-256")
     .digest(text.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
 
 @Serializable
-data class ParagraphTranslation(val start: Int, val end: Int, val sourceKey: String, val chinese: String, val hidden: Boolean = false) {
+data class ParagraphTranslation(val start: Int, val end: Int, val sourceKey: String, val chinese: String, val hidden: Boolean = false,
+    /** 译文语言（[TranslationTarget.code]）；空 = 旧缓存，当时只译成简体中文。字段名 chinese 为兼容旧缓存保留。 */
+    val target: String = "") {
+    val targetCode: String get() = target.ifBlank { TranslationTarget.ZH_HANS.code }
     fun matches(body: String): Boolean = start >= 0 && end in (start + 1)..body.length &&
         sourceKey == paragraphKey(body.substring(start, end))
 }

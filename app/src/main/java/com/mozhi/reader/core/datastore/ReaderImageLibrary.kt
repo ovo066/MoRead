@@ -19,7 +19,9 @@ data class ReaderImageAsset(
     val height: Int = 0,
     val importedAt: Long = 0L,
     val purpose: ReaderImagePurpose = ReaderImagePurpose.GENERAL,
-    val ownerBookId: Long? = null
+    val ownerBookId: Long? = null,
+    /** 文件内容指纹，同一用途下导入同一张图时复用已有条目；旧条目为空，比较时按需补算。 */
+    val sha256: String = ""
 )
 
 object ReaderImageLibraryCodec {

@@ -1,5 +1,9 @@
 package com.mozhi.reader.feature.reader
 
+import androidx.compose.material.icons.outlined.PlayCircleOutline
+import androidx.compose.material.icons.outlined.Title
+import com.mozhi.reader.R
+import androidx.compose.ui.res.stringResource
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
@@ -482,33 +486,32 @@ private fun ReaderTopBar(
                 minWidth = 220.dp,
                 maxWidth = 260.dp
             ) {
+                // 一级只放最常用的四项；样式类与整理类工具收进「更多」，第一次打开不必读完一长串。
                 key(moreTools) {
                     if (moreTools) {
-                        MoReadMenuItem(text = "返回常用操作", icon = Icons.AutoMirrored.Outlined.ArrowBack,
+                        MoReadMenuItem(text = stringResource(R.string.reader_menu_back), icon = Icons.AutoMirrored.Outlined.ArrowBack,
                             onClick = { moreTools = false })
-                        MoReadMenuItem(text = "操作区域", icon = Icons.Outlined.TouchApp,
+                        MoReadMenuItem(text = stringResource(R.string.reader_menu_title_style), icon = Icons.Outlined.Title,
+                            onClick = { menuExpanded = false; onTitleStyle() })
+                        MoReadMenuItem(text = stringResource(R.string.reader_menu_syntax), icon = Icons.Outlined.FormatColorText,
+                            onClick = { menuExpanded = false; onSyntaxHighlight() })
+                        MoReadMenuItem(text = stringResource(R.string.reader_menu_tap_zones), icon = Icons.Outlined.TouchApp,
                             onClick = { menuExpanded = false; onTapZones() })
-                        MoReadMenuItem(text = "TXT 净化 / 替换规则", icon = Icons.Outlined.AutoAwesome,
+                        MoReadMenuItem(text = stringResource(R.string.reader_menu_text_rules), icon = Icons.Outlined.AutoAwesome,
                             onClick = { menuExpanded = false; onTextReplacementRules() })
-                        MoReadMenuItem(text = "重新识别章节", icon = Icons.AutoMirrored.Outlined.MenuBook,
+                        MoReadMenuItem(text = stringResource(R.string.reader_menu_reidentify), icon = Icons.AutoMirrored.Outlined.MenuBook,
                             onClick = { menuExpanded = false; onReidentifyChapters() })
                     } else {
-                        MoReadMenuItem(text = "自动阅读", icon = Icons.AutoMirrored.Outlined.MenuBook,
-                            onClick = { menuExpanded = false; onAutoRead() })
-                        MoReadMenuItem(text = if (isCurrentPositionBookmarked) "取消书签" else "添加书签",
+                        MoReadMenuItem(text = stringResource(if (isCurrentPositionBookmarked) R.string.reader_menu_remove_bookmark else R.string.reader_menu_add_bookmark),
                             icon = if (isCurrentPositionBookmarked) Icons.Filled.Bookmark else Icons.Outlined.BookmarkAdd,
                             onClick = { menuExpanded = false; onToggleBookmark() })
-                        MoReadMenuItem(text = "书内搜索", icon = Icons.Outlined.Search,
+                        MoReadMenuItem(text = stringResource(R.string.reader_menu_search), icon = Icons.Outlined.Search,
                             onClick = { menuExpanded = false; onSearch() })
-                        MoReadMenuItem(text = "中英对照", icon = Icons.Outlined.Translate,
-                            onClick = { menuExpanded = false; onBilingual() })
-                        MoReadMenuItem(text = "阅读辅助 / 生词本", icon = Icons.Outlined.Translate,
+                        MoReadMenuItem(text = stringResource(R.string.reader_menu_auto_read), icon = Icons.Outlined.PlayCircleOutline,
+                            onClick = { menuExpanded = false; onAutoRead() })
+                        MoReadMenuItem(text = stringResource(R.string.language_aids_title), icon = Icons.Outlined.Translate,
                             onClick = { menuExpanded = false; onEnglishLearning() })
-                        MoReadMenuItem(text = "标题样式", icon = Icons.AutoMirrored.Outlined.MenuBook,
-                            onClick = { menuExpanded = false; onTitleStyle() })
-                        MoReadMenuItem(text = "语法高亮", icon = Icons.Outlined.FormatColorText,
-                            onClick = { menuExpanded = false; onSyntaxHighlight() })
-                        MoReadMenuItem(text = "更多工具", icon = Icons.Outlined.ChevronRight,
+                        MoReadMenuItem(text = stringResource(R.string.reader_menu_more), icon = Icons.Outlined.ChevronRight,
                             onClick = { moreTools = true })
                     }
                 }

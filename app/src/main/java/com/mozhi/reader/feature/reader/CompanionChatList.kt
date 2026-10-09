@@ -75,6 +75,11 @@ internal sealed interface ChatEntry {
         override val contentType: String = "media"
     }
 
+    data class Chart(val callId: String, val spec: com.mozhi.reader.ai.agent.ChartSpec) : ChatEntry {
+        override val key: String = "chart-$callId"
+        override val contentType: String = "chart-${spec.type}"
+    }
+
     data class Status(val text: String) : ChatEntry {
         override val key: String = "chat-live-status"
         override val contentType: String = "status"
@@ -109,6 +114,7 @@ internal fun buildCompanionChatEntries(
             is CompanionTimelineItem.Bubble -> it.message.clientRoundId
             is CompanionTimelineItem.Process -> it.clientRoundId
             is CompanionTimelineItem.Media -> null
+            is CompanionTimelineItem.Chart -> null
         }
     }.toSet()
     val liveRoundCommitted = liveEntryId in persistedRoundIds
@@ -158,6 +164,7 @@ internal fun buildCompanionChatEntries(
                     }
                 }
                 is CompanionTimelineItem.Media -> add(ChatEntry.Media(item.callId, item.result))
+                is CompanionTimelineItem.Chart -> add(ChatEntry.Chart(item.callId, item.spec))
             }
         }
         if (!liveRoundCommitted && (liveSteps.isNotEmpty() || !liveReasoning.isNullOrBlank())) {

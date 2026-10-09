@@ -23,7 +23,22 @@ class DictionaryWebContentTest {
         assertFalse(plain.contains("document.write"))
         assertFalse(plain.contains("display:none"))
         assertTrue(dictionaryPlainText("<img src='word.png'>").contains("没有可显示的文字"))
-        assertTrue(dictionaryHtml("<span style='color:black'>故</span>", true).contains("color:inherit!important"))
+        val dark = dictionaryHtml("<span style='color:black'>故</span>", true)
+        assertFalse(dark.contains("color:inherit!important"))
+        assertFalse(dark.contains("color:black"))
+    }
+    @Test fun publisherStylesFollowReaderDefaultsAndDarkModeKeepsDistinctHeadingColorsAndPanels() {
+        val source = "<style>body{font-size:21px}h2{color:teal}p{color:black;background-color:white}</style><h2>【正】</h2><p>正直</p>"
+        val light = dictionaryHtml(source, false)
+        assertTrue(light.indexOf("font-size:17px") < light.indexOf("font-size:21px"))
+        val dark = dictionaryHtml(source, true)
+        assertFalse(dark.contains("color:inherit!important"))
+        assertFalse(dark.contains("background-color:transparent!important"))
+        val adapted = dictionaryCssForTheme("h2{color:teal}p{color:black;background-color:white}", true)
+        val colors = Regex("(?<!-)color:([^;}]+)").findAll(adapted).map { it.groupValues[1] }.toList()
+        assertEquals(2, colors.toSet().size)
+        assertFalse(adapted.contains("background-color:white"))
+        assertEquals("h2{color:teal}", dictionaryCssForTheme("h2{color:teal}", false))
     }
     @Test fun dictionaryHtmlKeepsFormattingAndLocalStylesButRemovesActiveContent() {
         val html = dictionaryHtml("""<base href="https://evil.example"><script>fetch('/')</script><iframe src="https://evil.example"></iframe><link rel="stylesheet" href="style.css"><b onclick="alert(1)">book</b><img src="images/book.png"><a href="entry://books">books</a>""", false)

@@ -97,7 +97,7 @@ class TabletSettingsVisualTest {
         capture("tablet-settings-dark.png")
         compose.onNodeWithText("日间").performClick()
         compose.onNodeWithText("伴读与联网").performClick()
-        compose.onNodeWithText("显示伴读 Token 用量").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("生图 API").performScrollTo().assertIsDisplayed()
         val anchor = scroll()
         capture("tablet-settings-companion.png")
         sidebar("阅读与外观").performClick()
@@ -106,7 +106,7 @@ class TabletSettingsVisualTest {
         compose.runOnIdle { narrow = true }
         compose.onNodeWithTag("settings-sidebar").assertDoesNotExist()
         compose.onNodeWithContentDescription("返回").assertIsDisplayed()
-        compose.onNodeWithText("显示伴读 Token 用量").assertExists()
+        compose.onNodeWithText("生图 API").assertExists()
     }
 
     @Test @Config(qualifiers = "zh-rCN-w900dp-h1200dp-mdpi")

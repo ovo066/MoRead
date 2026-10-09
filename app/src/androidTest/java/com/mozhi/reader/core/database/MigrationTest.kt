@@ -1232,6 +1232,23 @@ class MigrationTest {
         }
     }
 
+    @Test fun migrate32To33AddsEmptySourceFingerprints() {
+        helper.createDatabase(DB_NAME, 32).use { db ->
+            db.execSQL("""
+                INSERT INTO books (id, title, author, coverPath, epubPath, sourceType, importedAt, totalChapters)
+                VALUES (1, '旧书', '作者', NULL, '', 'TXT', 1000, 3)
+            """.trimIndent())
+        }
+        helper.runMigrationsAndValidate(DB_NAME, 33, true, DatabaseMigrations.Migration32To33).use { db ->
+            db.query("SELECT title, sourceSha256, sourceByteSize FROM books WHERE id = 1").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("旧书", cursor.getString(0))
+                assertTrue(cursor.isNull(1))
+                assertTrue(cursor.isNull(2))
+            }
+        }
+    }
+
     private companion object {
         const val DB_NAME = "migration-test.db"
     }

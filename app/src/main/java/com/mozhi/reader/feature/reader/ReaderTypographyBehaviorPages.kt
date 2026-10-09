@@ -2,6 +2,7 @@ package com.mozhi.reader.feature.reader
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -36,6 +37,23 @@ internal fun BehaviorPage(
         actions.onImmersiveReadingChange
     )
     ReaderKeySettingsControl(settings, palette, actions)
+    SelectionToolbarSettings(settings.selectionToolbarExtras, palette, actions.onSelectionToolbarExtrasChange)
+}
+
+/** 选区工具栏：常用五项固定在第一排，这里勾选的再提到第一排，其余在「更多」里。 */
+@Composable
+private fun SelectionToolbarSettings(extras: Set<String>, palette: ReaderPalette, onChange: (Set<String>) -> Unit) {
+    androidx.compose.foundation.layout.Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        Text(androidx.compose.ui.res.stringResource(com.mozhi.reader.R.string.selection_toolbar_settings_title),
+            style = MaterialTheme.typography.titleSmall, color = palette.onBackground)
+        Text(androidx.compose.ui.res.stringResource(com.mozhi.reader.R.string.selection_toolbar_settings_hint),
+            style = MaterialTheme.typography.bodySmall, color = palette.muted)
+        com.mozhi.reader.core.datastore.SelectionToolbarItems.OPTIONAL.forEach { id ->
+            TypographySwitchRow(selectionToolLabel(id), androidx.compose.ui.res.stringResource(com.mozhi.reader.R.string.selection_toolbar_show_first_row), id in extras, palette) { checked ->
+                onChange(if (checked) extras + id else extras - id)
+            }
+        }
+    }
 }
 
 /**

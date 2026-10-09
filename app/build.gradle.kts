@@ -44,8 +44,8 @@ android {
         minSdk = 26
         targetSdk = 37
         // 测试期曾发过仓库外的高编号包，编号跳档保证覆盖安装不降级。
-        versionCode = 79
-        versionName = "1.3.0"
+        versionCode = 81
+        versionName = "1.3.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
 
@@ -74,6 +74,12 @@ android {
     }
 
     buildTypes {
+        getByName("debug") {
+            // Optional isolated device QA alongside an installed, officially signed app.
+            if (providers.gradleProperty("moreadQaDebug").orNull == "true") {
+                applicationIdSuffix = ".qa"
+            }
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
@@ -187,6 +193,8 @@ dependencies {
     implementation(libs.opencc.java)
     implementation(libs.android.svg)
     implementation(libs.zxing.core)
+    implementation(libs.vico.compose)
+    implementation(libs.vico.compose.m3)
 
     implementation(libs.readium.shared)
     implementation(libs.readium.streamer)

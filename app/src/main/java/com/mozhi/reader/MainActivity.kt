@@ -18,6 +18,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.res.stringResource
+import com.mozhi.reader.feature.reader.LocalCompanionProcessDisplay
 import com.mozhi.reader.feature.reader.LocalShowCompanionTokenUsage
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -129,8 +130,14 @@ class MainActivity : ComponentActivity() {
             val externalFont by pendingExternalFont.collectAsStateWithLifecycle()
             val showDictionary by externalDictionaryVisible.collectAsStateWithLifecycle()
             val showTokenUsage by settingsRepository.companionTokenUsageEnabled.collectAsStateWithLifecycle(initialValue = false)
+            val processDisplay by settingsRepository.companionProcessDisplay.collectAsStateWithLifecycle(
+                initialValue = com.mozhi.reader.core.datastore.CompanionProcessDisplay()
+            )
             MoReadTheme(appearance = current) {
-                CompositionLocalProvider(LocalShowCompanionTokenUsage provides showTokenUsage) {
+                CompositionLocalProvider(
+                    LocalShowCompanionTokenUsage provides showTokenUsage,
+                    LocalCompanionProcessDisplay provides processDisplay
+                ) {
                     MoReadApp(
                         incomingBookUri = incoming,
                         onIncomingBookConsumed = {

@@ -130,4 +130,15 @@ class ReadingReviewTest {
         assertTrue(markdown.contains("第 61 章"))
         assertTrue(markdown.contains(entry.body))
     }
+
+    @Test fun selectionFollowsTheVisibleFilteredList() {
+        val book = reviewTestBook()
+        val a = ReviewEntry(book, "我的", annotation = reviewTestAnnotation(1))
+        val b = ReviewEntry(book, "我的", annotation = reviewTestAnnotation(2))
+        val c = ReviewEntry(book, "我的", note = reviewTestNote(3))
+        assertEquals(listOf(a, c), reviewSelection(listOf(a, b, c), setOf(c.key, a.key)))
+        // 选过的条目被筛掉后不再计入，也不会被批量操作误删。
+        assertEquals(listOf(c), reviewSelection(listOf(b, c), setOf(a.key, c.key)))
+        assertEquals(emptyList<ReviewEntry>(), reviewSelection(listOf(a, b), emptySet()))
+    }
 }

@@ -23,11 +23,14 @@ internal object CompanionToolRouter {
 
     /** 段评讨论只开放查询能力，不在讨论过程中写批注、笔记或生成媒体。 */
     fun forDiscussion(longTermMemoryEnabled: Boolean): Set<String> =
-        READ_ONLY_TOOLS - if (longTermMemoryEnabled) emptySet() else setOf("recall_memory")
+        READ_ONLY_TOOLS - CHART_TOOLS - if (longTermMemoryEnabled) emptySet() else setOf("recall_memory")
 
     private val READ_ONLY_TOOLS = setOf(
         "get_reading_progress", "search_book", "grep_book", "read_book_section",
-        "list_chapters", "list_annotations", "list_notes", "recall_memory"
+        "list_chapters", "list_annotations", "list_notes", "recall_memory",
+        "count_mentions", "create_chart"
     )
     private val WEB_TOOLS = setOf("web_search", "web_scrape")
+    /** 段评讨论没有地方画图，图表与配套的计数工具只给聊天会话。 */
+    private val CHART_TOOLS = setOf("count_mentions", "create_chart")
 }

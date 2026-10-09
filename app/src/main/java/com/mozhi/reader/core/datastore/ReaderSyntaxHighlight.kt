@@ -132,10 +132,17 @@ object ReaderSyntaxHighlighter {
         result.forEach { span -> for (i in span.start until span.endExclusive) styles[i] = span.copy(start = 0, endExclusive = 0) }
         val base = ReaderSyntaxStyleSpan(0, 0, english.colorArgb, null, false, ReaderSyntaxFont.INHERIT, null, false, false, false, english.id)
         val cache = mutableMapOf<Triple<ReaderSyntaxStyleSpan, Boolean, Boolean>, ReaderSyntaxStyleSpan>()
-        com.mozhi.reader.core.dictionary.EnglishWords.pattern.findAll(text).forEach { match ->
-            val marked = com.mozhi.reader.core.dictionary.EnglishWords.normalize(match.value) in english.englishWords
-            val prefixEnd = match.range.first + if (english.englishPrefixes) (match.value.length + 1) / 2 else 0
-            for (i in match.range) {
+        // 生词划线按词表匹配（日文等无空格文字用子串）；仿生加粗只给字母文字的词首。
+        val markedAt = BooleanArray(text.length)
+        if (english.englishWords.isNotEmpty()) com.mozhi.reader.core.dictionary.WordGlossMatcher(english.englishWords).find(text)
+            .forEach { (range, _) -> for (i in range) if (i in markedAt.indices) markedAt[i] = true }
+        val words = com.mozhi.reader.core.dictionary.ForeignWords.pattern.findAll(text).map { it.range to it.value }.toMutableList()
+        val covered = BooleanArray(text.length).also { array -> words.forEach { (range, _) -> for (i in range) array[i] = true } }
+        markedAt.indices.filter { markedAt[it] && !covered[it] }.forEach { words += (it..it) to "" }
+        words.forEach { (range, value) ->
+            val prefixEnd = range.first + if (english.englishPrefixes && com.mozhi.reader.core.dictionary.ForeignWords.supportsBionic(value)) (value.length + 1) / 2 else 0
+            for (i in range) {
+                val marked = markedAt[i]
                 val bold = i < prefixEnd
                 if (!marked && !bold) continue
                 val previous = styles[i] ?: base

@@ -41,7 +41,9 @@ data class TxtImportSession(
     val charsetName: String,
     val text: String,
     val rules: List<TxtTocRule>,
-    val splitResult: TxtSplitResult
+    val splitResult: TxtSplitResult,
+    val sourceSha256: String? = null,
+    val sourceByteSize: Long? = null
 ) {
     fun toPreview(): TxtImportPreview = TxtImportPreview(
         sessionId = id,
@@ -72,7 +74,9 @@ private data class StoredTxtImportSession(
     val suggestedTitle: String,
     val suggestedAuthor: String = "",
     val charsetName: String,
-    val selectedRule: TxtTocRule?
+    val selectedRule: TxtTocRule?,
+    val sourceSha256: String? = null,
+    val sourceByteSize: Long? = null
 )
 
 @Singleton
@@ -100,7 +104,8 @@ class ImportSessionStore @Inject constructor(
         charsetName: String,
         text: String,
         rules: List<TxtTocRule>,
-        splitResult: TxtSplitResult
+        splitResult: TxtSplitResult,
+        fingerprint: com.mozhi.reader.core.importer.SourceFingerprint? = null
     ): TxtImportSession {
         val sessionId = UUID.randomUUID().toString()
         textFile(sessionId).writeText(text, StandardCharsets.UTF_8)
@@ -112,7 +117,9 @@ class ImportSessionStore @Inject constructor(
             charsetName = charsetName,
             text = text,
             rules = rules,
-            splitResult = splitResult
+            splitResult = splitResult,
+            sourceSha256 = fingerprint?.sha256,
+            sourceByteSize = fingerprint?.size
         )
         sessions[session.id] = session
         persist(session)
@@ -143,7 +150,9 @@ class ImportSessionStore @Inject constructor(
             suggestedTitle = session.suggestedTitle,
             suggestedAuthor = session.suggestedAuthor,
             charsetName = session.charsetName,
-            selectedRule = session.splitResult.rule
+            selectedRule = session.splitResult.rule,
+            sourceSha256 = session.sourceSha256,
+            sourceByteSize = session.sourceByteSize
         )
         val destination = metadataFile(session.id)
         val temporary = File(directory, "${session.id}.json.tmp")
@@ -175,7 +184,9 @@ class ImportSessionStore @Inject constructor(
             charsetName = metadata.charsetName,
             text = text,
             rules = ruleLoader.rules,
-            splitResult = splitResult
+            splitResult = splitResult,
+            sourceSha256 = metadata.sourceSha256,
+            sourceByteSize = metadata.sourceByteSize
         )
     }.getOrNull()
 

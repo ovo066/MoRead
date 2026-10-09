@@ -134,8 +134,8 @@ class DictionaryLookupVisualTest {
                 if (book.value) VocabularyDialog(onDismiss = { book.value = false }, viewModel = vm)
             }
         }
-        compose.onNodeWithText("词典管理").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText("生词本").performScrollTo().assertIsDisplayed()
+        // 词典与生词本合并为「外语学习」一个入口。
+        compose.onNodeWithText("外语学习").performScrollTo().assertIsDisplayed()
         compose.runOnIdle { book.value = true }
         compose.onNodeWithText("故").assertIsDisplayed()
         compose.onNodeWithText("温故而知新").assertIsDisplayed()

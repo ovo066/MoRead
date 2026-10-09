@@ -796,6 +796,14 @@ object DatabaseMigrations {
         }
     }
 
+    /** 重复导入检测：书籍记下源文件指纹，旧书留空（EPUB 在下次导入同尺寸文件时补算）。 */
+    val Migration32To33 = object : Migration(32, 33) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `books` ADD COLUMN `sourceSha256` TEXT DEFAULT NULL")
+            db.execSQL("ALTER TABLE `books` ADD COLUMN `sourceByteSize` INTEGER DEFAULT NULL")
+        }
+    }
+
     val Migration31To32 = object : Migration(31, 32) {
         override fun migrate(db: SupportSQLiteDatabase) {
             db.execSQL("ALTER TABLE `illustrations` ADD COLUMN `recipeJson` TEXT NOT NULL DEFAULT ''")

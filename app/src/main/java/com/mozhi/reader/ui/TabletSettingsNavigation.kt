@@ -52,11 +52,12 @@ internal fun settingsDestination(route: String?): SettingsDestination? = when (r
     "settings-review" -> SettingsDestination.REVIEW
     "settings", "settings-reading", "font-library", "image-library" -> SettingsDestination.READING
     "tts-settings", "tts-voices", "speech-cache" -> SettingsDestination.TTS
-    "settings-dictionaries" -> SettingsDestination.DICTIONARIES
+    "settings-dictionaries", "settings-language" -> SettingsDestination.DICTIONARIES
     "settings-vocabulary" -> SettingsDestination.VOCABULARY
     "ai-services", "provider/{providerId}" -> SettingsDestination.SERVICES
     "settings-ai", "annotation-limits", "annotation-prompts", "web-search-settings",
-    "image-gen-settings", "global-presets", "user-masks" -> SettingsDestination.COMPANION
+    "image-gen-settings", "global-presets", "user-masks",
+    "settings-chat-display", "settings-proactive", "settings-memory" -> SettingsDestination.COMPANION
     "backup-settings" -> SettingsDestination.BACKUP
     "settings-data" -> SettingsDestination.STORAGE
     "settings-about", "api-log" -> SettingsDestination.ABOUT

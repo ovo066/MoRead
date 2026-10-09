@@ -11,6 +11,7 @@ internal enum class CompanionToolIcon {
     WEB,
     PROGRESS,
     PLAN,
+    CHART,
     GENERIC
 }
 
@@ -119,6 +120,6 @@ internal fun companionToolPresentation(
         title = fallbackTitle.ifBlank { "调用工具" },
         action = fallbackTitle.ifBlank { "调用工具" },
         description = "执行 ${toolName.ifBlank { "未知工具" }}",
-        icon = CompanionToolIcon.GENERIC
+        icon = if (toolName == "create_chart" || toolName == "count_mentions") CompanionToolIcon.CHART else CompanionToolIcon.GENERIC
     )
 }

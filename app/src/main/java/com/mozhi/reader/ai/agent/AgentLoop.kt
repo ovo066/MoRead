@@ -83,6 +83,8 @@ class AgentLoop @Inject constructor(
     private val rollingSummarizer: dagger.Lazy<RollingSummarizer>,
     private val toolExecutor: AgentToolExecutor = AgentToolExecutor()
 ) {
+    private val toolRunner = ParallelToolRunner()
+
     /**
      * Streams one agent turn for the conversation's current history.
      *
@@ -161,9 +163,8 @@ class AgentLoop @Inject constructor(
 
             if (text.isNotBlank()) producedText = true
             working.add(ChatMessage(ChatRole.ASSISTANT, text.toString(), toolCalls = requested))
-            for (call in requested) {
-                val result = executeTool(call, byName[call.name])
-                working.add(ChatMessage(ChatRole.TOOL, result.content, toolCallId = call.id))
+            executeTools(requested, byName).forEachIndexed { index, result ->
+                working.add(ChatMessage(ChatRole.TOOL, result.content, toolCallId = requested[index].id))
             }
 
             if (round == maxRounds - 1 && !producedText) {
@@ -206,7 +207,7 @@ class AgentLoop @Inject constructor(
             .block(conversation?.rollingSummary.orEmpty())
             ?.let { listOf(ChatMessage(ChatRole.SYSTEM, it)) }
             .orEmpty()
-        val rest = persisted
+        val rest = pairToolResults(persisted)
         val history = (system + summary + rest.drop(windowStart(rest))).toMutableList()
         if (history.none { it.role == ChatRole.USER }) throw AiClientException.Empty()
         val streamer = resolve()
@@ -274,8 +275,10 @@ class AgentLoop @Inject constructor(
             }
             history.add(ChatMessage(ChatRole.ASSISTANT, text.toString(), toolCalls = requested))
 
-            for (call in requested) {
-                val result = executeTool(call, byName[call.name])
+            // 互不依赖的只读调用并发执行；落库与写回历史仍按模型给出的调用顺序。
+            val results = executeTools(requested, byName)
+            requested.forEachIndexed { index, call ->
+                val result = results[index]
                 val toolCompletedAt = System.currentTimeMillis()
                 chatDao.insertMessage(
                     MessageEntity(
@@ -302,22 +305,34 @@ class AgentLoop @Inject constructor(
         }
     }
 
-    private suspend fun FlowCollector<AgentEvent>.executeTool(call: ToolCall, tool: AgentTool?): ToolResult {
-        val displayName = tool?.displayName ?: "调用 ${call.name}"
-        emit(AgentEvent.ToolRun(call.id, call.name, displayName, call.arguments))
-        val result = toolExecutor.execute(call, tool)
-        emit(AgentEvent.ToolFinished(
-            callId = call.id,
-            toolName = call.name,
-            displayName = displayName,
-            succeeded = result is ToolResult.Success,
-            detail = when (result) {
-                is ToolResult.Success -> if (result.partial) "部分完成" else "已完成"
-                is ToolResult.Failure -> result.content.take(MAX_TOOL_STATUS_CHARS)
-            },
-            resultPreview = result.content.take(MAX_TOOL_PREVIEW_CHARS)
-        ))
-        return result
+    private suspend fun FlowCollector<AgentEvent>.executeTools(
+        calls: List<ToolCall>,
+        byName: Map<String, AgentTool>
+    ): List<ToolResult> = toolRunner.run(
+        calls = calls,
+        concurrencySafe = { call -> byName[call.name]?.concurrencySafe == true },
+        execute = { call -> toolExecutor.execute(call, byName[call.name]) }
+    ) { progress ->
+        val call = calls[progress.index]
+        val displayName = byName[call.name]?.displayName ?: "调用 ${call.name}"
+        when (progress) {
+            is ParallelToolRunner.Progress.Started ->
+                emit(AgentEvent.ToolRun(call.id, call.name, displayName, call.arguments))
+            is ParallelToolRunner.Progress.Finished -> {
+                val result = progress.result
+                emit(AgentEvent.ToolFinished(
+                    callId = call.id,
+                    toolName = call.name,
+                    displayName = displayName,
+                    succeeded = result is ToolResult.Success,
+                    detail = when (result) {
+                        is ToolResult.Success -> if (result.partial) "部分完成" else "已完成"
+                        is ToolResult.Failure -> result.content.take(MAX_TOOL_STATUS_CHARS)
+                    },
+                    resultPreview = result.content.take(MAX_TOOL_PREVIEW_CHARS)
+                ))
+            }
+        }
     }
 
     private suspend fun persistAssistant(
@@ -348,6 +363,31 @@ class AgentLoop @Inject constructor(
         val messageId = chatDao.insertMessage(message)
         chatDao.touchConversation(conversationId, now)
         return message.copy(id = messageId)
+    }
+
+    /**
+     * 停止生成可能发生在一轮工具执行到一半：assistant 的调用已落库，部分结果还没有。
+     * 各家协议都拒绝「有调用没结果」或「有结果没调用」的历史，这里补上中断说明、
+     * 丢掉找不到调用的孤立结果，让会话还能继续。
+     */
+    internal fun pairToolResults(messages: List<ChatMessage>): List<ChatMessage> {
+        val repaired = ArrayList<ChatMessage>(messages.size)
+        var pending = LinkedHashSet<String>()
+        fun flushPending() {
+            pending.forEach { id -> repaired += ChatMessage(ChatRole.TOOL, INTERRUPTED_TOOL_RESULT, toolCallId = id) }
+            pending = LinkedHashSet()
+        }
+        messages.forEach { message ->
+            if (message.role == ChatRole.TOOL) {
+                if (message.toolCallId != null && pending.remove(message.toolCallId)) repaired += message
+                return@forEach
+            }
+            flushPending()
+            repaired += message
+            if (message.role == ChatRole.ASSISTANT) message.toolCalls.mapTo(pending) { it.id }
+        }
+        flushPending()
+        return repaired
     }
 
     /**
@@ -412,6 +452,7 @@ class AgentLoop @Inject constructor(
 
     private companion object {
         const val MAX_ROUNDS = 8
+        const val INTERRUPTED_TOOL_RESULT = "（这次工具调用被中断，没有结果）"
         const val DETACHED_MAX_ROUNDS = 3
         const val WINDOW_MESSAGES = 20
         const val MAX_TOOL_STATUS_CHARS = 120

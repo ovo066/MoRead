@@ -29,6 +29,7 @@ enum class EpubDisplay { BLOCK, INLINE, INLINE_BLOCK, FLEX, GRID, TABLE, TABLE_R
 enum class EpubFloatValue { NONE, LEFT, RIGHT }
 enum class EpubClearValue { NONE, LEFT, RIGHT, BOTH }
 enum class EpubTextAlignValue { START, CENTER, END, JUSTIFY }
+enum class EpubDecorationStyle { SOLID, DOUBLE, DOTTED, DASHED, WAVY }
 
 /** CSS `position`; sticky behaves as relative in paginated flow. */
 enum class EpubPosition { STATIC, RELATIVE, ABSOLUTE }
@@ -90,6 +91,8 @@ data class EpubStyle(
     val italic: Boolean = false,
     val underline: Boolean = false,
     val strikethrough: Boolean = false,
+    val decorationStyle: EpubDecorationStyle = EpubDecorationStyle.SOLID,
+    val decorationColorArgb: Int? = null,
     /** 书写模式随文档继承；vertical-rl 由排版器在旋转坐标系里排出，其余竖排按能力判定降级。 */
     val writingMode: EpubWritingMode = EpubWritingMode.HORIZONTAL_TB,
     val textOrientation: EpubTextOrientation = EpubTextOrientation.MIXED,
@@ -189,7 +192,7 @@ class EpubStyleResolver(
         val ua = CssParser("ua.css", -10_000).parse(UA_STYLES).stylesheet.rules
         var order = 0
         val publisher = preParsedPublisherRules ?: stylesheets.flatMap { sheet ->
-            val parsed = CssParser(sheet.href, order).parse(sheet.css).stylesheet.rules
+            val parsed = CssParser(sheet.href, order, { href -> stylesheets.firstOrNull { it.href == href }?.css }).parse(sheet.css).stylesheet.rules
             order += parsed.size
             parsed
         }
@@ -254,6 +257,15 @@ class EpubStyleResolver(
                 inherited("font-style") == null && parent?.italic == true,
             underline = decoration?.first ?: parent?.underline ?: false,
             strikethrough = decoration?.second ?: parent?.strikethrough ?: false,
+            decorationStyle = inherited("text-decoration-style")?.let { value ->
+                val name = (value as? CssValue.Keyword)?.name ?: (value as? CssValue.Ident)?.name
+                EpubDecorationStyle.entries.firstOrNull { it.name.equals(name, true) }
+            } ?: parent?.decorationStyle ?: EpubDecorationStyle.SOLID,
+            decorationColorArgb = when (val value = inherited("text-decoration-color")) {
+                is CssValue.Color -> value.argb
+                CssValue.Keyword("currentcolor") -> null
+                else -> parent?.decorationColorArgb
+            },
             letterSpacingPx = lengthPx(inherited("letter-spacing"), fontSize, rootSize, fontSize)
                 ?: parent?.letterSpacingPx ?: 0f,
             colorArgb = color,
@@ -600,6 +612,7 @@ class EpubStyleResolver(
         val SIDES = listOf("top", "right", "bottom", "left")
         val CORNERS = listOf("top-left", "top-right", "bottom-right", "bottom-left")
         val INHERITED_PROPERTIES = setOf(
+            "text-decoration-line", "text-decoration-style", "text-decoration-color",
             "color", "font-family", "font-size", "font-weight", "font-style", "line-height",
             "letter-spacing", "text-align", "text-indent", "white-space", "visibility", "orphans", "widows",
             "writing-mode", "text-orientation", "text-combine-upright", "text-shadow"

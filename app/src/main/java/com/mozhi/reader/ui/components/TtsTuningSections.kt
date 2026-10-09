@@ -83,7 +83,7 @@ fun TtsTuningSections(
                 TuningSlider("语速", settings.systemRate, 0.5f..2f, actions.onSystemRateChange)
                 TuningSlider("音调", settings.systemPitch, 0.5f..2f, actions.onSystemPitchChange)
             } else {
-                TuningSlider("语速", settings.aiSpeed, 0.5f..2f, actions.onAiSpeedChange)
+                if (settings.aiSupportsSpeed) TuningSlider("语速", settings.aiSpeed, settings.aiSpeedRange, actions.onAiSpeedChange)
                 if (settings.aiSupportsVolume) TuningSlider("音量", settings.aiVolume, 0.5f..2f, actions.onAiVolumeChange)
                 if (settings.aiSupportsPitch) TuningSlider(
                     "音调",

@@ -35,13 +35,14 @@ class LibraryCompanionToolset @Inject constructor(
         val catalog = LibraryCatalogTool(library, shelf)
         val organizer = LibraryOrganizationTool(organization)
         // Schemas come from an actual catalog entry; constructing them does not read its text.
-        val sample = library.getBooks().firstOrNull { it.removedAt == 0L } ?: return listOf(catalog, organizer)
-        val names = setOf("list_chapters", "list_notes", "list_annotations", "read_book_section", "search_book", "grep_book")
+        val sample = library.getBooks().firstOrNull { it.removedAt == 0L } ?: return listOf(catalog, organizer, CreateChartTool())
+        val names = setOf("list_chapters", "list_notes", "list_annotations", "read_book_section", "search_book", "grep_book", "count_mentions")
         val templates = readerTools.forBook(sample.id, personaId, enabledTools = names,
             readingScope = ReadingScope.upto(0, 0), memoryScope = MemoryScope(longTermEnabled = false), buildMissingIndex = false)
             .filter { it.spec.name in names }
-        val resolved = mutableMapOf<Pair<Long, String>, AgentTool>()
-        return listOf(catalog, organizer) + templates.map { template ->
+        // 并发的只读调用可能同时解析同一本书的工具；重复构造无害，但映射本身必须线程安全。
+        val resolved = java.util.concurrent.ConcurrentHashMap<Pair<Long, String>, AgentTool>()
+        return listOf(catalog, organizer, CreateChartTool()) + templates.map { template ->
             ScopedLibraryTool(template, emptyList(), guard::validate, resolve = sources::authorize) { scope, arguments ->
                 val args = boundedLibraryArguments(template.spec.name, arguments, scope)
                 val tool = resolved.getOrPut(scope.bookId to template.spec.name) {

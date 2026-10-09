@@ -1,5 +1,11 @@
 package com.mozhi.reader.feature.reader
 
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.res.stringResource
+import com.mozhi.reader.R
+import com.mozhi.reader.ai.knowledge.ExternalCharacterNote
+import com.mozhi.reader.ai.knowledge.CharacterResearchAgent
+import com.mozhi.reader.ai.knowledge.BookCharacterGuide
 import androidx.compose.foundation.background
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.layout.*
@@ -39,7 +45,7 @@ import com.mozhi.reader.ui.components.blockSheetDrag
 internal data class ReaderKnowledgeActions(
     val preview: (Int) -> Unit = {}, val cancel: (Int) -> Unit = {}, val delete: (Int) -> Unit = {},
     val locate: (ChapterKnowledgeEntity, KnowledgeFact) -> Unit = { _, _ -> },
-    val previewCharacters: (Boolean) -> Unit = {}, val cancelCharacters: () -> Unit = {}, val deleteCharacters: () -> Unit = {},
+    val previewCharacters: (Boolean, Boolean) -> Unit = { _, _ -> }, val cancelCharacters: () -> Unit = {}, val deleteCharacters: () -> Unit = {},
     val locateCharacter: (BookCharacterGuideEntity, CharacterEvidence) -> Unit = { _, _ -> },
     val saveCharacterCard: (ExtractedCharacterCard) -> Unit = {},
     val saveCharacter: (String?, String, String) -> Unit = { _, _, _ -> },
@@ -81,7 +87,24 @@ internal fun ReaderKnowledgeContentsSheet(
         confirmButton = { TextButton(onClick = viewModel::generate) { Text("生成大纲") } },
         dismissButton = { TextButton(onClick = viewModel::dismissPreview) { Text("取消") } }
     ) }
-    state.pendingCharacters?.let { plan -> AlertDialog(
+    state.pendingCharacters?.takeIf { it.quick }?.let { plan -> AlertDialog(
+        onDismissRequest = viewModel::dismissPreview,
+        title = { Text(stringResource(if (plan.progressBounded) R.string.characters_quick_title_bounded else R.string.characters_quick_title_full)) },
+        text = { Text(buildString {
+            append(plan.bookTitle).append('\n')
+            append(stringResource(if (plan.progressBounded) R.string.characters_scope_bounded else R.string.characters_scope_full, plan.chapterCount))
+            append('\n')
+            append(stringResource(R.string.characters_quick_models, plan.mainModelLabel, plan.modelLabel)).append("\n\n")
+            append(stringResource(R.string.characters_quick_body, plan.maximumRequests))
+            if (plan.webSearch) {
+                append("\n\n")
+                append(stringResource(if (plan.progressBounded) R.string.characters_quick_web_bounded else R.string.characters_quick_web_full))
+            }
+        }) },
+        confirmButton = { TextButton(onClick = viewModel::generateCharacters) { Text(stringResource(R.string.characters_quick_start)) } },
+        dismissButton = { TextButton(onClick = viewModel::dismissPreview) { Text(stringResource(R.string.characters_cancel)) } }
+    ) }
+    state.pendingCharacters?.takeUnless { it.quick }?.let { plan -> AlertDialog(
         onDismissRequest = viewModel::dismissPreview,
         title = { Text(when {
             plan.resuming -> if (plan.progressBounded) "继续提取读过的人物？" else "继续提取全书人物？"
@@ -319,6 +342,7 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
     } }
     val titles = remember(chapters) { chapters.associate { it.chapterIndex to it.title } }
     var progressBounded by rememberSaveable(state.bookId, saved?.guide?.progressBounded) { mutableStateOf(saved?.guide?.progressBounded ?: true) }
+    var quickMode by rememberSaveable(state.bookId) { mutableStateOf(saved?.guide?.mode != BookCharacterGuide.MODE_FULL || saved == null) }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 20.dp).testTag("character-tools"),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -343,7 +367,7 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
         // Fixed status line: progress changes never move the list or its scroll anchor.
         Box(Modifier.fillMaxWidth().height(32.dp).padding(horizontal = 20.dp), contentAlignment = Alignment.CenterStart) {
             Text(task?.error ?: when {
-                busy -> task.progress + " · 可离开此页"
+                busy -> characterProgressLabel(task.progress) + " · 可离开此页"
                 state.characters.checkpointParts > 0 -> "已有提取进度，点击「提取」继续"
                 state.characters.outdated -> "正文已变化，可重新提取；手动资料保留"
                 saved?.guide?.scannedChapters == 0 -> "手动整理"
@@ -357,6 +381,9 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
             if (filtered.isEmpty()) item(key = "empty") {
                 KnowledgeEmpty(if (query.isNotBlank()) "没有找到这个人物" else "还没有人物",
                     if (query.isNotBlank()) "试试其他姓名，或清除搜索。" else "点击「提取」汇集书中人物，或用 + 手动添加。", palette)
+            }
+            saved?.guide?.externalNotes?.takeIf { it.isNotEmpty() && query.isBlank() }?.let { notes ->
+                item(key = "external-notes", contentType = "external") { ExternalNotesCard(notes, saved.guide.progressBounded, palette) }
             }
             items(filtered, key = { it.identity }, contentType = { "character" }) { person ->
                 var expanded by rememberSaveable(person.identity) { mutableStateOf(false) }
@@ -436,11 +463,17 @@ internal fun BookCharactersPanel(state: KnowledgeUiState, chapters: List<Chapter
                 }
             }
             Text(if (progressBounded) "只扫描读过的正文。" else "包含未读章节，资料可能涉及后续情节。", style = MaterialTheme.typography.bodySmall)
+            Row(Modifier.fillMaxWidth().selectableGroup().testTag("character-mode"), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(true to stringResource(R.string.characters_mode_quick), false to stringResource(R.string.characters_mode_full)).forEach { (quick, label) ->
+                    FilterChip(selected = quickMode == quick, onClick = { quickMode = quick }, enabled = !busy && state.characters.checkpointParts == 0, label = { Text(label) })
+                }
+            }
+            Text(stringResource(if (quickMode) R.string.characters_mode_quick_hint else R.string.characters_mode_full_hint), style = MaterialTheme.typography.bodySmall)
             TextButton(onClick = { options = false; information = true }) { Icon(Icons.Outlined.Info, "书籍资料说明"); Spacer(Modifier.width(6.dp)); Text("提取说明") }
             if (saved != null || state.characters.checkpointParts > 0) TextButton(onClick = { options = false; deleting = true }, enabled = !busy) { Text("删除人物资料") }
         }
     }, confirmButton = {
-        TextButton(onClick = { options = false; if (busy) actions.cancelCharacters() else actions.previewCharacters(progressBounded) },
+        TextButton(onClick = { options = false; if (busy) actions.cancelCharacters() else actions.previewCharacters(progressBounded, quickMode && state.characters.checkpointParts == 0) },
             enabled = !state.loading && !state.preparingCharacters) {
             Text(when {
                 busy -> "停止提取"
@@ -497,6 +530,45 @@ private fun KnowledgeFactRow(fact: KnowledgeFact, chapterTitle: String, palette:
             Text("“${fact.quote}”", style = MaterialTheme.typography.bodySmall.copy(lineHeight = 22.sp), color = palette.muted)
             TextButton(onClick = onLocate, contentPadding = PaddingValues(horizontal = 0.dp)) {
                 Text("$chapterTitle · 核对原文", color = palette.accent)
+            }
+        }
+    }
+}
+
+/** 快速提取的进度阶段码 → 界面文案。 */
+@Composable
+private fun characterProgressLabel(raw: String): String = when {
+    raw == CharacterResearchAgent.PROGRESS_PLANNING -> stringResource(R.string.characters_progress_planning)
+    raw == CharacterResearchAgent.PROGRESS_SEARCHING -> stringResource(R.string.characters_progress_searching)
+    raw.startsWith(CharacterResearchAgent.PROGRESS_PROFILING) ->
+        stringResource(R.string.characters_progress_profiling, raw.removePrefix(CharacterResearchAgent.PROGRESS_PROFILING))
+    else -> raw
+}
+
+/** 联网查到的书外资料：和原文依据分开放，「读到此处」时默认收起并提示可能含剧透。 */
+@Composable
+private fun ExternalNotesCard(notes: List<ExternalCharacterNote>, progressBounded: Boolean, palette: ReaderPalette) {
+    var expanded by rememberSaveable { mutableStateOf(!progressBounded) }
+    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+    Surface(shape = RoundedCornerShape(18.dp), color = palette.glass, modifier = Modifier.fillMaxWidth().testTag("external-notes")) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded }) {
+                Icon(Icons.Outlined.Info, null, tint = palette.muted, modifier = Modifier.size(18.dp))
+                Column(Modifier.weight(1f).padding(start = 8.dp)) {
+                    Text(stringResource(R.string.characters_external_title, notes.size), style = MaterialTheme.typography.titleSmall, color = palette.onBackground)
+                    Text(stringResource(if (progressBounded) R.string.characters_external_spoiler else R.string.characters_external_hint),
+                        style = MaterialTheme.typography.labelSmall, color = palette.muted)
+                }
+                Text(stringResource(if (expanded) R.string.characters_external_collapse else R.string.characters_external_expand),
+                    style = MaterialTheme.typography.labelMedium, color = palette.accent)
+            }
+            if (expanded) notes.forEach { note ->
+                Column(Modifier.fillMaxWidth().clickable(enabled = note.url.isNotBlank()) { runCatching { uriHandler.openUri(note.url) } }) {
+                    if (note.character.isNotBlank()) Text(note.character, style = MaterialTheme.typography.labelMedium, color = palette.accent)
+                    Text(note.text, style = MaterialTheme.typography.bodyMedium, color = palette.onBackground)
+                    if (note.url.isNotBlank()) Text(note.title.ifBlank { note.url }, style = MaterialTheme.typography.labelSmall, color = palette.muted,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
         }
     }

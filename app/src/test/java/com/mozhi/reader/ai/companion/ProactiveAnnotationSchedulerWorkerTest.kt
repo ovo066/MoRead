@@ -8,6 +8,7 @@ import com.mozhi.reader.core.datastore.*
 import com.mozhi.reader.core.library.LibraryRepository
 import io.mockk.*
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.*
 import org.junit.Assert.*
@@ -117,10 +118,149 @@ class ProactiveAnnotationSchedulerWorkerTest {
         assertEquals(1, requests.size)
         gate.complete(Unit); runCurrent()
         assertTrue(requests.size <= 7) // one active plus six pending, never twenty unbounded jobs
+        assertEquals(listOf(0, 19), requests.map { it.chapterIndex })
         assertEquals(requests.map { it.chapterIndex }.distinct(), requests.map { it.chapterIndex })
         val count = requests.size
-        f.scheduler.onChapterEntered(1, 0); runCurrent()
+        f.scheduler.onChapterEntered(1, 19); runCurrent()
         assertEquals(count, requests.size)
+    }
+
+    @Test fun jumpingChaptersReplacesFullLookaheadAndStopsObsoleteParagraphs() = runTest {
+        val f = Fixture(backgroundScope)
+        val gate = CompletableDeferred<Unit>()
+        val requests = mutableListOf<ProactiveAnnotationRequest>()
+        var obsoletePermit: ProactiveAnnotationAllowance? = ProactiveAnnotationAllowance(true)
+        coEvery { f.service.generateForChapter(capture(requests), any(), any(), any()) } coAnswers {
+            if (requests.size == 1) {
+                val allowance = arg<suspend () -> ProactiveAnnotationAllowance?>(1)
+                gate.await()
+                obsoletePermit = allowance()
+                ProactiveAnnotationGenerationResult(false, true)
+            } else ProactiveAnnotationGenerationResult(false, false)
+        }
+        f.scheduler.onChapterEntered(1, 0); runCurrent()
+        f.scheduler.onChapterEntered(1, 10); runCurrent()
+        gate.complete(Unit); runCurrent()
+        assertNull(obsoletePermit)
+        assertEquals(listOf(0, 10, 11, 12, 13, 14, 15), requests.map { it.chapterIndex })
+        assertEquals("PAUSED", f.ledger.rows.values.first().status)
+    }
+
+    @Test fun lateEntryLookupCannotReplaceTheNewestChapterWindow() = runTest {
+        val f = Fixture(backgroundScope)
+        val lookupGate = CompletableDeferred<Unit>()
+        val requests = mutableListOf<ProactiveAnnotationRequest>()
+        coEvery { f.library.getBook(any()) } coAnswers {
+            lookupGate.await()
+            BookEntity(id = 1, title = "书", author = "", coverPath = null, epubPath = "",
+                sourceType = BookSourceType.TXT, importedAt = 0, totalChapters = 20)
+        }
+        coEvery { f.service.generateForChapter(capture(requests), any(), any(), any()) } returns ProactiveAnnotationGenerationResult(false, false)
+        f.scheduler.onChapterEntered(1, 0); runCurrent()
+        f.scheduler.onChapterEntered(1, 10); runCurrent()
+        lookupGate.complete(Unit); runCurrent()
+        assertEquals((10..15).toList(), requests.map { it.chapterIndex })
+    }
+
+    @Test fun activeLookaheadYieldsToVisibleChapterThenResumesWithoutSpendingFailureBudget() = runTest {
+        val f = Fixture(backgroundScope)
+        val gate = CompletableDeferred<Unit>()
+        val requests = mutableListOf<ProactiveAnnotationRequest>()
+        var lookaheadPermit: ProactiveAnnotationAllowance? = ProactiveAnnotationAllowance(true)
+        coEvery { f.service.generateForChapter(capture(requests), any(), any(), any()) } coAnswers {
+            if (requests.size == 1) {
+                val allowance = arg<suspend () -> ProactiveAnnotationAllowance?>(1)
+                gate.await()
+                lookaheadPermit = allowance()
+                ProactiveAnnotationGenerationResult(false, true)
+            } else {
+                if (requests.size == 2) {
+                    val paused = f.ledger.rows.values.first { it.chapterIndex == 5 }
+                    assertEquals("PAUSED", paused.status)
+                    assertEquals(0, paused.attempts)
+                }
+                ProactiveAnnotationGenerationResult(false, false)
+            }
+        }
+        f.scheduler.onChapterEntered(1, 5); runCurrent()
+        f.scheduler.onChapterEntered(1, 3); runCurrent()
+        gate.complete(Unit); runCurrent()
+        assertNull(lookaheadPermit)
+        assertEquals(listOf(5, 3, 4, 5, 6, 7, 8), requests.map { it.chapterIndex })
+        assertTrue(f.ledger.rows.values.all { it.status == "DONE" && it.attempts == 0 })
+    }
+
+    @Test fun localCancellationRetriesWithoutAnotherReaderEventAndPreservesCheckpoint() = runTest {
+        val f = Fixture(backgroundScope)
+        f.autonomy.value = f.autonomy.value.copy(annotationLimits = f.autonomy.value.annotationLimits.copy(aheadChapters = 0))
+        f.ledger.insert(ProactiveAnnotationJobEntity(bookId = 1, chapterIndex = 0, personaId = 3,
+            sourceRevision = ProactiveAnnotationParagraphs.revision(f.body), status = "PENDING",
+            doneParagraphEnds = "[40]", createdAt = 0, updatedAt = System.currentTimeMillis()))
+        val requests = mutableListOf<ProactiveAnnotationRequest>()
+        coEvery { f.service.generateForChapter(capture(requests), any(), any(), any()) } coAnswers {
+            if (requests.size == 1) {
+                throw kotlinx.coroutines.CancellationException("request timed out")
+            }
+            ProactiveAnnotationGenerationResult(false, false)
+        }
+        f.scheduler.onChapterEntered(1, 0); runCurrent()
+        assertEquals("FAILED", f.ledger.rows.values.single().status)
+        advanceTimeBy(PROACTIVE_ANNOTATION_RETRY_DELAY_MS); runCurrent()
+        assertEquals(2, requests.size)
+        assertTrue(requests.all { it.doneParagraphEnds == setOf(40) })
+        assertEquals("DONE", f.ledger.rows.values.single().status)
+    }
+
+    @Test fun automaticFailureRetryStopsAtTwoAttempts() = runTest {
+        val f = Fixture(backgroundScope)
+        f.autonomy.value = f.autonomy.value.copy(annotationLimits = f.autonomy.value.annotationLimits.copy(aheadChapters = 0))
+        coEvery { f.service.generateForChapter(any(), any(), any(), any()) } returns ProactiveAnnotationGenerationResult(true, false)
+        f.scheduler.onChapterEntered(1, 0); runCurrent()
+        advanceTimeBy(PROACTIVE_ANNOTATION_RETRY_DELAY_MS); runCurrent()
+        advanceTimeBy(PROACTIVE_ANNOTATION_RETRY_DELAY_MS * 10); runCurrent()
+        coVerify(exactly = 2) { f.service.generateForChapter(any(), any(), any(), any()) }
+        assertEquals(2, f.ledger.rows.values.single().attempts)
+    }
+
+    @Test fun leavingReaderCancelsScheduledRetries() = runTest {
+        val f = Fixture(backgroundScope)
+        f.autonomy.value = f.autonomy.value.copy(annotationLimits = f.autonomy.value.annotationLimits.copy(aheadChapters = 0))
+        coEvery { f.service.generateForChapter(any(), any(), any(), any()) } returns ProactiveAnnotationGenerationResult(true, false)
+        f.scheduler.onChapterEntered(1, 0); runCurrent()
+        f.scheduler.clearReaderBook(1)
+        advanceTimeBy(PROACTIVE_ANNOTATION_RETRY_DELAY_MS); runCurrent()
+        coVerify(exactly = 1) { f.service.generateForChapter(any(), any(), any(), any()) }
+    }
+
+    @Test fun exhaustedLookaheadDoesNotConsumeTheVisibleChapterBudgetNotice() = runTest {
+        val f = Fixture(backgroundScope)
+        val notices = mutableListOf<ProactiveAnnotationBatchResult>()
+        backgroundScope.launch { f.scheduler.results.collect { notices += it } }
+        coEvery { f.service.generateForChapter(any(), any(), any(), any()) } coAnswers {
+            f.ledger.dailyCount = f.autonomy.value.annotationLimits.dailyMax
+            ProactiveAnnotationGenerationResult(false, false)
+        }
+        f.scheduler.onChapterEntered(1, 0); runCurrent()
+        assertTrue(notices.isEmpty())
+        f.scheduler.onChapterEntered(1, 6); runCurrent()
+        assertEquals(1, notices.size)
+        assertTrue(notices.single().dailyBudgetExhausted)
+        assertEquals(6, notices.single().chapterIndex)
+    }
+
+    @Test fun reopeningPendingJobResumesSuccessfulParagraphsWithoutTenMinuteWait() = runTest {
+        val f = Fixture(backgroundScope)
+        f.autonomy.value = f.autonomy.value.copy(annotationLimits = f.autonomy.value.annotationLimits.copy(aheadChapters = 0))
+        f.ledger.insert(ProactiveAnnotationJobEntity(bookId = 1, chapterIndex = 0, personaId = 3,
+            sourceRevision = ProactiveAnnotationParagraphs.revision(f.body), status = "PENDING",
+            doneParagraphEnds = "[40]", createdAt = 0, updatedAt = System.currentTimeMillis()))
+        coEvery { f.service.generateForChapter(any(), any(), any(), any()) } coAnswers {
+            assertEquals(setOf(40), firstArg<ProactiveAnnotationRequest>().doneParagraphEnds)
+            ProactiveAnnotationGenerationResult(false, false)
+        }
+        f.scheduler.onChapterEntered(1, 0); runCurrent()
+        assertEquals("DONE", f.ledger.rows.values.single().status)
+        coVerify(exactly = 1) { f.service.generateForChapter(any(), any(), any(), any()) }
     }
 
     @Test fun switchingBooksClearsQueuedWorkButLetsActiveCallFinish() = runTest {

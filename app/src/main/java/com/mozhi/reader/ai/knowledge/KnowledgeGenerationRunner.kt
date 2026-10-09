@@ -33,7 +33,8 @@ class KnowledgeGenerationRunner @Inject constructor(
     }
 
     fun generateCharacters(plan: BookCharactersPlan) = start(KnowledgeTaskKey(plan.bookId)) { key ->
-        characters.generate(plan) { completed, total, _ -> progress(key, "已扫描 $completed / $total 章") }
+        if (plan.quick) characters.generateQuick(plan) { stage -> progress(key, stage) }
+        else characters.generate(plan) { completed, total, _ -> progress(key, "已扫描 $completed / $total 章") }
     }
 
     fun stop(bookId: Long, chapterIndex: Int? = null) {

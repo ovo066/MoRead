@@ -261,6 +261,7 @@ fun MoReadApp(
                         onOpenAbout = { navController.navigate("settings-about") },
                         onOpenDictionaries = { navController.navigate("settings-dictionaries") },
                         onOpenVocabulary = { navController.navigate("settings-vocabulary") },
+                        onOpenLanguage = { navController.navigate("settings-language") },
                         onOpenReadingReview = { navController.navigate("settings-review") }
                     )
                 }
@@ -277,6 +278,15 @@ fun MoReadApp(
                                 }
                             }
                         }
+                    )
+                }
+                settingsComposable("settings-language", navController) { entry ->
+                    val settingsEntry = remember(entry) { navController.getBackStackEntry(RootDestination.Settings.route) }
+                    com.mozhi.reader.feature.settings.LanguageLearningSettingsScreen(
+                        onBack = navController::popBackStack,
+                        onOpenDictionaries = { navController.navigate("settings-dictionaries") },
+                        onOpenVocabulary = { navController.navigate("settings-vocabulary") },
+                        viewModel = hiltViewModel<SettingsViewModel>(settingsEntry)
                     )
                 }
                 settingsComposable("settings-dictionaries", navController) {
@@ -310,6 +320,31 @@ fun MoReadApp(
                         onOpenTtsSettings = { navController.navigate("tts-settings") },
                         onOpenVoiceLibrary = { navController.navigate("tts-voices") },
                         onOpenImageGenSettings = { navController.navigate("image-gen-settings") },
+                        viewModel = hiltViewModel<SettingsViewModel>(settingsEntry),
+                        onOpenChatDisplay = { navController.navigate("settings-chat-display") },
+                        onOpenProactive = { navController.navigate("settings-proactive") },
+                        onOpenMemory = { navController.navigate("settings-memory") }
+                    )
+                }
+                settingsComposable("settings-chat-display", navController) { entry ->
+                    val settingsEntry = remember(entry) { navController.getBackStackEntry(RootDestination.Settings.route) }
+                    com.mozhi.reader.feature.settings.ChatDisplaySettingsScreen(
+                        onBack = navController::popBackStack,
+                        viewModel = hiltViewModel<SettingsViewModel>(settingsEntry)
+                    )
+                }
+                settingsComposable("settings-proactive", navController) { entry ->
+                    val settingsEntry = remember(entry) { navController.getBackStackEntry(RootDestination.Settings.route) }
+                    com.mozhi.reader.feature.settings.ProactiveBehaviorSettingsScreen(
+                        onBack = navController::popBackStack,
+                        onOpenAnnotationLimits = { navController.navigate("annotation-limits") },
+                        viewModel = hiltViewModel<SettingsViewModel>(settingsEntry)
+                    )
+                }
+                settingsComposable("settings-memory", navController) { entry ->
+                    val settingsEntry = remember(entry) { navController.getBackStackEntry(RootDestination.Settings.route) }
+                    com.mozhi.reader.feature.settings.MemorySettingsScreen(
+                        onBack = navController::popBackStack,
                         viewModel = hiltViewModel<SettingsViewModel>(settingsEntry)
                     )
                 }

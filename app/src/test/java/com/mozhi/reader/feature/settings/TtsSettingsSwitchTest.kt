@@ -129,17 +129,44 @@ class TtsSettingsSwitchTest {
             nativeScreenshot("fish-${if (dark) "dark" else "light"}")
             compose.onNodeWithText("API Key").performScrollTo().performTextReplacement("fish-test-only")
             compose.onNodeWithText("Fish Studio（Fish Audio）").performScrollTo().performClick()
+            compose.onNodeWithText("ElevenLabs").performScrollTo().performClick()
+            compose.waitUntil { runBlocking { store.current().aiProvider == TtsApiProvider.ELEVENLABS } }
+            assertEquals("fish-test-only", keys[TtsSettingsStore.apiKeyAlias(TtsApiProvider.FISH_AUDIO)])
+            compose.onNodeWithText("模型").performScrollTo().assertTextContains("eleven_multilingual_v2")
+            nativeScreenshot("elevenlabs-config-${if (dark) "dark" else "light"}")
+            compose.onNodeWithText("音色 ID（必填）").performScrollTo()
+                .performTextReplacement("elevenlabs-cloned-voice-with-a-long-identifier-123456789")
+            compose.onNodeWithText("语速范围 0.7–1.2；eleven_v3 使用模型默认语速。音量和音调跟随音色本身。")
+                .performScrollTo().assertIsDisplayed()
+            compose.onNodeWithText("音调：", substring = true).assertDoesNotExist()
+            compose.onNodeWithText("音量：", substring = true).assertDoesNotExist()
+            nativeScreenshot("elevenlabs-${if (dark) "dark" else "light"}")
+            compose.onNodeWithText("API Key").performScrollTo().performTextReplacement("elevenlabs-test-only")
+            compose.onNodeWithText("ElevenLabs").performScrollTo().performClick()
             compose.onNodeWithText("小米 MiMo").performScrollTo().performClick()
             compose.waitUntil { runBlocking { store.current().aiProvider == TtsApiProvider.XIAOMI_MIMO } }
             assertEquals("fish-test-only", keys[TtsSettingsStore.apiKeyAlias(TtsApiProvider.FISH_AUDIO)])
             compose.onNodeWithText("音色 ID（可选）").performScrollTo().assertTextContains("茉莉")
             compose.onNodeWithText("音调风格：0").performScrollTo().assertIsDisplayed()
             nativeScreenshot("mimo-${if (dark) "dark" else "light"}")
+            compose.onNodeWithText("小米 MiMo").performScrollTo().performClick()
+            compose.onNodeWithText("ElevenLabs").performScrollTo().performClick()
+            compose.waitUntil { runBlocking { store.current().aiProvider == TtsApiProvider.ELEVENLABS } }
+            assertEquals("elevenlabs-test-only", keys[TtsSettingsStore.apiKeyAlias(TtsApiProvider.ELEVENLABS)])
+            compose.onNodeWithText("音色 ID（必填）").performScrollTo()
+                .assertTextContains("elevenlabs-cloned-voice-with-a-long-identifier-123456789")
+            compose.onNodeWithText("模型").performScrollTo().performTextReplacement("eleven_v3")
+            compose.onNodeWithText("音色 ID（必填）").performScrollTo().performClick()
+            compose.waitUntil { runBlocking { store.current().aiModel == "eleven_v3" } }
+            compose.onNodeWithText("语速：", substring = true).assertDoesNotExist()
+            compose.onNodeWithText("试听").performScrollTo().assertIsDisplayed()
+            nativeScreenshot("elevenlabs-bottom-${if (dark) "dark" else "light"}", mainWindow = true)
         } finally { scope.cancel() }
     }
 
-    private fun nativeScreenshot(name: String) = compose.runOnIdle {
-        val view = WindowInspector.getGlobalWindowViews().last { it.isShown && it.width > 0 }
+    private fun nativeScreenshot(name: String, mainWindow: Boolean = false) = compose.runOnIdle {
+        val views = WindowInspector.getGlobalWindowViews().filter { it.isShown && it.width > 0 && it.height > 0 }
+        val view = if (mainWindow) views.maxBy { it.width.toLong() * it.height } else views.last()
         val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
         view.draw(Canvas(bitmap))
         val file = File("build/outputs/tts-visual/$name.png")

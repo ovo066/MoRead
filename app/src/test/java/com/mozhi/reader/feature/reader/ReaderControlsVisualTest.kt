@@ -84,24 +84,27 @@ class ReaderControlsVisualTest {
         }
     }
 
-    @Test @Config(qualifiers = "w320dp-h640dp-mdpi")
+    @Test @Config(qualifiers = "zh-rCN-w320dp-h640dp-mdpi")
     fun topMenuKeepsAutoReadAndSyntaxDirectAndMoreToolsReturns() {
         show()
         compose.onNodeWithContentDescription("更多操作").performClick()
         compose.onNodeWithText("自动阅读").assertIsDisplayed().performClick()
         assertEquals(1, autoRead)
         compose.onNodeWithContentDescription("更多操作").performClick()
+        // 一级只有书签、搜索、自动阅读、外语阅读与「更多」；样式与整理类工具都在「更多」里。
+        compose.onNodeWithText("外语阅读").assertIsDisplayed()
         compose.onNodeWithText("TXT 净化 / 替换规则").assertDoesNotExist()
-        compose.onNodeWithText("操作区域").assertDoesNotExist()
-        compose.onNodeWithText("更多工具").performScrollTo().performClick()
+        compose.onNodeWithText("语法高亮").assertDoesNotExist()
+        compose.onNodeWithText("更多").performScrollTo().performClick()
         compose.onNodeWithText("操作区域").assertIsDisplayed()
-        compose.onNodeWithText("返回常用操作").assertIsDisplayed().performClick()
+        compose.onNodeWithText("返回").assertIsDisplayed().performClick()
+        compose.onNodeWithText("更多").performScrollTo().performClick()
         compose.onNodeWithText("语法高亮").performScrollTo().performClick()
         compose.onNodeWithText("语法高亮规则").assertIsDisplayed()
         compose.onNodeWithText("添加规则").performScrollTo().assertIsDisplayed()
         compose.onNodeWithContentDescription("关闭语法高亮").performClick()
         compose.onNodeWithContentDescription("更多操作").performClick()
-        compose.onNodeWithText("更多工具").performScrollTo().performClick()
+        compose.onNodeWithText("更多").performScrollTo().performClick()
         compose.onNodeWithText("TXT 净化 / 替换规则").performClick()
         assertEquals(1, cleanup)
     }

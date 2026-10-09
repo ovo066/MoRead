@@ -1,5 +1,6 @@
 package com.mozhi.reader.feature.reader
 
+import androidx.compose.ui.platform.testTag
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
@@ -88,6 +89,7 @@ internal fun VocabularyPage(bookId: Long = 0, palette: ReaderPalette = companion
     val settings by viewModel.readerSettings.collectAsStateWithLifecycle()
     var query by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf(VocabularyFilter.ALL) }
+    var languageFilter by rememberSaveable { mutableStateOf<String?>(null) }
     var editing by remember { mutableStateOf<VocabularyWord?>(null) }
     var lookup by remember { mutableStateOf<VocabularyWord?>(null) }
     val listState = rememberLazyListState()
@@ -97,7 +99,9 @@ internal fun VocabularyPage(bookId: Long = 0, palette: ReaderPalette = companion
     val resources = LocalContext.current.resources
     val haptics = LocalHapticFeedback.current
 
-    val vocabulary = settings.vocabulary
+    val allWords = settings.vocabulary
+    val languages = remember(allWords) { vocabularyLanguages(allWords) }
+    val vocabulary = remember(allWords, languageFilter) { allWords.filter { languageFilter == null || it.languageCode == languageFilter } }
     val stats = remember(vocabulary) { vocabularyStats(vocabulary) }
     val groups = remember(vocabulary, query, filter) {
         vocabularyGroups(vocabulary, query, filter, System.currentTimeMillis(), ZoneId.systemDefault())
@@ -140,6 +144,22 @@ internal fun VocabularyPage(bookId: Long = 0, palette: ReaderPalette = companion
             item(key = "vocabulary-overview", contentType = "overview") {
                 VocabularyOverview(stats, filter, onFilter = { filter = it },
                     modifier = Modifier.padding(top = MoReadSpacing.s))
+            }
+            // 收藏了不止一种语言时才出现语言筛选，只学英文的人不会多看到一排按钮。
+            if (languages.size > 1) item(key = "vocabulary-languages", contentType = "languages") {
+                val choices = learningLanguageChoices().filter { it.value.code in languages }
+                val current = choices.firstOrNull { it.value.code == languageFilter }
+                var picking by rememberSaveable { mutableStateOf(false) }
+                MoReadChoiceRow(title = stringResource(R.string.vocabulary_language), value = current?.label ?: stringResource(R.string.vocabulary_filter_all),
+                    badge = current?.badge, tint = current?.tint, onClick = { picking = true },
+                    modifier = Modifier.padding(top = MoReadSpacing.s).testTag("vocabulary-languages"))
+                if (picking) {
+                    val all = com.mozhi.reader.core.dictionary.LearningLanguage.AUTO
+                    MoReadChoiceDialog(stringResource(R.string.vocabulary_language),
+                        listOf(MoReadChoice(all, stringResource(R.string.vocabulary_filter_all))) + choices,
+                        selected = choices.firstOrNull { it.value.code == languageFilter }?.value ?: all,
+                        onSelect = { languageFilter = if (it == all) null else it.code }, onDismiss = { picking = false })
+                }
             }
             if (groups.isEmpty()) item(key = "vocabulary-no-result", contentType = "empty") {
                 VocabularyEmptyState(title = null, body = when {

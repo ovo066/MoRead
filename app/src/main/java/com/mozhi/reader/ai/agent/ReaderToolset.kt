@@ -149,6 +149,8 @@ class ReaderToolset @Inject constructor(
             )
             add(GrepBookTool(bookId, { libraryRepository.getBook(bookId) }, loadChapter,
                 getRevision, readingScope, sourceRegistry, currentScope))
+            add(CountMentionsTool({ libraryRepository.getBook(bookId)?.totalChapters ?: 0 }, loadChapter, readingScope, currentScope))
+            add(CreateChartTool())
             add(ReadBookSectionTool(libraryRepository, bookId, readingScope))
             add(WebSearchTool(webSearchService))
             add(WebScrapeTool(webSearchService))
@@ -263,7 +265,7 @@ private class WebScrapeTool(
             return ToolResult.Failure("WEB_SCRAPE_FAILED", error.message ?: "网页抓取失败", error)
         }
         return ToolResult.Success(buildString {
-            append("网页正文（回答时请标明来源链接）：\n")
+            append("网页正文（回答中用到时，在该句末写〔来源 完整网址〕标注）：\n")
             append("标题：").append(result.title).append('\n')
             append("来源：").append(result.url).append("\n\n")
             append(result.content)
@@ -308,7 +310,7 @@ private class WebSearchTool(
         }
         if (results.isEmpty()) return ToolResult.Success("没有找到与「$query」相关的网页结果。")
         return ToolResult.Success(buildString {
-            append("互联网搜索结果（回答时请标明来源链接）：\n")
+            append("互联网搜索结果（回答中用到某条结果时，在该句末写〔来源 完整网址〕标注，不要另列网址）：\n")
             results.forEachIndexed { index, result ->
                 append("\n[").append(index + 1).append("] ").append(result.title)
                 append("\n").append(result.url)
@@ -896,7 +898,9 @@ private val READ_ONLY_BASE_TOOLS = setOf(
     "list_chapters",
     "list_annotations",
     "list_notes",
-    "recall_memory"
+    "recall_memory",
+    "count_mentions",
+    "create_chart"
 )
 
 private const val MAX_NOTE_CHARS = 50_000

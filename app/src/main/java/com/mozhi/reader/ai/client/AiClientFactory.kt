@@ -20,6 +20,8 @@ import com.mozhi.reader.core.speech.TtsApiProvider
 import javax.inject.Inject
 import javax.inject.Singleton
 import okhttp3.OkHttpClient
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 
 /** A resolved client plus the provider's default request options. */
 data class ResolvedChatClient(
@@ -245,11 +247,21 @@ class AiClientFactory @Inject constructor(
                 settings.aiIsGemini -> "/interactions"
                 settings.aiIsMimo -> "/chat/completions"
                 settings.aiIsFish -> "/tts"
+                settings.aiIsElevenLabs -> "/text-to-speech"
                 isGmiCloud -> "/api/v1/ie/requestqueue/apikey/requests"
                 isMiniMax -> "/t2a_v2"
                 else -> "/audio/speech"
             },
-            extraJson = settings.aiGroupId.takeIf { isMiniMax && it.isNotBlank() }
+            extraJson = if (settings.aiIsElevenLabs) {
+                buildJsonObject {
+                    put("body", buildJsonObject {
+                        if (settings.aiVoiceId.isNotBlank()) put("voice_id", JsonPrimitive(settings.aiVoiceId))
+                        if (settings.aiSupportsSpeed) put("voice_settings", buildJsonObject {
+                            put("speed", JsonPrimitive(settings.aiSpeed.coerceIn(settings.aiSpeedRange)))
+                        })
+                    })
+                }.toString()
+            } else settings.aiGroupId.takeIf { isMiniMax && it.isNotBlank() }
                 ?.let { """{"body":{"group_id":"$it"}}""" }
                 ?: "{}",
             createdAt = 0

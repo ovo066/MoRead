@@ -31,6 +31,17 @@ class TtsProviderProfilesTest {
             assertEquals("fish-voice", store.current().aiVoiceId)
             assertEquals("s2-pro", store.current().aiModel)
             assertEquals(0.8f, store.current().aiVolume)
+            val fish = store.current()
+            store.update { it.copy(aiProvider = TtsApiProvider.ELEVENLABS) }
+            assertEquals(TtsApiProvider.ELEVENLABS.defaultBaseUrl(), store.current().aiBaseUrl)
+            assertEquals(TtsApiProvider.ELEVENLABS.defaultModel(), store.current().aiModel)
+            assertEquals("", store.current().aiVoiceId)
+            store.update { it.copy(aiVoiceId = "cloned-voice", aiModel = "eleven_flash_v2_5", aiSpeed = 1.1f) }
+            val elevenLabs = store.current()
+            store.update { it.copy(aiProvider = TtsApiProvider.FISH_AUDIO) }
+            assertEquals(fish, store.current())
+            store.update { it.copy(aiProvider = TtsApiProvider.ELEVENLABS) }
+            assertEquals(elevenLabs, store.current())
         } finally { scope.coroutineContext.job.cancelAndJoin() }
     }
     @get:Rule val temporary = TemporaryFolder()

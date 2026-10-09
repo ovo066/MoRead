@@ -683,6 +683,7 @@ fun ReaderScreen(
             onImmersiveReadingChange = viewModel::setImmersiveReading,
             onVolumeKeysPageTurnChange = viewModel::setVolumeKeysPageTurn,
             onPhysicalKeyBindingsChange = viewModel::setPhysicalKeyBindings,
+            onSelectionToolbarExtrasChange = viewModel::setSelectionToolbarExtras,
             onChineseConversionModeChange = viewModel::setChineseConversionMode,
             onScreenBrightnessChange = viewModel::setScreenBrightness,
             onWidePageLayoutChange = viewModel::setWidePageLayout,
@@ -844,6 +845,10 @@ fun ReaderScreen(
                         onEditText = paneEditText,
                         pageTurnRequest = hardwarePageTurnRequest,
                         autoRead = autoRead,
+                        readTrackingEnabled = contentVisible && readerResumed,
+                        onVisiblePagesDrawn = { snapshot ->
+                            if (contentVisible && readerResumed) viewModel.markVisibleScrollRead(snapshot)
+                        },
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
@@ -1236,7 +1241,8 @@ fun ReaderScreen(
                 onDismiss = { screenState.activeSheet = null; screenState.dictionaryHit = null })
         }
         ReaderSheet.ENGLISH_LEARNING -> EnglishLearningDialog(bookId, state.settings, palette,
-            onDismiss = { screenState.activeSheet = null })
+            onDismiss = { screenState.activeSheet = null },
+            onOpenBilingual = { screenState.activeSheet = ReaderSheet.BILINGUAL })
         ReaderSheet.TAP_ZONES -> ReaderTapZonesDialog(
             saved = state.settings.tapZones,
             onDismiss = { screenState.activeSheet = null },

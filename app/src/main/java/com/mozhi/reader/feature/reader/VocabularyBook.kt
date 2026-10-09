@@ -96,3 +96,7 @@ internal fun vocabularyContextHighlight(context: String, word: String): IntRange
 private val MarkdownLinePrefix = Regex("""^(#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)""")
 private val MarkdownInline = Regex("""\*\*|__|`|~~""")
 private val Whitespace = Regex("""\s+""")
+
+/** 生词本里出现过的语言，按收藏数从多到少；旧数据记作英文。 */
+internal fun vocabularyLanguages(words: List<VocabularyWord>): List<String> =
+    words.groupingBy { it.languageCode }.eachCount().entries.sortedByDescending { it.value }.map { it.key }

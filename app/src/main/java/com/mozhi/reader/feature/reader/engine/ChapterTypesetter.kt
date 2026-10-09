@@ -483,7 +483,12 @@ class ChapterTypesetter(
                         opacity = column.opacity,
                         sourceLength = column.sourceLength,
                         inlineMarkerKind = column.inlineMarkerKind,
-                        inlineMarkerOffset = column.inlineMarkerOffset
+                        inlineMarkerOffset = column.inlineMarkerOffset,
+                        linkHref = column.linkHref,
+                        textShadows = column.textShadows,
+                        decorationStyle = column.decorationStyle,
+                        decorationColorArgb = column.decorationColorArgb,
+                        linkUnderlineOverride = column.linkUnderlineOverride
                     )
                 }
             }

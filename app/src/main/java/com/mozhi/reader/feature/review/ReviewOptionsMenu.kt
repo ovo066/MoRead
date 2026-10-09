@@ -22,7 +22,7 @@ import com.mozhi.reader.ui.components.*
 @Composable
 internal fun ReviewOptionsMenu(state: ReadingReviewState, initial: ReviewFilter, onDismiss: () -> Unit,
     onApply: (ReviewFilter) -> Unit, onCompose: (List<ReviewEntry>) -> Unit, onExport: (List<ReviewEntry>) -> Unit,
-    onReview: (List<ReviewEntry>) -> Unit, onFontChange: (String) -> Unit) {
+    onReview: (List<ReviewEntry>) -> Unit, onFontChange: (String) -> Unit, onManage: () -> Unit = {}) {
     var page by rememberSaveable { mutableStateOf("home") }
     val scrolls = mapOf("home" to rememberScrollState(), "source" to rememberScrollState(), "kind" to rememberScrollState(),
         "persona" to rememberScrollState(), "sort" to rememberScrollState(), "font" to rememberScrollState())
@@ -57,6 +57,8 @@ internal fun ReviewOptionsMenu(state: ReadingReviewState, initial: ReviewFilter,
             MoReadMenuItem("划线字体", { page = "font" }, icon = Icons.Outlined.TextFields,
                 trailingText = fonts.firstOrNull { it.first == settings.reviewFont }?.second, modifier = Modifier.testTag("review-choose-font"))
             MoReadMenuDivider()
+            MoReadMenuItem(androidx.compose.ui.res.stringResource(com.mozhi.reader.R.string.review_manage), onManage,
+                icon = Icons.Outlined.Checklist, enabled = selected.isNotEmpty(), modifier = Modifier.testTag("review-manage"))
             MoReadMenuItem("全屏翻阅", { onReview(selected) }, icon = Icons.Outlined.AutoStories, enabled = selected.isNotEmpty())
             MoReadMenuItem("导出记录", { onExport(selected) }, icon = Icons.Outlined.IosShare,
                 trailingText = "${selected.size} 条", enabled = selected.isNotEmpty())

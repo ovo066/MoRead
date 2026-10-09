@@ -158,6 +158,7 @@ fun CompanionChatPane(
     }
 
     val timeline = remember(state.messages) { buildCompanionTimeline(state.messages) }
+    val webSources = remember(state.messages) { com.mozhi.reader.ai.companion.companionWebSources(state.messages) }
     val lastAssistantMessageId = remember(timeline) {
         timeline.filterIsInstance<CompanionTimelineItem.Bubble>()
             .lastOrNull { it.message.role == "assistant" }
@@ -334,6 +335,7 @@ fun CompanionChatPane(
                     .weight(1f)
                     .fillMaxWidth()
             ) {
+                androidx.compose.runtime.CompositionLocalProvider(LocalCompanionWebSources provides webSources) {
                 CompanionChatMessageList(
                     entries = entries,
                     scrollState = scrollState,
@@ -395,6 +397,7 @@ fun CompanionChatPane(
                                     },
                                     onPlayVoice = mediaViewModel::playCachedSpeech
                                 )
+                                is ChatEntry.Chart -> CompanionChartCard(entry.spec, palette)
                                 is ChatEntry.Media -> CompanionMediaBubble(
                                     result = entry.result,
                                     palette = palette,
@@ -428,6 +431,7 @@ fun CompanionChatPane(
                                     ) { Text("重试") }
                                 }
                     }
+                }
                 }
 
                 val followScope = rememberCoroutineScope()

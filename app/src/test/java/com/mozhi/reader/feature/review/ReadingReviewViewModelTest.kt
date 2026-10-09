@@ -101,4 +101,43 @@ class ReadingReviewViewModelTest {
         assertNull(vm.draft.value)
         coVerify(exactly = 0) { notes.create(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) }
     }
+
+    @Test fun batchDeleteKeepsASnapshotThatUndoRestores() = runTest {
+        val reply = com.mozhi.reader.core.database.entity.AnnotationReplyEntity(id = 5, annotationId = 1, personaId = 7, contentMarkdown = "回应", createdAt = 2)
+        coEvery { annotations.getReplies(1) } returns listOf(reply)
+        coEvery { annotations.delete(1) } just Runs
+        coEvery { annotations.restore(any(), any()) } just Runs
+        val vm = model()
+        vm.state.first { it.entries.isNotEmpty() }
+        vm.deleteAll(selected)
+        runCurrent()
+        coVerify(exactly = 1) { annotations.delete(1) }
+        assertEquals(1, vm.undo.value?.count)
+        vm.undoDelete()
+        runCurrent()
+        coVerify(exactly = 1) { annotations.restore(annotation, listOf(reply)) }
+        assertNull(vm.undo.value)
+    }
+
+    @Test fun undoWindowExpires() = runTest {
+        coEvery { annotations.getReplies(1) } returns emptyList()
+        coEvery { annotations.delete(1) } just Runs
+        val vm = model()
+        vm.state.first { it.entries.isNotEmpty() }
+        vm.deleteAll(selected)
+        runCurrent()
+        assertEquals(1, vm.undo.value?.count)
+        advanceTimeBy(7_000)
+        runCurrent()
+        assertNull(vm.undo.value)
+    }
+
+    @Test fun batchStyleOnlyTouchesHighlights() = runTest {
+        coEvery { annotations.updateStyle(any(), any(), any()) } just Runs
+        val vm = model()
+        advanceUntilIdle()
+        vm.styleAll(selected + ReviewEntry(book, "我的", note = reviewTestNote()), com.mozhi.reader.core.database.entity.AnnotationStyle.WAVY, "blue")
+        runCurrent()
+        coVerify(exactly = 1) { annotations.updateStyle(1, com.mozhi.reader.core.database.entity.AnnotationStyle.WAVY, "blue") }
+    }
 }

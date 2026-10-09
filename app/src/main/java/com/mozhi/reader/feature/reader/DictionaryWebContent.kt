@@ -101,7 +101,7 @@ internal fun DictionaryWebContent(entry: DictionaryDefinition, dark: Boolean, re
                     return true
                 }
                 override fun shouldInterceptRequest(webView: WebView, request: WebResourceRequest): WebResourceResponse {
-                    return dictionaryWebResponse(entry.dictionaryId, html, request) { path -> repository.resource(entry.dictionaryId, path) }
+                    return dictionaryWebResponse(entry.dictionaryId, html, request, dark) { path -> repository.resource(entry.dictionaryId, path) }
                 }
             }
             // Explicitly serve the main document as HTML. Never return an empty 200 for a
@@ -123,7 +123,7 @@ internal const val DICTIONARY_HOST = "dictionary.moread.invalid"
 internal fun dictionaryPageUrl(id: String, html: String): String =
     "https://$DICTIONARY_HOST/$id/entry.html?v=${html.hashCode()}"
 
-internal fun dictionaryWebResponse(id: String, html: String, request: WebResourceRequest,
+internal fun dictionaryWebResponse(id: String, html: String, request: WebResourceRequest, dark: Boolean = false,
     resource: (String) -> ByteArray?): WebResourceResponse {
     val uri = request.url
     val local = uri.scheme == "https" && uri.host == DICTIONARY_HOST
@@ -140,9 +140,10 @@ internal fun dictionaryWebResponse(id: String, html: String, request: WebResourc
         "svg" -> "image/svg+xml"
         else -> MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "application/octet-stream"
     }
-    return WebResourceResponse(mime, "UTF-8", if (bytes != null) 200 else 404,
+    val content = if (!main && mime == "text/css" && bytes != null) dictionaryCssForTheme(bytes.toString(Charsets.UTF_8), dark).toByteArray(Charsets.UTF_8) else bytes
+    return WebResourceResponse(mime, "UTF-8", if (content != null) 200 else 404,
         if (bytes != null) "OK" else "Not Found", mapOf("Cache-Control" to "no-store", "X-Content-Type-Options" to "nosniff"),
-        ByteArrayInputStream(bytes ?: byteArrayOf()))
+        ByteArrayInputStream(content ?: byteArrayOf()))
 }
 
 internal fun dictionaryHtml(source: String, dark: Boolean): String {
@@ -150,20 +151,30 @@ internal fun dictionaryHtml(source: String, dark: Boolean): String {
     doc.select("script,iframe,frame,object,embed,form,base,meta[http-equiv]").remove()
     doc.allElements.forEach { node ->
         node.attributes().asList().filter { it.key.startsWith("on", true) }.forEach { node.removeAttr(it.key) }
+        if (node.hasAttr("style")) node.attr("style", dictionaryCssForTheme("{${node.attr("style")}}", dark).removePrefix("{").removeSuffix("}"))
+        for (attribute in listOf("src", "href")) {
+            if (node.hasAttr(attribute) && !node.attr(attribute).contains(":") && !node.attr(attribute).startsWith("//")) {
+                node.attr(attribute, node.attr(attribute).replace('\\', '/'))
+            }
+        }
+    }
+    doc.select("style").forEach {
+        val css = dictionaryCssForTheme(it.data(), dark)
+        it.empty().appendChild(org.jsoup.nodes.DataNode(css))
     }
     doc.head().prependElement("meta").attr("name", "viewport").attr("content", "width=device-width,initial-scale=1")
     doc.head().prependElement("meta").attr("http-equiv", "Content-Security-Policy")
-        .attr("content", "default-src 'none'; img-src https://$DICTIONARY_HOST data:; style-src 'unsafe-inline' https://$DICTIONARY_HOST; font-src https://$DICTIONARY_HOST; media-src https://$DICTIONARY_HOST;")
-    doc.head().appendElement("style").text("body{margin:16px;line-height:1.65;overflow-wrap:anywhere;color:${if (dark) "#dedede" else "#242424"};background:${if (dark) "#202020" else "#fafafa"};font-size:17px}img{max-width:100%;height:auto}table{max-width:100%}a{color:${if (dark) "#b8cfff" else "#305e9d"}}")
-    if (dark) doc.head().appendElement("style").text("html,body{background:#202020!important;color:#dedede!important}body *{color:inherit!important;background-color:transparent!important}a{color:#b8cfff!important}")
+        .attr("content", "default-src 'none'; img-src https://$DICTIONARY_HOST data:; style-src 'unsafe-inline' https://$DICTIONARY_HOST; font-src https://$DICTIONARY_HOST data:; media-src https://$DICTIONARY_HOST;")
+    // Reader defaults have lower priority than all publisher CSS, including body/link rules.
+    doc.head().prependElement("style").text("body{margin:16px;line-height:1.65;overflow-wrap:anywhere;color:${if (dark) "#dedede" else "#242424"};background:${if (dark) "#202020" else "#fafafa"};font-size:17px}img{max-width:100%;height:auto}table{max-width:100%}a{color:${if (dark) "#b8cfff" else "#305e9d"}}")
     // Some MDX distributions contain only styled spans and expect a separate CSS/JS bundle.
     // Supply a readable layout for this vocabulary instead of depending on dictionary scripts.
     if (doc.select("[class*=oalecd8e]").isNotEmpty()) {
         doc.body().attr("data-moread-format", "oxford")
-        doc.head().appendElement("style").text("""
+        doc.head().prependElement("style").text("""
             body{font-family:system-ui,sans-serif}
             .entry,.h-g,.top-g,.pos-g,.sn-g,.def-g,.x-g,.idiom-g,.id-g,.sense-g,.xr-g{display:block!important;visibility:visible!important;opacity:1!important}
-            .entry{margin-bottom:1.2em}.h{font-size:1.65em;font-weight:700;color:${if (dark) "#bdceef" else "#31598a"}!important}
+            .entry{margin-bottom:1.2em}.h{font-size:1.65em;font-weight:700;color:${if (dark) "#bdceef" else "#31598a"}}
             .ei-g{font-family:serif}.pos-g{margin:.35em 0;font-style:italic}.sn-g,.def-g{margin:.7em 0}
             .oalecd8e_chn{display:inline!important;visibility:visible!important}.d>.oalecd8e_chn{display:block!important;margin-top:.2em}
             .x-g{margin:.6em 0;padding-left:.8em;border-left:2px solid ${if (dark) "#66758e" else "#bbc9dd"}}

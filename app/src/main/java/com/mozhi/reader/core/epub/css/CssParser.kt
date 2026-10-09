@@ -5,7 +5,9 @@ import com.mozhi.reader.core.library.EpubResourcePath
 /** Fault-tolerant EPUB CSS parser. Invalid selectors/declarations are isolated from their siblings. */
 class CssParser(
     private val sourceHref: String,
-    private val startingOrder: Int = 0
+    private val startingOrder: Int = 0,
+    private val importResolver: ((String) -> String?)? = null,
+    private val importChain: Set<String> = emptySet()
 ) {
     private val rules = ArrayList<CssRule>()
     private val fontFaces = ArrayList<CssFontFaceRule>()
@@ -41,7 +43,7 @@ class CssParser(
                 if (boundary < 0) break
                 val prelude = css.substring(nameEnd, boundary).trim()
                 if (css[boundary] == ';') {
-                    if (atName == "import") diagnostics += "unsupported @import: $prelude"
+                    if (atName == "import") parseImport(prelude, mediaCondition)
                     cursor = boundary + 1
                     continue
                 }
@@ -87,6 +89,23 @@ class CssParser(
         }
     }
 
+    private fun parseImport(prelude: String, parentMedia: CssMediaCondition?) {
+        val reference = Regex("^\\s*(?:url\\(\\s*['\"]?([^)'\"]+)['\"]?\\s*\\)|['\"]([^'\"]+)['\"])(.*)$", RegexOption.DOT_MATCHES_ALL).find(prelude)
+        val href = reference?.let { EpubResourcePath.normalize(it.groupValues[1].ifBlank { it.groupValues[2] }.trim(), sourceHref) }
+        val css = href?.takeIf { it !in importChain && it != sourceHref && importChain.size < 16 }?.let { importResolver?.invoke(it) }
+        if (href == null || css == null) { diagnostics += "unsupported @import: $prelude"; return }
+        val parsed = CssParser(href, nextOrder, importResolver, importChain + sourceHref).parse(css)
+        val mediaText = reference.groupValues[3].trim()
+        val media = if (mediaText.isEmpty()) parentMedia else combineMedia(parentMedia, parseMedia(mediaText))
+        parsed.stylesheet.rules.forEach { rule ->
+            rules += rule.copy(order = nextOrder++, mediaCondition = rule.mediaCondition?.let { combineMedia(media, it) } ?: media)
+        }
+        fontFaces += parsed.stylesheet.fontFaces
+        unsupportedProperties += parsed.unsupportedProperties
+        unsupportedSelectors += parsed.unsupportedSelectors
+        diagnostics += parsed.diagnostics
+    }
+
     fun parseDeclarations(raw: String): List<CssDeclaration> {
         val result = ArrayList<CssDeclaration>()
         splitTopLevel(raw, ';').forEach { declarationSource ->
@@ -122,6 +141,10 @@ class CssParser(
         "background" -> expandBackground(raw, important)
         "font" -> expandFont(raw, important)
         "list-style" -> expandListStyle(raw, important)
+        "text-decoration", "-webkit-text-decoration" -> expandTextDecoration(raw, important)
+        "-webkit-text-decoration-style" -> parsePropertyValue("text-decoration-style", raw)?.let {
+            listOf(CssDeclaration("text-decoration-style", it, important))
+        }
         // 厂商前缀别名归一到标准属性：级联与样式解析只认 writing-mode 一个名字。
         "-webkit-writing-mode", "-epub-writing-mode" ->
             parsePropertyValue("writing-mode", raw)?.let { listOf(CssDeclaration("writing-mode", it, important)) }
@@ -140,6 +163,27 @@ class CssParser(
             combine?.let { listOf(CssDeclaration("text-combine-upright", CssValue.Keyword(it), important)) }
         }
         else -> parsePropertyValue(property, raw)?.let { listOf(CssDeclaration(property, it, important)) }
+    }
+
+    private fun expandTextDecoration(raw: String, important: Boolean): List<CssDeclaration>? {
+        if (raw.trim().lowercase() in setOf("inherit", "unset", "initial")) {
+            val inherit = raw.trim().equals("inherit", true)
+            return listOf("text-decoration-line" to if (inherit) "inherit" else "none",
+                "text-decoration-style" to if (inherit) "inherit" else "solid",
+                "text-decoration-color" to if (inherit) "inherit" else "currentcolor")
+                .map { CssDeclaration(it.first, CssValue.Keyword(it.second), important) }
+        }
+        val values = componentValues("text-decoration", raw) ?: return null
+        fun name(value: CssValue) = (value as? CssValue.Keyword)?.name ?: (value as? CssValue.Ident)?.name
+        val lines = values.filter { name(it) in setOf("none", "underline", "overline", "line-through") }.map { CssValue.Keyword(requireNotNull(name(it))) }
+        val style = values.firstOrNull { name(it) in setOf("solid", "double", "dotted", "dashed", "wavy") }?.let { CssValue.Keyword(requireNotNull(name(it))) }
+        val color = values.firstOrNull { it is CssValue.Color || it == CssValue.Keyword("currentcolor") }
+        if (lines.isEmpty() && style == null && color == null) return null
+        return listOf(
+            CssDeclaration("text-decoration-line", if (lines.size == 1) lines.single() else if (lines.isEmpty()) CssValue.Keyword("none") else CssValue.Tuple(lines), important),
+            CssDeclaration("text-decoration-style", style ?: CssValue.Keyword("solid"), important),
+            CssDeclaration("text-decoration-color", color ?: CssValue.Keyword("currentcolor"), important)
+        )
     }
 
     /** `translate(x[, y])`, `translateX(x)`, `translateY(y)` as a two-length tuple; `none` as zero. */
@@ -876,7 +920,7 @@ class CssParser(
             "color", "background-color", "border-color", "border-top-color", "border-right-color", "border-bottom-color",
             "border-left-color", "text-decoration-color", "outline-color"
         )
-        val COLOR_AWARE_PROPERTIES = COLOR_PROPERTIES + setOf("background", "border", "border-top", "border-right", "border-bottom", "border-left", "box-shadow", "text-shadow")
+        val COLOR_AWARE_PROPERTIES = COLOR_PROPERTIES + setOf("background", "border", "border-top", "border-right", "border-bottom", "border-left", "box-shadow", "text-shadow", "text-decoration")
         val LENGTH_PROPERTIES = setOf(
             "margin-top", "margin-right", "margin-bottom", "margin-left", "padding-top", "padding-right", "padding-bottom",
             "padding-left", "width", "height", "min-width", "min-height", "max-width", "max-height", "text-indent",
@@ -895,7 +939,7 @@ class CssParser(
         ) + LENGTH_PROPERTIES + COLOR_PROPERTIES + setOf(
             "font-family", "font-weight", "font-style", "display", "float", "clear", "text-align", "vertical-align",
             "box-sizing", "background-image", "background-repeat", "background-position", "background-size", "box-shadow",
-            "text-shadow", "text-decoration", "text-decoration-line", "opacity", "overflow", "visibility", "white-space",
+            "text-shadow", "text-decoration", "text-decoration-line", "text-decoration-style", "-webkit-text-decoration", "-webkit-text-decoration-style", "opacity", "overflow", "visibility", "white-space",
             "break-before", "break-after", "break-inside", "page-break-before", "page-break-after", "page-break-inside",
             "orphans", "widows", "list-style-type", "list-style-position", "list-style-image", "border-collapse",
             "ruby-align", "duokan-text-indent", "duokan-bleed", "align-items", "justify-content", "flex-direction",

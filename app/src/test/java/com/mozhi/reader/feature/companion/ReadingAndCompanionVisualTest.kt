@@ -192,7 +192,7 @@ class ReadingAndCompanionVisualTest {
         ), conversationId = 7)
         val vm = vm(LibraryChatSession(conversation, scopes, setOf(1, 2)), messages)
         show { LibraryCompanionScreen({}, {}, {}, vm) }
-        compose.onNodeWithText("雨夜里的灯塔 · 第2章 ↗").assertIsDisplayed().performClick()
+        compose.onNodeWithText("雨夜里的灯塔 · Chapter 2").performScrollTo().assertIsDisplayed().performClick()
         verify(exactly = 1) { vm.locate(any()) }
         capture("library-companion-chat.png")
         compose.onNodeWithText("对照一下两本书里我的笔记。").performTouchInput { longClick() }

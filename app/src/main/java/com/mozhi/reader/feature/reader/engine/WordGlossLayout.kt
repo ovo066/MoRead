@@ -1,12 +1,20 @@
 package com.mozhi.reader.feature.reader.engine
 
-import com.mozhi.reader.core.dictionary.EnglishWords
+import com.mozhi.reader.core.dictionary.WordGlossMatcher
 import kotlin.math.max
+
+/** 同一份生词表在整章排版里反复使用；按引用缓存最近一份匹配器，避免逐行重建。 */
+@Volatile private var cachedMatcher: Pair<Map<String, *>, WordGlossMatcher>? = null
+
+private fun TypesetSpec.glossMatcher(): WordGlossMatcher {
+    cachedMatcher?.takeIf { it.first === wordGlosses }?.let { return it.second }
+    return WordGlossMatcher(wordGlosses.keys).also { cachedMatcher = wordGlosses to it }
+}
 
 /** Reserve a second/third baseline before pagination. English source coordinates never change. */
 internal fun TypesetSpec.wordGlossBand(text: String, isTitle: Boolean): Float {
     if (isTitle || wordGlosses.isEmpty()) return 0f
-    return if (EnglishWords.pattern.findAll(text).any { EnglishWords.normalize(it.value) in wordGlosses }) contentFontSizePx * 1.2f else 0f
+    return if (glossMatcher().find(text).isNotEmpty()) contentFontSizePx * 1.2f else 0f
 }
 
 internal fun addWordGlosses(line: TextLine, spec: TypesetSpec, measure: TextMeasure) {
@@ -16,12 +24,12 @@ internal fun addWordGlosses(line: TextLine, spec: TypesetSpec, measure: TextMeas
     var offset = 0
     line.columns.forEach { column -> if (column.sourceLength > 0) { columnStarts += offset to column; offset += column.charData.length } }
     data class Candidate(val start: Float, val end: Float, val meaning: String, val phonetic: String)
-    val candidates = EnglishWords.pattern.findAll(visible).mapNotNull { match ->
-        val gloss = spec.wordGlosses[EnglishWords.normalize(match.value)] ?: return@mapNotNull null
-        val first = columnStarts.lastOrNull { it.first <= match.range.first }?.second ?: return@mapNotNull null
-        val last = columnStarts.lastOrNull { it.first <= match.range.last }?.second ?: return@mapNotNull null
+    val candidates = spec.glossMatcher().find(visible).mapNotNull { (range, key) ->
+        val gloss = spec.wordGlosses[key] ?: return@mapNotNull null
+        val first = columnStarts.lastOrNull { it.first <= range.first }?.second ?: return@mapNotNull null
+        val last = columnStarts.lastOrNull { it.first <= range.last }?.second ?: return@mapNotNull null
         Candidate(first.start, last.end, gloss.meaning, gloss.phonetic)
-    }.toList()
+    }
     if (candidates.isEmpty()) return
     val originalBottom = line.lineBottom
     val annotations = mutableListOf<TextRubyPlacement>()

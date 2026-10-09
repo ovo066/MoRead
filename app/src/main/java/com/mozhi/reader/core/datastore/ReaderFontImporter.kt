@@ -1,5 +1,6 @@
 package com.mozhi.reader.core.datastore
 
+import kotlinx.coroutines.flow.first
 import android.content.Context
 import android.graphics.Typeface
 import android.net.Uri
@@ -80,6 +81,15 @@ class ReaderFontImporter @Inject constructor(
     suspend fun confirm(pending: PendingReaderFont, customName: String, selectForReading: Boolean = true): ReaderFontAsset =
         withContext(Dispatchers.IO) {
             val source = checkedPendingFile(pending)
+            val fingerprint = com.mozhi.reader.core.importer.SourceFingerprints.of(source)
+            // 同一个字体文件已经在字体库里：不再复制一份，按需选中已有条目。
+            ReaderAssetDedup.find(settingsRepository.settings.first().fontLibrary, fingerprint,
+                filePath = { it.filePath }, sha256 = { it.sha256 })?.let { existing ->
+                source.delete()
+                if (existing.sha256.isBlank()) settingsRepository.addCustomFont(existing.copy(sha256 = fingerprint.sha256), select = false)
+                if (selectForReading) settingsRepository.selectCustomFont(existing.id)
+                return@withContext existing
+            }
             val displayName = customName.trim().take(48).ifBlank { pending.detectedName }
             val directory = File(context.filesDir, "reader-custom").apply { mkdirs() }.canonicalFile
             val id = UUID.randomUUID().toString()
@@ -92,7 +102,8 @@ class ReaderFontImporter @Inject constructor(
                     displayName = displayName,
                     filePath = destination.absolutePath,
                     originalFileName = pending.originalFileName,
-                    importedAt = System.currentTimeMillis()
+                    importedAt = System.currentTimeMillis(),
+                    sha256 = fingerprint.sha256
                 )
                 settingsRepository.addCustomFont(asset, select = selectForReading)
                 if (source.exists()) source.delete()

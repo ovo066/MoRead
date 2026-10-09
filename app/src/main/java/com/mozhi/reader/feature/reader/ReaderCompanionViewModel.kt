@@ -1117,7 +1117,7 @@ class ReaderCompanionViewModel @Inject constructor(
                             )
                         }
                         is AgentEvent.ToolRun -> session.value = session.value.copy(
-                            toolStatus = "正在${event.displayName}…",
+                            toolStatus = runningToolStatus(event.displayName),
                             executionSteps = session.value.executionSteps
                                 .filterNot { it.callId == event.callId } + AgentExecutionStep(
                                 callId = event.callId,
@@ -1128,7 +1128,10 @@ class ReaderCompanionViewModel @Inject constructor(
                             )
                         )
                         is AgentEvent.ToolFinished -> session.value = session.value.copy(
-                            toolStatus = null,
+                            // 并行调用时其余查询可能还在跑：状态行改说仍在进行的那一项。
+                            toolStatus = session.value.executionSteps
+                                .lastOrNull { it.state == AgentStepState.RUNNING && it.callId != event.callId }
+                                ?.let { runningToolStatus(it.displayName) },
                             executionSteps = session.value.executionSteps.map { step ->
                                 if (step.callId == event.callId) {
                                     step.copy(
@@ -1237,3 +1240,5 @@ class ReaderCompanionViewModel @Inject constructor(
         const val INITIAL_CITATION_LOCATE_MS = 600L
     }
 }
+
+private fun runningToolStatus(displayName: String): String = "正在$displayName…"

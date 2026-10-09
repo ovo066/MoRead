@@ -25,7 +25,7 @@ import org.robolectric.annotation.Implements
 import org.robolectric.annotation.Implementation
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35], application = Application::class, qualifiers = "w411dp-h891dp-mdpi", shadows = [SelectionMagnifierShadow::class])
+@Config(sdk = [35], application = Application::class, qualifiers = "zh-rCN-w411dp-h891dp-mdpi", shadows = [SelectionMagnifierShadow::class])
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ReaderDictionarySelectionTest {
     @get:Rule val compose = createComposeRule()

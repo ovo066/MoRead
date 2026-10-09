@@ -14,6 +14,7 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.delay
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -134,6 +135,21 @@ class ProactiveAnnotationServiceTest {
         val stopped = service.generateForChapter(request, { null }, { _, _ -> }, { _, _, _ -> error("no commit") })
         assertTrue(stopped.stopped)
         coVerify(exactly = 1) { client.chat(any(), any()) }
+    }
+
+    @Test fun paragraphTimeoutDoesNotBlockFollowingParagraphAndRemainsRetryable() = runTest {
+        var calls = 0
+        val rows = mutableListOf<AnnotationEntity>()
+        coEvery { client.chat(any(), any()) } coAnswers {
+            if (++calls == 1) delay(PROACTIVE_ANNOTATION_TEXT_TIMEOUT_MS + 1)
+            """{"quote":"$second","note":"评论"}"""
+        }
+        val outcome = service.generateForChapter(request, { permit }, { _, _ -> },
+            { row, _, _ -> rows += row; true })
+        assertTrue(outcome.failed)
+        assertFalse(outcome.stopped)
+        assertEquals(2, calls)
+        assertEquals(second, rows.single().selectedText)
     }
 
     @Test fun mediaDisabledSkipsBothPaidCalls() = runTest {

@@ -44,7 +44,11 @@ class TextColumn(
     /** text-combine-upright: [charData] is squeezed horizontally into one upright em cell. */
     val combineUpright: Boolean = false,
     /** CSS text-shadow layers in physical px, first on top. */
-    val textShadows: List<TextBoxShadow> = emptyList()
+    val textShadows: List<TextBoxShadow> = emptyList(),
+    val decorationStyle: com.mozhi.reader.core.epub.style.EpubDecorationStyle = com.mozhi.reader.core.epub.style.EpubDecorationStyle.SOLID,
+    val decorationColorArgb: Int? = null,
+    /** Explicit publisher text-decoration:none must also apply to links. */
+    val linkUnderlineOverride: Boolean? = null
 )
 
 /** Only generated illustration buttons occupy text space. Comments are paint-only decorations. */

@@ -530,15 +530,14 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
                 ) {
                     syntaxPaint(
                         base = paint,
-                        color = if (column.linkHref != null) pageStyle.accentColor
-                            else column.syntaxColorArgb ?: pageStyle.textColor,
-                        underline = column.syntaxUnderline || column.linkHref != null,
+                        color = column.syntaxColorArgb ?: if (column.linkHref != null) pageStyle.accentColor else pageStyle.textColor,
+                        underline = columnUnderline(column) && !customDecoration(column),
                         title = line.isTitle,
                         font = column.syntaxFont,
                         fontAssetId = column.syntaxFontAssetId,
                         bold = column.syntaxBold,
                         italic = column.syntaxItalic,
-                        strikethrough = column.syntaxStrikethrough,
+                        strikethrough = column.syntaxStrikethrough && !customDecoration(column),
                         textSizeScale = column.textSizeScale,
                         fontFilePath = column.fontFilePath,
                         fontFamily = column.fontFamily,
@@ -561,6 +560,14 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
                         withTextShadows(column.textShadows, resolvedPaint) {
                             canvas.drawText(column.charData, columnStart,
                                 line.lineBase + column.baselineShiftPx, resolvedPaint)
+                        }
+                        if (customDecoration(column)) {
+                            val baseline = line.lineBase + column.baselineShiftPx
+                            val color = column.decorationColorArgb ?: resolvedPaint.color
+                            if (columnUnderline(column)) decorationPainter.draw(canvas, columnStart, columnEnd,
+                                baseline + resolvedPaint.textSize * .12f, resolvedPaint.textSize, color, decorationOpacity(column), column.decorationStyle)
+                            if (column.syntaxStrikethrough) decorationPainter.draw(canvas, columnStart, columnEnd,
+                                baseline - resolvedPaint.textSize * .3f, resolvedPaint.textSize, color, decorationOpacity(column), column.decorationStyle)
                         }
                     } else {
                         drawVerticalColumn(canvas, column, columnStart, columnEnd,
@@ -1468,7 +1475,13 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
                 canvas.drawText(column.charData, centerX - plain.measureText(column.charData) / 2f, baseline, plain)
             }
         }
-        if (source.isUnderlineText || source.isStrikeThruText) {
+        if (customDecoration(column)) {
+            val color = column.decorationColorArgb ?: source.color
+            if (columnUnderline(column)) decorationPainter.draw(canvas, start, end, axisY + source.textSize * .56f,
+                source.textSize, color, decorationOpacity(column), column.decorationStyle)
+            if (column.syntaxStrikethrough) decorationPainter.draw(canvas, start, end, axisY,
+                source.textSize, color, decorationOpacity(column), column.decorationStyle)
+        } else if (source.isUnderlineText || source.isStrikeThruText) {
             verticalLinePaint.color = source.color
             verticalLinePaint.strokeWidth = (source.textSize * 0.06f).coerceAtLeast(1f)
             if (source.isUnderlineText) {
@@ -1520,6 +1533,14 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
     private val verticalPaints = HashMap<Pair<TextPaint, Boolean>, TextPaint>()
     private val verticalForms = HashMap<String, Boolean>()
     private val verticalLinePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val decorationPainter = TextDecorationPainter()
+    // The fallback paint color already includes CSS opacity; apply it once to explicit colors.
+    private fun decorationOpacity(column: com.mozhi.reader.feature.reader.engine.TextColumn) =
+        if (column.decorationColorArgb != null) column.opacity else 1f
+    private fun customDecoration(column: com.mozhi.reader.feature.reader.engine.TextColumn) =
+        column.decorationStyle != com.mozhi.reader.core.epub.style.EpubDecorationStyle.SOLID || column.decorationColorArgb != null
+    private fun columnUnderline(column: com.mozhi.reader.feature.reader.engine.TextColumn) =
+        if (column.linkHref != null) column.linkUnderlineOverride ?: true else column.syntaxUnderline
 
     /** Decorations are drawn along the column by [drawVerticalColumn], never by the glyph paint. */
     private fun verticalPaint(source: TextPaint, vert: Boolean): TextPaint =

@@ -39,6 +39,17 @@ internal data class ReadingReviewState(
     val error: String? = null
 )
 
+/** 一次批量删除的完整快照：划线连同讨论串、笔记，用于撤销。 */
+internal data class ReviewDeletion(
+    val annotations: List<Pair<com.mozhi.reader.core.database.entity.AnnotationEntity, List<com.mozhi.reader.core.database.entity.AnnotationReplyEntity>>>,
+    val notes: List<com.mozhi.reader.core.database.entity.NoteEntity>
+) {
+    val count: Int get() = annotations.size + notes.size
+}
+
+private const val UNDO_WINDOW_MS = 6_000L
+private const val CONTENT_CHANGED = "内容已变化，请重新选择"
+
 internal data class ReviewDraft(
     val sources: List<ReviewEntry>,
     val scope: ReadingScope,
@@ -74,6 +85,10 @@ internal class ReadingReviewViewModel @Inject constructor(
     private var generation: Job? = null
     private var generationRevision = 0L
     private val writeMutex = Mutex()
+    private val mutableUndo = MutableStateFlow<ReviewDeletion?>(null)
+    /** 最近一次批量删除，可在几秒内撤销；新的删除会覆盖上一份快照。 */
+    val undo = mutableUndo.asStateFlow()
+    private var undoExpiry: Job? = null
 
     fun setReviewFont(choice: String) = write { settings.setReviewFont(choice) }
     fun setReviewPreferences(value: com.mozhi.reader.core.datastore.ReadingReviewPreferences) =
@@ -111,6 +126,40 @@ internal class ReadingReviewViewModel @Inject constructor(
         messages.send("已删除这条${entry.kindLabel}")
     }
 
+    /** 多选删除：先取完整快照（含段评讨论），逐条删除后允许撤销。 */
+    fun deleteAll(entries: List<ReviewEntry>) = write {
+        val visible = state.value.entries.associateBy { it.key }
+        val targets = entries.mapNotNull { visible[it.key] }
+        require(targets.isNotEmpty()) { CONTENT_CHANGED }
+        val snapshot = ReviewDeletion(
+            annotations = targets.mapNotNull { it.annotation }.map { it to annotations.getReplies(it.id) },
+            notes = targets.mapNotNull { it.note }
+        )
+        snapshot.annotations.forEach { (annotation, _) -> annotations.delete(annotation.id) }
+        snapshot.notes.forEach { notes.delete(it.id) }
+        mutableUndo.value = snapshot
+        undoExpiry?.cancel()
+        undoExpiry = viewModelScope.launch {
+            kotlinx.coroutines.delay(UNDO_WINDOW_MS)
+            mutableUndo.compareAndSet(snapshot, null)
+        }
+    }
+
+    fun undoDelete() = write {
+        val snapshot = mutableUndo.value ?: return@write
+        mutableUndo.value = null
+        undoExpiry?.cancel()
+        snapshot.annotations.forEach { (annotation, replies) -> annotations.restore(annotation, replies) }
+        snapshot.notes.forEach { notes.restore(it) }
+    }
+
+    fun dismissUndo() { mutableUndo.value = null; undoExpiry?.cancel() }
+
+    /** 多选改样式：只作用于划线，笔记没有样式。 */
+    fun styleAll(entries: List<ReviewEntry>, style: com.mozhi.reader.core.database.entity.AnnotationStyle, color: String) = write {
+        entries.mapNotNull { it.annotation }.forEach { annotations.updateStyle(it.id, style, color) }
+    }
+
     private fun write(block: suspend () -> Unit) {
         viewModelScope.launch {
             try { writeMutex.withLock { block() } } catch (cancelled: CancellationException) { throw cancelled }
@@ -123,7 +172,7 @@ internal class ReadingReviewViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val visible = state.value.entries.map { it.key }.toSet()
-                require(entries.isNotEmpty() && entries.all { it.key in visible }) { "内容已变化，请重新选择" }
+                require(entries.isNotEmpty() && entries.all { it.key in visible }) { CONTENT_CHANGED }
                 shareIntents.send(if (image) exporter.image(entries.single(), style, options) else exporter.markdown(entries))
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { messages.send(error.message ?: "导出失败，请重试") }

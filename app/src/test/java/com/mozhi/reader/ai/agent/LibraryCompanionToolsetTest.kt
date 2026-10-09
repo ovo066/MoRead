@@ -73,7 +73,7 @@ class LibraryCompanionToolsetTest {
         }
         val sources = LibraryConversationSources(7, "u", emptyList(), guard, chats)
         val tools = LibraryCompanionToolset(library, mockk(), mockk(), guard, reader, mockk(), mockk()).forConversation(sources, null)
-        assertEquals(setOf("find_books", "propose_library_organization", "read_book_section"), tools.map { it.spec.name }.toSet())
+        assertEquals(setOf("find_books", "propose_library_organization", "create_chart", "read_book_section"), tools.map { it.spec.name }.toSet())
         val read = tools.single { it.spec.name == "read_book_section" }
         assertNull(read.spec.parameters["properties"]!!.jsonObject["book_id"]!!.jsonObject["enum"])
         read.execute(buildJsonObject { put("book_id", 2); put("from_chapter", 1) }).content

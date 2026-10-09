@@ -7,6 +7,21 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TtsSettingsTest {
+    @Test fun elevenLabsPresetsAndControlsStayNativeOnProxyHosts() {
+        assertEquals("https://api.elevenlabs.io/v1", TtsApiProvider.ELEVENLABS.defaultBaseUrl())
+        assertEquals("eleven_multilingual_v2", TtsApiProvider.ELEVENLABS.defaultModel())
+        for (url in listOf("https://minimax-proxy.test/v1", "https://gmicloud.ai/v1")) {
+            val settings = TtsSettings(aiProvider = TtsApiProvider.ELEVENLABS, aiBaseUrl = url)
+            assertFalse(settings.aiIsMiniMax)
+            assertFalse(settings.aiIsGmiCloud)
+            assertFalse(settings.aiSupportsVolume)
+            assertFalse(settings.aiSupportsPitch)
+            assertTrue(settings.aiSupportsSpeed)
+            assertEquals(0.7f..1.2f, settings.aiSpeedRange)
+            assertFalse(settings.copy(aiModel = "eleven_v3").aiSupportsSpeed)
+        }
+        assertNotEquals(TtsSettingsStore.apiKeyAlias(TtsApiProvider.ELEVENLABS), TtsSettingsStore.apiKeyAlias(TtsApiProvider.FISH_AUDIO))
+    }
     @Test fun mimoAndFishPresetsUseNativeEndpointsAndControls() {
         assertEquals("https://api.xiaomimimo.com/v1", TtsApiProvider.XIAOMI_MIMO.defaultBaseUrl())
         assertEquals("mimo-v2.5-tts", TtsApiProvider.XIAOMI_MIMO.defaultModel())

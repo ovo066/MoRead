@@ -90,5 +90,6 @@ data class ReaderBehaviorActions(
     val spreadActive: Boolean = false,
     val onModernBackTextOpacityChange: (Float) -> Unit = {},
     val onModernCurlRadiusScaleChange: (Float) -> Unit = {},
-    val onPhysicalKeyBindingsChange: (List<com.mozhi.reader.core.datastore.ReaderKeyBinding>) -> Unit = {}
+    val onPhysicalKeyBindingsChange: (List<com.mozhi.reader.core.datastore.ReaderKeyBinding>) -> Unit = {},
+    val onSelectionToolbarExtrasChange: (Set<String>) -> Unit = {}
 )

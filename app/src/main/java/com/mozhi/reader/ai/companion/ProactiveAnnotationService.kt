@@ -17,6 +17,10 @@ import com.mozhi.reader.core.library.AnnotationMedia
 import com.mozhi.reader.core.library.QuoteLocation
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 
@@ -97,6 +101,7 @@ internal fun proactiveAnnotationMessages(
 
 /** 角色身份块进入 CHEAP 段评提示词的长度上限；聊天路径不裁，这里按每段一次调用的成本收口。 */
 internal const val PROACTIVE_PERSONA_MAX_CHARS = 2_400
+internal const val PROACTIVE_ANNOTATION_TEXT_TIMEOUT_MS = 60_000L
 
 /** Scheduler-owned immutable identity and transactional sink; the service never writes progress. */
 data class ProactiveAnnotationRequest(
@@ -143,17 +148,19 @@ class ProactiveAnnotationService @Inject constructor(
                     return ProactiveAnnotationGenerationResult(failed, stopped = true)
                 }
                 val resolved = clientFactory.forRole(ModelRole.PROACTIVE_ANNOTATION)
-                val raw = resolved.client.chat(
-                    messages = proactiveAnnotationMessages(
-                        persona = request.persona,
-                        prefix = context.prefix,
-                        presets = request.prompts,
-                        target = context.target,
-                        minPerChapter = refreshedPermit.minAnnotations,
-                        background = context.background
-                    ),
-                    options = resolved.options
-                )
+                val raw = withTimeout(PROACTIVE_ANNOTATION_TEXT_TIMEOUT_MS) {
+                    resolved.client.chat(
+                        messages = proactiveAnnotationMessages(
+                            persona = request.persona,
+                            prefix = context.prefix,
+                            presets = request.prompts,
+                            target = context.target,
+                            minPerChapter = refreshedPermit.minAnnotations,
+                            background = context.background
+                        ),
+                        options = resolved.options
+                    )
+                }
                 if (!contextValid()) return ProactiveAnnotationGenerationResult(failed, stopped = true)
                 val draft = ProactiveAnnotationParser.parse(raw, 1).firstOrNull()
                 if (draft == null) { failed = true; continue }
@@ -202,6 +209,10 @@ class ProactiveAnnotationService @Inject constructor(
                 if (!contextValid()) return ProactiveAnnotationGenerationResult(failed, stopped = true)
                 committed = commit(row, paragraph.end, detachedImage)
                 if (!committed) return ProactiveAnnotationGenerationResult(failed, true)
+            } catch (_: TimeoutCancellationException) {
+                // A slow paragraph must release the single worker and remain eligible for retry.
+                currentCoroutineContext().ensureActive()
+                failed = true
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 throw cancelled
             } catch (_: Exception) {

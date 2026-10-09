@@ -34,6 +34,7 @@ class BookCharactersRepositoryTest {
     private lateinit var database: MoReadDatabase
     private lateinit var repository: BookCharactersRepository
     private val client = CharacterClient()
+    private val mainClient = EditorClient()
 
     @Before fun setup() = runBlocking {
         database = Room.inMemoryDatabaseBuilder(ApplicationProvider.getApplicationContext(), MoReadDatabase::class.java).allowMainThreadQueries().build()
@@ -50,7 +51,14 @@ class BookCharactersRepositoryTest {
         val provider = AiProviderEntity(id = 1, name = "测试模型", baseUrl = "https://example.test", apiKeyAlias = "alias", type = AiProviderType.CHAT, createdAt = 1)
         coEvery { factory.forRole(ModelRole.CHEAP) } returns ResolvedChatClient(client, ChatOptions.Default, provider, "test-extractor")
         val loop = AgentLoop(chatDao, dagger.Lazy { error("Use resolved model") }, dagger.Lazy { error("No attachments") }, dagger.Lazy { error("No summaries") }, com.mozhi.reader.ai.agent.AgentToolExecutor { })
-        repository = BookCharactersRepository(library, database, factory, ChapterKnowledgeAgent(loop, KnowledgeRequestLimiter()))
+        val knowledgeAgent = ChapterKnowledgeAgent(loop, KnowledgeRequestLimiter())
+        val readerTools = mockk<com.mozhi.reader.ai.agent.ReaderToolset>()
+        every { readerTools.forBook(any(), any(), any(), any(), any(), any(), any()) } returns emptyList()
+        val webSettings = mockk<com.mozhi.reader.ai.search.WebSearchSettingsStore>()
+        coEvery { webSettings.current() } returns com.mozhi.reader.ai.search.WebSearchSettings(enabled = false)
+        coEvery { factory.forRole(ModelRole.CHAT) } returns ResolvedChatClient(mainClient, ChatOptions.Default, provider, "test-editor")
+        repository = BookCharactersRepository(library, database, factory, knowledgeAgent,
+            dagger.Lazy { CharacterResearchAgent(loop, knowledgeAgent, readerTools) }, webSettings)
     }
 
     @After fun close() { database.close() }
@@ -272,6 +280,39 @@ class BookCharactersRepositoryTest {
             emit(ChatDelta.ToolCalls(listOf(ToolCall("submit-$requests", tools.single().name, json))))
         }
         override suspend fun chat(messages: List<ChatMessage>, options: ChatOptions): String = error("Use detached agent")
+        override suspend fun embed(texts: List<String>): List<FloatArray> = error("No embeddings")
+    }
+
+    @Test fun quickModeDispatchesHelpersAndPublishesVerifiedCharacters() = runBlocking {
+        val plan = repository.preview(1, progressBounded = false, quick = true)
+        assertTrue(plan.quick)
+        assertEquals("test-editor", plan.mainModelLabel)
+        val published = repository.generateQuick(plan)
+        val guide = BookCharactersCodec.visible(published, revision)!!.guide
+        assertEquals(BookCharacterGuide.MODE_QUICK, guide.mode)
+        val person = guide.characters.single { it.name == "林舟" }
+        assertEquals(0, person.evidence.single().chapterIndex)
+        assertEquals(0, person.evidence.single().fact.start)
+        assertEquals(2, mainClient.rounds)
+        assertTrue(client.received.single().contains("目标人物：林舟"))
+    }
+
+    @Test fun quickModeWithinProgressNeverSendsUnreadText() = runBlocking {
+        currentBook = book.copy(maxReachedChapterIndex = 0, maxReachedCharOffset = texts[0].length)
+        val plan = repository.preview(1, progressBounded = true, quick = true)
+        repository.generateQuick(plan)
+        assertTrue(client.received.none { "没有读到" in it })
+    }
+
+    private inner class EditorClient : ChatApiClient {
+        var rounds = 0
+        override fun chatStream(messages: List<ChatMessage>, tools: List<ToolSpec>, options: ChatOptions): Flow<ChatDelta> = flow {
+            rounds++
+            val call = if (rounds == 1) ToolCall("p1", "profile_characters", """{"characters":[{"name":"林舟"}]}""")
+                else ToolCall("s1", "submit_character_guide", """{"order":["林舟"]}""")
+            emit(ChatDelta.ToolCalls(listOf(call)))
+        }
+        override suspend fun chat(messages: List<ChatMessage>, options: ChatOptions): String = error("Use agent")
         override suspend fun embed(texts: List<String>): List<FloatArray> = error("No embeddings")
     }
 }

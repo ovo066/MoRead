@@ -31,7 +31,12 @@ class BookCharactersPlan internal constructor(
     internal val resumeGenerationId: String?, val completedParts: Int,
     /** true = 只扫到阅读进度为止（边界章只送已读部分），资料不含未读情节。 */
     val progressBounded: Boolean = false,
-    internal val scope: ReadingScope = ReadingScope.WholeBook
+    internal val scope: ReadingScope = ReadingScope.WholeBook,
+    /** true = 主 agent 检索主要人物，子 agent 并行整理；false = 逐段扫描全部正文。 */
+    val quick: Boolean = false,
+    internal val mainModel: ResolvedChatClient? = null,
+    /** 快速模式下主 agent 可以联网（按用户的联网搜索开关）。 */
+    val webSearch: Boolean = false
 ) {
     val chapterCount: Int get() = chapters.size
     /** 本次实际要送出的字数：整章，或边界章只到已读位置。 */
@@ -44,11 +49,22 @@ class BookCharactersPlan internal constructor(
     val modelLabel: String get() = model.modelName
     internal val modelKey = ChapterKnowledgeCodec.hash("${model.provider.id}|${model.provider.baseUrl}|${model.modelName}|${model.options}")
     // A paragraph-aware part is at least half PART_CHARS, except for the final part.
-    val maximumRequests: Long = chapters.sumOf {
+    val mainModelLabel: String get() = mainModel?.modelName ?: model.modelName
+    val maximumRequests: Long = if (quick) {
+        CharacterResearchAgent.MAX_MAIN_ROUNDS + QUICK_MAX_HELPERS * 2L
+    } else chapters.sumOf {
         (scannedChars(it).toLong() + ChapterKnowledgeCodec.PART_CHARS / 2 - 1) / (ChapterKnowledgeCodec.PART_CHARS / 2)
     } * 2
-    val resuming: Boolean get() = resumeGenerationId != null
+    val resuming: Boolean get() = !quick && resumeGenerationId != null
+
+    internal companion object {
+        /** 快速模式下子 agent 整理的人数上限（主 agent 自己决定派多少，这里只用于费用提示）。 */
+        const val QUICK_MAX_HELPERS = 30
+    }
 }
+
+/** 快速模式最多读入的正文量；超出部分不参与候选统计与段落检索。 */
+private const val QUICK_MAX_SOURCE_CHARS = 8_000_000L
 
 /** Whole-book extraction has its own explicit consent and never inherits the reader's progress boundary. */
 @Singleton
@@ -56,7 +72,9 @@ class BookCharactersRepository @Inject constructor(
     private val library: LibraryRepository,
     private val database: MoReadDatabase,
     private val clients: AiClientFactory,
-    private val agent: ChapterKnowledgeAgent
+    private val agent: ChapterKnowledgeAgent,
+    private val research: dagger.Lazy<CharacterResearchAgent>,
+    private val webSearchSettings: com.mozhi.reader.ai.search.WebSearchSettingsStore
 ) {
     private val dao get() = database.bookCharacterDao()
     private val generating = ConcurrentHashMap.newKeySet<Long>()
@@ -77,8 +95,10 @@ class BookCharactersRepository @Inject constructor(
      * [progressBounded] 把扫描范围收到 [ReadingScope.uptoProgress]（边界章只送已读部分）；
      * 全书模式保留自己的明确同意，不继承阅读进度边界。
      */
-    suspend fun preview(bookId: Long, progressBounded: Boolean = false): BookCharactersPlan = withContext(Dispatchers.IO) {
+    suspend fun preview(bookId: Long, progressBounded: Boolean = false, quick: Boolean = false): BookCharactersPlan = withContext(Dispatchers.IO) {
         val model = clients.forRole(ModelRole.CHEAP)
+        val mainModel = if (quick) clients.forRole(ModelRole.CHAT) else null
+        val webSearch = quick && webSearchSettings.current().enabled
         BookContentMutation.withBook(bookId) {
             val book = library.getBook(bookId)?.takeIf { it.removedAt == 0L } ?: error("书籍正文已移除")
             val scope = if (progressBounded) ReadingScope.uptoProgress(book) else ReadingScope.WholeBook
@@ -95,9 +115,64 @@ class BookCharactersRepository @Inject constructor(
             val published = dao.getGuide(bookId)
             val checkpoint = dao.getCheckpoint(bookId)?.takeIf { it.generationId != published?.generationId &&
                 it.sourceRevision == revision && it.modelKey == key && it.promptVersion == BookCharactersCodec.PROMPT_VERSION }
-            BookCharactersPlan(bookId, book.title, revision, chapters, model, checkpoint?.generationId,
-                checkpoint?.completedParts ?: 0, progressBounded, scope)
+            BookCharactersPlan(bookId, book.title, revision, chapters, model, checkpoint?.generationId.takeUnless { quick },
+                if (quick) 0 else checkpoint?.completedParts ?: 0, progressBounded, scope, quick, mainModel, webSearch)
         }
+    }
+
+    /**
+     * 快速模式：读出范围内的正文交给主 agent，结果与逐段扫描走同一套合并、手动资料保留与发布。
+     * 不写分段缓存（它们按段落绑定，快速模式没有段落）；失败或取消时已发布的资料不变。
+     */
+    suspend fun generateQuick(plan: BookCharactersPlan, onProgress: (String) -> Unit = {}): BookCharacterGuideEntity {
+        require(plan.quick && plan.mainModel != null)
+        check(generating.add(plan.bookId)) { "这本书正在提取人物" }
+        try {
+            val chapters = withContext(Dispatchers.IO) { BookContentMutation.withBook(plan.bookId) {
+                validateLocked(plan)
+                var total = 0L
+                plan.chapters.mapNotNull { chapter ->
+                    if (total >= QUICK_MAX_SOURCE_CHARS) return@mapNotNull null
+                    val text = library.readChapterTextStrict(plan.bookId, chapter)
+                    val readable = if (plan.progressBounded) plan.scope.readableText(chapter.chapterIndex, text) else text
+                    total += readable.length
+                    readable.takeIf { it.isNotBlank() }?.let { chapter.chapterIndex to it }
+                }
+            } }
+            val titles = plan.chapters.associate { it.chapterIndex to it.title }
+            val result = research.get().run(CharacterResearchRequest(
+                bookId = plan.bookId,
+                bookTitle = plan.bookTitle,
+                scope = plan.scope,
+                progressBounded = plan.progressBounded,
+                chapters = chapters,
+                chapterTitle = { index -> titles[index] ?: "第${index + 1}章" },
+                mainModel = plan.mainModel,
+                helperModel = plan.model,
+                webSearch = plan.webSearch,
+                validate = { validate(plan) }
+            ), onProgress)
+            val accumulator = BookCharactersCodec.Accumulator()
+            result.people.sortedBy { it.first }.forEach { (chapter, person) -> accumulator.add(chapter, listOf(person)) }
+            val rank = result.order.withIndex().associate { it.value to it.index }
+            val built = accumulator.guide(plan.chapterCount, plan.sourceCharacters, plan.progressBounded)
+            val guide = built.copy(
+                characters = built.characters.sortedWith(compareBy<BookCharacter> { rank[it.name] ?: Int.MAX_VALUE }
+                    .thenByDescending { it.evidence.size }),
+                externalNotes = result.externalNotes,
+                mode = BookCharacterGuide.MODE_QUICK
+            )
+            val generationId = UUID.randomUUID().toString()
+            return withContext(Dispatchers.IO) { BookContentMutation.withBook(plan.bookId) {
+                validateLocked(plan)
+                val previous = BookCharactersCodec.visible(dao.getGuide(plan.bookId), plan.revision)?.guide
+                val published = BookCharacterGuideEntity(plan.bookId, generationId, plan.revision, plan.modelKey,
+                    plan.mainModelLabel + " + " + plan.modelLabel, BookCharactersCodec.PROMPT_VERSION,
+                    AiJson.encodeToString(BookCharactersCodec.mergeManual(guide, previous)), System.currentTimeMillis())
+                dao.saveGuide(published)
+                published
+            } }
+        } finally { generating.remove(plan.bookId) }
     }
 
     suspend fun generate(plan: BookCharactersPlan, onProgress: (Int, Int, String) -> Unit = { _, _, _ -> }): BookCharacterGuideEntity {

@@ -1,5 +1,9 @@
 package com.mozhi.reader.feature.importer
 
+import com.mozhi.reader.core.importer.BookTitles
+import com.mozhi.reader.core.importer.SourceFingerprints
+import com.mozhi.reader.core.importer.SourceFingerprint
+import com.mozhi.reader.core.importer.DuplicateBookException
 import android.content.Context
 import com.mozhi.reader.R
 import android.content.Intent
@@ -124,18 +128,22 @@ class ImportCoordinator @Inject constructor(
         runCatching { marker.createNewFile() }
     }
 
-    override suspend fun prepare(uri: Uri): PreparedImport = withContext(Dispatchers.IO) {
+    override suspend fun prepare(uri: Uri, allowDuplicate: Boolean): PreparedImport = withContext(Dispatchers.IO) {
         takeReadPermission(uri)
         val displayName = queryDisplayName(uri) ?: "未命名书籍"
         val mimeType = context.contentResolver.getType(uri).orEmpty()
 
-        when {
-            displayName.endsWith(".txt", ignoreCase = true) || mimeType.startsWith("text/") ->
-                prepareTxt(uri, displayName)
-            displayName.endsWith(".epub", ignoreCase = true) ||
-                mimeType == "application/epub+zip" ->
-                PreparedImport.BookImported(importEpub(uri, displayName))
-            else -> error("仅支持 TXT 与 EPUB 文件")
+        try {
+            when {
+                displayName.endsWith(".txt", ignoreCase = true) || mimeType.startsWith("text/") ->
+                    prepareTxt(uri, displayName, allowDuplicate, interactive = true)
+                displayName.endsWith(".epub", ignoreCase = true) ||
+                    mimeType == "application/epub+zip" ->
+                    PreparedImport.BookImported(importEpub(uri, displayName, allowDuplicate))
+                else -> error("仅支持 TXT 与 EPUB 文件")
+            }
+        } catch (duplicate: DuplicateBookException) {
+            PreparedImport.Duplicate(uri, duplicate.bookId, duplicate.title, exact = true, removed = duplicate.removed)
         }
     }
 
@@ -150,9 +158,12 @@ class ImportCoordinator @Inject constructor(
         val mimeType = context.contentResolver.getType(uri).orEmpty()
         when {
             displayName.endsWith(".epub", ignoreCase = true) ||
-                mimeType == "application/epub+zip" -> importEpub(uri, displayName)
+                mimeType == "application/epub+zip" -> importEpub(uri, displayName, allowDuplicate = false)
             displayName.endsWith(".txt", ignoreCase = true) || mimeType.startsWith("text/") -> {
-                val prepared = prepareTxt(uri, displayName) as PreparedImport.PreviewReady
+                val prepared = when (val result = prepareTxt(uri, displayName, allowDuplicate = false, interactive = false)) {
+                    is PreparedImport.Duplicate -> throw DuplicateBookException(result.bookId, result.title, result.removed)
+                    else -> result as PreparedImport.PreviewReady
+                }
                 val session = requireNotNull(sessionStore.get(prepared.sessionId)) { "导入会话已失效" }
                 try {
                     confirmTxt(
@@ -220,7 +231,9 @@ class ImportCoordinator @Inject constructor(
                     epubPath = "",
                     sourceType = BookSourceType.TXT,
                     importedAt = System.currentTimeMillis(),
-                    totalChapters = chapters.size
+                    totalChapters = chapters.size,
+                    sourceSha256 = session.sourceSha256,
+                    sourceByteSize = session.sourceByteSize
                 ),
                 chapters = chapters
             )
@@ -250,17 +263,25 @@ class ImportCoordinator @Inject constructor(
         }
     }
 
-    private fun prepareTxt(uri: Uri, displayName: String): PreparedImport {
+    private suspend fun prepareTxt(uri: Uri, displayName: String, allowDuplicate: Boolean, interactive: Boolean): PreparedImport {
         val declaredSize = queryDocumentSize(uri)
         require(declaredSize == null || declaredSize <= MAX_TXT_BYTES) {
             "TXT 文件超过 200 MB，暂不支持导入"
         }
         val bytes = readBytesWithLimit(uri, MAX_TXT_BYTES)
         require(bytes.isNotEmpty()) { "TXT 文件为空" }
+        val fingerprint = SourceFingerprints.of(bytes)
+        if (!allowDuplicate) findDuplicate(fingerprint, BookSourceType.TXT)?.let { existing ->
+            return PreparedImport.Duplicate(uri, existing.id, existing.title, exact = true, removed = existing.removedAt != 0L)
+        }
 
         val detected = encodingDetector.decode(bytes)
-        val split = chapterSplitter.chooseBest(detected.text, ruleLoader.rules)
         val metadata = TxtMetadataDetector.detect(displayName, detected.text)
+        // 旧书没有指纹：只在单本导入时按书名作者提示「可能重复」，批量导入不会因此跳过。
+        if (!allowDuplicate && interactive) likelyLegacyDuplicate(metadata.title, metadata.author)?.let { existing ->
+            return PreparedImport.Duplicate(uri, existing.id, existing.title, exact = false, removed = existing.removedAt != 0L)
+        }
+        val split = chapterSplitter.chooseBest(detected.text, ruleLoader.rules)
         val session = sessionStore.create(
             sourceName = displayName,
             suggestedTitle = metadata.title,
@@ -268,19 +289,49 @@ class ImportCoordinator @Inject constructor(
             charsetName = detected.charsetName,
             text = detected.text,
             rules = ruleLoader.rules,
-            splitResult = split
+            splitResult = split,
+            fingerprint = fingerprint
         )
         return PreparedImport.PreviewReady(session.id)
     }
 
-    private suspend fun importEpub(uri: Uri, displayName: String): Long {
+    /**
+     * 先按指纹查；旧 EPUB 没有指纹，只对字节数相同的旧书补算一次（原包与导入源逐字节一致），
+     * 补算结果写回，下次直接命中。正文已移除、只保留记录的书同样算重复。
+     */
+    private suspend fun findDuplicate(fingerprint: SourceFingerprint, type: BookSourceType): BookEntity? {
+        libraryRepository.findBookBySourceHash(fingerprint.sha256)?.let { return it }
+        if (type != BookSourceType.EPUB) return null
+        libraryRepository.getEpubBooksWithoutSource().forEach { book ->
+            val file = File(book.epubPath)
+            if (!file.isFile || file.length() != fingerprint.size) return@forEach
+            val legacy = runCatching { SourceFingerprints.of(file) }.getOrNull() ?: return@forEach
+            libraryRepository.updateBookSource(book.id, legacy.sha256, legacy.size)
+            if (legacy.sha256 == fingerprint.sha256) return book
+        }
+        return null
+    }
+
+    private suspend fun likelyLegacyDuplicate(title: String, author: String): BookEntity? {
+        val key = BookTitles.normalize(title).takeIf { it.isNotEmpty() } ?: return null
+        return libraryRepository.getAllBooksIncludingRemoved().firstOrNull { book ->
+            book.sourceSha256 == null && book.sourceType == BookSourceType.TXT && BookTitles.normalize(book.title) == key &&
+                (author.isBlank() || book.author.isBlank() || author.trim() == book.author.trim())
+        }
+    }
+
+    private suspend fun importEpub(uri: Uri, displayName: String, allowDuplicate: Boolean): Long {
         val bookKey = UUID.randomUUID().toString()
         val target = File(booksDirectory(), "$bookKey.epub")
         var coverFile: File? = null
         var insertedBookId: Long? = null
-        context.contentResolver.openInputStream(uri)?.use { input ->
-            target.outputStream().buffered().use(input::copyTo)
+        val fingerprint = context.contentResolver.openInputStream(uri)?.use { input ->
+            target.outputStream().buffered().use { output -> SourceFingerprints.copy(input, output) }
         } ?: error("无法读取 EPUB 文件")
+        if (!allowDuplicate) findDuplicate(fingerprint, BookSourceType.EPUB)?.let { existing ->
+            target.delete()
+            throw DuplicateBookException(existing.id, existing.title, existing.removedAt != 0L)
+        }
 
         try {
             val publication = readium.open(target)
@@ -309,7 +360,9 @@ class ImportCoordinator @Inject constructor(
                         epubPath = target.absolutePath,
                         sourceType = BookSourceType.EPUB,
                         importedAt = System.currentTimeMillis(),
-                        totalChapters = chapters.size
+                        totalChapters = chapters.size,
+                        sourceSha256 = fingerprint.sha256,
+                        sourceByteSize = fingerprint.size
                     ),
                     chapters = chapters,
                     tocEntries = structure.tocEntries

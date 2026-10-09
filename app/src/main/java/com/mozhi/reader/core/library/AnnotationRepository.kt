@@ -112,6 +112,13 @@ class AnnotationRepository @Inject constructor(
         annotationDao.delete(annotationId)
     }
 
+    /** 撤销批量删除：按原编号写回划线及其讨论串，删除前由调用方先取快照。 */
+    suspend fun restore(annotation: AnnotationEntity, replies: List<AnnotationReplyEntity>) {
+        if (annotationDao.getAnnotation(annotation.id) != null) return
+        annotationDao.insert(annotation)
+        replies.forEach { annotationDao.insertReply(it) }
+    }
+
     // ---- 讨论串回复层 ----
 
     fun observeReplies(annotationIds: List<Long>): Flow<List<AnnotationReplyEntity>> =

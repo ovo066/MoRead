@@ -39,6 +39,7 @@ import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.InsertChart
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Psychology
@@ -70,17 +71,27 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.res.stringResource
+import com.mozhi.reader.R
+import com.mozhi.reader.ai.agent.ConcurrencySafeTools
+import com.mozhi.reader.ai.agent.ParallelToolRunner
 import com.mozhi.reader.ai.agent.ToolCallSummary
+import com.mozhi.reader.ai.client.ToolCall
+import com.mozhi.reader.core.datastore.CompanionProcessDisplay
+import com.mozhi.reader.core.datastore.CompanionProcessMode
 import com.mozhi.reader.ai.embedding.BookEmbeddingProgress
 import com.mozhi.reader.ai.embedding.EmbeddingIndexStage
+
+internal val LocalCompanionProcessDisplay = staticCompositionLocalOf { CompanionProcessDisplay() }
 
 /**
  * 「过程」卡：一轮里的思维链 + 工具调用合成一条，挂在该轮 AI 气泡上方。
  *
- * 形制取自 Codex / Claude Code 的执行链——**默认折叠成一行淡字**，点开才看细节。
- * 过程是让人放心的，不是让人读的：它不该把回答挤下去。
- *
- * 展开策略：本轮正在跑时自动展开（看得见 agent 在干什么），跑完自动收起；
+ * 形制取自 Codex / Claude Code 的执行链，显示程度由用户在「聊天显示」里选：
+ * 隐藏（生成中只留一行状态）、简洁（默认折叠成一行淡字）、详细（逐步时间线，默认展开）。
+ * 过程是让人放心的，不是让人读的：生成中展开时高度固定，不把回答挤下去。
  * 用户手动开合之后一律以用户的选择为准，不再被自动逻辑改写。
  */
 @Composable
@@ -93,10 +104,17 @@ internal fun CompanionProcessCard(
     stateKey: String = "process",
     onUserToggle: () -> Unit = {}
 ) {
-    if (steps.isEmpty() && reasoning.isNullOrBlank()) return
-
-    // 流式时默认保持一行摘要；自动展开会让正文随着步骤增加不断被向下顶。
-    var expanded by rememberSaveable(stateKey) { mutableStateOf(false) }
+    val display = LocalCompanionProcessDisplay.current
+    val shownReasoning = reasoning?.takeIf { display.showReasoning && it.isNotBlank() }
+    if (steps.isEmpty() && shownReasoning == null) return
+    if (display.mode == CompanionProcessMode.HIDDEN) {
+        if (isLive) ProcessStatusLine(steps, shownReasoning, palette, modifier)
+        return
+    }
+    val detailed = display.mode == CompanionProcessMode.DETAILED
+    var expanded by rememberSaveable(stateKey) {
+        mutableStateOf(if (isLive) display.expandWhileStreaming else detailed)
+    }
     val chevronRotation by animateFloatAsState(
         targetValue = if (expanded) 180f else 0f,
         animationSpec = if (isLive) tween(0) else tween(180),
@@ -150,7 +168,7 @@ internal fun CompanionProcessCard(
                     )
                 }
                 Text(
-                    text = processHeadline(steps, reasoning, isLive),
+                    text = processHeadline(steps, shownReasoning, isLive),
                     style = MaterialTheme.typography.labelSmall,
                     color = if (failed) MaterialTheme.colorScheme.error else palette.muted,
                     maxLines = 1,
@@ -161,7 +179,9 @@ internal fun CompanionProcessCard(
                 )
                 Icon(
                     Icons.Outlined.ExpandMore,
-                    contentDescription = if (expanded) "收起过程" else "展开过程",
+                    contentDescription = stringResource(
+                        if (expanded) R.string.process_collapse else R.string.process_expand
+                    ),
                     tint = palette.muted,
                     modifier = Modifier
                         .size(15.dp)
@@ -195,17 +215,43 @@ internal fun CompanionProcessCard(
                         .padding(start = 11.dp, end = 11.dp, bottom = 10.dp),
                     verticalArrangement = Arrangement.spacedBy(9.dp)
                 ) {
-                    reasoning?.takeIf(String::isNotBlank)?.let {
+                    shownReasoning?.let {
                         ReasoningBlock(
                             reasoning = it,
                             palette = palette,
                             onUserToggle = onUserToggle
                         )
                     }
-                    if (steps.isNotEmpty()) StepRail(steps, palette)
+                    if (steps.isNotEmpty()) {
+                        if (detailed) DetailedStepList(steps, palette, display) else StepRail(steps, palette, display)
+                    }
                 }
             }
         }
+    }
+}
+
+/** 「隐藏」模式下生成中仍留的一行状态：让人知道它在干活，而不是卡住了。 */
+@Composable
+private fun ProcessStatusLine(
+    steps: List<AgentExecutionStep>,
+    reasoning: String?,
+    palette: ReaderPalette,
+    modifier: Modifier
+) {
+    Row(
+        modifier = modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        CircularProgressIndicator(strokeWidth = 1.5.dp, color = palette.accent, modifier = Modifier.size(11.dp))
+        Text(
+            text = processHeadline(steps, reasoning, isLive = true),
+            style = MaterialTheme.typography.labelSmall,
+            color = palette.muted,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(start = 6.dp)
+        )
     }
 }
 
@@ -241,7 +287,9 @@ private fun ReasoningBlock(
                 )
             ) {
                 Text(
-                    text = if (fullyExpanded) "收起思考" else "展开全部思考",
+                    text = stringResource(
+                        if (fullyExpanded) R.string.process_reasoning_collapse else R.string.process_reasoning_expand
+                    ),
                     style = MaterialTheme.typography.labelSmall,
                     color = palette.accent
                 )
@@ -252,7 +300,7 @@ private fun ReasoningBlock(
 
 /** 工具步骤时间线：左侧一条竖导轨，每步「状态图标 + 工具名 + 参数摘要 + 结果预览」。 */
 @Composable
-private fun StepRail(steps: List<AgentExecutionStep>, palette: ReaderPalette) {
+private fun StepRail(steps: List<AgentExecutionStep>, palette: ReaderPalette, display: CompanionProcessDisplay) {
     Row(modifier = Modifier.height(IntrinsicSize.Min)) {
         Box(
             modifier = Modifier
@@ -265,13 +313,13 @@ private fun StepRail(steps: List<AgentExecutionStep>, palette: ReaderPalette) {
             modifier = Modifier.padding(start = 9.dp),
             verticalArrangement = Arrangement.spacedBy(7.dp)
         ) {
-            steps.forEach { step -> StepRow(step, palette) }
+            steps.forEach { step -> StepRow(step, palette, display) }
         }
     }
 }
 
 @Composable
-private fun StepRow(step: AgentExecutionStep, palette: ReaderPalette) {
+private fun StepRow(step: AgentExecutionStep, palette: ReaderPalette, display: CompanionProcessDisplay) {
     val presentation = remember(step.toolName, step.displayName) {
         companionToolPresentation(step.toolName, step.displayName)
     }
@@ -310,27 +358,7 @@ private fun StepRow(step: AgentExecutionStep, palette: ReaderPalette) {
                     }
                 )
                 Spacer(modifier = Modifier.weight(1f))
-                Box(modifier = Modifier.size(15.dp), contentAlignment = Alignment.Center) {
-                    when (step.state) {
-                        AgentStepState.RUNNING -> CircularProgressIndicator(
-                            strokeWidth = 1.5.dp,
-                            color = palette.accent,
-                            modifier = Modifier.size(11.dp)
-                        )
-                        AgentStepState.SUCCEEDED -> Icon(
-                            Icons.Outlined.Check,
-                            contentDescription = "已完成",
-                            tint = palette.accent,
-                            modifier = Modifier.size(13.dp)
-                        )
-                        AgentStepState.FAILED -> Icon(
-                            Icons.Outlined.Close,
-                            contentDescription = "未完成",
-                            tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(13.dp)
-                        )
-                    }
-                }
+                StepStateIcon(step.state, palette)
             }
             Text(
                 text = presentation.description,
@@ -340,7 +368,7 @@ private fun StepRow(step: AgentExecutionStep, palette: ReaderPalette) {
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(top = 1.dp)
             )
-            if (summary.isNotBlank()) {
+            if (display.showArguments && summary.isNotBlank()) {
                 Text(
                     text = summary,
                     style = MaterialTheme.typography.labelSmall,
@@ -350,53 +378,183 @@ private fun StepRow(step: AgentExecutionStep, palette: ReaderPalette) {
                     modifier = Modifier.padding(top = 2.dp)
                 )
             }
-            // 失败原因永远看得见；成功的结果预览是「点开才看」的那一层。
-            val body = when {
-                step.state == AgentStepState.FAILED -> step.detail
-                else -> step.resultPreview
-            }
-            body.takeIf { it.isNotBlank() && it != "已完成" }?.let { detail ->
-                Text(
-                    text = detail.trim(),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (step.state == AgentStepState.FAILED) {
-                        MaterialTheme.colorScheme.error.copy(alpha = 0.85f)
-                    } else {
-                        palette.muted.copy(alpha = 0.85f)
-                    },
-                    maxLines = 4,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 2.dp)
-                )
+            StepResult(step, palette, display, maxLines = 4)
+        }
+    }
+}
+
+/**
+ * 「详细」模式：编码 agent 式的逐步清单。每步一行「状态 · 动作 · 参数」，
+ * 结果缩进在下面；同一轮里并行执行的只读查询用一道竖括号框在一起。
+ */
+@Composable
+private fun DetailedStepList(steps: List<AgentExecutionStep>, palette: ReaderPalette, display: CompanionProcessDisplay) {
+    val groups = remember(steps) { processStepGroups(steps) }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        groups.forEach { group ->
+            if (group.size == 1) {
+                DetailedStepLine(group.single(), palette, display)
+            } else {
+                Column {
+                    Text(
+                        text = stringResource(R.string.process_parallel_group, group.size),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = palette.accent,
+                        modifier = Modifier.padding(bottom = 3.dp)
+                    )
+                    Row(modifier = Modifier.height(IntrinsicSize.Min)) {
+                        Box(
+                            modifier = Modifier
+                                .padding(start = 5.dp, top = 2.dp, bottom = 2.dp)
+                                .width(2.dp)
+                                .fillMaxHeight()
+                                .background(palette.accent.copy(alpha = 0.35f), RoundedCornerShape(1.dp))
+                        )
+                        Column(
+                            modifier = Modifier.padding(start = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            group.forEach { DetailedStepLine(it, palette, display) }
+                        }
+                    }
+                }
             }
         }
     }
 }
 
-/** 折叠态那一行：正在跑时说当下在干什么，跑完了说一共干了什么。 */
+@Composable
+private fun DetailedStepLine(step: AgentExecutionStep, palette: ReaderPalette, display: CompanionProcessDisplay) {
+    val presentation = remember(step.toolName, step.displayName) {
+        companionToolPresentation(step.toolName, step.displayName)
+    }
+    val summary = remember(step.toolName, step.arguments) {
+        ToolCallSummary.summarize(step.toolName, step.arguments)
+    }
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            StepStateIcon(step.state, palette)
+            Icon(
+                toolIcon(presentation.icon),
+                contentDescription = null,
+                tint = palette.muted,
+                modifier = Modifier
+                    .padding(start = 6.dp)
+                    .size(13.dp)
+            )
+            Text(
+                text = buildString {
+                    append(presentation.action)
+                    if (display.showArguments && summary.isNotBlank()) append(" · ").append(summary)
+                },
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Medium,
+                color = if (step.state == AgentStepState.FAILED) MaterialTheme.colorScheme.error else palette.onBackground,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = 6.dp)
+            )
+        }
+        Box(modifier = Modifier.padding(start = 34.dp)) {
+            StepResult(step, palette, display, maxLines = 6, monospace = true)
+        }
+    }
+}
+
+@Composable
+private fun StepStateIcon(state: AgentStepState, palette: ReaderPalette) {
+    Box(modifier = Modifier.size(15.dp), contentAlignment = Alignment.Center) {
+        when (state) {
+            AgentStepState.RUNNING -> CircularProgressIndicator(
+                strokeWidth = 1.5.dp,
+                color = palette.accent,
+                modifier = Modifier.size(11.dp)
+            )
+            AgentStepState.SUCCEEDED -> Icon(
+                Icons.Outlined.Check,
+                contentDescription = stringResource(R.string.process_step_done),
+                tint = palette.accent,
+                modifier = Modifier.size(13.dp)
+            )
+            AgentStepState.FAILED -> Icon(
+                Icons.Outlined.Close,
+                contentDescription = stringResource(R.string.process_step_failed),
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(13.dp)
+            )
+        }
+    }
+}
+
+/** 失败原因永远看得见；成功的结果预览受「显示结果」开关控制。 */
+@Composable
+private fun StepResult(
+    step: AgentExecutionStep,
+    palette: ReaderPalette,
+    display: CompanionProcessDisplay,
+    maxLines: Int,
+    monospace: Boolean = false
+) {
+    val failed = step.state == AgentStepState.FAILED
+    val body = when {
+        failed -> step.detail
+        display.showResults -> step.resultPreview
+        else -> ""
+    }
+    body.takeIf { it.isNotBlank() && it != TOOL_DONE_MARKER }?.let { detail ->
+        Text(
+            text = detail.trim(),
+            style = MaterialTheme.typography.labelSmall.let {
+                if (monospace) it.copy(fontFamily = FontFamily.Monospace) else it
+            },
+            color = if (failed) {
+                MaterialTheme.colorScheme.error.copy(alpha = 0.85f)
+            } else {
+                palette.muted.copy(alpha = 0.85f)
+            },
+            maxLines = maxLines,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 2.dp)
+        )
+    }
+}
+
+/**
+ * 把一轮的步骤按「是否并行执行」分组：相邻的只读查询与 [ParallelToolRunner] 的分段一致，
+ * 写入类调用各自成组。分组只看工具名，历史消息与实时事件得到同样的结果。
+ */
+internal fun processStepGroups(steps: List<AgentExecutionStep>): List<List<AgentExecutionStep>> =
+    ParallelToolRunner.batches(steps.map { ToolCall(it.callId, it.toolName, "") }) {
+        it.name in ConcurrencySafeTools.NAMES
+    }.map { batch -> batch.map(steps::get) }
+
+/** 折叠态那一行：正在跑时说当下在干什么（并行时说同时在跑几项），跑完了说一共干了什么。 */
+@Composable
 private fun processHeadline(
     steps: List<AgentExecutionStep>,
     reasoning: String?,
     isLive: Boolean
 ): String {
-    val running = steps.lastOrNull { it.state == AgentStepState.RUNNING }
-    if (isLive && running != null) {
-        val presentation = companionToolPresentation(running.toolName, running.displayName)
-        return "正在${presentation.action}…"
-    }
-    if (isLive && steps.isEmpty() && !reasoning.isNullOrBlank()) return "正在思考…"
+    val running = steps.filter { it.state == AgentStepState.RUNNING }
+    val runningActions = running.map { companionToolPresentation(it.toolName, it.displayName).action }.distinct()
+    val runningOne = stringResource(R.string.process_running_one, runningActions.firstOrNull().orEmpty())
+    val runningMany = stringResource(R.string.process_running_many, runningActions.take(2).joinToString(" · "), running.size)
+    val thinking = stringResource(R.string.process_thinking)
     val failedCount = steps.count { it.state == AgentStepState.FAILED }
     val actions = steps
         .map { companionToolPresentation(it.toolName, it.displayName).action }
         .distinct()
+    val thought = stringResource(R.string.process_thought)
+    val failedLabel = stringResource(R.string.process_failed_count, failedCount)
+    val manyActions = stringResource(R.string.process_actions_many, actions.take(2).joinToString(" · "), actions.size)
+    val fallback = stringResource(R.string.process_title)
+    if (isLive && running.isNotEmpty()) return if (running.size == 1) runningOne else runningMany
+    if (isLive && steps.isEmpty() && !reasoning.isNullOrBlank()) return thinking
     return buildList {
-        if (!reasoning.isNullOrBlank()) add("已思考")
-        when {
-            actions.size <= 2 -> addAll(actions)
-            actions.isNotEmpty() -> add(actions.take(2).joinToString(" · ") + " 等 ${actions.size} 项操作")
-        }
-        if (failedCount > 0) add("$failedCount 个未完成")
-    }.joinToString(" · ").ifEmpty { "执行过程" }
+        if (!reasoning.isNullOrBlank()) add(thought)
+        if (actions.size <= 2) addAll(actions) else add(manyActions)
+        if (failedCount > 0) add(failedLabel)
+    }.joinToString(" · ").ifEmpty { fallback }
 }
 
 private fun toolIcon(icon: CompanionToolIcon): ImageVector = when (icon) {
@@ -410,6 +568,7 @@ private fun toolIcon(icon: CompanionToolIcon): ImageVector = when (icon) {
     CompanionToolIcon.WEB -> Icons.Outlined.Language
     CompanionToolIcon.PROGRESS -> Icons.Outlined.QueryStats
     CompanionToolIcon.PLAN -> Icons.Outlined.CalendarMonth
+    CompanionToolIcon.CHART -> Icons.Outlined.InsertChart
     CompanionToolIcon.GENERIC -> Icons.Outlined.AutoAwesome
 }
 
@@ -566,3 +725,6 @@ internal fun EmbeddingProgressCapsule(
 }
 
 private const val COLLAPSED_REASONING_LINES = 8
+
+/** AgentLoop 对成功且无部分标记的工具给出的状态文字；与结果预览相同时不重复显示。 */
+private const val TOOL_DONE_MARKER = "已完成"

@@ -10,7 +10,9 @@ data class ReaderFontAsset(
     val displayName: String,
     val filePath: String,
     val originalFileName: String = "",
-    val importedAt: Long = 0L
+    val importedAt: Long = 0L,
+    /** 文件内容指纹，导入同一个字体时复用已有条目；旧条目为空，比较时按需补算。 */
+    val sha256: String = ""
 )
 
 object ReaderFontLibraryCodec {

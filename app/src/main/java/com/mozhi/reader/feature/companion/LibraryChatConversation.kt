@@ -16,7 +16,8 @@ import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.mozhi.reader.ai.companion.LibraryBookScope
 import com.mozhi.reader.ai.companion.LibraryCitation
-import com.mozhi.reader.ai.companion.LibraryCitationParser
+import com.mozhi.reader.ai.companion.Footnote
+import com.mozhi.reader.ai.companion.FootnoteTarget
 import com.mozhi.reader.core.database.entity.chatAppearance
 import com.mozhi.reader.core.database.entity.MessageEntity
 import com.mozhi.reader.feature.reader.*
@@ -70,25 +71,18 @@ internal fun LibraryChatConversation(
                         when (entry) {
                             is ChatEntry.Scene -> ChatSceneDivider(entry.text, palette)
                             is ChatEntry.Bubble -> {
-                                val parsed = remember(entry.part.text) { LibraryCitationParser.parse(entry.part.text) }
                                 CompanionChatBubble(
-                                    entry.copy(part = CompanionBubblePart.Text(parsed.text)), palette,
+                                    entry, palette,
                                     persona?.name ?: "伴读", persona?.avatarPath, appearance, font,
                                     readOnlyActions = session.busy || messages.reply.running || isLoading,
                                     onEdit = { scroll.pauseFollowing(); entry.message?.let(onEdit) },
                                     onDelete = { scroll.pauseFollowing(); entry.message?.let(onDelete) },
                                     onReroll = { scroll.requestFollowLatest(); entry.message?.let(onReroll) },
                                     onBranch = { entry.message?.let(onBranch) },
-                                    footer = {
-                                        if (!entry.fromUser && !entry.streaming) parsed.citations.forEach { citation ->
-                                            val book = session.scopes.firstOrNull { it.bookId == citation.bookId }
-                                            if (book != null) TextButton(onClick = { onLocate(citation) }) {
-                                                Text(book.title.take(12) + " · 第" + (citation.chapterIndex + 1) + "章 ↗", style = MaterialTheme.typography.labelSmall, color = palette.accent)
-                                            }
-                                        }
-                                    }
+                                    libraryFootnotes = { footnotes -> libraryFootnoteDisplays(footnotes, session.scopes, onLocate) }
                                 )
                             }
+                            is ChatEntry.Chart -> CompanionChartCard(entry.spec, palette)
                             is ChatEntry.Status -> Text(entry.text, style = MaterialTheme.typography.labelSmall, color = palette.muted)
                             is ChatEntry.ErrorLine -> Text(entry.text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                             else -> Unit
@@ -132,10 +126,17 @@ internal fun LibraryChatConversation(
 internal fun libraryChatEntries(scopes: List<LibraryBookScope>, messages: LibraryChatMessages, greeting: String = ""): List<ChatEntry> = buildList {
     add(ChatEntry.Scene(if (scopes.isEmpty()) "从这里开始聊" else scopes.take(3).joinToString(" · ") { "《" + it.title.take(12) + "》" }))
     if (messages.rows.isEmpty() && greeting.isNotBlank()) add(ChatEntry.Bubble("library-greeting", CompanionBubblePart.Text(greeting), false))
+    var pendingCharts = messages.charts
     messages.rows.forEach { message ->
+        // 图画在发起调用的那一轮之后、下一条可见消息之前。
+        pendingCharts.filter { it.first < message.id }.forEachIndexed { index, (source, spec) ->
+            add(ChatEntry.Chart("library-$source-$index-${spec.title}", spec))
+        }
+        pendingCharts = pendingCharts.filterNot { it.first < message.id }
         add(ChatEntry.Bubble(message.clientRoundId ?: "library-" + message.id, CompanionBubblePart.Text(message.content), message.role == "user", message,
             timestamp = message.createdAt, canReroll = message.role == "assistant" && messages.rows.any { it.role == "user" && it.id < message.id }))
     }
+    pendingCharts.forEachIndexed { index, (source, spec) -> add(ChatEntry.Chart("library-$source-$index-${spec.title}", spec)) }
     val reply = messages.reply
     if (reply.text.isNotBlank() && messages.rows.none { it.clientRoundId == reply.roundId }) {
         add(ChatEntry.Bubble(reply.roundId ?: "library-live", CompanionBubblePart.Text(reply.text), false, streaming = true))
@@ -143,3 +144,35 @@ internal fun libraryChatEntries(scopes: List<LibraryBookScope>, messages: Librar
     reply.status?.let { add(ChatEntry.Status(it)) }
     reply.error?.let { add(ChatEntry.ErrorLine(it)) }
 }.withBubbleGrouping()
+
+/** 书库脚注：书名与章节作标签，点开时才去正文里核对位置（同原来的跳转胶囊）。 */
+@Composable
+private fun libraryFootnoteDisplays(
+    footnotes: List<Footnote>,
+    scopes: List<LibraryBookScope>,
+    onLocate: (LibraryCitation) -> Unit
+): List<FootnoteDisplay> {
+    val chapterLabel = androidx.compose.ui.res.stringResource(com.mozhi.reader.R.string.footnote_book_chapter)
+    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+    return footnotes.map { footnote ->
+        when (val target = footnote.target) {
+            is FootnoteTarget.Book -> {
+                val book = scopes.firstOrNull { it.bookId == target.bookId }
+                val chapter = target.chapterNumber ?: 1
+                FootnoteDisplay(
+                    number = footnote.number,
+                    label = chapterLabel.format(book?.title.orEmpty().take(16), chapter),
+                    text = target.quote,
+                    onOpen = book?.let { { onLocate(LibraryCitation(it.bookId, chapter - 1, target.quote)) } }
+                )
+            }
+            is FootnoteTarget.Web -> FootnoteDisplay(
+                number = footnote.number,
+                label = hostOf(target.url),
+                text = target.url,
+                web = true,
+                onOpen = { runCatching { uriHandler.openUri(target.url) } }
+            )
+        }
+    }
+}

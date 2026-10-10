@@ -328,6 +328,11 @@
     <string name="tts_fish_voice_hint">Enter the model ID (reference_id) from a Fish voice page; leave blank to let the service choose a voice</string>
     <string name="tts_fish_controls_hint">Supports speed and volume controls; voices are available in the Fish voice library.</string>
     <string name="tts_minimax_controls_hint">Supports speed, volume, and pitch controls.</string>
+    <string name="tts_reset_tuning">Restore defaults</string>
+    <string name="tts_reset_tuning_confirm_title">Restore default parameters?</string>
+    <string name="tts_reset_tuning_confirm_body">Speed, volume, pitch, synthesis granularity and the various limits will return to their defaults. Engine, provider, API key and voice stay unchanged.</string>
+    <string name="tts_reset_tuning_apply">Restore</string>
+    <string name="tts_tuning_restored">Default parameters restored</string>
     <string name="process_collapse">Collapse process</string>
     <string name="process_expand">Expand process</string>
     <string name="process_reasoning_collapse">Collapse reasoning</string>

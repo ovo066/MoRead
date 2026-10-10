@@ -324,6 +324,11 @@
     <string name="tts_fish_voice_hint">填写 Fish 音色页面的模型 ID（reference_id）；留空由服务选择音色</string>
     <string name="tts_fish_controls_hint">支持语速和音量调节；音色可从 Fish 音色库获取。</string>
     <string name="tts_minimax_controls_hint">支持语速、音量与音调调节。</string>
+    <string name="tts_reset_tuning">恢复默认参数</string>
+    <string name="tts_reset_tuning_confirm_title">恢复默认参数？</string>
+    <string name="tts_reset_tuning_confirm_body">语速、音量、音调、合成粒度与各项数量将恢复默认值；引擎、服务商、密钥与音色保持不变。</string>
+    <string name="tts_reset_tuning_apply">恢复</string>
+    <string name="tts_tuning_restored">已恢复默认参数</string>
     <string name="process_collapse">收起过程</string>
     <string name="process_expand">展开过程</string>
     <string name="process_reasoning_collapse">收起思考</string>

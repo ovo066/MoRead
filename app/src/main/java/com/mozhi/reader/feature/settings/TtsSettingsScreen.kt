@@ -505,7 +505,7 @@ fun TtsSettingsScreen(
                             modifier = Modifier.size(20.dp)
                         )
                         Text(
-                            "恢复默认参数",
+                            stringResource(R.string.tts_reset_tuning),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             style = MaterialTheme.typography.labelLarge,
@@ -525,23 +525,26 @@ fun TtsSettingsScreen(
         }
     }
 
+    val tuningRestored = stringResource(R.string.tts_tuning_restored)
     if (showResetConfirm) {
         AlertDialog(
             onDismissRequest = { showResetConfirm = false },
-            title = { Text("恢复默认参数？") },
+            title = { Text(stringResource(R.string.tts_reset_tuning_confirm_title)) },
             text = {
-                Text("语速、音量、音调、合成粒度与各项数量将恢复默认值；引擎、服务商、密钥与音色保持不变。")
+                Text(stringResource(R.string.tts_reset_tuning_confirm_body))
             },
             confirmButton = {
                 TextButton(
                     onClick = {
                         showResetConfirm = false
-                        afterDrafts(viewModel::restoreDefaultTuning)
+                        afterDrafts { viewModel.restoreDefaultTuning(tuningRestored) }
                     }
-                ) { Text("恢复") }
+                ) { Text(stringResource(R.string.tts_reset_tuning_apply)) }
             },
             dismissButton = {
-                TextButton(onClick = { showResetConfirm = false }) { Text("取消") }
+                TextButton(onClick = { showResetConfirm = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
             }
         )
     }

@@ -1,6 +1,7 @@
 package com.mozhi.reader.feature.reader
 
 import androidx.compose.material.icons.outlined.PlayCircleOutline
+import androidx.compose.material.icons.outlined.Theaters
 import androidx.compose.material.icons.outlined.Title
 import com.mozhi.reader.R
 import androidx.compose.ui.res.stringResource
@@ -308,6 +309,7 @@ fun ReaderChrome(
     onReidentifyChapters: () -> Unit,
     onTextReplacementRules: () -> Unit,
     onAutoRead: () -> Unit = {},
+    onStageMode: () -> Unit = {},
     onTapZones: () -> Unit = {},
     onEnglishLearning: () -> Unit = {},
     onBilingual: () -> Unit = {},
@@ -343,6 +345,7 @@ fun ReaderChrome(
                 onToggleBookmark = onToggleBookmark,
                 onSearch = onSearch,
                 onAutoRead = onAutoRead,
+                onStageMode = onStageMode,
                 onTapZones = onTapZones,
                 onEnglishLearning = onEnglishLearning,
                 onBilingual = onBilingual,
@@ -399,6 +402,7 @@ private fun ReaderTopBar(
     onToggleBookmark: () -> Unit,
     onSearch: () -> Unit,
     onAutoRead: () -> Unit,
+    onStageMode: () -> Unit,
     onTapZones: () -> Unit,
     onEnglishLearning: () -> Unit,
     onBilingual: () -> Unit,
@@ -513,6 +517,8 @@ private fun ReaderTopBar(
                             onClick = { menuExpanded = false; onSearch() })
                         MoReadMenuItem(text = stringResource(R.string.reader_menu_auto_read), icon = Icons.Outlined.PlayCircleOutline,
                             onClick = { menuExpanded = false; onAutoRead() })
+                        MoReadMenuItem(text = stringResource(R.string.reader_menu_stage_mode), icon = Icons.Outlined.Theaters,
+                            onClick = { menuExpanded = false; onStageMode() })
                         MoReadMenuItem(text = stringResource(R.string.language_aids_title), icon = Icons.Outlined.Translate,
                             onClick = { menuExpanded = false; onEnglishLearning() })
                         MoReadMenuItem(text = stringResource(R.string.reader_menu_more), icon = Icons.Outlined.ChevronRight,

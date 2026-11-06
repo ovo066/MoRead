@@ -143,6 +143,7 @@ fun ReaderAiSheet(
                     )
                     is CompanionTimelineItem.Media -> Unit
                     is CompanionTimelineItem.Chart -> CompanionChartCard(item.spec, palette)
+                    is CompanionTimelineItem.Document -> CompanionDocumentCard(item.spec, palette)
                 }
             }
             state.streamingText?.let { streaming ->

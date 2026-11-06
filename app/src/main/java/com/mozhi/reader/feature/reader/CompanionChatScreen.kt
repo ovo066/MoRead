@@ -450,6 +450,7 @@ fun CompanionChatPane(
                                     onPlayVoice = mediaViewModel::playCachedSpeech
                                 )
                                 is ChatEntry.Chart -> CompanionChartCard(entry.spec, palette)
+                                is ChatEntry.Document -> CompanionDocumentCard(entry.spec, palette)
                                 is ChatEntry.Media -> CompanionMediaBubble(
                                     result = entry.result,
                                     palette = palette,

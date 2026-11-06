@@ -83,6 +83,7 @@ internal fun LibraryChatConversation(
                                 )
                             }
                             is ChatEntry.Chart -> CompanionChartCard(entry.spec, palette)
+                            is ChatEntry.Document -> com.mozhi.reader.feature.reader.CompanionDocumentCard(entry.spec, palette)
                             is ChatEntry.Status -> Text(entry.text, style = MaterialTheme.typography.labelSmall, color = palette.muted)
                             is ChatEntry.ErrorLine -> Text(entry.text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                             else -> Unit

@@ -62,11 +62,15 @@ class PageTurnCompositor {
         spread: SpreadGeometry? = null,
         startY: Float = height / 2f,
         modernBackTextOpacity: Float = .18f,
-        modernRadiusScale: Float = 1f
+        modernRadiusScale: Float = 1f,
+        curlX: Float = touchX,
+        curlY: Float = touchY
     ) {
         if (animation == PageTurnAnimation.MODERN_SIMULATION && android.os.Build.VERSION.SDK_INT >= 33) {
-            modern!!.draw(canvas, direction, front, under, touchX - startX, touchY, width, height, backgroundColor, spread,
-                modernBackTextOpacity, modernRadiusScale, startX, startY)
+            if (spread == null) modern!!.drawSingle(canvas, front, under, curlX, curlY, startY, width, height,
+                backgroundColor, modernBackTextOpacity, modernRadiusScale)
+            else modern!!.drawSpread(canvas, direction, front, under, touchX - startX, touchY, width, height,
+                backgroundColor, spread, modernBackTextOpacity, modernRadiusScale, startX, startY)
             return
         }
         val effective = if (animation == PageTurnAnimation.MODERN_SIMULATION) PageTurnAnimation.SIMULATION else animation

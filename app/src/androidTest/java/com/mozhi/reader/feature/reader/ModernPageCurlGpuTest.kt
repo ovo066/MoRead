@@ -28,19 +28,15 @@ class ModernPageCurlGpuTest {
         val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; textSize = 24f }
         Canvas(front).apply { repeat(15) { drawText("春江潮水连海平 ${it + 1}", 28f, 60f + it * 34f, paint) } }
         val curl = ModernPageCurl()
-        for (direction in PageTurnDirection.entries) for (step in listOf(0f, .28f, .55f, 1f)) {
-            val next = direction == PageTurnDirection.NEXT
+        for (step in listOf(0f, .28f, .55f, 1f)) {
             val result = gpuFrame(360, 640) { canvas ->
-                curl.draw(canvas, direction, front, under, 720f * step * if (next) -1 else 1,
-                    500f, 360f, 640f, Color.WHITE, null)
+                curl.drawSingle(canvas, front, under, 360f - 720f * step, 500f, 500f, 360f, 640f, Color.WHITE)
             }
             val pixels = IntArray(360 * 640).also { result.getPixels(it, 0, 360, 0, 0, 360, 640) }
             assertTrue(pixels.all { it ushr 24 == 255 })
-            if (step == 0f || step == 1f) {
-                val expected = if ((step == 0f) == next) front else under
-                assertTrue(result.sameAs(expected))
-            }
-            save(result, "modern-${direction.name}-$step.png")
+            if (step == 0f) assertTrue(result.sameAs(front))
+            if (step == 1f) assertTrue(result.sameAs(under))
+            save(result, "modern-single-$step.png")
         }
     }
 
@@ -52,8 +48,7 @@ class ModernPageCurlGpuTest {
         Canvas(front).apply { repeat(22) { drawText("春江潮水连海平海上明月共潮生 ${it + 1}", 5f, 20f + it * 28, paint) } }
         val curl = ModernPageCurl()
         fun frame(y: Float, opacity: Float = .18f): Bitmap = gpuFrame(360, 640) { canvas ->
-            curl.draw(canvas, PageTurnDirection.NEXT, front, under, -160f, y, 360f, 640f, Color.WHITE, null,
-                backTextOpacity = opacity, startX = 350f, startY = 320f)
+            curl.drawSingle(canvas, front, under, 200f, y, 320f, 360f, 640f, Color.WHITE, backTextOpacity = opacity)
         }
         val down = frame(470f)
         val up = frame(170f)
@@ -90,7 +85,7 @@ class ModernPageCurlGpuTest {
             val next = direction == PageTurnDirection.NEXT
             for (progress in listOf(.6f, .2f, 0f, 1f)) {
                 val result = gpuFrame(800, 600) { canvas ->
-                    curl.draw(canvas, direction, if (next) current else target, if (next) target else current,
+                    curl.drawSpread(canvas, direction, if (next) current else target, if (next) target else current,
                         geometry.leafWidth * progress * if (next) -1 else 1, 450f, 800f, 600f, Color.WHITE, geometry)
                 }
                 if (progress == 0f) assertTrue(result.sameAs(current))
@@ -111,8 +106,7 @@ class ModernPageCurlGpuTest {
         }
         val curl = ModernPageCurl()
         val result = gpuFrame(360, 640) { canvas ->
-            curl.draw(canvas, PageTurnDirection.PREVIOUS, target, current, 216f, 320f,
-                360f, 640f, Color.WHITE, null, startX = 20f, startY = 320f)
+            curl.drawSingle(canvas, target, current, -144f, 320f, 320f, 360f, 640f, Color.WHITE)
         }
         save(result, "modern-previous-readable.png")
         assertEquals(Color.RED, result.getPixel(250, 200))
@@ -121,24 +115,19 @@ class ModernPageCurlGpuTest {
         assertTrue(Color.blue(result.getPixel(10, 20)) - Color.red(result.getPixel(10, 20)) > 20)
     }
 
-    @Test fun returningUsesTheForwardCurlPathInReverseWithoutMirroringTheBinding() {
+    @Test fun revealedPageDarkensBesideTheFoldButNotFarFromIt() {
         val sheet = Bitmap.createBitmap(360, 640, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.WHITE) }
-        val below = Bitmap.createBitmap(360, 640, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.BLUE) }
-        val paint = android.graphics.Paint().apply { color = Color.RED }
-        Canvas(sheet).drawRect(40f, 100f, 180f, 300f, paint)
+        val below = Bitmap.createBitmap(360, 640, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.WHITE) }
         val curl = ModernPageCurl()
-        for (p in listOf(.2f, .45f, .75f)) {
-            fun frame(direction: PageTurnDirection, offset: Float) = gpuFrame(360, 640) { canvas ->
-                curl.draw(canvas, direction, sheet, below, offset, 320f, 360f, 640f, Color.WHITE, null,
-                    startX = 350f, startY = 320f)
-            }
-            val forward = frame(PageTurnDirection.NEXT, -720f * p)
-            val backward = frame(PageTurnDirection.PREVIOUS, 720f * (1f - p))
-            // Floating point roundoff in reversing progress can change a subpixel edge by 1.
-            val a = IntArray(360 * 640).also { forward.getPixels(it, 0, 360, 0, 0, 360, 640) }
-            val b = IntArray(a.size).also { backward.getPixels(it, 0, 360, 0, 0, 360, 640) }
-            assertTrue(a.indices.count { kotlin.math.abs(Color.red(a[it]) - Color.red(b[it])) > 2 } < 10)
+        val result = gpuFrame(360, 640) { canvas ->
+            curl.drawSingle(canvas, sheet, below, 0f, 320f, 320f, 360f, 640f, Color.WHITE)
         }
+        save(result, "modern-cast-shadow.png")
+        val fold = modernCurlFold(0f, 320f, 320f, 360f, 640f, 1f)
+        val edge = ((fold.fold + fold.radius) * 640f).toInt()
+        val near = Color.red(result.getPixel((edge + 4).coerceAtMost(359), 320))
+        assertTrue("Revealed page beside the fold should be shaded, was $near", near < 245)
+        assertTrue(Color.red(result.getPixel(359, 320)) >= 253)
     }
 
     @Test fun shortEdgeDragsAndSteepFlicksStayOpaqueAndLandWithoutAResidualCorner() {
@@ -148,9 +137,8 @@ class ModernPageCurlGpuTest {
         for (anchor in listOf(1f, 150f, 320f, 639f)) {
             for (progress in listOf(.001f, .02f, .35f, .8f, .9999f)) {
                 val result = gpuFrame(360, 640) { canvas ->
-                    curl.draw(canvas, PageTurnDirection.NEXT, current, target, -720f * progress,
-                        anchor + 450f * (1f - progress), 360f, 640f, Color.WHITE, null,
-                        startX = 350f, startY = anchor)
+                    curl.drawSingle(canvas, current, target, 360f * (1f - 2f * progress),
+                        modernCurlAnchorY(anchor, 640f) + 450f * (1f - progress), anchor, 360f, 640f, Color.WHITE)
                 }
                 val pixels = IntArray(360 * 640).also { result.getPixels(it, 0, 360, 0, 0, 360, 640) }
                 assertTrue(pixels.all { it ushr 24 == 255 })

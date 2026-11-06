@@ -150,83 +150,133 @@ class ReaderPageTouchTest {
         }
     }
 
-    @Test fun modernCurlKeepsTheDownAnchorAndLandsWithoutProjectingTheFingerOffScreen() {
+    @Test fun modernCurlEdgeEasesUnderTheFingerInsteadOfJumping() {
         mount()
         compose.runOnIdle { driver.mode = PageTurnDriver.Mode.MODERN_CURL; driver.setViewport(300f, 400f) }
-        compose.onNodeWithTag("page").performTouchInput {
-            down(Offset(290f, 200f))
-            moveTo(Offset(260f, 210f), delayMillis = 40)
-            moveTo(Offset(150f, 270f), delayMillis = 70)
-        }
-        compose.runOnIdle {
-            assertEquals(270f, driver.touchY, .01f)
-            assertEquals(200f, driver.startY, .01f)
-            assertEquals(290f, driver.startX, .01f)
-            assertEquals(PageTurnDirection.NEXT, driver.direction)
-        }
         compose.mainClock.autoAdvance = false
-        compose.onNodeWithTag("page").performTouchInput { up() }
-        compose.mainClock.advanceTimeBy(64)
-        compose.runOnIdle {
-            assertTrue(driver.touchY in 200f..270f)
-            assertTrue(driver.touchX < 150f)
-        }
-        compose.mainClock.advanceTimeBy(500)
-        compose.runOnIdle { assertEquals(1, turns); assertFalse(driver.isRunning) }
-    }
-
-    @Test fun modernShortFastFlickCommitsButHoldingTheSameDistanceCancels() {
-        mount()
-        compose.runOnIdle { driver.mode = PageTurnDriver.Mode.MODERN_CURL; driver.setViewport(300f, 400f) }
         compose.onNodeWithTag("page").performTouchInput {
-            down(Offset(270f, 200f))
-            moveTo(Offset(210f, 220f), delayMillis = 40)
+            down(Offset(200f, 200f))
+            moveTo(Offset(180f, 205f), delayMillis = 16)
+        }
+        compose.mainClock.advanceTimeBy(16)
+        compose.runOnIdle {
+            assertEquals(PageTurnDirection.NEXT, driver.direction)
+            // A press in mid-page starts from the outer edge and travels toward the finger.
+            assertTrue(driver.curlX > 200f && driver.curlX < 300f)
+        }
+        compose.onNodeWithTag("page").performTouchInput { moveTo(Offset(150f, 260f), delayMillis = 30) }
+        compose.mainClock.advanceTimeBy(600)
+        compose.runOnIdle {
+            assertEquals(150f, driver.curlX, .5f)
+            assertEquals(260f, driver.curlY, .5f)
+            assertEquals(200f, driver.startX, .01f)
+            assertEquals(200f, driver.startY, .01f)
+        }
+        compose.onNodeWithTag("page").performTouchInput {
+            advanceEventTime(180)
             up()
         }
-        compose.runOnIdle { assertEquals(1, turns) }
+        compose.mainClock.advanceTimeBy(600)
+        // Held at a sixth of the width from the press: the sheet lies back down.
+        compose.runOnIdle { assertEquals(0, turns); assertFalse(driver.isRunning) }
+    }
+
+    @Test fun modernAQuarterPullOrAnyForwardFlickTurnsWhileAFlickBackCancels() {
+        mount()
+        compose.runOnIdle { driver.mode = PageTurnDriver.Mode.MODERN_CURL; driver.setViewport(300f, 400f) }
         compose.onNodeWithTag("page").performTouchInput {
-            down(Offset(270f, 200f))
-            moveTo(Offset(210f, 220f), delayMillis = 40)
+            down(Offset(280f, 200f))
+            moveTo(Offset(240f, 202f), delayMillis = 40)
+            moveTo(Offset(195f, 204f), delayMillis = 60)
             advanceEventTime(180)
             up()
         }
         compose.runOnIdle { assertEquals(1, turns); assertFalse(driver.isRunning) }
+        compose.onNodeWithTag("page").performTouchInput {
+            down(Offset(280f, 200f))
+            moveTo(Offset(230f, 202f), delayMillis = 400)
+            advanceEventTime(180)
+            up()
+        }
+        compose.runOnIdle { assertEquals(1, turns); assertFalse(driver.isRunning) }
+        compose.onNodeWithTag("page").performTouchInput {
+            down(Offset(280f, 200f))
+            moveTo(Offset(255f, 201f), delayMillis = 60)
+            moveTo(Offset(230f, 202f), delayMillis = 60)
+            up()
+        }
+        compose.runOnIdle { assertEquals(2, turns); assertFalse(driver.isRunning) }
+        compose.onNodeWithTag("page").performTouchInput {
+            down(Offset(280f, 200f))
+            moveTo(Offset(150f, 202f), delayMillis = 100)
+            moveTo(Offset(60f, 204f), delayMillis = 100)
+            moveTo(Offset(90f, 204f), delayMillis = 20)
+            moveTo(Offset(130f, 204f), delayMillis = 20)
+            up()
+        }
+        compose.runOnIdle { assertEquals(2, turns); assertFalse(driver.isRunning) }
     }
 
-    @Test fun modernReverseFlickCancelsAndAReturningCurlCanBeGrabbedContinuously() {
+    @Test fun modernReturningCurlCanBeGrabbedWithoutAJump() {
         mount()
         compose.runOnIdle {
             driver.mode = PageTurnDriver.Mode.MODERN_CURL
             driver.setViewport(300f, 400f)
-            driver.onDown(290f, 200f, 0)
-            driver.onMove(30f, 220f, 8f, 200)
-            driver.onMove(120f, 215f, 8f, 230)
-            driver.onUp(231)
         }
-        compose.runOnIdle { assertEquals(0, turns) }
         compose.mainClock.autoAdvance = false
         compose.runOnIdle {
             driver.onDown(290f, 200f, 1000)
-            driver.onMove(200f, 230f, 8f, 1040)
+            driver.onMove(240f, 230f, 8f, 1040)
+        }
+        compose.mainClock.advanceTimeBy(400)
+        compose.runOnIdle {
+            assertEquals(240f, driver.curlX, .5f)
             driver.onUp(1220)
         }
-        compose.mainClock.advanceTimeBy(64)
+        compose.mainClock.advanceTimeBy(48)
         compose.runOnIdle {
             assertTrue(driver.isAnimating)
-            val x = driver.touchX
-            val y = driver.touchY
+            val x = driver.curlX
+            val y = driver.curlY
+            assertTrue(x > 240f && x < 300f)
             driver.onDown(250f, 200f, 1300)
-            assertEquals(x, driver.touchX, 0f)
-            assertEquals(y, driver.touchY, 0f)
+            assertEquals(x, driver.curlX, 0f)
+            assertEquals(y, driver.curlY, 0f)
+            assertFalse(driver.isAnimating)
             assertEquals(0, turns)
-            driver.onMove(240f, 205f, 8f, 1320)
-            assertEquals(x - 10f, driver.touchX, .001f)
-            assertEquals(y + 5f, driver.touchY, .001f)
-            driver.onMove(160f, 205f, 8f, 1340)
+            driver.onMove(200f, 205f, 8f, 1320)
+            driver.onMove(150f, 205f, 8f, 1340)
             driver.onUp(1341)
         }
-        compose.mainClock.advanceTimeBy(500)
-        compose.runOnIdle { assertEquals(1, turns); assertFalse(driver.isRunning); assertEquals(2, starts) }
+        compose.mainClock.advanceTimeBy(600)
+        compose.runOnIdle { assertEquals(1, turns); assertFalse(driver.isRunning); assertEquals(1, starts) }
+    }
+
+    @Test fun modernTapTurnSweepsTheSheetAcrossAndLandsOnce() {
+        mount()
+        compose.runOnIdle { driver.mode = PageTurnDriver.Mode.MODERN_CURL; driver.setViewport(300f, 400f) }
+        compose.mainClock.autoAdvance = false
+        compose.runOnIdle { driver.turnByTap(PageTurnDirection.PREVIOUS) }
+        compose.mainClock.advanceTimeBy(16)
+        compose.runOnIdle {
+            // The previous sheet starts turned away to the left and comes back across the page.
+            assertTrue(driver.curlX < -250f)
+            assertTrue(driver.isAnimating)
+        }
+        compose.mainClock.advanceTimeBy(150)
+        compose.runOnIdle { assertTrue(driver.curlX > -250f && driver.curlX < 300f); assertEquals(0, turns) }
+        compose.mainClock.advanceTimeBy(400)
+        compose.runOnIdle {
+            assertEquals(listOf(PageTurnDirection.PREVIOUS), filledDirections)
+            assertFalse(driver.isRunning)
+        }
+        // Going forward, the turn lands as soon as the sheet has left the page, before the curve ends.
+        compose.runOnIdle { driver.turnByTap(PageTurnDirection.NEXT) }
+        compose.mainClock.advanceTimeBy(304)
+        compose.runOnIdle {
+            assertEquals(listOf(PageTurnDirection.PREVIOUS, PageTurnDirection.NEXT), filledDirections)
+            assertFalse(driver.isRunning)
+        }
     }
 
     @Test fun modernConsecutiveFlicksEachTurnAPageWhileThePreviousAnimationIsStillRunning() {

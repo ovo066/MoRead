@@ -14,6 +14,7 @@
 - AndroidSVG（Apache-2.0）：EPUB 内联 SVG 导入期栅格化。
 - Unicode 字符数据库（Unicode License V3，Copyright © 1991-2026 Unicode, Inc.）：竖排字向表取自 UAX #50 `VerticalOrientation.txt`，竖排标点回退取自 `UnicodeData.txt` 的 `<vertical>` 分解（`licenses/unicode-LICENSE-V3.txt`）。
 - Lobe Icons 1.95.0（MIT，Copyright (c) 2023 LobeHub）：AI 供应商、模型系列与搜索引擎图标，转换为本地 Android 矢量资源（`licenses/lobe-icons-MIT.txt`）。
+- 志莽行书 Zhi Mang Xing（SIL Open Font License 1.1，Copyright 2018 The Zhi Mang Xing Project Authors，[googlefonts/zhimangxing](https://github.com/googlefonts/zhimangxing)）：演出模式的章名、海报、拟声与书信题字，随 APK 以 `res/font/stage_brush.ttf` 分发（`licenses/zhimangxing-OFL-1.1.txt`）。
 - ZXing core（Apache-2.0）：局域网传书页的二维码矩阵生成（只用纯 Java 的 `core`，绘制由应用自己完成）。
 - multiplatform-markdown-renderer（Apache-2.0）：AI 输出的 Markdown 渲染。
 - Vico（Apache-2.0，[patrykandpatrick/vico](https://github.com/patrykandpatrick/vico)）：伴读图表中的柱状图与折线图；饼图、雷达图、关系图与时间线由应用自绘。

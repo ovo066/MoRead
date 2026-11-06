@@ -100,6 +100,8 @@ import com.mozhi.reader.feature.reader.readerLocateRequests
 import com.mozhi.reader.feature.reader.requestReaderLocate
 import com.mozhi.reader.feature.reader.consumeReaderLocate
 import com.mozhi.reader.feature.reader.ReaderScreen
+import com.mozhi.reader.feature.reader.stage.StageScreen
+import com.mozhi.reader.feature.reader.stage.StageViewModel
 import com.mozhi.reader.feature.settings.AboutSettingsScreen
 import com.mozhi.reader.feature.settings.AiAndCompanionSettingsScreen
 import com.mozhi.reader.feature.settings.AiServiceScreen
@@ -561,8 +563,34 @@ fun MoReadApp(
                                 navController.navigate("companion-chat/$bookId")
                             },
                             onOpenListenPlayer = { bookId -> navController.navigate("listen/$bookId") },
+                            onOpenStage = { bookId, chapterIndex, offset ->
+                                navController.navigate("stage/$bookId?chapter=$chapterIndex&offset=$offset")
+                            },
                             pendingLocate = locateRequest,
                             onPendingLocateConsumed = entry.savedStateHandle::consumeReaderLocate
+                        )
+                    }
+                }
+                pushComposable(
+                    route = "stage/{bookId}?chapter={chapter}&offset={offset}",
+                    arguments = listOf(
+                        navArgument(StageViewModel.ARG_CHAPTER) {
+                            type = NavType.IntType
+                            defaultValue = -1
+                        },
+                        navArgument(StageViewModel.ARG_OFFSET) {
+                            type = NavType.IntType
+                            defaultValue = 0
+                        }
+                    )
+                ) {
+                    ReaderAppearanceScope {
+                        StageScreen(
+                            onExit = { request ->
+                                // 交回阅读页：定位到演出停下的那一拍并短亮；直接打开的演出就只是返回。
+                                if (request != null) navController.previousBackStackEntry?.savedStateHandle?.requestReaderLocate(request)
+                                navController.popBackStack()
+                            }
                         )
                     }
                 }

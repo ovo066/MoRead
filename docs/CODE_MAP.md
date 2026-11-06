@@ -67,7 +67,7 @@ Room 结构、迁移、备份版本校验和实际数据文件要保持一致。
 - 批量 TXT 使用流式指纹与解码、`TxtFileText` 的 64 KiB 磁盘缓存和 `TxtChapterRange` 目录索引；内置规则仅扫描短标题行，候选规则不复制正文，自动分节只检查有限窗口。`BookTextWriter.writeSlices` 分块规范化和压缩写入，超长单章也不需要整体载入内存。
 - `LibraryRepository.insertTextBook` 先生成完整正文，再用单次事务发布书籍、章节与目录，避免逐章回写位置及暴露未完成书籍。`BatchImportRunner` 串行执行并保存小型原子检查点，取消保留清单，恢复后继续未完成项；进度通知按阶段和时间节流。多选和文件夹入口保存持久读取授权。`TxtStreamingImportTest`、`TxtAtomicPublicationTest`、`BatchImportRunnerTest` 覆盖文本一致性、发布失败和中断恢复。
 - 单本 TXT 预览同样分块解码；`ImportSessionStore` 保存 UTF-16LE 文件与轻量章节索引，重启恢复、切换规则、AI 规则验证和确认入库都不加载整本正文，兼容迁移旧 UTF-8 会话。单本后台进度共用合并与节流逻辑。`TxtImportStorageTest` 覆盖 65.7 MB 文件的预览、恢复、规则切换和正文一致性，`ImportSessionStoreTest` 覆盖旧会话迁移及失败重试。
-- EPUB：`core/epub/EpubPackageInspector`、`EpubTextExtractor`、`EpubLayoutDocumentParser` 与 `EpubLegacyStyleBridge` 处理包、文本与布局解析；`feature/importer/EpubMetadataResolver`、`EpubTocMapper` 负责导入元信息与目录。`EpubArchiveNormalizer` 在交给 Readium 前规范化导入副本中内容相同的重复 ZIP 条目，源文件和指纹不变。
+- EPUB：`core/epub/EpubPackageInspector`、`EpubTextExtractor`、`EpubLayoutDocumentParser` 与 `EpubLegacyStyleBridge` 处理包、文本与布局解析；`feature/importer/EpubMetadataResolver`、`EpubTocMapper` 负责导入元信息与目录。单本、批量与局域网导入共用 `ImportCoordinator` 的归档预处理：`EpubArchiveNormalizer` 在交给 Readium 前规范化导入副本中内容相同的重复 ZIP 条目，源文件和指纹不变。优先扫描中央目录；系统拒绝打开归档时流式检查本地条目，不依赖 Android 版本或异常文字。仅实际存在重复条目才尝试修复，内容冲突、损坏及取消均中止，不丢弃资源或覆盖原文件。
 - `core/epub/EpubChapterFallback` 共用导入与缓存重建的单章降级策略。精排解析异常时使用文本提取器保留正文及图片锚点，在现有包诊断中记录 `chapter-text-fallback-v1`；缓存淘汰、重启及精排解析恢复后仍遵循已记录的提取路径，核对正文完全一致后走原生普通文本排版。旧书修复逐章核对已存正文，一致时只更新辅助数据，不重写正文；不一致则停止修复。取消、虚拟机错误及正文提取失败不能被当作精排降级吞掉。
 - `core/readium/EpubUriContainer` 为带冒号等特殊资源名的 EPUB 提供 URI 兼容视图：恢复归档条目，并转义清单、目录与文档中的本地引用；原始书包、资源名和正文保持不变，外部 URL 不改写。
 - EPUB 导入复用：`EpubLegacyStyleBridge.newDocumentScope` 在章节间共享不可变 CSS 规则索引，但元素样式缓存按文档隔离；`EpubArchiveImageReader` 直接将图片解析为归档条目，同一导入复用 ZIP 索引与别名映射，结束时关闭。
@@ -150,6 +150,20 @@ Room 结构、迁移、备份版本校验和实际数据文件要保持一致。
 - 外语阅读不再限于英文：`core/dictionary/LearningLanguage` 定义按书的学习语言（默认按 `ScriptDetector` 识别文字系统）与段落对照的 `TranslationTarget`；`ForeignWords` 为拉丁（含变音）、希腊、西里尔与韩文取词，`WordGlossMatcher` 对日文等无空格文字按收藏词条做最长子串匹配，生词标注、划线弹窗与仿生阅读共用它（旧名 `EnglishWords` 只是转发）。译文缓存记录目标语言，生词记录语言并可在生词本按语言筛选。语言与译文语言用 `ui/components/MoReadChoiceDialog` 的选择弹窗（文字徽标而非国旗）。回归见 `LearningLanguageTest`、`LanguageChoiceDialogVisualTest`。
 - 回归入口：`MdictReaderTest`、`EnglishReadingLayoutTest`、`EnglishReadingVisualTest`、`DictionaryWebContentTest`、`ReaderTapZonesDialogTest`、`TextCleanupPreviewTest`、`ExtractedCharacterCardTest`。
 
+### 演出模式（一句一屏）
+
+阅读页右上角菜单的「演出模式」进入全屏演出页（路由 `stage/{bookId}`）：一屏只放一拍（通常是一句），点一下走一拍，旁白、对白、心声、拟声、系统提示各有版面，手机消息、论坛楼层、书信、属性面板这类内容进入对应的版式容器、逐条累积。屏幕上的字逐字来自原文，效果只是元数据。
+
+- `core/stage/` 是「场记」（`StageScript`）：节拍、镜头类型、说话人、提示语旁注、版式容器、行内强调与入场/屏幕效果，全部挂在章内 UTF-16 原文坐标上。入口 `StageCompiler`：`StageLines` 逐段分类（旁白、对白、心声、时空字幕、拟声、系统提示、场景分隔、内联图片、脚注与表情占位），`StageGrouping` 识别版式容器（同行或分行格式的论坛楼层、手机消息、属性面板与资料卡、书信、诗词），`StageQuotes` 找对白（含方括号式传音、跨段长对白、跨段提示语）并拆分超长对白，`StageNames` 挖说话人词表。容器与镜头都要线索叠加才成立，宁缺毋滥。
+- 说话人只用读者已经读过的正文判断：词表来自当前章与之前若干章（说话小句开头按「下一个字是否分散」切出名字边界，带「·」的音译名按左右分支修剪），人物档案与有声书选角的名字经 `StageCompileContext.knownNames` 传入；名牌写原文此处的称呼，置信度不足时只出对白框、不出名牌。
+- 精排 EPUB 的结构直接复用：`StageBookLayoutReader` 读已解析、带原文坐标的 DOM，按 class 词根认出聊天框（含书内头像、左右、语音条）、论坛楼层、弹幕、报纸、社交动态、文件清单、属性面板、引文/笔记框，以及插图（带图注）、章首题图、分隔图与删除线，经 `StageCompileContext.book` 交给编译器；书标出的区域优先于本地规则，认不出就回落。`StageAmbience` 按原文写明的声光与情绪词给旁白屏幕效果、给对白结巴抖字/惊叹放大/省略放慢。
+- `StageAssetMerger` 合入已确认且修订号一致的有声书分镜（说话人、情绪、语气）。`StageEffects` 把情绪与语气换成视觉倾向，并执行硬限：一拍最多一个强效果、行内强调最多两处（人名与专有名词不计）、屏幕效果按强度档限频，「克制」档与系统「移除动画」退化为淡入。海报（整屏竖排朱砂大字）很稀少：`StageFigures.posterStrength` 只认独立成段、两半同位同字的三三/四四对句（「粗看离谱，细看合理。」），对白、惊叹、带人名或口语虚词的句子都不算，`StageEffectBudget.figures` 再限每章至多一张（华丽档两张，相隔 40 拍以上），AI 导演核对过的金句优先。`StageReveal` 给出逐字揭示时间表与自动播放停留时长。`StageTextRules` 放界面会用到的原文判断，界面代码里不出现中文字面量。
+- 场景氛围：`StageAtmosphere` 按拍维护天气、布景（山野、江河、海、树林、竹林、城市、室内、古风庭院、校园、乡村、沙漠）、时段、光源与有限时长（14 拍）的情绪，只从已出现的原文更新；布景、时段与光源只认旁白、字幕与提示语（对白和心声里提到的地点不算），并排除比喻、回忆、否定、目的地与成语/人名里的跨词；章首可承接上一章末尾的环境，`era` 按现代/古代标志词密度给整本书的年代感。可选的 AI 导演（`ai/stage/StageDirector`，默认关，走廉价模型）按约 1600 字的段落窗口返回封闭词表里的场景标签与逐字摘录的金句，不跨窗前瞻、按章缓存在 `filesDir/stage-director/`；`StageDirections.merge` 只把结果并进还没演到的拍，金句只有与某拍原文逐字相同时才提成海报。
+- 声音：`core/stage/sound/` 是不依赖 Android 的确定性合成器（环境层：雨、暴雨、风、浪、溪、虫、鸟、火、城市、树叶、风铃；程序配乐六种；提示音六种；Freeverb 混响、DC 阻断与软限幅），`StageSoundMatcher` 把场景换成各层音量与配乐风格。低频为主的声音会把能量放到 250 Hz–4 kHz，保证手机外放可听。`feature/reader/stage/StageSoundPlayer` 独占 AudioTrack 与音频焦点，参数在音频块边界交接；`StageSound` 只在打开声景时创建播放器，跟随生命周期暂停与释放。
+- `feature/reader/stage/`：`StageViewModel` 编译当前章并预编译下一章，保存进度（拍起点）、推进阅读水位（`markVisibleReadEnd`，一拍完整显示后才推进）、记阅读时长，退出时经 `ReaderLocateRequest` 把当前拍的原文范围交回阅读页定位并短亮。`StageScreen` 负责手势（点按、长按快进到已读处、上滑回看、下滑退出）、音量键、自动播放、屏幕效果（压暗是四周的墨向中间收拢）、雷雨闪电、场景分隔的化开转场与沉浸系统栏；`StageKineticText`/`StageParagraphText` 整段排版一次、按字形簇逐个绘制，揭示进度与颤动相位只在绘制阶段读取，逐字动效（含墨晕：字形影子由洇开收拢到清晰）是纯函数 `StageGlyphMotion`；文字显示效果默认关（直接显示），句末呼吸的墨点提示可以点按继续。
+- 布景与笔墨：`StageScenery` 按（布景、时段、阴天、年代、明暗、尺寸、章种子）确定性地生成两层水墨位图（屏幕 1/3 分辨率，远景与近景，主体压在下方一角、中间留白给文字），镜头以每秒 15 次的低频更新缓慢错动，换景时交叉化开，光源（烛火摇曳、灯光、篝火、霓虹）与情绪颜料在运行时叠加；`StageSceneryPainter.paintPixels` 是纯 Kotlin，单测可出图核对。`StageInk` 放印章（说话人名牌、章名卡章序）、开章墨滴、场景分隔的飞白横画、溅墨与竖排工具；内置行书 `res/font/stage_brush.ttf`（志莽行书，OFL）用于章名、海报、拟声、喊叫、书信与印章，可在设置里关掉。`StagePalette` 定舞台配色（宣纸、墨夜、跟随阅读），国画颜料（朱砂、藤黄、花青、赭石、石绿、胭脂）在 `StagePigments`。
+- `StageContainers`、`StageCards`（弹幕、报纸、动态、文件、笔记）、`StageArtwork`（书内插图、题图、分隔图、头像的解码与展示）、`StageBeatViews`（章名卡、字幕、拟声、系统面板）、`StageBalloons`（对白小笺与名牌）、`StageFigureViews`（海报、阶梯、叠句）、`StageSheets` 分别是版式容器、各镜头组件与回看/设置弹层。设置保存在 `core/datastore/StageSettings`（带 `revision`，旧版本存下的默认值读取时换成新默认）。
+
 ### 繁简转换与原文坐标
 
 - [`core/datastore/BookChineseConversion.kt`](../app/src/main/java/com/mozhi/reader/core/datastore/BookChineseConversion.kt)：按书保存 `OFF`、`TW2SP`、`S2TWP` 模式。
@@ -200,6 +214,7 @@ Room 结构、迁移、备份版本校验和实际数据文件要保持一致。
 - 过程卡显示由 `core/datastore/CompanionProcessDisplay` 控制（隐藏 / 简洁 / 详细，思考、参数、结果预览与生成时展开四个开关），经 `LocalCompanionProcessDisplay` 提供给 `CompanionProcessCard`；详细模式按 `processStepGroups` 把并行执行的查询框在一起。设置在「AI 与伴读 → 聊天显示」，同页还有建议回复、多气泡与用量；主动行为与记忆各有二级页（`feature/settings/CompanionSettingsPages`）。
 - 脚注式引用：`ai/companion/CitationFootnotes` 把 `〔原文 …〕「…」`、书库 `〔书籍#… 第N章〕「…」` 与网页 `〔来源 URL〕` 按整条消息首次出现的顺序编号，渲染为 `moread-cite:n` 上标链接；`feature/reader/CompanionFootnotes` 拦截链接，在点击处弹出纸色卡片（引文与前后可读上下文），气泡底部列出来源，原文跳回阅读页、网页用浏览器打开。网页标题与摘要由 `ai/agent/WebSourceParser` 从同一会话的工具结果还原。回归见 `CitationFootnotesTest`。
 - 图表：`ai/agent/ChartTools` 提供 `create_chart`（`ChartSpecCodec` 校验柱状、折线、饼图、雷达、关系图与时间线规格）与 `count_mentions`（阅读范围内按章字面计数）；成功的调用在聊天流里以 `CompanionChartCard` 显示，可放大导出图片。柱状与折线使用 Vico，其余在 Canvas 自绘，关系图布局由确定性的 `RelationLayout` 计算。回归见 `ChartToolsTest`。
+- 文件：`ai/agent/DocumentTools` 提供 `create_document`（`DocumentSpecCodec` 校验标题、类型与 Markdown 正文），模型把读书报告、章节总结、人物档案、金句摘录这类成篇内容交给用户。与图表一样，规格就是工具调用参数，不另建表；成功的调用在聊天流里以 `CompanionDocumentCard` 显示：固定高度的卡片，点开全屏预览，可分享（FileProvider）或经系统文件选择器保存。素材须先经只读工具取得，所以天然受阅读进度约束；段评讨论不开放。回归见 `DocumentSpecCodecTest`。
 - `ai/agent/ChapterSearchBounds` 解析 `search_book` / `grep_book` 的章节区间，并与阅读水位求交。正文加载从实际起始章开始；Grep 游标绑定上下界，阅读进度增长不会扩大旧查询。`RetrievalRequest.firstChapterIndex` 在融合前和邻居扩展后都执行下界检查。
 - `core/vector/VectorQueries` 在章节范围内不超过 512 个切片时使用精确余弦排序（限制向量复制量）；较大范围使用有界 ANN 补召回，不承诺穷举。
 - `AiModelType.RERANK` / `ModelRole.RERANK` 提供独立可选重排模型；自定义供应商使用 `RerankApiClient` 调用 `/rerank` 或模型自定义路径，采用 query/documents 与 index/relevance_score 格式。`ConfiguredChunkReranker` 只重排已过滤候选的有界前缀：最多 24 段、每段 800 字、合计 12000 字、5 秒。未分配时不调用重排模型，异常、超时或不完整排名回落原融合排序；不更改向量阈值，不重建索引。书内与书库检索共用此链路，发送候选前及返回证据前再次核对正文和范围。
@@ -263,6 +278,7 @@ EPUB 兼容回归包括 `EpubImportCompatibilityTest`（资源 URI 与目录）�
 | 图标轮廓与存储图表 | `AiIconRenderingTest` 将 Compose 矢量渲染与原始 SVG 独立渲染逐像素比对；`StorageDistributionTest` 检查分类汇总、占比和零释放反馈，`StorageScreenVisualTest` 验证图表选择、刷新、小屏和深色界面 |
 | 存储、素材与数据保留 | `StorageFilesTest`、`UpdateDownloadsTest`、`AssetPreferencesTest`、`LibraryRepositoryRemovalTest`（含真实 25→26→27 迁移和历史保留）、`LocalImageExporterTest`、`DataManagementUiTest`、`AppFontTest` |
 | 自动阅读 | `AutoReadSessionTest`、`AutoReadSurfaceTest`、`AutoReadUiTest`；停顿不追赶、取消不提交、加载超时暂停，仍需真机检查滚动手感与生命周期 |
+| 演出模式 | `StageCompilerTest`（示例章节逐拍断言、各镜头与容器的正反例、坐标与重叠不变式）、`StageEffectBudgetTest`、`StageFiguresTest`（海报只给对得最紧的对句与每章限额；设置 `MOREAD_STAGE_TEXT_DIRS` 时打印真书里每档的海报数与句子）、`StageRevealTest`、`StageAssetMergerTest`、`StageSettingsTest`（含旧版本默认值迁移）、`StageGlyphMotionTest`；`StageAtmosphereTest`（布景/时段/光源/情绪/天气的正反例、持续与衰减、章首承接、年代感、前缀不前瞻）、`StageDirectionsTest`、`StageDirectorParseTest`（AI 导演解析容错、分窗不跨窗、缓存与降级）；`StageSoundMatcherTest`、`StageSynthTest`（峰值、静音、确定性、平滑、零分配与性能）；`StageSceneryPreviewTest`（布景确定性与留白；设置 `MOREAD_STAGE_SCENERY_DIR` 时按布景 × 时段 × 明暗出图）；`StageBookLayoutReaderTest`（精排结构正反例）；`StageEpubBooksTest` 读取 `MOREAD_EPUB_FIXTURES` 跑真解析器回归并打印镜头/容器覆盖；`StageSampleBooksTest` 与 `StageSceneCoverageTest` 读取 `MOREAD_STAGE_TEXT_DIRS`（逐章 TXT 目录，首行为章名）跑本地真书回归与场景覆盖统计，`StageSoundExportTest` 在设置 `MOREAD_STAGE_SOUND_DIR` 时导出试听 WAV；未设置时跳过，书籍内容不进入仓库 |
 | 书库伴读与统计 | `LibraryCompanionToolsetTest`、`LibraryCatalogToolTest`、`LibraryConversationSourcesTest`、`LibraryCompanionRunnerTest`、`LibraryOrganizationCoordinatorTest`、`CompanionStatisticsTest` / `CompanionStatisticsDatabaseTest`、`ReadingAndCompanionVisualTest`（真实控件、合成示例，不调用外部模型） |
 | 章节大纲与人物 | `ChapterKnowledgeTest`、`ChapterKnowledgeRepositoryTest`、`BookCharactersRepositoryTest`、`CharacterResearchPipelineTest`、`CharacterDossierCodecTest`、`KnowledgeJsonRequestTest`、`CharacterJsonSalvageTest`、`CharacterBiographerTest`、`KnowledgeGenerationRunnerTest`、`ReaderKnowledgeViewModelTest`、`CharacterDossierLayoutTest`、`ReaderKnowledgeTaskOrbTest`、`ReaderKnowledgeVisualTest`；覆盖整章合成、未读末章、断点核对、独立取消、并发限流、刷新保留和真实弹层中的边界滑动/切页/进度更新 |
 | 重排与历史修改 | `RerankApiClientTest`、`ConfiguredChunkRerankerTest`、`LibraryHistoryMutationTest`；覆盖输入预算、失败回落、取消、引用完整性和分支后的上下文 |
@@ -312,7 +328,8 @@ Compose 使用 `stringResource` / `pluralStringResource`。资源命名、占位
 
 ### 阅读外观、人物资料与紧凑词云
 
-- `feature/reader/ModernPageCurl` / `ModernPageCurlShader` 是「现代仿真」的 GPU 圆柱反投影着色器：按页面高度归一化，以按下位置的纵坐标确定锚点，按实际拖动距离推进单页折线，保持短距离拖动跟手，并对纵向位移作平滑约束；单页和双页均按材质截面扣除书脊位移，避免纸张在装订端自由旋转。单页通过 `asin` 分段反投影直接选择正反面，双页按深度选择曲面，支持背面透字、纸边高光及双页书脊效果。单页沿用原有仿真的来回路径，返回时把上一张纸反向铺回当前页上；正反面纹理在整个手势中保持稳定。Android 13 以下回落原有仿真。`ModernCurlMotion` 为 `PageTurnDriver.MODERN_CURL` 提供近期速度拟合、停顿消速及密度一致的甩动判断；松手时平滑落页；新触摸立即完成已确认的上一轮翻页，让连续滑动各自翻过一页，取消回弹则可从当前卷页位置接续。
+- `feature/reader/ModernPageCurl` / `ModernPageCurlShader` 是「现代仿真」的 GPU 圆柱反投影着色器。单页的折线由 `ModernCurlFold` 每帧在 CPU 上解出（按页面高度归一化：外缘抓取点按按下位置的纵坐标取锚，折到虚拟指尖上，折线是两者的中垂线、再让出半圈圆柱；斜度受书脊约束，落页前逐渐摆正），着色器只做逐像素的 `asin` 分段反投影、选择正反面，并画出纸边投影（翻起的页缘压在当前页上的细阴影）与掀开处的投影（随触达距离加宽、落页前淡出）。双页仍在着色器内按深度选择曲面，两种模式都按材质截面扣除书脊位移，避免纸张在装订端自由旋转；支持背面透字、纸边高光及双页书脊效果。Android 13 以下回落原有仿真。
+- `ModernCurlMotion` 驱动单页 `PageTurnDriver.MODERN_CURL`：虚拟指尖 `curlX/curlY` 以一阶跟随（约 40 ms）追赶真实指尖，所以按在页面中部时页缘会顺滑地移到手指下而不是跳过去，按在上下角附近会斜着掀起页角；向后翻时上一页从左侧整张翻回来。松手判定：任何向前的轻扫都翻页，明确向后甩则取消，停住松手时需从按下处拖过约四分之一页宽。松手、点按翻页和接住回弹都从纸张当前位置走同一条三次曲线（起速衔接手指速度、到终点停稳，整幅最长约 1/3 秒）；新触摸立即完成已确认的上一轮翻页，让连续快速轻扫各自翻过一页，取消回弹则可接住继续拖。双页仍按铰链的相对行程与原有落页动画。
 - `core/datastore/ReaderTitleStyle` 保存章首字体、色彩、边框、图片资产、对齐与 CSS 声明。右上角菜单中的 `ReaderTitleStyleSheet` 管理多套命名样式，支持选择、复制、编辑、重命名与删除；阅读主题通过稳定 ID 记住选择，删除时保留最新外观快照。`ReaderTitleStyleEditor` 的预览与实际阅读复用 `ChapterTypesetter` / `PageBitmapRenderer`，排版缓存包含标题样式与图片引用；`TextLine.isReaderTitle` 区分阅读器标题和 EPUB 出版商标题。
 - `core/datastore/ReaderKeyBindings` 保存物理按键与上一页/下一页的对应关系，兼容原音量键开关；已知按键使用 Android 键码和组合修饰键，未命名按键保留扫描码，不依赖会随重连变化的设备 ID。翻页方式与阅读交互中的 `ReaderPhysicalKeysSheet` 提供音量方向预设、多个按键录制、冲突确认和移除。录制直接处理对话框窗口的按键事件，松开后才允许保存；`ReaderHardwareKeyDispatcher` 仅在阅读正文时接管匹配按键，同时消费按下/抬起并忽略长按重复。对应回归为 `ReaderKeyBindingsTest`、`ReaderHardwareKeysTest` 和真实父弹层中的 `ReaderPhysicalKeysVisualTest`；`ReaderInputDeviceTest` 验证真机窗口录制与连续滑动。
 - 标题和高亮规则编辑器复用 `ReaderStyleEditorComponents`，提供实时预览、独立滚动页签和常驻保存操作；高亮支持输入示例文字验证匹配。字号、留白与装饰控件会同步对应 CSS 属性，避免旧预设覆盖刚调整的值。
@@ -321,7 +338,7 @@ Compose 使用 `stringResource` / `pluralStringResource`。资源命名、占位
 - `ChapterKnowledgeAgent` 输出带独立引文的别名、年龄、性别、身份与人物关系；`ChapterKnowledgeCodec` 验证引文及双方称呼，`BookCharactersCodec` 仅合并明确且唯一归属的别名，兼容旧资料。人物页的展示见上文「人物档案界面」。
 - 书架网格和列表仅搜索栏吸顶常驻；问候语与右上角视图/导入操作随内容滚动，书籍区保留分组、筛选标签、拖拽与排序。
 - `StatsCloudLayout` / `PackedStatsCloud` 在后台完成确定性的字形遮罩碰撞与螺旋排布。按阅读时长映射字号，部分标签旋转，小词填补空隙；放不下的条目提供展开列表。算法思路参考 [d3-cloud 官方说明](https://github.com/jasondavies/d3-cloud)，使用独立 Kotlin 实现。
-- 回归入口：`ReaderStyleCssTest`、`CharacterProfileTest`、`ReaderEnhancementsVisualTest`、`ReaderStyleEditorVisualTest`、`BookshelfPinnedSearchTest` 与 `ReaderKnowledgeVisualTest`（真实导航父弹层）。`ModernCurlMotionTest` 与 `ReaderPageTouchTest` 覆盖快速甩动、反向回弹、停顿和动画接续；`ModernPageCurlGpuTest` 在 Android 13 及以上真机的硬件画布验证卷页像素、斜向手势、反向文字方向、双页与首尾状态；AGSL 不支持软件画布。
+- 回归入口：`ReaderStyleCssTest`、`CharacterProfileTest`、`ReaderEnhancementsVisualTest`、`ReaderStyleEditorVisualTest`、`BookshelfPinnedSearchTest` 与 `ReaderKnowledgeVisualTest`（真实导航父弹层）。`ModernCurlMotionTest`、`ModernCurlFoldTest` 与 `ReaderPageTouchTest` 覆盖指尖跟随、四分之一页宽与轻扫翻页、反向甩动取消、接住回弹、点按翻页、折线几何与投影淡出；`ModernPageCurlGpuTest` 在 Android 13 及以上真机的硬件画布验证卷页像素、斜向手势、掀开处投影、双页与首尾状态；AGSL 不支持软件画布。
 
 ### 阅读样式 CSS 绘制
 

@@ -3,6 +3,7 @@ package com.mozhi.reader.feature.importer
 import java.io.File
 import java.util.concurrent.CancellationException
 import java.util.zip.ZipEntry
+import java.util.zip.ZipException
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
 import org.junit.Assert.assertArrayEquals
@@ -70,6 +71,61 @@ class EpubArchiveNormalizerTest {
         val actual = contents(file)
         assertEquals(expected.keys, actual.keys)
         expected.forEach { (name, bytes) -> assertArrayEquals(name, bytes, actual.getValue(name)) }
+    }
+
+    @Test fun platformZipRejectionsStillRepairDuplicateResourcesWithoutInspectingErrorText() {
+        val file = archive(duplicateChapter = true, secondChapter = "<p>测试正文🙂</p>")
+        val original = file.readBytes()
+        val expected = contents(file)
+        for (message in listOf("Duplicate entry name: mimetype", "invalid CEN header (duplicate entry)",
+            "Unknown platform ZIP error", null)) {
+            file.writeBytes(original)
+            // Exercise Android's failure path on desktop JVMs, which accept duplicate names.
+            assertTrue(EpubArchiveNormalizer.normalize(file, openZip = { throw ZipException(message) }))
+            val actual = contents(file)
+            assertEquals(expected.keys, actual.keys)
+            expected.forEach { (name, bytes) -> assertArrayEquals(name, bytes, actual.getValue(name)) }
+            ZipFile(file).use { zip ->
+                val names = zip.entries().asSequence().map { it.name }.toList()
+                assertEquals(names.size, names.toSet().size)
+            }
+        }
+    }
+
+    @Test fun otherZipRejectionsLeaveTheArchiveIntact() {
+        val file = archive(duplicate = false)
+        val original = file.readBytes()
+        val failure = ZipException("invalid CEN header (bad signature)")
+        assertEquals(failure, assertThrows(ZipException::class.java) {
+            EpubArchiveNormalizer.normalize(file, openZip = { throw failure })
+        })
+        assertArrayEquals(original, file.readBytes())
+        assertEquals(listOf(file.name), temporary.root.list()!!.toList())
+    }
+
+    @Test fun unreadableLocalEntriesKeepTheOriginalZipFailureAndArchive() {
+        val file = temporary.newFile("broken.epub").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
+        val original = file.readBytes()
+        val failure = ZipException("invalid CEN header (bad signature)")
+        assertEquals(failure, assertThrows(ZipException::class.java) {
+            EpubArchiveNormalizer.normalize(file, openZip = { throw failure })
+        })
+        assertArrayEquals(original, file.readBytes())
+        assertEquals(listOf(file.name), temporary.root.list()!!.toList())
+    }
+
+    @Test fun cancellationDuringLocalEntryInspectionLeavesNoTemporaryArchive() {
+        val file = archive(duplicate = false)
+        val original = file.readBytes()
+        var checks = 0
+        assertThrows(CancellationException::class.java) {
+            EpubArchiveNormalizer.normalize(file, openZip = { throw ZipException() }) {
+                if (++checks == 3) throw CancellationException()
+            }
+        }
+        assertEquals(3, checks)
+        assertArrayEquals(original, file.readBytes())
+        assertEquals(listOf(file.name), temporary.root.list()!!.toList())
     }
 
     @Test fun cancellationLeavesTheArchiveIntactAndCleansUp() {

@@ -55,6 +55,14 @@ class EpubImportPipelineTest {
     @get:Rule val temporary = TemporaryFolder()
 
     @Test fun archiveBackedImportsRenderRasterAndSvgWithoutDuplicatingImagesOrFullBookDom() = runBlocking {
+        importAndRenderArchive(duplicateEntry = false)
+    }
+
+    @Test fun duplicateEntriesAreRepairedBeforeImportStorageAndRendering() = runBlocking {
+        importAndRenderArchive(duplicateEntry = true)
+    }
+
+    private suspend fun importAndRenderArchive(duplicateEntry: Boolean) {
         val files = temporary.newFolder("archive-files")
         val caches = temporary.newFolder("archive-cache")
         val context = object : ContextWrapper(ApplicationProvider.getApplicationContext<Context>()) {
@@ -75,6 +83,7 @@ class EpubImportPipelineTest {
                 zip.putNextEntry(entry); zip.write(content); zip.closeEntry()
             }
             put("mimetype", "application/epub+zip".toByteArray())
+            if (duplicateEntry) put("mimetyp2", "application/epub+zip".toByteArray())
             put("META-INF/container.xml", """<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>""".toByteArray())
             put("OPS/content.opf", """<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">archive-regression</dc:identifier><dc:title>归档插图</dc:title><dc:language>zh-CN</dc:language><dc:creator>作者</dc:creator><meta property="dcterms:modified">2026-09-13T00:00:00Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="one" href="one.xhtml" media-type="application/xhtml+xml"/><item id="two" href="two.xhtml" media-type="application/xhtml+xml"/><item id="css" href="book.css" media-type="text/css"/><item id="png" href="art.png" media-type="image/png"/><item id="svg" href="art.svg" media-type="image/svg+xml"/></manifest><spine><itemref idref="one"/><itemref idref="two"/></spine></package>""".toByteArray())
             put("OPS/nav.xhtml", """<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>目录</title></head><body><nav epub:type="toc"><ol><li><a href="one.xhtml">第一章</a></li><li><a href="two.xhtml">第二章</a></li></ol></nav></body></html>""".toByteArray())
@@ -85,17 +94,36 @@ class EpubImportPipelineTest {
                 put("OPS/$name.xhtml", """<html xmlns="http://www.w3.org/1999/xhtml"><head><title>章节</title><link rel="stylesheet" href="book.css"/></head><body><h1>章节</h1><p>这里是图片前的正文。🙂</p><img src="art.$extension" alt="青色插图"/><p>图片后的文字。</p></body></html>""".toByteArray())
             }
         }
+        if (duplicateEntry) {
+            // Produce a malformed archive without relying on a copyrighted/local fixture.
+            val bytes = source.readBytes()
+            val from = "mimetyp2".toByteArray()
+            val to = "mimetype".toByteArray()
+            for (offset in 0..bytes.size - from.size) {
+                if (from.indices.all { bytes[offset + it] == from[it] }) to.copyInto(bytes, offset)
+            }
+            source.writeBytes(bytes)
+        }
+        val fingerprint = com.mozhi.reader.core.importer.SourceFingerprints.of(source)
         val layouts = BookLayoutStore(context)
         val media = BookMediaStore(context)
         val text = slot<List<ChapterTextInput>>()
         val library = mockk<LibraryRepository>(relaxed = true)
-        coEvery { library.insertBook(any(), any(), any()) } returns 1L
+        val importedBook = slot<com.mozhi.reader.core.database.entity.BookEntity>()
+        coEvery { library.insertBook(capture(importedBook), any(), any()) } returns 1L
         coEvery { library.findBookBySourceHash(any()) } returns null
         coEvery { library.getEpubBooksWithoutSource() } returns emptyList()
         coEvery { library.materializeBookText(1, capture(text), false) } just Runs
         val importer = ImportCoordinator(context, mockk(), mockk(), mockk(), EpubTextExtractor(), EpubLayoutDocumentParser(),
             EpubPackageInspector(), layouts, media, mockk(), ReadiumServices(context), library)
         assertEquals(1L, importer.importDirectly(Uri.fromFile(source)))
+        assertEquals(fingerprint, com.mozhi.reader.core.importer.SourceFingerprints.of(source))
+        assertEquals(fingerprint.sha256, importedBook.captured.sourceSha256)
+        assertEquals(fingerprint.size, importedBook.captured.sourceByteSize)
+        java.util.zip.ZipFile(importedBook.captured.epubPath).use { zip ->
+            val names = zip.entries().asSequence().map { it.name }.toList()
+            assertEquals(names.size, names.toSet().size)
+        }
         assertEquals(2, text.captured.size)
         assertTrue(layouts.hasCurrentLayout(1, text.captured.map { it.body.length }))
         assertTrue(File(files, "book-layout/1/chapters").exists().not())

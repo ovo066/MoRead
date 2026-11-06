@@ -30,7 +30,7 @@ class CompanionToolRouterTest {
             longTermMemoryEnabled = true
         )
 
-        assertEquals(allTools + setOf("count_mentions", "create_chart"), tools)
+        assertEquals(allTools + setOf("count_mentions", "create_chart", "create_document"), tools)
     }
 
     @Test

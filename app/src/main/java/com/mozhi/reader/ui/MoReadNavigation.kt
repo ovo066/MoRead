@@ -37,6 +37,11 @@ internal const val ROOT_FADE_OUT_MS = 90
 internal const val ROOT_FADE_IN_MS = 210
 internal const val PUSH_MS = 280
 
+internal const val STAGE_FADE_MS = 280
+
+/** 演出页进出不横移：阅读页压暗淡出、舞台从黑场里亮起（舞台自己再做一次熄灯开场）。 */
+internal fun isStageRoute(route: String?): Boolean = route?.startsWith("stage/") == true
+
 internal fun isRootRoute(route: String?): Boolean = RootDestination.entries.any { it.route == route }
 
 internal fun isRootSwitch(initialRoute: String?, targetRoute: String?): Boolean =
@@ -45,7 +50,9 @@ internal fun isRootSwitch(initialRoute: String?, targetRoute: String?): Boolean 
 // Select motion for the pair, never just the destination. A root returning from a child must
 // mirror that child's shared-axis exit, not run a delayed/scaled root-tab entrance underneath it.
 internal fun navigationEnter(initialRoute: String?, targetRoute: String?, pop: Boolean): EnterTransition =
-    if (isRootSwitch(initialRoute, targetRoute)) {
+    if (isStageRoute(initialRoute) || isStageRoute(targetRoute)) {
+        fadeIn(tween(STAGE_FADE_MS, easing = LinearOutSlowInEasing))
+    } else if (isRootSwitch(initialRoute, targetRoute)) {
         // Do not scale the page-sized gradient or a restored list during root-tab switches.
         fadeIn(tween(ROOT_FADE_IN_MS, delayMillis = ROOT_FADE_OUT_MS, easing = LinearOutSlowInEasing))
     } else {
@@ -54,7 +61,9 @@ internal fun navigationEnter(initialRoute: String?, targetRoute: String?, pop: B
     }
 
 internal fun navigationExit(initialRoute: String?, targetRoute: String?, pop: Boolean): ExitTransition =
-    if (isRootSwitch(initialRoute, targetRoute)) {
+    if (isStageRoute(initialRoute) || isStageRoute(targetRoute)) {
+        fadeOut(tween(STAGE_FADE_MS, easing = FastOutLinearInEasing))
+    } else if (isRootSwitch(initialRoute, targetRoute)) {
         fadeOut(tween(ROOT_FADE_OUT_MS, easing = FastOutLinearInEasing))
     } else {
         slideOutHorizontally(tween(PUSH_MS, easing = FastOutSlowInEasing)) { if (pop) it / 4 else -it / 8 } +

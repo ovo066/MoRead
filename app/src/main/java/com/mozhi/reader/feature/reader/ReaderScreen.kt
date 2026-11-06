@@ -22,7 +22,6 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -151,6 +150,8 @@ fun ReaderScreen(
     onBack: () -> Unit,
     onOpenCompanionChat: (Long) -> Unit = {},
     onOpenListenPlayer: (Long) -> Unit = {},
+    /** 演出模式：从当前页首所在的原文位置开演（章节序号、章内 UTF-16 原文坐标）。 */
+    onOpenStage: (bookId: Long, chapterIndex: Int, sourceOffset: Int) -> Unit = { _, _, _ -> },
     /** 详情批注、回顾或聊天「跳到原文」的位置；完成后只清空对应请求。 */
     pendingLocate: ReaderLocateRequest? = null,
     onPendingLocateConsumed: (ReaderLocateRequest) -> Unit = {},
@@ -962,6 +963,15 @@ fun ReaderScreen(
                 onCompanion = openCompanion,
                 onSearch = { screenState.activeSheet = ReaderSheet.SEARCH },
                 onAutoRead = { screenState.activeSheet = ReaderSheet.AUTO_READ },
+                onStageMode = {
+                    autoRead.stop()
+                    coroutineScope.launch {
+                        val chapterIndex = state.currentChapterIndex
+                        val offset = viewModel.sourceOffsetForDisplayed(chapterIndex, state.currentCharOffset) ?: 0
+                        viewModel.flushProgress()
+                        onOpenStage(bookId, chapterIndex, offset)
+                    }
+                },
                 onTapZones = { screenState.activeSheet = ReaderSheet.TAP_ZONES },
                 onSyntaxHighlight = { screenState.activeSheet = ReaderSheet.SYNTAX },
                 onTitleStyle = { screenState.activeSheet = ReaderSheet.TITLE_STYLE },
@@ -1454,9 +1464,6 @@ fun ReaderScreen(
                 screenState.annotationThread = null
                 discussionViewModel.close()
             },
-            // IME inset must constrain the sheet itself. Padding only the inner Column leaves a
-            // full-height discussion measured behind the keyboard, so its composer cannot move.
-            modifier = Modifier.imePadding(),
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
             containerColor = palette.glassStrong,
             contentColor = palette.onBackground,

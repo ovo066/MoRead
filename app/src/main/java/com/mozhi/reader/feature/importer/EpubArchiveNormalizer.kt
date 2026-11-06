@@ -1,6 +1,7 @@
 package com.mozhi.reader.feature.importer
 
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
@@ -16,8 +17,8 @@ internal object EpubArchiveNormalizer {
     private const val MIMETYPE = "mimetype"
     private val epubMime = "application/epub+zip".toByteArray(Charsets.US_ASCII)
 
-    fun normalize(file: File, checkActive: () -> Unit = {}): Boolean {
-        if (!hasDuplicateEntries(file)) return false
+    fun normalize(file: File, openZip: (File) -> ZipFile = ::ZipFile, checkActive: () -> Unit = {}): Boolean {
+        if (!hasDuplicateEntries(file, openZip, checkActive)) return false
         val temporary = File.createTempFile("epub-normalized-", ".epub", file.absoluteFile.parentFile)
         try {
             ZipInputStream(file.inputStream().buffered()).use { input ->
@@ -98,11 +99,12 @@ internal object EpubArchiveNormalizer {
         }
     }
 
-    private fun hasDuplicateEntries(file: File): Boolean = try {
-        ZipFile(file).use { zip ->
+    private fun hasDuplicateEntries(file: File, openZip: (File) -> ZipFile, checkActive: () -> Unit): Boolean = try {
+        openZip(file).use { zip ->
             val names = HashSet<String>()
             var duplicate = false
             zip.entries().asSequence().forEach { entry ->
+                checkActive()
                 if (!names.add(entry.name)) {
                     duplicate = true
                 }
@@ -110,8 +112,35 @@ internal object EpubArchiveNormalizer {
             duplicate
         }
     } catch (error: ZipException) {
-        // Android rejects duplicates in ZipFile's constructor; desktop JVMs accept them.
-        if (error.message?.startsWith("Duplicate entry name: ") != true) throw error
+        // Some Android ZIP implementations reject duplicates before exposing the directory.
+        // Inspect local entries instead of depending on system/version-specific error text.
+        // Healthy archives keep the cheap central-directory scan and are never rewritten.
+        val duplicates = try {
+            hasDuplicateLocalEntries(file, checkActive)
+        } catch (streamError: IOException) {
+            error.addSuppressed(streamError)
+            throw error
+        }
+        if (!duplicates) throw error
         true
     }
+
+    private fun hasDuplicateLocalEntries(file: File, checkActive: () -> Unit): Boolean =
+        ZipInputStream(file.inputStream().buffered()).use { input ->
+            val names = HashSet<String>()
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                checkActive()
+                val entry = input.nextEntry ?: return@use false
+                if (!names.add(entry.name)) return@use true
+                // Drain with cancellation checks; closeEntry alone can inflate a large resource
+                // without returning control to a cancelled import.
+                while (true) {
+                    checkActive()
+                    if (input.read(buffer) < 0) break
+                }
+                input.closeEntry()
+            }
+            @Suppress("UNREACHABLE_CODE") false
+        }
 }

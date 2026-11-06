@@ -2,7 +2,8 @@ package com.mozhi.reader.feature.reader
 
 /**
  * Cylindrical paper in height-normalized coordinates. Material slices remain attached to
- * the binding while the outer edge can bend diagonally with the fingertip.
+ * the binding while the outer edge can bend diagonally with the fingertip. The single-page
+ * fold is solved per frame on the CPU ([modernCurlFold]); the shader only inverts it per pixel.
  */
 internal const val MODERN_PAGE_CURL_SHADER = """
 uniform shader image;
@@ -10,8 +11,11 @@ uniform shader backImage;
 uniform shader underImage;
 uniform float2 resolution;
 uniform float4 backfaceOverlay;
-uniform float4 iMouse;
-uniform float radiusScale;
+uniform float2 curlNormal;
+uniform float curlFold;
+uniform float curlRadius;
+uniform float curlShadow;
+uniform float curlShadowSpread;
 uniform float doublePageCurlRadius;
 uniform float doublePageFoldPosition;
 uniform float doublePageProgress;
@@ -81,6 +85,18 @@ half4 shadePaper(half4 ink, float cosTheta, float overlay) {
     ink.rgb *= half(thickness);
     return ink;
 }
+// Rim shadow: a page point whose reflection lands just past the outer paper edge lies
+// under the rim of the folded flap and darkens toward it. The binding side never casts one.
+float rimShade(float2 p, float width) {
+    if (p.x < 0.0 || p.x > width + 0.02 || p.y < -0.02 || p.y > 1.02) return 1.0;
+    float dx = p.x - width;
+    float dy = p.y > 1.0 ? p.y - 1.0 : -p.y;
+    if (dx <= 0.0 && dy <= 0.0) return 1.0;
+    float rim = max(sqrt(sqrt(clamp(dx / 0.02, 0.0, 0.9))), sqrt(sqrt(clamp(dy / 0.02, 0.0, 0.9))));
+    return mix(1.0, rim, 0.25);
+}
+// xy: material point, z: rim shade (or -1e6 where no paper covers), w: signed cosine (< 0 back)
+// or, where uncovered, the distance past the fold start for the cast shadow.
 float4 singleSurface(float2 uv, float2 normal, float radius, float width, float fold) {
     float2 tangent = float2(-normal.y, normal.x);
     float v = dot(uv, tangent);
@@ -88,58 +104,39 @@ float4 singleSurface(float2 uv, float2 normal, float radius, float width, float 
     float spineAxis = normal.y * v / normal.x;
     if (spineAxis > fold) projected += cylinder(spineAxis, radius, PI, fold).x - spineAxis;
     float t = projected - fold;
-    if (t > radius) return float4(0.0, 0.0, -1000000.0, 1.0);
+    if (t > radius) return float4(0.0, 0.0, -1000000.0, t);
     float2 base = tangent * v;
     if (t >= 0.0) {
         float ratio = clamp(t / radius, 0.0, 1.0);
         float theta = asin(ratio);
         float cosine = sqrt(max(1.0 - ratio * ratio, 0.0));
         float2 back = base + normal * (fold + radius * (PI - theta));
-        if (inPaper(back, width)) return float4(back, 0.0, -cosine);
+        if (inPaper(back, width)) return float4(back, 1.0, -cosine);
         float2 front = base + normal * (fold + radius * theta);
-        if (inPaper(front, width)) return float4(front, 0.0, cosine);
+        if (inPaper(front, width)) return float4(front, rimShade(back, width), cosine);
     } else {
         float2 back = base + normal * (fold + PI * radius - t);
-        if (inPaper(back, width)) return float4(back, 0.0, -1.0);
+        if (inPaper(back, width)) return float4(back, 1.0, -1.0);
         float2 front = spineAxis <= fold ? uv : base + normal * projected;
-        if (inPaper(front, width)) return float4(front, 0.0, 1.0);
+        if (inPaper(front, width)) return float4(front, rimShade(back, width), 1.0);
     }
-    return float4(0.0, 0.0, -1000000.0, 1.0);
+    return float4(0.0, 0.0, -1000000.0, t);
 }
 half4 singlePage(float2 xy) {
     float width = resolution.x / resolution.y;
-    float2 uv = xy / resolution.y;
-    float2 finger = iMouse.xy / resolution.y;
-    float p = clamp((width - finger.x) / (2.0 * width), 0.0, 1.0);
-    float anchor = clamp(iMouse.w / resolution.y, 0.0, 1.0);
-    if (anchor < 1.0 / 3.0) anchor *= smoothstep(0.0, 1.0, anchor * 3.0);
-    else if (anchor > 2.0 / 3.0) anchor = 1.0 - (1.0 - anchor) * smoothstep(0.0, 1.0, (1.0 - anchor) * 3.0);
-    float2 grab = float2(width, anchor);
-    float dx = max(width - finger.x, 0.00001);
-    float rawSlope = (finger.y - anchor) / max(dx, width * 0.18);
-    // The reflected outer corner must not pass the binding while its tip is still on this
-    // side of the book. Solve sin(2*angle) from the available reach, rather than using a
-    // fixed narrow tilt limit. Corner grabs can bend farther than middle-of-page grabs.
-    float lever = rawSlope >= 0.0 ? anchor : 1.0 - anchor;
-    float reach = max(finger.x - width * 0.055, 0.0);
-    float sineLimit = clamp(reach / max(lever, 0.00001), 0.0, 1.0);
-    float maxSlope = sineLimit / (1.0 + sqrt(max(1.0 - sineLimit * sineLimit, 0.0)));
-    float slope = sign(rawSlope) * min(abs(rawSlope), maxSlope);
-    slope *= 1.0 - smoothstep(0.65, 1.0, p);
-    float2 normal = normalize(float2(1.0, -slope));
-    float2 tip = float2(finger.x, anchor + slope * dx);
-    float dragged = distance(grab, tip);
-    float radius = mix(0.065, 0.04, smoothstep(0.0, 0.2, dragged)) * radiusScale;
-    // Advance the fold with the fingertip before forming a full semicylinder. This keeps
-    // short drags responsive without borrowing the two-page hinge's slower progress curve.
-    float fold = dot(tip, normal) + max((dragged - PI * radius) * 0.5, 0.0);
-    fold -= PI * radius * 0.5 * smoothstep(0.8, 1.0, p);
-    float4 surface = singleSurface(uv, normal, radius, width, fold);
-    if (surface.z < -1000.0) return half4(0.0);
+    float4 surface = singleSurface(xy / resolution.y, curlNormal, curlRadius, width, curlFold);
+    if (surface.z < -1000.0) {
+        // The revealed page darkens beside the curl, fading over a tenth of the reach.
+        half4 below = underImage.eval(xy);
+        float darken = curlShadow * exp(-max(surface.w - curlRadius, 0.0) / curlShadowSpread);
+        return half4(below.rgb * half(1.0 - darken), below.a);
+    }
     float backside = surface.w < 0.0 ? 1.0 : 0.0;
     float cosTheta = clamp(abs(surface.w), 0.0, 1.0);
     half4 ink = backside > 0.5 ? backImage.eval(surface.xy * resolution.y) : image.eval(surface.xy * resolution.y);
     ink = shadePaper(ink, cosTheta, backfaceOverlay.a * backside * sqrt(cosTheta));
+    ink.rgb *= half(surface.z);
+    if (ink.a < 1.0) ink += underImage.eval(xy) * (1.0 - ink.a);
     return ink;
 }
 
@@ -178,10 +175,10 @@ half4 doublePage(float2 xy) {
     return ink;
 }
 half4 main(float2 xy) {
+    if (doublePageMode < 0.5) return singlePage(xy);
     half4 below = underImage.eval(xy);
-    if (doublePageMode > 0.5 && doublePageDirection * (xy.x - resolution.x * 0.5) < -leafGeometry.y * 0.5)
-        below = image.eval(xy);
-    half4 paper = doublePageMode > 0.5 ? doublePage(xy) : singlePage(xy);
+    if (doublePageDirection * (xy.x - resolution.x * 0.5) < -leafGeometry.y * 0.5) below = image.eval(xy);
+    half4 paper = doublePage(xy);
     return paper + below * (1.0 - paper.a);
 }
 """

@@ -179,6 +179,13 @@ internal sealed interface CompanionTimelineItem {
     ) : CompanionTimelineItem {
         override val key: String = "chart-$callId"
     }
+
+    data class Document(
+        val callId: String,
+        val spec: com.mozhi.reader.ai.agent.DocumentSpec
+    ) : CompanionTimelineItem {
+        override val key: String = "document-$callId"
+    }
 }
 
 internal fun buildCompanionTimeline(messages: List<MessageEntity>): List<CompanionTimelineItem> {
@@ -231,6 +238,10 @@ internal fun buildCompanionTimeline(messages: List<MessageEntity>): List<Compani
                         if (call.name == "create_chart") {
                             com.mozhi.reader.ai.agent.ChartSpecCodec.fromToolCall(call.arguments, toolResults[call.id]?.content)
                                 ?.let { add(CompanionTimelineItem.Chart(call.id, it)) }
+                        }
+                        if (call.name == "create_document") {
+                            com.mozhi.reader.ai.agent.DocumentSpecCodec.fromToolCall(call.arguments, toolResults[call.id]?.content)
+                                ?.let { add(CompanionTimelineItem.Document(call.id, it)) }
                         }
                     }
                 }

@@ -26,12 +26,19 @@ class ReaderEnhancementsVisualTest {
         val under = Bitmap.createBitmap(360, 640, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.BLUE) }
         val node = android.graphics.RenderNode("curl-contract").apply { setPosition(0, 0, 360, 640) }
         val curl = ModernPageCurl()
-        for (direction in PageTurnDirection.entries) {
+        val spread = com.mozhi.reader.feature.reader.render.SpreadGeometry(360f, 640f, 20f)
+        for (curlY in listOf(470f, 320f, 120f)) {
             val canvas = node.beginRecording()
             try {
                 assertTrue(canvas.isHardwareAccelerated)
-                curl.draw(canvas, direction, front, under, if (direction == PageTurnDirection.NEXT) -160f else 160f,
-                    470f, 360f, 640f, Color.WHITE, null, startX = 350f, startY = 320f)
+                curl.drawSingle(canvas, front, under, 200f, curlY, 320f, 360f, 640f, Color.WHITE)
+            } finally { node.endRecording() }
+        }
+        for (direction in PageTurnDirection.entries) {
+            val canvas = node.beginRecording()
+            try {
+                curl.drawSpread(canvas, direction, front, under, if (direction == PageTurnDirection.NEXT) -80f else 80f,
+                    470f, 360f, 640f, Color.WHITE, spread, startX = 350f, startY = 320f)
             } finally { node.endRecording() }
         }
         curl.clear()

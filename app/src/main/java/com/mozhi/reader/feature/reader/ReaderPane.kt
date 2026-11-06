@@ -517,7 +517,9 @@ internal fun ReaderPane(
                             spread = holder.spread,
                             startY = driver.startY,
                             modernBackTextOpacity = settings.modernBackTextOpacity,
-                            modernRadiusScale = settings.modernCurlRadiusScale
+                            modernRadiusScale = settings.modernCurlRadiusScale,
+                            curlX = driver.curlX,
+                            curlY = driver.curlY
                         )
                         canvas.restoreToCount(saved)
                     } else {

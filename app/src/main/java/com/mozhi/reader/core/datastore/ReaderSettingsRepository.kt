@@ -1181,6 +1181,13 @@ class ReaderSettingsRepository @Inject constructor(
         dataStore.edit { it[Keys.CompanionTokenUsage] = value }
     }
 
+    val stageSettings: Flow<StageSettings> =
+        dataStore.data.map { StageSettings.decode(it[Keys.StageSettings]) }.distinctUntilChanged()
+
+    suspend fun setStageSettings(value: StageSettings) {
+        dataStore.edit { it[Keys.StageSettings] = StageSettings.encode(value) }
+    }
+
     /** 伴读「过程」卡的显示程度；书内伴读、书库伴读与段评讨论共用。 */
     val companionProcessDisplay: Flow<CompanionProcessDisplay> =
         dataStore.data.map { CompanionProcessDisplay.decode(it[Keys.CompanionProcessDisplay]) }.distinctUntilChanged()
@@ -1438,6 +1445,7 @@ class ReaderSettingsRepository @Inject constructor(
         val SuggestionReplies = booleanPreferencesKey("companion_suggestion_replies")
         val CompanionTokenUsage = booleanPreferencesKey("companion_token_usage")
         val CompanionProcessDisplay = stringPreferencesKey("companion_process_display")
+        val StageSettings = stringPreferencesKey("stage_settings")
         val CompanionGenUi = stringPreferencesKey("companion_genui")
         val CompanionSpoilerProtection = booleanPreferencesKey("companion_spoiler_protection")
         val ShowAiAnnotations = booleanPreferencesKey("companion_show_ai_annotations")

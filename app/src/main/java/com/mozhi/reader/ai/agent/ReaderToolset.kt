@@ -127,6 +127,7 @@ class ReaderToolset @Inject constructor(
                 getRevision, readingScope, sourceRegistry, currentScope))
             add(CountMentionsTool({ libraryRepository.getBook(bookId)?.totalChapters ?: 0 }, loadChapter, readingScope, currentScope))
             add(CreateChartTool())
+            add(CreateDocumentTool())
             add(ReadBookSectionTool(libraryRepository, bookId, readingScope))
             add(WebSearchTool(webSearchService))
             add(WebScrapeTool(webSearchService))
@@ -267,5 +268,6 @@ private val READ_ONLY_BASE_TOOLS = setOf(
     "list_notes",
     "recall_memory",
     "count_mentions",
-    "create_chart"
+    "create_chart",
+    "create_document"
 )

@@ -11,6 +11,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
@@ -35,8 +36,11 @@ import kotlinx.coroutines.launch
  *   duration = 300ms × |remaining Δx| / width.
  * - Data advances only when the animation finishes or is aborted mid-commit ([Callbacks.fillPage]),
  *   which is why the final frame and the freshly filled page are pixel-identical.
- * MODERN_CURL retains the down anchor and fits recent velocity. A new press finishes an
- * accepted turn immediately; only a returning, cancelled curl remains available to grab.
+ * MODERN_CURL on a single page folds the grab edge onto a virtual fingertip ([curlX], [curlY])
+ * that chases the real one every frame, so the folded edge settles under the finger wherever the
+ * press lands. Release, re-grab and tap turns continue from wherever the sheet is. Any forward
+ * flick commits; a new press finishes an accepted turn immediately, while a returning, cancelled
+ * curl remains available to grab. A two-page spread keeps its hinge-relative travel.
  */
 @Stable
 class PageTurnDriver(
@@ -69,6 +73,14 @@ class PageTurnDriver(
         private set
     var startY by mutableFloatStateOf(0f)
         private set
+    /**
+     * Single-page MODERN_CURL: the point the shader folds the grab corner onto. During a drag it
+     * chases the fingertip; afterwards it sweeps to the far side (commit) or back (cancel).
+     */
+    var curlX by mutableFloatStateOf(0f)
+        private set
+    var curlY by mutableFloatStateOf(0f)
+        private set
     var direction by mutableStateOf<PageTurnDirection?>(null)
         private set
     var isRunning by mutableStateOf(false)
@@ -100,6 +112,13 @@ class PageTurnDriver(
     private val modernVelocity = ModernCurlVelocity()
     private var modernDragOffset = Offset.Zero
     private var releaseVelocity = 0f
+    private var curlJob: Job? = null
+    private var curlSettle: ModernCurlSettle? = null
+    private var curlVelocityX = 0f
+    private var fingerX = 0f
+    private var fingerY = 0f
+    /** The commit distance counts from the press that currently holds the sheet. */
+    private var pressX = 0f
     var pixelsPerDp = 1f
 
     /**
@@ -114,26 +133,41 @@ class PageTurnDriver(
     var hingeLeafWidth: Float? = null
     private val settleWidth: Float get() = hingeLeafWidth?.coerceAtLeast(1f)
         ?: if (mode == Mode.MODERN_CURL) viewWidth * 2f else viewWidth
+    /** A single-page modern curl follows the fingertip; a spread hinge keeps relative travel. */
+    val followsFinger: Boolean get() = mode == Mode.MODERN_CURL && hingeLeafWidth == null
 
     fun setViewport(width: Float, height: Float) {
         viewWidth = width.coerceAtLeast(1f)
         viewHeight = height.coerceAtLeast(1f)
     }
 
-    val isAnimating: Boolean get() = settleJob?.isActive == true
+    val isAnimating: Boolean get() = curlSettle != null || settleJob?.isActive == true
 
     // ---- gesture entry points ----
 
     fun onDown(rawX: Float, y: Float, timeMillis: Long = android.os.SystemClock.uptimeMillis()) {
         // 接住仍在回弹的现代卷页时沿用这一次翻页的方向，其余按下都重新判定。
-        if (!(mode == Mode.MODERN_CURL && isAnimating && isCancel && direction != null)) mirrored = mirrorProvider()
+        val resumesCurl = mode == Mode.MODERN_CURL && isAnimating && isCancel && direction != null
+        if (!resumesCurl) mirrored = mirrorProvider()
         val x = mirrorX(rawX)
         modernVelocity.reset(timeMillis, x)
         releaseVelocity = 0f
-        if (mode == Mode.MODERN_CURL && isAnimating && isCancel && direction != null) {
-            settleJob?.cancel()
-            settleJob = null
-            modernDragOffset = Offset(touchX - x, touchY - y)
+        if (resumesCurl) {
+            if (curlSettle != null) {
+                // The returning sheet stays where it is and chases this finger instead.
+                curlSettle = null
+                pressX = x
+                fingerX = x
+                fingerY = y
+                touchX = x
+                touchY = y
+                startCurlLoop()
+            } else {
+                settleJob?.cancel()
+                settleJob = null
+                modernDragOffset = Offset(touchX - x, touchY - y)
+            }
+            lastX = x
             isMoved = true
             isCancel = false
             tapSuppressedByAbort = false
@@ -181,11 +215,20 @@ class PageTurnDriver(
                 startY = y
             }
             lastX = x
+            if (followsFinger) beginCurl(dir)
         }
         val dir = direction ?: return
         isCancel = if (dir == PageTurnDirection.NEXT) x > lastX else x < lastX
         lastX = x
         isRunning = true
+        if (followsFinger) {
+            fingerX = x
+            fingerY = y
+            touchX = x
+            touchY = y
+            startCurlLoop()
+            return
+        }
         touchX = x + modernDragOffset.x
         touchY = if (mode == Mode.MODERN_CURL) y + modernDragOffset.y else antiJitterY(y, dir)
     }
@@ -196,12 +239,14 @@ class PageTurnDriver(
             tapSuppressedByAbort = false
             return if (suppressed) UpResult.ABORT_TAP else UpResult.TAP
         }
-        if (direction != null) {
+        val dir = direction
+        if (dir != null) {
             if (mode == Mode.MODERN_CURL) {
                 releaseVelocity = modernVelocity.velocity(timeMillis)
-                val sign = if (direction == PageTurnDirection.NEXT) -1f else 1f
-                val progress = ((touchX - startX) * sign / settleWidth).coerceIn(0f, 1f)
-                isCancel = !modernCurlShouldComplete(progress, releaseVelocity * sign, settleWidth, pixelsPerDp)
+                val sign = if (dir == PageTurnDirection.NEXT) -1f else 1f
+                val displacement = if (followsFinger) (fingerX - pressX) * sign else (touchX - startX) * sign
+                isCancel = !modernCurlShouldCommit(displacement, releaseVelocity * sign,
+                    if (followsFinger) viewWidth else settleWidth, pixelsPerDp)
             }
             startSettle(FULL_PAGE_SETTLE_MS)
         } else clearTurn()
@@ -233,6 +278,8 @@ class PageTurnDriver(
         cornerAtTop = dir == PageTurnDirection.NEXT && y <= 1f
         callbacks.onTurnStarted(dir)
         isRunning = true
+        // A tap plays the sweep a released drag would, starting from the untouched sheet.
+        if (followsFinger) beginCurl(dir)
         startSettle(FULL_PAGE_SETTLE_MS)
     }
 
@@ -281,6 +328,10 @@ class PageTurnDriver(
             clearTurn()
             return
         }
+        if (followsFinger) {
+            settleCurl(dir, committing)
+            return
+        }
         val targetX = settleTargetX(dir, committing)
         // Restore the grab height smoothly. Extending a steep drag ray off-screen makes a
         // short flick rotate the fold wildly, then snap the remaining corner at completion.
@@ -327,6 +378,16 @@ class PageTurnDriver(
 
     /** Legado `abortAnim`: a DOWN during the settle snaps to the end state immediately. */
     private fun abortAnimation() {
+        if (curlSettle != null) {
+            curlJob?.cancel()
+            curlJob = null
+            curlSettle = null
+            val dir = direction
+            if (!isCancel && dir != null) callbacks.fillPage(dir)
+            tapSuppressedByAbort = true
+            clearTurn()
+            return
+        }
         val job = settleJob ?: return
         if (!job.isActive) {
             settleJob = null
@@ -342,9 +403,77 @@ class PageTurnDriver(
         clearTurn()
     }
 
+    // ---- single-page modern curl ----
+
+    /** The sheet starts flat going forward, or fully turned away when the previous page comes back. */
+    private fun beginCurl(dir: PageTurnDirection) {
+        pressX = startX
+        curlX = if (dir == PageTurnDirection.NEXT) viewWidth else -viewWidth
+        curlY = modernCurlAnchorY(startY, viewHeight)
+        curlVelocityX = 0f
+        curlSettle = null
+        startCurlLoop()
+    }
+
+    /** Commits and backward cancels carry the sheet off to the left; the others lay it flat. */
+    private fun settleCurl(dir: PageTurnDirection, committing: Boolean) {
+        val toLeft = (dir == PageTurnDirection.NEXT) == committing
+        val endX = if (toLeft) -viewWidth else viewWidth
+        curlSettle = ModernCurlSettle.create(curlX, curlY, endX, modernCurlAnchorY(startY, viewHeight),
+            viewWidth, if (toLeft) -curlVelocityX else curlVelocityX)
+        if (committing) callbacks.onTurnCommitted()
+        startCurlLoop()
+    }
+
+    private fun startCurlLoop() {
+        if (curlJob?.isActive == true) return
+        curlJob = scope.launch {
+            var last = 0L
+            while (true) {
+                val now = withFrameNanos { it }
+                val dt = if (last == 0L) FIRST_CURL_FRAME_MS else ((now - last) / 1_000_000f).coerceIn(0f, MAX_CURL_STEP_MS)
+                last = now
+                if (!stepCurl(dt)) break
+            }
+        }
+    }
+
+    /** One frame of the sheet; false once it rests on the finger or the turn is handed off. */
+    private fun stepCurl(dtMillis: Float): Boolean {
+        val dir = direction ?: return false
+        val previousX = curlX
+        val sweep = curlSettle
+        if (sweep == null) {
+            curlX = modernCurlFollow(curlX, fingerX, dtMillis)
+            curlY = modernCurlFollow(curlY, fingerY, dtMillis)
+        } else {
+            sweep.advance(dtMillis)
+            curlX = sweep.x()
+            curlY = sweep.y()
+        }
+        if (dtMillis > 0f) curlVelocityX = (curlX - previousX) / dtMillis * 1000f
+        if (sweep == null) {
+            // Idle while the finger rests: the next move restarts the chase.
+            if (kotlin.math.abs(fingerX - curlX) >= CURL_REST_PX || kotlin.math.abs(fingerY - curlY) >= CURL_REST_PX) return true
+            curlX = fingerX
+            curlY = fingerY
+            curlVelocityX = 0f
+            return false
+        }
+        // A sheet carried off to the left is out of sight before the curve lands; hand off then.
+        val gone = sweep.toX < 0f && modernCurlSheetHidden(curlX, curlY, startY, viewWidth, viewHeight)
+        if (!sweep.finished && !gone) return true
+        if (!isCancel) callbacks.fillPage(dir)
+        clearTurn()
+        return false
+    }
+
     private fun clearTurn() {
         val hadTurn = isRunning || direction != null
         settleJob = null
+        curlJob?.cancel()
+        curlJob = null
+        curlSettle = null
         isRunning = false
         isMoved = false
         direction = null
@@ -355,6 +484,9 @@ class PageTurnDriver(
 
     private companion object {
         const val FULL_PAGE_SETTLE_MS = 300
+        const val FIRST_CURL_FRAME_MS = 16f
+        const val MAX_CURL_STEP_MS = 48f
+        const val CURL_REST_PX = .5f
         val MODERN_SETTLE_EASING = Easing { fraction ->
             val remaining = 1f - fraction
             1f - remaining * remaining * remaining

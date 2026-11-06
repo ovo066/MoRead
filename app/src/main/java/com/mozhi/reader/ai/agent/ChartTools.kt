@@ -355,6 +355,7 @@ object ToolDisplayNames {
     fun of(name: String): String? = when (name) {
         "create_chart" -> "绘制图表"
         "count_mentions" -> "统计出现次数"
+        "create_document" -> "生成文件"
         else -> null
     }
 }

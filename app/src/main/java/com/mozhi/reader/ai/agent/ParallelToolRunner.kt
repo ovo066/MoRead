@@ -86,6 +86,6 @@ internal object ConcurrencySafeTools {
     val NAMES = setOf(
         "get_reading_progress", "search_book", "grep_book", "read_book_section",
         "list_chapters", "list_annotations", "list_notes", "recall_memory",
-        "web_search", "web_scrape", "find_books", "count_mentions", "create_chart"
+        "web_search", "web_scrape", "find_books", "count_mentions", "create_chart", "create_document"
     )
 }

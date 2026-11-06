@@ -396,7 +396,7 @@ internal fun AnnotationDiscussionSheet(
         if (total > 0) listState.scrollToItem(total - 1)
     }
 
-    // 键盘弹出时弹层整体上抬（见调用处的 imePadding），列表被压缩，尾部讨论会被裁掉。
+    // 共用父弹层处理 IME 避让；键盘弹出时只压缩可滚动内容，输入区留在键盘上方。
     // 只在可见性翻转时跟一次底，不逐帧跟随 IME 动画。
     val density = LocalDensity.current
     val imeInsets = WindowInsets.ime
@@ -438,52 +438,9 @@ internal fun AnnotationDiscussionSheet(
             }
         }
 
-        // 原文只是「在讨论哪一句」的索引，讨论才是主体：原文小一号、默认折三行，
-        // 样式条收在原文标题行的小钮里，要改时再展开，不常驻占一整行。
         var styleEditing by rememberSaveable { mutableStateOf(false) }
-        if (quote.isNotBlank() && quoteSource != null) {
-            val quoteStyle = AnnotationStyle.fromWire(quoteSource.style)
-            val quoteInk = annotationSolidColor(
-                quoteSource.colorTag.ifBlank {
-                    quoteSource.personaId?.let(AnnotationColors::forPersona) ?: AnnotationColors.AMBER
-                },
-                palette
-            )
-            QuoteExcerpt(
-                text = quote,
-                style = quoteStyle,
-                ink = quoteInk,
-                palette = palette,
-                styleToggle = if (ownAnnotation != null) {
-                    {
-                        StyleToggleChip(
-                            style = quoteStyle,
-                            ink = quoteInk,
-                            expanded = styleEditing,
-                            palette = palette,
-                            onClick = { styleEditing = !styleEditing }
-                        )
-                    }
-                } else null,
-                modifier = Modifier.padding(top = 2.dp, bottom = 8.dp)
-            )
-        }
-        ownAnnotation?.let { own ->
-            AnimatedVisibility(
-                visible = styleEditing,
-                enter = expandVertically() + fadeIn(),
-                exit = shrinkVertically() + fadeOut()
-            ) {
-                InlineStyleControls(
-                    selectedStyle = AnnotationStyle.fromWire(own.style),
-                    selectedColor = AnnotationColors.normalize(own.colorTag),
-                    palette = palette,
-                    onChange = { style, color -> onUpdateStyle(own.id, style, color) },
-                    modifier = Modifier.padding(bottom = 10.dp)
-                )
-            }
-        }
 
+        // 摘录和样式也属于滚动内容；固定在列表外会在 IME 压缩视口后挤掉输入框。
         LazyColumn(
             state = listState,
             modifier = Modifier
@@ -498,13 +455,61 @@ internal fun AnnotationDiscussionSheet(
                         brush = androidx.compose.ui.graphics.Brush.verticalGradient(
                             listOf(seal.copy(alpha = 0.75f), seal.copy(alpha = 0.08f))
                         ),
-                        start = Offset(x, 0f),
+                        start = Offset(x, listState.layoutInfo.visibleItemsInfo
+                            .firstOrNull { it.key == "discussion-quote" }
+                            ?.let { (it.offset + it.size).toFloat().coerceIn(0f, size.height) } ?: 0f),
                         end = Offset(x, size.height),
                         strokeWidth = 1.5.dp.toPx()
                     )
                 },
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
+            item(key = "discussion-quote") {
+                // 原文只是「在讨论哪一句」的索引，讨论才是主体：原文小一号、默认折三行，
+                // 样式条收在原文标题行的小钮里，要改时再展开，不常驻占一整行。
+                if (quote.isNotBlank() && quoteSource != null) {
+                    val quoteStyle = AnnotationStyle.fromWire(quoteSource.style)
+                    val quoteInk = annotationSolidColor(
+                        quoteSource.colorTag.ifBlank {
+                            quoteSource.personaId?.let(AnnotationColors::forPersona) ?: AnnotationColors.AMBER
+                        },
+                        palette
+                    )
+                    QuoteExcerpt(
+                        text = quote,
+                        style = quoteStyle,
+                        ink = quoteInk,
+                        palette = palette,
+                        styleToggle = if (ownAnnotation != null) {
+                            {
+                                StyleToggleChip(
+                                    style = quoteStyle,
+                                    ink = quoteInk,
+                                    expanded = styleEditing,
+                                    palette = palette,
+                                    onClick = { styleEditing = !styleEditing }
+                                )
+                            }
+                        } else null,
+                        modifier = Modifier.padding(top = 2.dp, bottom = 8.dp)
+                    )
+                }
+                ownAnnotation?.let { own ->
+                    AnimatedVisibility(
+                        visible = styleEditing,
+                        enter = expandVertically() + fadeIn(),
+                        exit = shrinkVertically() + fadeOut()
+                    ) {
+                        InlineStyleControls(
+                            selectedStyle = AnnotationStyle.fromWire(own.style),
+                            selectedColor = AnnotationColors.normalize(own.colorTag),
+                            palette = palette,
+                            onChange = { style, color -> onUpdateStyle(own.id, style, color) },
+                            modifier = Modifier.padding(bottom = 10.dp)
+                        )
+                    }
+                }
+            }
             if (annotations.isEmpty()) {
                 item {
                     Text(

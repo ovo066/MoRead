@@ -51,7 +51,9 @@ data class ReaderLayoutActions(
     val onImportTitleImage: () -> Unit = {},
     val onImportTitleFont: () -> Unit = {},
     val onSaveTitleStylePreset: (com.mozhi.reader.core.datastore.ReaderTitleStylePreset) -> Unit = {},
-    val onDeleteTitleStylePreset: (String) -> Unit = {}
+    val onDeleteTitleStylePreset: (String) -> Unit = {},
+    /** 页眉页脚各槽位的内容（全局，不随阅读主题切换）。 */
+    val onChromeLayoutChange: (com.mozhi.reader.core.datastore.ReaderChromeLayout) -> Unit = {}
 )
 
 data class ReaderThemeActions(
@@ -91,5 +93,7 @@ data class ReaderBehaviorActions(
     val onModernBackTextOpacityChange: (Float) -> Unit = {},
     val onModernCurlRadiusScaleChange: (Float) -> Unit = {},
     val onPhysicalKeyBindingsChange: (List<com.mozhi.reader.core.datastore.ReaderKeyBinding>) -> Unit = {},
-    val onSelectionToolbarExtrasChange: (Set<String>) -> Unit = {}
+    val onSelectionToolbarExtrasChange: (Set<String>) -> Unit = {},
+    /** 打开操作区域（点按分区）配置。 */
+    val onOpenTapZones: () -> Unit = {}
 )

@@ -69,7 +69,12 @@ class ReaderPageStyle(
     val publisherTitleSizePx: Float = titleSizePx,
     val publisherTitleTopSpacingLines: Float = titleTopSpacingLines,
     val publisherTitleBottomSpacingLines: Float = titleBottomSpacingLines,
-    val styleImagePaths: Map<String, String> = emptyMap()
+    val styleImagePaths: Map<String, String> = emptyMap(),
+    /** 页眉页脚各槽位放什么；[showHeader]/[showFooter] 已按它是否有内容折算过。 */
+    val chromeLayout: com.mozhi.reader.core.datastore.ReaderChromeLayout = com.mozhi.reader.core.datastore.ReaderChromeLayout.DEFAULT,
+    /** 系统状态栏是否常显（没开「完全沉浸」）：决定「状态栏可见时隐藏时间与电量」是否生效。 */
+    val statusBarVisible: Boolean = true,
+    val bookTitle: String = ""
 ) {
     // Pagination geometry uses whole physical pixels. Fractional viewport dimensions accumulate
     // at page boundaries and can expose a clipped half-line or let chrome overlap the last row.
@@ -144,13 +149,16 @@ class ReaderPageStyle(
         const val TIP_SP = 11f
         const val HEADER_PADDING_DP = 10f
         const val FOOTER_PADDING_DP = 12f
-        /** Each edge setting 0..2 maps to 14..34dp of horizontal padding. */
+        /** Each edge setting maps to 14 + 10v dp of horizontal padding; v reaches below 0 down to a true 0 dp. */
         const val MARGIN_BASE_DP = 14f
         const val MARGIN_RANGE_DP = 10f
         /** Body top/bottom padding; it never moves header or footer chrome. */
         const val VERTICAL_MARGIN_RANGE_DP = 18f
         /** Independent header/footer offset range. */
         const val CHROME_MARGIN_RANGE_DP = 18f
+
+        /** 左右边距设置值对应的 dp；放宽到负值后最小停在 0，不让正文越出屏幕边缘。 */
+        fun horizontalMarginDp(value: Float): Float = (MARGIN_BASE_DP + MARGIN_RANGE_DP * value).coerceAtLeast(0f)
 
         fun resolve(
             settings: ReaderSettings,
@@ -160,24 +168,25 @@ class ReaderPageStyle(
             viewHeight: Int,
             statusBarPx: Float,
             navigationBarPx: Float,
-            columnWidthPx: Float = viewWidth.toFloat()
+            columnWidthPx: Float = viewWidth.toFloat(),
+            bookTitle: String = ""
         ): ReaderPageStyle {
+            // 打开了页眉/页脚但所有槽位都没东西可画时，按隐藏处理，把那一条的高度还给正文。
+            val statusBarVisible = !settings.immersiveReading
+            val headerOn = settings.showHeader && !settings.chromeLayout.headerEmpty(statusBarVisible)
+            val footerOn = settings.showFooter && !settings.chromeLayout.footerEmpty(statusBarVisible)
             val columnInset = ((viewWidth - columnWidthPx.coerceAtLeast(1f)) / 2f).coerceAtLeast(0f)
             val contentSize = with(density) { (BASE_CONTENT_SP * settings.fontScale).sp.toPx() }
             val tipSize = with(density) { TIP_SP.sp.toPx() }
             val headerPadding = with(density) { HEADER_PADDING_DP.dp.toPx() }
             val footerPadding = with(density) { FOOTER_PADDING_DP.dp.toPx() }
-            val left = with(density) {
-                (MARGIN_BASE_DP + MARGIN_RANGE_DP * settings.pageMarginLeft).dp.toPx()
-            }
-            val right = with(density) {
-                (MARGIN_BASE_DP + MARGIN_RANGE_DP * settings.pageMarginRight).dp.toPx()
-            }
+            val left = with(density) { horizontalMarginDp(settings.pageMarginLeft).dp.toPx() }
+            val right = with(density) { horizontalMarginDp(settings.pageMarginRight).dp.toPx() }
             val top = with(density) {
-                (VERTICAL_MARGIN_RANGE_DP * settings.pageMarginTop).dp.toPx()
+                (VERTICAL_MARGIN_RANGE_DP * settings.pageMarginTop.coerceAtLeast(0f)).dp.toPx()
             }
             val bottom = with(density) {
-                (VERTICAL_MARGIN_RANGE_DP * settings.pageMarginBottom).dp.toPx()
+                (VERTICAL_MARGIN_RANGE_DP * settings.pageMarginBottom.coerceAtLeast(0f)).dp.toPx()
             }
             val headerOffset = with(density) {
                 (CHROME_MARGIN_RANGE_DP * settings.headerMarginTop).dp.toPx()
@@ -217,12 +226,12 @@ class ReaderPageStyle(
                 viewHeight = viewHeight,
                 paddingLeft = left + columnInset,
                 paddingRight = right + columnInset,
-                headerHeight = if (settings.showHeader) {
+                headerHeight = if (headerOn) {
                     statusBarPx + headerPadding + tipSize * 1.6f
                 } else {
                     statusBarPx + headerPadding * 0.4f
                 },
-                footerHeight = if (settings.showFooter) {
+                footerHeight = if (footerOn) {
                     navigationBarPx.coerceAtLeast(footerPadding) + tipSize * 1.9f
                 } else {
                     navigationBarPx + footerPadding * 0.35f
@@ -255,8 +264,11 @@ class ReaderPageStyle(
                 typeface = weightedTypeface(baseTypeface, settings.fontWeight),
                 customFontPath = settings.customFontPath,
                 customFontPaths = settings.fontLibrary.associate { it.id to it.filePath },
-                showHeader = settings.showHeader,
-                showFooter = settings.showFooter,
+                showHeader = headerOn,
+                showFooter = footerOn,
+                chromeLayout = settings.chromeLayout,
+                statusBarVisible = statusBarVisible,
+                bookTitle = bookTitle,
                 backgroundImagePath = settings.backgroundImagePath,
                 backgroundImageOpacity = settings.backgroundImageOpacity,
                 preferReaderBackground = settings.backgroundImagePath != null ||

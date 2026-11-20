@@ -48,7 +48,7 @@ data class LanServerState(
  * 局域网传书服务端：手机开一个只在局域网可达的最小 HTTP 服务，电脑浏览器打开即可拖拽上传。
  *
  * 明确的边界（安全上不打算做得更多，也不假装做到了）：
- * - 只接受 txt/epub，文件名经 [LanUploadNaming] 清洗后落进应用私有缓存目录；
+ * - 接受 TXT / EPUB / Markdown / HTML / MOBI，文件名清洗后落进应用私有缓存目录；
  * - 单文件与单次会话都有硬上限，请求头长度也有上限；
  * - 没有鉴权：局域网内任何人都能上传。页面上如实提示「仅在可信网络开启」，
  *   并且服务只在用户停留在传书页/前台服务存活期间监听，用完即关。
@@ -213,7 +213,8 @@ class LanBookServer @Inject constructor(
         }
         _state.value = _state.value.copy(incoming = null)
         if (saved.isEmpty()) {
-            respondJson(output, 400, errorJson("没有收到可导入的 txt / epub 文件"))
+            respondJson(output, 400, errorJson(com.mozhi.reader.core.i18n.UiText.of(
+                com.mozhi.reader.R.string.import_lan_no_supported_files).resolve(context.resources)))
         } else {
             respondJson(
                 output,
@@ -251,10 +252,6 @@ class LanBookServer @Inject constructor(
                 target.delete()
                 throw error
             }
-            if (written > MAX_FILE_BYTES) {
-                target.delete()
-                throw IOException("「$name」超过 200 MB，已拒绝")
-            }
             saved += register(target, written)
         }
         return saved
@@ -266,8 +263,8 @@ class LanBookServer @Inject constructor(
         declaredLength: Long
     ): LanReceivedFile? {
         val name = LanUploadNaming.sanitize(rawName) ?: return null
+        checkDocumentSize(name, declaredLength)
         if (declaredLength < 0) throw IOException("上传缺少 Content-Length")
-        if (declaredLength > MAX_FILE_BYTES) throw IOException("「$name」超过 200 MB，已拒绝")
         val target = allocate(name)
         _state.value = _state.value.copy(
             incoming = LanIncomingFile(name, 0L, declaredLength)
@@ -290,6 +287,21 @@ class LanBookServer @Inject constructor(
             throw error
         }
         return register(target, written)
+    }
+
+    private fun checkDocumentSize(name: String, size: Long) {
+        val format = com.mozhi.reader.core.importer.convert.BookDocumentFormat.fromFileName(name)
+        val mobi = format == com.mozhi.reader.core.importer.convert.BookDocumentFormat.MOBI
+        val limit = when {
+            mobi -> com.mozhi.reader.core.importer.convert.mobi.MobiBookConverter.MAX_SOURCE_BYTES.toLong()
+            format != null -> com.mozhi.reader.core.importer.convert.BookDocumentInput.MAX_SOURCE_BYTES.toLong()
+            else -> MAX_FILE_BYTES
+        }
+        if (size <= limit) return
+        if (format == null) throw IOException("「$name」超过 200 MB，已拒绝")
+        throw IOException(com.mozhi.reader.core.i18n.UiText.of(
+            if (mobi) com.mozhi.reader.R.string.import_mobi_too_large
+            else com.mozhi.reader.R.string.import_document_too_large).resolve(context.resources))
     }
 
     private fun allocate(name: String): File {
@@ -331,15 +343,16 @@ class LanBookServer @Inject constructor(
         private var written = 0L
 
         override fun write(b: Int) {
+            checkDocumentSize(name, written + 1)
             delegate.write(b)
             written++
             publishProgress(name, written, total)
         }
 
         override fun write(b: ByteArray, off: Int, len: Int) {
+            checkDocumentSize(name, written + len)
             delegate.write(b, off, len)
             written += len
-            if (written > MAX_FILE_BYTES) throw IOException("「$name」超过 200 MB，已拒绝")
             publishProgress(name, written, total)
         }
 

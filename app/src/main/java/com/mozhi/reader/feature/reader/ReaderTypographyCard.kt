@@ -47,10 +47,12 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import com.mozhi.reader.core.datastore.ReaderMarginLimits
 import com.mozhi.reader.core.datastore.ReaderSettings
 import com.mozhi.reader.feature.reader.render.ReaderPageStyle
 import kotlin.math.roundToInt
@@ -401,7 +403,7 @@ private fun PageMarginSection(
         label = "左边距",
         valueText = horizontalMarginText(settings.pageMarginLeft),
         value = settings.pageMarginLeft,
-        range = 0f..2f,
+        range = ReaderMarginLimits.HORIZONTAL_MIN..ReaderMarginLimits.HORIZONTAL_MAX,
         step = 0.1f,
         palette = palette,
         onValueChange = actions.onPageMarginLeftChange
@@ -410,7 +412,7 @@ private fun PageMarginSection(
         label = "右边距",
         valueText = horizontalMarginText(settings.pageMarginRight),
         value = settings.pageMarginRight,
-        range = 0f..2f,
+        range = ReaderMarginLimits.HORIZONTAL_MIN..ReaderMarginLimits.HORIZONTAL_MAX,
         step = 0.1f,
         palette = palette,
         onValueChange = actions.onPageMarginRightChange
@@ -419,7 +421,7 @@ private fun PageMarginSection(
         label = "上边距",
         valueText = verticalMarginText(settings.pageMarginTop),
         value = settings.pageMarginTop,
-        range = 0f..2f,
+        range = ReaderMarginLimits.VERTICAL_MIN..ReaderMarginLimits.VERTICAL_MAX,
         step = 0.1f,
         palette = palette,
         onValueChange = actions.onPageMarginTopChange
@@ -428,7 +430,7 @@ private fun PageMarginSection(
         label = "下边距",
         valueText = verticalMarginText(settings.pageMarginBottom),
         value = settings.pageMarginBottom,
-        range = 0f..2f,
+        range = ReaderMarginLimits.VERTICAL_MIN..ReaderMarginLimits.VERTICAL_MAX,
         step = 0.1f,
         palette = palette,
         onValueChange = actions.onPageMarginBottomChange
@@ -443,11 +445,14 @@ private fun ChromeMarginSection(
 ) {
     TypographySwitchRow(
         "显示页眉",
-        "章节标题",
+        "内容在下面三格里选",
         settings.showHeader,
         palette,
         actions.onShowHeaderChange
     )
+    var editingSlot by remember { mutableStateOf<com.mozhi.reader.core.datastore.ReaderChromeSlot?>(null) }
+    val chrome = settings.chromeLayout
+    ReaderChromeSlotBar(chrome, header = true, enabled = settings.showHeader, palette = palette) { editingSlot = it }
     TypographyStepper(
         label = "页眉上距",
         valueText = chromeMarginText(settings.headerMarginTop),
@@ -460,11 +465,12 @@ private fun ChromeMarginSection(
     HorizontalDivider(color = palette.glassBorder)
     TypographySwitchRow(
         "显示页脚",
-        "页码、进度、时间与电量",
+        "内容在下面三格里选",
         settings.showFooter,
         palette,
         actions.onShowFooterChange
     )
+    ReaderChromeSlotBar(chrome, header = false, enabled = settings.showFooter, palette = palette) { editingSlot = it }
     TypographyStepper(
         label = "页脚下距",
         valueText = chromeMarginText(settings.footerMarginBottom),
@@ -474,4 +480,27 @@ private fun ChromeMarginSection(
         palette = palette,
         onValueChange = actions.onFooterMarginBottomChange
     )
+    HorizontalDivider(color = palette.glassBorder)
+    TypographySwitchRow(
+        androidx.compose.ui.res.stringResource(com.mozhi.reader.R.string.reader_chrome_hide_clock),
+        androidx.compose.ui.res.stringResource(com.mozhi.reader.R.string.reader_chrome_hide_clock_hint),
+        chrome.hideClockWithStatusBar,
+        palette
+    ) { actions.onChromeLayoutChange(chrome.copy(hideClockWithStatusBar = it)) }
+    if (chrome != com.mozhi.reader.core.datastore.ReaderChromeLayout.DEFAULT) {
+        androidx.compose.material3.TextButton(
+            onClick = { actions.onChromeLayoutChange(com.mozhi.reader.core.datastore.ReaderChromeLayout.DEFAULT) },
+            modifier = Modifier.testTag("chrome-reset")
+        ) {
+            Text(androidx.compose.ui.res.stringResource(com.mozhi.reader.R.string.reader_chrome_reset), color = palette.accent)
+        }
+    }
+    editingSlot?.let { slot ->
+        ReaderChromeSlotDialog(
+            layout = chrome,
+            slot = slot,
+            onApply = actions.onChromeLayoutChange,
+            onDismiss = { editingSlot = null }
+        )
+    }
 }

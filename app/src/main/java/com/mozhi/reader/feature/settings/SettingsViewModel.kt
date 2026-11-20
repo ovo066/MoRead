@@ -80,7 +80,9 @@ class SettingsViewModel @Inject constructor(
     private val embeddingProgressTracker: EmbeddingProgressTracker,
     private val storageRepository: StorageRepository,
     personaRepository: PersonaRepository,
-    annotationRepository: com.mozhi.reader.core.library.AnnotationRepository
+    annotationRepository: com.mozhi.reader.core.library.AnnotationRepository,
+    annotationQuota: com.mozhi.reader.core.datastore.ProactiveAnnotationQuota,
+    private val mediaService: com.mozhi.reader.ai.media.AiMediaGenerationService
 ) : ViewModel() {
     /**
      * 今日随读段评用量。额度用完时页面必须自己说清楚，否则用户只会看到「怎么突然不段评了」——
@@ -91,6 +93,18 @@ class SettingsViewModel @Inject constructor(
             java.time.LocalDate.now().atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
         )
         .stateIn(viewModelScope, SharingStarted.Lazily, 0)
+
+    /** 今日段评语音与插图的用量（含没画出来的次数）；额度按请求扣，失败必须让用户看得见。 */
+    val todayAnnotationMedia: StateFlow<com.mozhi.reader.core.datastore.ProactiveAnnotationQuotaState?> =
+        annotationQuota.observe().stateIn(viewModelScope, SharingStarted.Lazily, null)
+
+    /** 生图服务此刻是否可用；null＝还没查。开着「段评附插图」却没配生图服务时，页面要直接说出来。 */
+    private val mutableImageBackendReady = MutableStateFlow<Boolean?>(null)
+    val imageBackendReady: StateFlow<Boolean?> = mutableImageBackendReady
+
+    fun refreshImageBackendReady() {
+        viewModelScope.launch { mutableImageBackendReady.value = mediaService.illustrationBackendReady() }
+    }
 
     private val working = MutableStateFlow(false)
     private val storage = storageRepository.snapshot
@@ -323,6 +337,10 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             readerSettingsRepository.setCompanionProactiveAnnotationVoice(enabled)
         }
+    }
+
+    fun setAnnotationInterplay(enabled: Boolean) {
+        viewModelScope.launch { readerSettingsRepository.setCompanionAnnotationInterplay(enabled) }
     }
 
     fun setProactiveAnnotationImage(enabled: Boolean) {

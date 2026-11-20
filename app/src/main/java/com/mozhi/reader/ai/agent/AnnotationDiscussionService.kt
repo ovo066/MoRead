@@ -44,8 +44,11 @@ class AnnotationDiscussionService @Inject constructor(
     /**
      * 让 [personaId] 回复 [annotationId] 的讨论串（最新一条用户发言视为被回复对象）。
      * 完成时把全文写入 annotation_replies 并发出 [Event.Done]。
+     *
+     * [roundtable]＝读者点了「大家聊聊」：几个角色轮流各说一句。每个人开口前都重新读一遍讨论串，
+     * 所以看得到前一位刚说的话；提示词要求接着别人的话说、不重复、更短。
      */
-    fun respond(bookId: Long, annotationId: Long, personaId: Long): Flow<Event> = flow {
+    fun respond(bookId: Long, annotationId: Long, personaId: Long, roundtable: Boolean = false): Flow<Event> = flow {
         try {
             val persona = personaRepository.getPersona(personaId)
                 ?: run { emit(Event.Failed("角色不存在或已删除")); return@flow }
@@ -70,7 +73,8 @@ class AnnotationDiscussionService @Inject constructor(
                 quote = annotation.selectedText,
                 neighborhood = neighborhood,
                 transcript = transcript,
-                readingScope = scope
+                readingScope = scope,
+                roundtable = roundtable
             )
             val latestUser = replies.lastOrNull { it.personaId == null }?.contentMarkdown
                 ?: annotation.note.takeIf { annotation.personaId == null && it.isNotBlank() }
@@ -92,9 +96,9 @@ class AnnotationDiscussionService @Inject constructor(
                 ChatMessage(ChatRole.SYSTEM, system),
                 ChatMessage(
                     ChatRole.USER,
-                    (latestUser?.let { "用户在这段讨论里说：「$it」\n" }
-                        ?: "用户邀请你点评这段划线原文，没有附加想法。\n") +
-                        "请以${persona.name}的身份直接给出你在讨论串里的下一条发言。"
+                    discussionRequest(persona.name, latestUser, roundtable,
+                        othersSpoke = replies.any { it.personaId != null && it.personaId != personaId } ||
+                            (annotation.personaId != null && annotation.personaId != personaId && annotation.note.isNotBlank()))
                 )
             )
             val text = StringBuilder()
@@ -159,6 +163,18 @@ class AnnotationDiscussionService @Inject constructor(
     }
 }
 
+/** 这一次发言的请求语。「大家聊聊」时让角色接着别人的话说，而不是各自对着原文再点评一遍。 */
+internal fun discussionRequest(personaName: String, latestUser: String?, roundtable: Boolean, othersSpoke: Boolean): String = buildString {
+    when {
+        roundtable && latestUser != null -> append("用户在这段讨论里说：「").append(latestUser).append("」，并请大家一起聊聊。\n")
+        roundtable -> append("用户请大家一起聊聊这段划线原文。\n")
+        latestUser != null -> append("用户在这段讨论里说：「").append(latestUser).append("」\n")
+        else -> append("用户邀请你点评这段划线原文，没有附加想法。\n")
+    }
+    if (roundtable && othersSpoke) append("前面已经有人说过了：接着他们的话说，可以点名赞同、反驳或补充，别重复已经说过的意思。\n")
+    append("请以").append(personaName).append("的身份直接给出你在讨论串里的下一条发言。")
+}
+
 /** 锚点邻域抽取；[readLimit] 非空时整段截到该 UTF-16 偏移（防剧透当前章后半）。 */
 internal fun extractAnchorNeighborhood(
     chapterText: String,
@@ -204,7 +220,8 @@ internal fun buildDiscussionSystemPrompt(
     quote: String,
     neighborhood: String,
     transcript: String,
-    readingScope: ReadingScope
+    readingScope: ReadingScope,
+    roundtable: Boolean = false
 ): String = buildString {
     append("你是「").append(persona.name).append("」。")
     if (persona.personality.isNotBlank()) {
@@ -225,7 +242,11 @@ internal fun buildDiscussionSystemPrompt(
     }
     append("\n\n目前的讨论串：\n").append(transcript)
     append("\n\n规则：")
-    append("\n- 这是段落旁的讨论区，回复要短小、口语化、直接说观点，一般不超过 150 字")
+    if (roundtable) {
+        append("\n- 这是几个人轮流各说一句的闲聊：只说一个观点，两三句话，不超过 80 字；讨论串里别人的发言是别人说的，不要当成你自己的话")
+    } else {
+        append("\n- 这是段落旁的讨论区，回复要短小、口语化、直接说观点，一般不超过 150 字")
+    }
     append("\n- 不用 Markdown 标题和列表，像聊天一样自然")
     if (!readingScope.isWholeBook) {
         append("\n- 只谈用户已读到的内容，绝不涉及第 ")

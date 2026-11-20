@@ -75,6 +75,7 @@ sealed interface BookshelfEvent {
     data class OpenImportPreview(val sessionId: String) : BookshelfEvent
     data class OpenBook(val bookId: Long) : BookshelfEvent
     data class ShowMessage(val message: String) : BookshelfEvent
+    data class ShowLocalizedMessage(val message: com.mozhi.reader.core.i18n.UiText) : BookshelfEvent
     data class DuplicateFound(val duplicate: PreparedImport.Duplicate) : BookshelfEvent
 }
 
@@ -200,23 +201,31 @@ class BookshelfViewModel @Inject constructor(
     fun importDocument(uri: Uri, allowDuplicate: Boolean = false) {
         viewModelScope.launch {
             importing.value = true
-            runCatching { importGateway.prepare(uri, allowDuplicate) }
-                .onSuccess { prepared ->
-                    when (prepared) {
-                        is PreparedImport.PreviewReady ->
-                            eventChannel.send(BookshelfEvent.OpenImportPreview(prepared.sessionId))
-                        is PreparedImport.BookImported ->
-                            eventChannel.send(BookshelfEvent.OpenBook(prepared.bookId))
-                        is PreparedImport.Duplicate ->
-                            eventChannel.send(BookshelfEvent.DuplicateFound(prepared))
+            try {
+                runCatching { importGateway.prepare(uri, allowDuplicate) }
+                    .onSuccess { prepared ->
+                        when (prepared) {
+                            is PreparedImport.PreviewReady ->
+                                eventChannel.send(BookshelfEvent.OpenImportPreview(prepared.sessionId))
+                            is PreparedImport.BookImported ->
+                                eventChannel.send(BookshelfEvent.OpenBook(prepared.bookId))
+                            is PreparedImport.Duplicate ->
+                                eventChannel.send(BookshelfEvent.DuplicateFound(prepared))
+                        }
                     }
-                }
-                .onFailure { error ->
-                    eventChannel.send(
-                        BookshelfEvent.ShowMessage(error.message ?: "导入失败，请检查文件")
-                    )
-                }
-            importing.value = false
+                    .onFailure { error ->
+                        if (error is kotlinx.coroutines.CancellationException) throw error
+                        if (error is com.mozhi.reader.core.importer.ImportFailureException) {
+                            eventChannel.send(BookshelfEvent.ShowLocalizedMessage(error.uiText))
+                            return@onFailure
+                        }
+                        eventChannel.send(
+                            BookshelfEvent.ShowMessage(error.message ?: "导入失败，请检查文件")
+                        )
+                    }
+            } finally {
+                importing.value = false
+            }
         }
     }
 

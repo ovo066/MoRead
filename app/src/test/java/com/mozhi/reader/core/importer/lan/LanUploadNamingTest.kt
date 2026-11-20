@@ -71,5 +71,8 @@ class LanUploadNamingTest {
         // 大写扩展名可以收，但统一规范成小写，后续按扩展名分流不必再处处 ignoreCase。
         assertEquals("A.txt", LanUploadNaming.sanitize("A.TXT"))
         assertEquals("B.epub", LanUploadNaming.sanitize("B.EPUB"))
+        listOf("md", "markdown", "html", "htm", "xhtml", "mobi", "azw", "azw3", "prc").forEach {
+            assertEquals("Document.$it", LanUploadNaming.sanitize("Document.${it.uppercase()}"))
+        }
     }
 }

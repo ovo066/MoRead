@@ -483,12 +483,38 @@ fun ReaderScreen(
             )
         }
     }
+    // 本书选了「插图排进正文」时，插图像出版书那样落在段落之间；眼前这一页和已经读过的位置
+    // 不在阅读中途插图（见 EmbeddedArtAdmission），那些图先以按钮的样子留着。
+    val artEmbedded = bookId in state.settings.embeddedArtBooks
+    val artAdmission = remember(bookId, artEmbedded) { EmbeddedArtAdmission() }
+    var artFresh by remember(bookId, artEmbedded, state.currentChapterIndex) { mutableStateOf(true) }
+    LaunchedEffect(bookId, artEmbedded, state.currentChapterIndex) {
+        kotlinx.coroutines.delay(EMBEDDED_ART_ENTRY_GRACE_MS)
+        artFresh = false
+    }
+    val embeddedArtIds = remember(artEmbedded, illustrationMarks, state.currentChapterIndex, artFresh) {
+        if (!artEmbedded) emptySet()
+        else artAdmission.admit(state.currentChapterIndex, state.currentCharOffset, artFresh, illustrationMarks)
+    }
+    val buttonMarks = remember(illustrationMarks, embeddedArtIds) { illustrationMarks.filter { it.id !in embeddedArtIds } }
+    val artCaption = stringResource(R.string.reader_embedded_art_caption)
+    val artCaptionBy = stringResource(R.string.reader_embedded_art_caption_persona)
     // 段评只改变划线上的小点，不参与分页；异步返回时正文和翻页快照保持原位。
-    LaunchedEffect(illustrationMarks) {
-        val reservations = illustrationMarks.map {
+    LaunchedEffect(buttonMarks, embeddedArtIds, visibleIllustrations, companionState.personas) {
+        val reservations = buttonMarks.map {
             it.chapterIndex to InlineMarkerReservation(it.endCharOffset, InlineMarkerKind.ILLUSTRATION)
         }.distinct().groupBy({ it.first }, { it.second })
         viewModel.contentController.setInlineMarkers(reservations)
+        val art = illustrationMarks.filter { it.id in embeddedArtIds }.mapNotNull { mark ->
+            val image = visibleIllustrations.firstOrNull { it.id == mark.id } ?: return@mapNotNull null
+            val by = image.createdByPersonaId?.let { id -> companionState.personas.firstOrNull { it.id == id }?.name }
+            mark.chapterIndex to com.mozhi.reader.feature.reader.engine.EmbeddedArt(
+                anchor = mark.startCharOffset, imagePath = image.imagePath,
+                pixelWidth = image.pixelWidth, pixelHeight = image.pixelHeight,
+                caption = by?.let { String.format(artCaptionBy, it) } ?: artCaption
+            )
+        }.groupBy({ it.first }, { it.second })
+        viewModel.contentController.setEmbeddedArt(art)
     }
     val threadAnnotations = screenState.annotationThread?.let { key ->
         visibleAnnotations.filter { it.id in key.annotationIds }
@@ -650,7 +676,8 @@ fun ReaderScreen(
             onImportTitleImage = { titleImageLauncher.launch(arrayOf("image/*")) },
             onImportTitleFont = { titleFontLauncher.launch(arrayOf("*/*")) },
             onSaveTitleStylePreset = viewModel::saveTitleStylePreset,
-            onDeleteTitleStylePreset = viewModel::deleteTitleStylePreset
+            onDeleteTitleStylePreset = viewModel::deleteTitleStylePreset,
+            onChromeLayoutChange = viewModel::setChromeLayout
         ),
         theme = ReaderThemeActions(
             onThemeChange = viewModel::setTheme,
@@ -689,7 +716,8 @@ fun ReaderScreen(
             onChineseConversionModeChange = viewModel::setChineseConversionMode,
             onScreenBrightnessChange = viewModel::setScreenBrightness,
             onWidePageLayoutChange = viewModel::setWidePageLayout,
-            spreadActive = spreadActive && !scrollMode
+            spreadActive = spreadActive && !scrollMode,
+            onOpenTapZones = { screenState.activeSheet = ReaderSheet.TAP_ZONES }
         )
     )
 
@@ -822,6 +850,7 @@ fun ReaderScreen(
                         holder = viewModel.scrollPaneHolder,
                         settings = readerSettings,
                         palette = contentPalette,
+                        bookTitle = state.book?.title.orEmpty(),
                         enabled = paneEnabled,
                         registerContentHook = viewModel::setContentHook,
                         onScrollSupersedesNavigation = viewModel::supersedePendingNavigation,
@@ -833,7 +862,7 @@ fun ReaderScreen(
                         onBoundary = viewModel::onBoundaryHit,
                         onNotice = paneNotice,
                         annotations = annotationMarks,
-                        illustrations = illustrationMarks,
+                        illustrations = buttonMarks,
                         transientHighlight = paneListenHighlight,
                         listenPlaying = listenState?.takeIf { it.bookId == bookId }?.isPlaying == true,
                         onAiAction = paneAiAction,
@@ -859,11 +888,12 @@ fun ReaderScreen(
                         holder = viewModel.paneHolder,
                         settings = readerSettings,
                         palette = contentPalette,
+                        bookTitle = state.book?.title.orEmpty(),
                         enabled = paneEnabled,
                         registerContentHook = viewModel::setContentHook,
                         onNotice = paneNotice,
                         annotations = annotationMarks,
-                        illustrations = illustrationMarks,
+                        illustrations = buttonMarks,
                         transientHighlight = paneListenHighlight,
                         onAiAction = paneAiAction,
                         onAnnotationAction = paneAnnotationAction,
@@ -975,6 +1005,8 @@ fun ReaderScreen(
                 onTapZones = { screenState.activeSheet = ReaderSheet.TAP_ZONES },
                 onSyntaxHighlight = { screenState.activeSheet = ReaderSheet.SYNTAX },
                 onTitleStyle = { screenState.activeSheet = ReaderSheet.TITLE_STYLE },
+                artEmbedded = bookId in state.settings.embeddedArtBooks,
+                onToggleArtEmbedded = { viewModel.toggleArtEmbedded() },
                 onBilingual = { screenState.activeSheet = ReaderSheet.BILINGUAL },
                 onEnglishLearning = { screenState.dictionaryHit = null; screenState.activeSheet = ReaderSheet.ENGLISH_LEARNING },
                 onReidentifyChapters = { screenState.activeSheet = ReaderSheet.REIDENTIFY_CHAPTERS },
@@ -1484,6 +1516,7 @@ fun ReaderScreen(
                 onSend = { target, text, respondPersonaId ->
                     discussionViewModel.sendUserReply(bookId, target, text, respondPersonaId)
                 },
+                onRoundtable = { target, personaIds -> discussionViewModel.roundtable(bookId, target.id, personaIds) },
                 onUpdateStyle = viewModel::updateAnnotationStyle,
                 onDeleteAnnotation = viewModel::deleteAnnotation,
                 onDeleteReply = discussionViewModel::deleteReply,

@@ -15,6 +15,10 @@ class FolderScannerFilterTest {
     fun acceptsOnlySupportedBookExtensions() {
         assertTrue(FolderScanner.isSupportedBook("三体.txt"))
         assertTrue(FolderScanner.isSupportedBook("Dune.EPUB"))
+        listOf("md", "Markdown", "HTML", "htm", "XhTmL", "MOBI", "AzW", "AZW3", "prc").forEach {
+            assertTrue(FolderScanner.isSupportedBook("Document.$it"))
+        }
+        assertFalse(FolderScanner.isSupportedBook("book.md.bak"))
         assertFalse(FolderScanner.isSupportedBook("封面.jpg"))
         assertFalse(FolderScanner.isSupportedBook("说明"))
         assertFalse(FolderScanner.isSupportedBook("book.txt.bak"))

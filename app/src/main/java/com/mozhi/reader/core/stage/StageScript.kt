@@ -148,7 +148,9 @@ data class StageImage(
     val width: Int = 0,
     val height: Int = 0,
     /** 原文图注（插图下方的说明文字），没有为 null。 */
-    val caption: String? = null
+    val caption: String? = null,
+    /** 不是书里的图，而是读者自己生成或伴读配的插图；界面要标出来，不和原书插图混为一谈。 */
+    val generated: Boolean = false
 )
 
 data class StageBeat(
@@ -253,7 +255,9 @@ data class StageCompileContext(
     val history: List<String> = emptyList(),
     val knownNames: List<StageKnownName> = emptyList(),
     /** EPUB 精排书自带的结构（聊天框、楼层、弹幕、报纸……）与图片；TXT 为 null。 */
-    val book: StageBookLayout? = null
+    val book: StageBookLayout? = null,
+    /** 核心编译默认逐句；应用设置可选择合句或整段。 */
+    val narration: StageNarrationRhythm = StageNarrationRhythm.SENTENCE
 )
 
 /**

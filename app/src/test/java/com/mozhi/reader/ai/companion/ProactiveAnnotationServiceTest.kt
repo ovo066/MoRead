@@ -50,11 +50,17 @@ class ProactiveAnnotationServiceTest {
     private val body = "$first\n$second"
     private val request = ProactiveAnnotationRequest(1, 3, body, persona, 2, emptySet())
     private val permit = ProactiveAnnotationAllowance(true, maxAnnotations = 2)
+    // 两段都有画面，前一段更强；配图测试用它们，其余测试的正文没有画面。
+    private val scenic = "月光洒落在湖面，她站在桥上回头，白色长裙与发丝在微风里飞舞，远处灯火倒映在水面，夜色笼罩着山峰。"
+    private val scenicToo = "大雪落在长街的屋檐上，他站在门口抬头仰望夜空，黑色斗篷的衣角被狂风掀起，身后的灯火摇曳不定。"
+    private val scenicBody = "$scenic\n$scenicToo"
+    private val scenicRequest = request.copy(body = scenicBody, imagesPerChapter = 1)
 
     init {
         coEvery { factory.forRole(ModelRole.PROACTIVE_ANNOTATION) } returns ResolvedChatClient(client, ChatOptions(), mockk(), "mock")
         coEvery { contextRepository.prepare(any(), any()) } returns PreparedAnnotationContext("revision")
         coEvery { contextRepository.isCurrent(any(), any()) } returns true
+        coEvery { media.illustrationBackendReady() } returns true
     }
 
     @Test fun eachRequestUsesOnlyTargetPrefixAndStoresExactProvenance() = runTest {
@@ -263,13 +269,14 @@ class ProactiveAnnotationServiceTest {
         val file = java.io.File.createTempFile("annotation-image", ".png")
         var imageCharges = 0
         try {
-            coEvery { client.chat(any(), any()) } returns """{"quote":"$first","note":"评论","image_prompt":"配图"}"""
+            coEvery { client.chat(any(), any()) } returns """{"quote":"$scenic","note":"评论","image_prompt":"配图"}"""
             coEvery { media.generateIllustration(any(), any(), any(), any(), any(), any(), any(), any(), any()) } answers {
                 assertEquals(1, imageCharges)
+                assertEquals("配图", arg<String>(4))
                 assertFalse(arg<Boolean>(7)) // detached, never published by the media service
                 com.mozhi.reader.core.database.entity.IllustrationEntity(bookId = 1, prompt = "配图", imagePath = file.path, createdAt = 0)
             }
-            val outcome = service.generateForChapter(request.copy(candidateLimit = 1),
+            val outcome = service.generateForChapter(scenicRequest.copy(candidateLimit = 1),
                 { permit.copy(maxImages = 1 - imageCharges) }, { _, images -> imageCharges += images },
                 { _, _, _ -> error("transaction rolled back") })
             assertTrue(outcome.failed)
@@ -284,14 +291,14 @@ class ProactiveAnnotationServiceTest {
         var calls = 0
         try {
             coEvery { client.chat(any(), any()) } answers {
-                val quote = if (++calls == 1) first else second
+                val quote = if (++calls == 1) scenic else scenicToo
                 """{"quote":"$quote","note":"评论","image_prompt":"配图"}"""
             }
             coEvery { media.generateIllustration(any(), any(), any(), any(), any(), any(), any(), any(), any()) } answers {
                 assertEquals(1, imageCharges)
                 com.mozhi.reader.core.database.entity.IllustrationEntity(bookId = 1, prompt = "配图", imagePath = file.path, createdAt = 0)
             }
-            val outcome = service.generateForChapter(request,
+            val outcome = service.generateForChapter(scenicRequest.copy(imagesPerChapter = 2),
                 { permit.copy(maxImages = 1 - imageCharges) }, { _, images -> imageCharges += images }, { _, _, _ -> true })
             assertFalse(outcome.failed)
             assertEquals(1, imageCharges)
@@ -416,5 +423,336 @@ class ProactiveAnnotationServiceTest {
         assertFalse(result.failed)
         assertEquals(second, rows.single().selectedText)
         assertEquals(setOf(body.length), result.visitedParagraphEnds)
+    }
+
+    @Test fun pictureGoesToTheMostVisualParagraphAndOnlyThatRequestAsksForOne() = runTest {
+        val file = java.io.File.createTempFile("annotation-image", ".png")
+        try {
+            val requests = mutableListOf<List<ChatMessage>>()
+            coEvery { client.chat(capture(requests), any()) } answers {
+                val target = requests.last().last().content.orEmpty().substringAfterLast("唯一目标段落：\n")
+                """{"quote":"$target","note":"评论"}"""
+            }
+            val prompts = mutableListOf<String>()
+            coEvery { media.generateIllustration(any(), any(), any(), any(), capture(prompts), any(), any(), any(), any()) } returns
+                com.mozhi.reader.core.database.entity.IllustrationEntity(bookId = 1, prompt = "配图", imagePath = file.path, createdAt = 0)
+            val withImage = mutableListOf<String>()
+            val mixed = "$first\n$scenic"
+            val outcome = service.generateForChapter(request.copy(body = mixed, imagesPerChapter = 1),
+                { permit.copy(maxImages = 1) }, { _, _ -> },
+                { row, _, image -> if (image != null) withImage += row.selectedText; true })
+            assertFalse(outcome.failed)
+            // 模型没写画面，就用原文这一段去画；没被选中的段落连字段都不提。
+            assertEquals(listOf(scenic), prompts)
+            assertEquals(listOf(scenic), withImage)
+            val (plainAsk, scenicAsk) = requests.map { it.first().content.orEmpty() }
+            assertFalse("image_prompt" in plainAsk)
+            assertTrue("image_prompt" in scenicAsk)
+        } finally { file.delete() }
+    }
+
+    @Test fun pictureTheModelVolunteersForAnUnchosenParagraphIsNeverGenerated() = runTest {
+        coEvery { client.chat(any(), any()) } returns """{"quote":"$first","note":"评论","image_prompt":"配图"}"""
+        service.generateForChapter(request.copy(candidateLimit = 1, imagesPerChapter = 1),
+            { permit.copy(maxImages = 3) }, { _, _ -> error("no media charge") }, { _, _, _ -> true })
+        coVerify(exactly = 0) { media.generateIllustration(any(), any(), any(), any(), any(), any(), any(), any(), any()) }
+    }
+
+    @Test fun missingImageServiceAsksForNoPictureAndChargesNothing() = runTest {
+        coEvery { media.illustrationBackendReady() } returns false
+        val requests = mutableListOf<List<ChatMessage>>()
+        coEvery { client.chat(capture(requests), any()) } answers {
+            val target = requests.last().last().content.orEmpty().substringAfterLast("唯一目标段落：\n")
+            """{"quote":"$target","note":"评论","image_prompt":"配图"}"""
+        }
+        var commits = 0
+        service.generateForChapter(scenicRequest, { permit.copy(maxImages = 3) },
+            { _, _ -> error("no media charge") }, { _, _, _ -> commits++; true })
+        assertEquals(2, commits)
+        assertFalse(requests.any { "image_prompt" in it.first().content.orEmpty() })
+        coVerify(exactly = 1) { media.illustrationBackendReady() }
+        coVerify(exactly = 0) { media.generateIllustration(any(), any(), any(), any(), any(), any(), any(), any(), any()) }
+    }
+
+    @Test fun chapterPictureCapCountsPicturesOtherCompanionsAlreadyMade() = runTest {
+        coEvery { client.chat(any(), any()) } returns """{"quote":"$scenic","note":"评论"}"""
+        service.generateForChapter(scenicRequest.copy(candidateLimit = 1, chapterImageCount = { 1 }),
+            { permit.copy(maxImages = 3) }, { _, _ -> error("no media charge") }, { _, _, _ -> true })
+        coVerify(exactly = 0) { media.generateIllustration(any(), any(), any(), any(), any(), any(), any(), any(), any()) }
+    }
+
+    @Test fun failedPictureIsReportedAndTheAnnotationStillCommits() = runTest {
+        coEvery { client.chat(any(), any()) } returns """{"quote":"$scenic","note":"评论"}"""
+        coEvery { media.generateIllustration(any(), any(), any(), any(), any(), any(), any(), any(), any()) } throws
+            IllegalStateException("image service down")
+        var failures = 0
+        var charges = 0
+        val images = mutableListOf<com.mozhi.reader.core.database.entity.IllustrationEntity?>()
+        val outcome = service.generateForChapter(scenicRequest.copy(candidateLimit = 1),
+            { permit.copy(maxImages = 1) }, { _, count -> charges += count },
+            { _, _, image -> images += image; true }, { failures++ })
+        assertFalse(outcome.failed)
+        assertEquals(1, charges)
+        assertEquals(1, failures)
+        assertEquals(listOf(null), images)
+    }
+
+    @Test fun voiceIsOnlyMentionedWhenThisCompanionCanSpeak() {
+        val silent = proactiveAnnotationMessages(persona, "目标段落正文", voiceBrief = false).first().content.orEmpty()
+        val speaking = proactiveAnnotationMessages(persona, "目标段落正文", voiceBrief = true, imageBrief = true).first().content.orEmpty()
+        assertFalse("voice" in silent.substringAfter("【随读段评】"))
+        assertFalse("image_prompt" in silent)
+        assertTrue("voice（布尔值）" in speaking)
+        assertTrue("image_prompt（字符串）" in speaking)
+        assertTrue("不写后文" in speaking)
+    }
+
+    private fun peer(paragraph: ProactiveAnnotationParagraph, chapter: String = body, id: Long = 9) = ProactivePeerNote(
+        annotationId = id, personaId = 8, personaName = "照夜", personaTraits = "敏锐 直言",
+        start = paragraph.start, end = paragraph.end, quote = chapter.substring(paragraph.start, paragraph.end),
+        note = "我觉得这里还有未说出口的犹豫。", hasPersonaReply = false
+    )
+
+    @Test fun interplayRepliesFirstThenWritesOnlyOnFreeParagraphsInTheNextBucket() = runTest {
+        val texts = listOf("甲段原文".repeat(20), "乙段原文".repeat(20), "丙段原文".repeat(15), "丁段秘密".repeat(15))
+        val chapter = texts.joinToString("\n")
+        val buckets = ProactiveAnnotationParagraphs.generationBuckets(chapter, 2)
+        assertEquals(listOf(2, 2), buckets.map { it.size })
+        val peers = buckets.mapIndexed { index, bucket -> peer(bucket.first(), chapter, 10L + index) }
+        val sent = mutableListOf<List<ChatMessage>>()
+        coEvery { client.chat(capture(sent), any()) } returnsMany listOf(
+            """{"reply":"照夜，也可能是他还没等到那个约定的信号。"}""",
+            """{"quote":"${texts.last()}","note":"自己的段评"}"""
+        )
+        val replies = mutableListOf<Pair<ProactivePeerNote, Int>>()
+        val rows = mutableListOf<AnnotationEntity>()
+        val outcome = service.generateForChapter(request.copy(body = chapter, interplay = true, peers = peers),
+            { permit }, { _, _ -> error("no media") }, { row, _, _ -> rows += row; true },
+            commitReply = { peer, text, end ->
+                assertTrue(text.startsWith("照夜"))
+                replies += peer to end
+                true
+            })
+        assertFalse(outcome.failed)
+        assertEquals(listOf(peers.first() to buckets.first().first().end), replies)
+        assertEquals(listOf(texts.last()), rows.map { it.selectedText })
+        assertTrue(rows.all { row -> peers.none { it.start < row.endCharOffset && it.end > row.startCharOffset } })
+        val user = sent.first().last().content.orEmpty()
+        assertTrue(user.contains(peers.first().personaName))
+        assertTrue(user.contains(peers.first().note))
+        assertTrue(user.contains(peers.first().quote))
+        texts.drop(1).forEach { assertFalse(user.contains(it)) }
+        assertFalse(sent.first().any { "voice" in it.content.orEmpty() || "image_prompt" in it.content.orEmpty() })
+    }
+
+    @Test fun explicitNoReplySkipsParagraphWithoutAnyCommitOrFailure() = runTest {
+        val target = ProactiveAnnotationParagraphs.split(body).first()
+        coEvery { client.chat(any(), any()) } returns """{"reply":null}"""
+        val skipped = mutableListOf<Set<Int>>()
+        val outcome = service.generateForChapter(request.copy(candidateLimit = 1, interplay = true, peers = listOf(peer(target))),
+            { permit }, { _, _ -> error("no media") }, { _, _, _ -> error("no annotation") },
+            commitReply = { _, _, _ -> error("no reply") }, skip = { skipped += it })
+        assertFalse(outcome.failed)
+        assertFalse(outcome.stopped)
+        assertEquals(listOf(setOf(target.end)), skipped)
+        coVerify(exactly = 1) { client.chat(any(), any()) }
+    }
+
+    @Test fun fullyOccupiedBucketWithPersonaRepliesSkipsAllEndsWithoutCallingModel() = runTest {
+        val targets = ProactiveAnnotationParagraphs.split(body)
+        val skipped = mutableListOf<Set<Int>>()
+        val outcome = service.generateForChapter(request.copy(candidateLimit = 1, interplay = true,
+            peers = targets.map { peer(it).copy(hasPersonaReply = true) }),
+            { permit }, { _, _ -> error("no media") }, { _, _, _ -> error("no annotation") },
+            commitReply = { _, _, _ -> error("no reply") }, skip = { skipped += it })
+        assertEquals(listOf(targets.map { it.end }.toSet()), skipped)
+        assertFalse(outcome.failed)
+        assertEquals(targets.map { it.end }.toSet(), outcome.visitedParagraphEnds)
+        coVerify(exactly = 0) { client.chat(any(), any()) }
+        coVerify(exactly = 0) { contextRepository.prepare(any(), any()) }
+    }
+
+    @Test fun chapterReplyCapIncludesPreviousPassesAndSkipsDoNotSpendSlots() = runTest {
+        val chapter = (0..11).joinToString("\n") { "段落$it：" + "原文内容。".repeat(10) }
+        val targets = ProactiveAnnotationParagraphs.split(chapter)
+        val peers = targets.mapIndexed { index, target -> peer(target, chapter, index.toLong()) }
+        coEvery { client.chat(any(), any()) } returns """{"reply":"另一个角度是他仍在等人。"}"""
+        var replies = 0
+        val skipped = mutableSetOf<Int>()
+        val interplay = request.copy(body = chapter, candidateLimit = Int.MAX_VALUE, interplay = true, peers = peers)
+        val outcome = service.generateForChapter(interplay, { permit }, { _, _ -> }, { _, _, _ -> error("occupied") },
+            commitReply = { _, _, _ -> replies++; true }, skip = { skipped += it })
+        assertEquals(maxOf(1, targets.size / 4), replies)
+        assertEquals(targets.size - replies, skipped.size)
+        assertFalse(outcome.failed)
+        skipped.clear()
+        val capped = service.generateForChapter(interplay.copy(repliesSoFar = replies, maxSlotsPerPass = 1),
+            { permit }, { _, _ -> }, { _, _, _ -> error("occupied") },
+            commitReply = { _, _, _ -> error("cap reached") }, skip = { skipped += it })
+        assertFalse(capped.hasMore)
+        assertFalse(capped.failed)
+        assertEquals(targets.map { it.end }.toSet(), skipped)
+        coVerify(exactly = 3) { client.chat(any(), any()) }
+    }
+
+    @Test fun disabledInterplayIgnoresPeersAndKeepsTheExactOriginalMessagesAndRows() = runTest {
+        val sent = mutableListOf<List<ChatMessage>>()
+        coEvery { client.chat(capture(sent), any()) } returns """{"quote":"$first","note":"评论"}"""
+        val rows = mutableListOf<AnnotationEntity>()
+        val plain = request.copy(candidateLimit = 1)
+        service.generateForChapter(plain, { permit }, { _, _ -> }, { row, _, _ -> rows += row; true })
+        service.generateForChapter(plain.copy(peers = listOf(peer(ProactiveAnnotationParagraphs.split(body).first())),
+            repliesSoFar = 10, interplay = false),
+            { permit }, { _, _ -> }, { row, _, _ -> rows += row; true },
+            commitReply = { _, _, _ -> error("disabled") }, skip = { error("disabled") })
+        assertEquals(sent.first(), sent.last())
+        assertEquals(rows.first().copy(createdAt = 0), rows.last().copy(createdAt = 0))
+    }
+
+    @Test fun replyOnAnImageTargetNeverInjectsPresetsOrRequestsMedia() = runTest {
+        val target = ProactiveAnnotationParagraphs.split(scenicBody).first()
+        assertTrue(target.end in ProactiveAnnotationImagery.targets(scenicBody,
+            ProactiveAnnotationParagraphs.generationBuckets(scenicBody, 1), 1))
+        val sent = mutableListOf<List<ChatMessage>>()
+        coEvery { client.chat(capture(sent), any()) } returns """{"reply":"照夜，我更在意她回头的动作。","voice":true,"image_prompt":"图"}"""
+        var replies = 0
+        service.generateForChapter(scenicRequest.copy(candidateLimit = 1, interplay = true, peers = listOf(peer(target, scenicBody)),
+            persona = persona.copy(voiceId = "voice"),
+            prompts = listOf(com.mozhi.reader.core.datastore.GlobalPromptPreset("custom", "预设", "禁止注入的预设", true))),
+            { permit.copy(maxVoice = 1, maxImages = 1) }, { _, _ -> error("no media charge") }, { _, _, _ -> error("no annotation") },
+            imageFailed = { error("no image attempt") }, commitReply = { _, _, _ -> replies++; true })
+        assertEquals(1, replies)
+        assertFalse(sent.single().any { message ->
+            listOf("voice", "image_prompt", "禁止注入的预设", "段评预设").any { it in message.content.orEmpty() }
+        })
+        coVerify(exactly = 0) { media.illustrationBackendReady() }
+        coVerify(exactly = 0) { media.generateIllustration(any(), any(), any(), any(), any(), any(), any(), any(), any()) }
+        coVerify(exactly = 0) { media.synthesizeSpeech(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) }
+    }
+
+    @Test fun unparseableReplyFailsTheBucketWithoutTryingItsAlternate() = runTest {
+        val target = ProactiveAnnotationParagraphs.split(body).first()
+        coEvery { client.chat(any(), any()) } returns "not json"
+        val outcome = service.generateForChapter(request.copy(candidateLimit = 1, interplay = true, peers = listOf(peer(target))),
+            { permit }, { _, _ -> }, { _, _, _ -> error("no alternate") },
+            commitReply = { _, _, _ -> error("no reply") }, skip = { error("not silence") })
+        assertTrue(outcome.failed)
+        assertFalse(outcome.stopped)
+        assertEquals(ProactiveAnnotationParagraphs.split(body).map { it.end }.toSet(), outcome.visitedParagraphEnds)
+        coVerify(exactly = 1) { client.chat(any(), any()) }
+    }
+
+    @Test fun replyObeysReaderFrontierDoneVisitedAndPassSlotLimit() = runTest {
+        val targets = ProactiveAnnotationParagraphs.split(body)
+        val peers = targets.mapIndexed { index, target -> peer(target, id = index.toLong()) }
+        val base = request.copy(interplay = true, peers = peers, maxSlotsPerPass = 1)
+        coEvery { client.chat(any(), any()) } returns """{"reply":"我还想起了前文的约定。"}"""
+        val ends = mutableListOf<Int>()
+        val firstPass = service.generateForChapter(base, { permit }, { _, _ -> }, { _, _, _ -> error("occupied") },
+            commitReply = { _, _, end -> ends += end; true })
+        // 一次接话已经到上限，下一格无空段落，直接跳过，不再占一格。
+        assertFalse(firstPass.hasMore)
+        assertEquals(listOf(targets.first().end), ends)
+        listOf(base.copy(readerOffset = { targets.last().start }), base.copy(doneParagraphEnds = setOf(targets.first().end)),
+            base.copy(visitedParagraphEnds = setOf(targets.first().end))).forEach { resumed ->
+            service.generateForChapter(resumed, { permit }, { _, _ -> }, { _, _, _ -> error("occupied") },
+                commitReply = { _, _, end -> ends += end; true })
+        }
+        assertEquals(listOf(targets.first().end) + List(3) { targets.last().end }, ends)
+    }
+
+    @Test fun skipDoesNotPreventAFreeSlotInTheSamePass() = runTest {
+        val target = ProactiveAnnotationParagraphs.split(body).first()
+        coEvery { client.chat(any(), any()) } returns """{"quote":"$second","note":"评论"}"""
+        val rows = mutableListOf<AnnotationEntity>()
+        val skipped = mutableSetOf<Int>()
+        val outcome = service.generateForChapter(request.copy(interplay = true, maxSlotsPerPass = 1,
+            peers = listOf(peer(target).copy(hasPersonaReply = true))), { permit }, { _, _ -> },
+            { row, _, _ -> rows += row; true }, skip = { skipped += it })
+        assertFalse(outcome.failed)
+        assertFalse(outcome.hasMore)
+        assertEquals(setOf(target.end), skipped)
+        assertEquals(listOf(second), rows.map { it.selectedText })
+    }
+
+    @Test fun overlappingPeerCannotLeakItsQuoteOrSourcePastTheTarget() = runTest {
+        val target = ProactiveAnnotationParagraphs.split(body).first()
+        val skipped = mutableSetOf<Int>()
+        val unsafe = listOf(peer(target).copy(end = body.length, quote = body),
+            peer(target).copy(sourceEnd = body.length, note = second))
+        for (peer in unsafe) {
+            service.generateForChapter(request.copy(interplay = true, peers = listOf(peer),
+                doneParagraphEnds = setOf(body.length)), { permit }, { _, _ -> }, { _, _, _ -> error("occupied") },
+                commitReply = { _, _, _ -> error("future context") }, skip = { skipped += it })
+        }
+        assertEquals(setOf(target.end), skipped)
+        coVerify(exactly = 0) { client.chat(any(), any()) }
+    }
+
+    @Test fun replyChecksAllowanceAndContextBeforePaidCallAndRejectsStaleOutput() = runTest {
+        val target = ProactiveAnnotationParagraphs.split(body).first()
+        val base = request.copy(interplay = true, peers = listOf(peer(target)), candidateLimit = 1)
+        var checks = 0
+        val revoked = service.generateForChapter(base, { if (++checks == 1) permit else null }, { _, _ -> },
+            { _, _, _ -> error("no annotation") })
+        assertTrue(revoked.stopped)
+        coVerify(exactly = 0) { client.chat(any(), any()) }
+        coEvery { client.chat(any(), any()) } answers {
+            coEvery { contextRepository.isCurrent(any(), any()) } returns false
+            """{"reply":"迟到的回复"}"""
+        }
+        val stale = service.generateForChapter(base, { permit }, { _, _ -> }, { _, _, _ -> error("no annotation") },
+            commitReply = { _, _, _ -> error("stale") })
+        assertTrue(stale.stopped)
+    }
+
+    @Test fun replyTimeoutAndRequestFailureUseTheSameRetryBudgetAsAnnotations() = runTest {
+        val target = ProactiveAnnotationParagraphs.split(body).first()
+        val base = request.copy(interplay = true, peers = listOf(peer(target)))
+        for (timeout in listOf(true, false)) {
+            var calls = 0
+            coEvery { client.chat(any(), any()) } coAnswers {
+                if (++calls == 1) {
+                    if (timeout) delay(PROACTIVE_ANNOTATION_TEXT_TIMEOUT_MS + 1) else error("request failed")
+                }
+                """{"quote":"$second","note":"评论"}"""
+            }
+            val rows = mutableListOf<AnnotationEntity>()
+            val outcome = service.generateForChapter(base, { permit }, { _, _ -> }, { row, _, _ -> rows += row; true },
+                commitReply = { _, _, _ -> error("failed reply") })
+            assertTrue(outcome.failed)
+            assertFalse(outcome.stopped)
+            assertEquals(2, calls)
+            assertEquals(listOf(second), rows.map { it.selectedText })
+        }
+    }
+
+    @Test fun replyMessagesKeepBackgroundOrderAndOmitEmptyTraitsParentheses() {
+        val peer = peer(ProactiveAnnotationParagraphs.split(body).first()).copy(personaTraits = "")
+        val messages = proactiveReplyMessages(persona, peer, first, first, "前文证据")
+        val user = messages.last().content.orEmpty()
+        assertTrue(user.startsWith("相关前文资料（均早于本章）：\n前文证据\n\n正文前缀"))
+        assertTrue(user.contains("「照夜」划的原文：\n$first"))
+        assertFalse(user.contains("（）"))
+        assertTrue(messages.first().content.orEmpty().contains("你、「照夜」和用户都在书外一起阅读"))
+    }
+
+    @Test fun successfulReplyConsumesOnePassSlotAndResumesWithAnOwnAnnotation() = runTest {
+        val target = ProactiveAnnotationParagraphs.split(body).first()
+        val base = request.copy(interplay = true, peers = listOf(peer(target)), maxSlotsPerPass = 1)
+        coEvery { client.chat(any(), any()) } returnsMany listOf("""{"reply":"再看看前文的约定。"}""",
+            """{"quote":"$second","note":"自己的段评"}""")
+        val firstPass = service.generateForChapter(base, { permit }, { _, _ -> }, { _, _, _ -> error("must yield") },
+            commitReply = { _, _, _ -> true })
+        assertTrue(firstPass.hasMore)
+        assertEquals(setOf(target.end), firstPass.visitedParagraphEnds)
+        val rows = mutableListOf<AnnotationEntity>()
+        val next = service.generateForChapter(base.copy(doneParagraphEnds = setOf(target.end),
+            visitedParagraphEnds = firstPass.visitedParagraphEnds, repliesSoFar = 1),
+            { permit }, { _, _ -> }, { row, _, _ -> rows += row; true }, commitReply = { _, _, _ -> error("already replied") })
+        assertFalse(next.hasMore)
+        assertFalse(next.failed)
+        assertEquals(listOf(second), rows.map { it.selectedText })
+        coVerify(exactly = 1) { contextRepository.prepare(1, 3) }
     }
 }

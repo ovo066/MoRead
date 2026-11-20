@@ -231,6 +231,8 @@ fun ProactiveBehaviorSettingsScreen(
     viewModel: SettingsViewModel
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val imageBackendReady by viewModel.imageBackendReady.collectAsStateWithLifecycle()
+    androidx.compose.runtime.LaunchedEffect(Unit) { viewModel.refreshImageBackendReady() }
     MoReadSecondaryPage(title = stringResource(R.string.settings_section_proactive), onBack = onBack) {
         item {
             MoReadSection(
@@ -285,7 +287,10 @@ fun ProactiveBehaviorSettingsScreen(
                 MoReadSwitchRow(
                     icon = Icons.Outlined.Image,
                     title = stringResource(R.string.settings_annotation_image),
-                    subtitle = stringResource(R.string.settings_annotation_image_summary),
+                    // 开着却没配生图服务时一张图都不会有，直接在开关下面说出来。
+                    subtitle = if (state.autonomy.annotationImageActive && imageBackendReady == false)
+                        stringResource(R.string.settings_annotation_image_no_backend)
+                    else stringResource(R.string.settings_annotation_image_summary),
                     checked = state.autonomy.proactiveAnnotationImageEnabled,
                     enabled = state.autonomy.proactiveAnnotationsEnabled,
                     onCheckedChange = viewModel::setProactiveAnnotationImage

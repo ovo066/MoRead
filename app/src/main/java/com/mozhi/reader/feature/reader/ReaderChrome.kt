@@ -2,6 +2,7 @@ package com.mozhi.reader.feature.reader
 
 import androidx.compose.material.icons.outlined.PlayCircleOutline
 import androidx.compose.material.icons.outlined.Theaters
+import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Title
 import com.mozhi.reader.R
 import androidx.compose.ui.res.stringResource
@@ -315,7 +316,10 @@ fun ReaderChrome(
     onBilingual: () -> Unit = {},
     onSyntaxHighlight: () -> Unit = {},
     pageLabel: String? = null,
-    onTitleStyle: () -> Unit = {}
+    onTitleStyle: () -> Unit = {},
+    /** 本书的插图是否排进正文；菜单里是一项带勾的开关。 */
+    artEmbedded: Boolean = false,
+    onToggleArtEmbedded: () -> Unit = {}
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val tablet = com.mozhi.reader.ui.rememberMoReadWindowWidth() != com.mozhi.reader.ui.MoReadWindowWidth.COMPACT && maxWidth >= 600.dp
@@ -352,7 +356,9 @@ fun ReaderChrome(
                 onSyntaxHighlight = onSyntaxHighlight,
                 onTitleStyle = onTitleStyle,
                 onReidentifyChapters = onReidentifyChapters,
-                onTextReplacementRules = onTextReplacementRules
+                onTextReplacementRules = onTextReplacementRules,
+                artEmbedded = artEmbedded,
+                onToggleArtEmbedded = onToggleArtEmbedded
             )
         }
 
@@ -409,7 +415,9 @@ private fun ReaderTopBar(
     onSyntaxHighlight: () -> Unit,
     onTitleStyle: () -> Unit,
     onReidentifyChapters: () -> Unit,
-    onTextReplacementRules: () -> Unit
+    onTextReplacementRules: () -> Unit,
+    artEmbedded: Boolean = false,
+    onToggleArtEmbedded: () -> Unit = {}
 ) {
     Row(
         modifier = Modifier
@@ -505,6 +513,9 @@ private fun ReaderTopBar(
                             onClick = { menuExpanded = false; onSyntaxHighlight() })
                         MoReadMenuItem(text = stringResource(R.string.reader_menu_tap_zones), icon = Icons.Outlined.TouchApp,
                             onClick = { menuExpanded = false; onTapZones() })
+                        // 开关项：点了不关菜单，勾立刻变，读者看得到它生效了。
+                        MoReadMenuItem(text = stringResource(R.string.reader_menu_embed_art), icon = Icons.Outlined.Image,
+                            selected = artEmbedded, onClick = onToggleArtEmbedded)
                         MoReadMenuItem(text = stringResource(R.string.reader_menu_text_rules), icon = Icons.Outlined.AutoAwesome,
                             onClick = { menuExpanded = false; onTextReplacementRules() })
                         MoReadMenuItem(text = stringResource(R.string.reader_menu_reidentify), icon = Icons.AutoMirrored.Outlined.MenuBook,

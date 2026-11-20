@@ -48,10 +48,18 @@ data class CustomReaderTheme(
     val textColorCustomized: Boolean = true
 )
 
+/** 四边正文边距统一归一化，避免主题保存路径绕过全局设置的范围与非有限值校验。 */
+internal fun CustomReaderTheme.withNormalizedMargins(): CustomReaderTheme = copy(
+    pageMarginLeft = ReaderMarginLimits.horizontal(pageMarginLeft),
+    pageMarginRight = ReaderMarginLimits.horizontal(pageMarginRight),
+    pageMarginTop = ReaderMarginLimits.vertical(pageMarginTop),
+    pageMarginBottom = ReaderMarginLimits.vertical(pageMarginBottom)
+)
+
 object CustomReaderThemeCodec {
     private val json = Json { ignoreUnknownKeys = true }
 
-    fun encode(themes: List<CustomReaderTheme>): String = json.encodeToString(themes)
+    fun encode(themes: List<CustomReaderTheme>): String = json.encodeToString(themes.map { it.withNormalizedMargins() })
 
     /**
      * 逐项解码，避免一个损坏或未来版本的主题让整份主题列表消失；新增字段均由默认值
@@ -62,7 +70,7 @@ object CustomReaderThemeCodec {
         val elements = runCatching { json.parseToJsonElement(raw) as? JsonArray }
             .getOrNull() ?: return emptyList()
         return elements.mapNotNull { element ->
-            runCatching { json.decodeFromJsonElement<CustomReaderTheme>(element) }.getOrNull()
+            runCatching { json.decodeFromJsonElement<CustomReaderTheme>(element).withNormalizedMargins() }.getOrNull()
         }.distinctBy(CustomReaderTheme::id)
     }
 }

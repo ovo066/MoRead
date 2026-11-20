@@ -1,5 +1,9 @@
 package com.mozhi.reader.feature.reader.render
 
+import com.mozhi.reader.core.datastore.ReaderChromeInfo
+import com.mozhi.reader.core.datastore.ReaderChromeItem
+import com.mozhi.reader.core.datastore.ReaderChromeSlot
+import com.mozhi.reader.core.datastore.ReaderChromeText
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.BitmapShader
@@ -35,7 +39,6 @@ import com.mozhi.reader.feature.reader.engine.annotationGeometry
 import com.mozhi.reader.feature.reader.engine.inlineMarkerLayout
 import com.mozhi.reader.feature.reader.engine.lineExtent
 import java.io.File
-import java.util.Locale
 
 /**
  * Renders one [RenderPage] into a bitmap: header (chapter title), the laid-out body, and the footer
@@ -141,7 +144,7 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         if (includeBackground) {
             drawBackdrop(canvas, bitmap.width.toFloat(), bitmap.height.toFloat())
         }
-        drawHeader(canvas, page)
+        drawHeader(canvas, page, bookProgress, timeText, batteryPercent)
         when (page) {
             is RenderPage.Laid -> drawBody(canvas, page, annotations, illustrations, transientHighlight)
             is RenderPage.Placeholder -> drawPlaceholder(canvas, page)
@@ -176,7 +179,7 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
             canvas.save()
             canvas.translate(geometry.originX(leaf), 0f)
             canvas.clipRect(0f, 0f, geometry.leafWidth, geometry.paneHeight)
-            if (leaf == Leaf.LEFT && page !is RenderPage.Blank) drawHeader(canvas, page)
+            drawHeader(canvas, page, bookProgress, timeText, batteryPercent, leaf)
             when (page) {
                 is RenderPage.Laid -> drawBody(
                     canvas, page,
@@ -206,14 +209,20 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
     internal fun drawBackdrop(canvas: Canvas, width: Float, height: Float) {
         backgroundProvider.draw(canvas, width, height)    }
 
-    internal fun drawHeader(canvas: Canvas, page: RenderPage) {
+    internal fun drawHeader(
+        canvas: Canvas,
+        page: RenderPage,
+        bookProgress: Float = Float.NaN,
+        timeText: String = "",
+        batteryPercent: Int = -1,
+        leaf: Leaf? = null
+    ) {
         val laidPage = (page as? RenderPage.Laid)?.page
         if (!pageStyle.showHeader || laidPage?.immersive == true || laidPage?.hideHeader == true) return
-        val title = page.chapterTitle.ifBlank { return }
-        val maxWidth = pageStyle.contentWidth
-        val text = ellipsize(title, tipPaint, maxWidth)
-        val y = pageStyle.headerBaseline
-        canvas.drawText(text, pageStyle.paddingLeft, y, tipPaint)
+        if (page is RenderPage.Blank) return
+        drawChromeRow(canvas, page, HEADER_SLOTS, pageStyle.headerBaseline, bookProgress, timeText, batteryPercent,
+            // 双页：页眉只在左页画全，右页只留它自己的页码类内容。
+            perPageOnly = leaf == Leaf.RIGHT)
     }
 
     private fun drawBody(
@@ -1625,23 +1634,99 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         leaf: Leaf? = null
     ) {
         if (!pageStyle.showFooter || (page as? RenderPage.Laid)?.page?.immersive == true) return
-        val baseline = pageStyle.footerBaseline
-        val pageText = com.mozhi.reader.feature.reader.engine.leafPageLabel(page)
-        canvas.drawText(pageText, pageStyle.paddingLeft, baseline, tipPaint)
-        if (leaf == Leaf.LEFT) return
+        drawChromeRow(canvas, page, FOOTER_SLOTS, pageStyle.footerBaseline, bookProgress, timeText, batteryPercent,
+            // 双页：两页各自标页码，进度、时间与电量只在右页画一次。
+            perPageOnly = leaf == Leaf.LEFT)
+    }
 
-        val progressText = String.format(Locale.ROOT, "%.1f%%", bookProgress * 100)
-        val rightText = "$progressText · $timeText"
-        val batteryWidth = pageStyle.tipSizePx * 1.7f
-        val textWidth = tipPaint.measureText(rightText)
-        val rightEdge = pageStyle.viewWidth - pageStyle.paddingRight
-        canvas.drawText(rightText, rightEdge - batteryWidth - textWidth, baseline, tipPaint)
-        drawBattery(
-            canvas,
-            left = rightEdge - batteryWidth + pageStyle.tipSizePx * 0.35f,
-            centerY = baseline - pageStyle.tipSizePx * 0.32f,
-            percent = batteryPercent
+    /**
+     * 一行页眉或页脚：左、中、右三个槽位。中间的按整行居中，最多占半行；
+     * 左右在剩下的地方各自贴边，放不下时右侧（多是短的进度与时间）先保全，左侧截断。
+     */
+    private fun drawChromeRow(
+        canvas: Canvas,
+        page: RenderPage,
+        slots: Triple<ReaderChromeSlot, ReaderChromeSlot, ReaderChromeSlot>,
+        baseline: Float,
+        bookProgress: Float,
+        timeText: String,
+        batteryPercent: Int,
+        perPageOnly: Boolean
+    ) {
+        val layout = pageStyle.chromeLayout
+        val info = ReaderChromeInfo(
+            bookTitle = pageStyle.bookTitle,
+            chapterTitle = page.chapterTitle,
+            pageLabel = com.mozhi.reader.feature.reader.engine.leafPageLabel(page),
+            chapterProgress = when (page) {
+                is RenderPage.Laid -> if (page.pageCount > 0) (page.pageIndex + 1f) / page.pageCount else null
+                is RenderPage.Blank -> 1f
+                is RenderPage.Placeholder -> null
+            },
+            bookProgress = bookProgress,
+            timeText = timeText
         )
+        fun cell(slot: ReaderChromeSlot): ChromeCell? {
+            var items = layout.visibleItems(slot, pageStyle.statusBarVisible)
+            if (perPageOnly) items = items.filter { it in PER_PAGE_ITEMS }
+            if (batteryPercent < 0) items = items - ReaderChromeItem.BATTERY
+            if (items.isEmpty()) return null
+            val text = ReaderChromeText.text(items, info)
+            val battery = ReaderChromeText.hasBattery(items)
+            if (text.isEmpty() && !battery) return null
+            return ChromeCell(text, battery)
+        }
+        val left = cell(slots.first)
+        val center = cell(slots.second)
+        val right = cell(slots.third)
+        if (left == null && center == null && right == null) return
+        val start = pageStyle.paddingLeft
+        val width = pageStyle.contentWidth
+        val end = start + width
+        val gap = pageStyle.tipSizePx
+        val hasSides = left != null || right != null
+        var centerWidth = 0f
+        if (center != null) {
+            centerWidth = minOf(center.width(), if (hasSides) width * 0.5f else width)
+            drawChromeCell(canvas, center, start + (width - centerWidth) / 2f, baseline, centerWidth, batteryPercent)
+        }
+        val sideBudget = if (center != null) (width - centerWidth) / 2f - gap else width
+        var rightWidth = 0f
+        if (right != null) {
+            val cap = if (center != null) sideBudget else if (left != null) width * 0.6f else width
+            rightWidth = minOf(right.width(), cap)
+            drawChromeCell(canvas, right, end - rightWidth, baseline, rightWidth, batteryPercent)
+        }
+        if (left != null) {
+            val room = if (center != null) sideBudget else if (right != null) width - rightWidth - gap else width
+            drawChromeCell(canvas, left, start, baseline, minOf(left.width(), room), batteryPercent)
+        }
+    }
+
+    private inner class ChromeCell(val text: String, val battery: Boolean) {
+        fun width(): Float = (if (text.isEmpty()) 0f else tipPaint.measureText(text)) + if (battery) batteryWidth() else 0f
+    }
+
+    private fun batteryWidth(): Float = pageStyle.tipSizePx * 1.7f
+
+    /** 文字（必要时截断）在前，电池图标跟在后面。 */
+    private fun drawChromeCell(canvas: Canvas, cell: ChromeCell, x: Float, baseline: Float, maxWidth: Float, batteryPercent: Int) {
+        val iconWidth = if (cell.battery) batteryWidth() else 0f
+        var textWidth = 0f
+        if (cell.text.isNotEmpty()) {
+            val room = (maxWidth - iconWidth).coerceAtLeast(0f)
+            val shown = ellipsize(cell.text, tipPaint, room)
+            textWidth = tipPaint.measureText(shown)
+            canvas.drawText(shown, x, baseline, tipPaint)
+        }
+        if (cell.battery) {
+            drawBattery(
+                canvas,
+                left = x + textWidth + pageStyle.tipSizePx * if (cell.text.isEmpty()) 0f else 0.35f,
+                centerY = baseline - pageStyle.tipSizePx * 0.32f,
+                percent = batteryPercent
+            )
+        }
     }
 
     private fun drawBattery(canvas: Canvas, left: Float, centerY: Float, percent: Int) {
@@ -1676,6 +1761,10 @@ class PageBitmapRenderer(private val pageStyle: ReaderPageStyle) {
         const val MAX_SVG_DIMENSION = 4096
         const val ANNOTATION_HIGHLIGHT_RADIUS = 4f
         const val LISTEN_HIGHLIGHT_ID = -1L
+        val HEADER_SLOTS = Triple(ReaderChromeSlot.HEADER_LEFT, ReaderChromeSlot.HEADER_CENTER, ReaderChromeSlot.HEADER_RIGHT)
+        val FOOTER_SLOTS = Triple(ReaderChromeSlot.FOOTER_LEFT, ReaderChromeSlot.FOOTER_CENTER, ReaderChromeSlot.FOOTER_RIGHT)
+        /** 每一页各不相同的内容：双页时两页各画各的。 */
+        val PER_PAGE_ITEMS = setOf(ReaderChromeItem.CHAPTER_PAGE, ReaderChromeItem.CHAPTER_PERCENT)
     }
 
     private fun ellipsize(text: String, paint: TextPaint, maxWidth: Float): String {

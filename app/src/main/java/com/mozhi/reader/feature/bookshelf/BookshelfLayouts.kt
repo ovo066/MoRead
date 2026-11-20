@@ -1,5 +1,8 @@
 package com.mozhi.reader.feature.bookshelf
 
+import androidx.compose.ui.res.stringResource
+import com.mozhi.reader.R
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -667,7 +670,7 @@ private fun EmptyBookshelf(onImport: () -> Unit) {
                 modifier = Modifier.padding(top = 8.dp)
             )
             Text(
-                text = "支持 TXT 智能分章与标准 EPUB。阅读数据、书签和角色对话上下文优先保存在本机。",
+                text = stringResource(R.string.shelf_empty_formats_hint),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,

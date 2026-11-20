@@ -2,7 +2,15 @@
   'use strict';
 
   var MAX_BYTES = 200 * 1024 * 1024;
-  var ALLOWED = /\.(txt|epub)$/i;
+  var ALLOWED = /\.(txt|epub|md|markdown|html|htm|xhtml|mobi|azw|azw3|prc)$/i;
+  var MOBI = /\.(mobi|azw|azw3|prc)$/i;
+  var DOCUMENT = /\.(md|markdown|html|htm|xhtml)$/i;
+  var english = /^en\b/i.test(navigator.language || '');
+  if (english) {
+    document.querySelectorAll('[data-en]').forEach(function (element) {
+      element.textContent = element.getAttribute('data-en');
+    });
+  }
 
   var drop = document.getElementById('drop');
   var picker = document.getElementById('picker');
@@ -46,11 +54,13 @@
     Array.prototype.slice.call(fileList || []).forEach(function (file) {
       var row = addRow(file.name);
       if (!ALLOWED.test(file.name)) {
-        finish(row, false, '只支持 txt / epub');
+        finish(row, false, english ? 'Only TXT / EPUB / Markdown / HTML / MOBI / AZW3 are supported' : '只支持 TXT / EPUB / Markdown / HTML / MOBI / AZW3');
         return;
       }
-      if (file.size > MAX_BYTES) {
-        finish(row, false, '超过 200 MB');
+      var limit = MOBI.test(file.name) ? 256 * 1024 * 1024 : DOCUMENT.test(file.name) ? 32 * 1024 * 1024 : MAX_BYTES;
+      if (file.size > limit) {
+        var sizeLabel = MOBI.test(file.name) ? '256 MiB' : DOCUMENT.test(file.name) ? '32 MiB' : '200 MB';
+        finish(row, false, (english ? 'Exceeds ' : '超过 ') + sizeLabel);
         return;
       }
       pending.push({ file: file, row: row });

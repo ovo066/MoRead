@@ -12,7 +12,7 @@
     <div class="mark" aria-hidden="true"></div>
     <div>
       <h1>墨知 · 局域网传书</h1>
-      <p class="sub">把 TXT / EPUB 拖进下面的方框，手机会直接收下</p>
+      <p class="sub" data-en="Drop TXT / EPUB / Markdown / HTML / MOBI / AZW3 files below to send them to your phone">把 TXT / EPUB / Markdown / HTML / MOBI / AZW3 拖进下面的方框，手机会直接收下</p>
     </div>
   </header>
 
@@ -20,13 +20,13 @@
            aria-label="选择或拖入书籍文件">
     <p class="drop-title">拖拽文件到这里</p>
     <p class="drop-hint">或者<span class="link">点击选择文件</span>，支持一次多选</p>
-    <input id="picker" type="file" accept=".txt,.epub" multiple hidden>
+    <input id="picker" type="file" accept=".mobi,.azw,.azw3,.prc,application/x-mobipocket-ebook,application/vnd.amazon.ebook,application/vnd.amazon.mobi8-ebook,.txt,.epub,.md,.markdown,.html,.htm,.xhtml,text/plain,text/markdown,text/x-markdown,text/html,application/xhtml+xml,application/epub+zip,application/octet-stream" multiple hidden>
   </section>
 
   <section id="queue" class="queue" hidden></section>
 
   <footer class="foot">
-    <p>单个文件上限 200 MB，只接受 .txt 与 .epub。</p>
+    <p data-en="TXT / EPUB: up to 200 MB each. Markdown (.md / .markdown) and HTML (.html / .htm / .xhtml): up to 32 MiB each. DRM-free MOBI / AZW3: up to 256 MiB each.">TXT / EPUB 单个上限 200 MB；Markdown（.md / .markdown）与 HTML（.html / .htm / .xhtml）单个上限 32 MiB；无 DRM 的 MOBI / AZW3 单个上限 256 MiB。</p>
     <p class="warn">此服务没有密码：同一 Wi-Fi 下的任何人都能上传。传完请在手机上关闭。</p>
   </footer>
 </main>

@@ -213,6 +213,8 @@ class MainActivity : ComponentActivity() {
             )
             else -> null
         } ?: return
+        // 文件导入只接受本地授权 URI；HTML / Markdown / MOBI 与 EPUB 共用书籍入口，不处理网页 URL。
+        if (uri.scheme != "content" && uri.scheme != "file") return
         // 外部授权通常只保证本次 Activity 生命周期；导入协调器收到后会立即复制到私有目录。
         runCatching {
             contentResolver.takePersistableUriPermission(

@@ -88,10 +88,12 @@ internal fun StageKineticText(
     motion: StageTextMotion,
     modifier: Modifier = Modifier,
     /** 按整行宽度排版：居中、右对齐与两端对齐的短句也占满一行，对齐才有意义。 */
-    fillWidth: Boolean = false
+    fillWidth: Boolean = false,
+    /** 有它时行内的书内嵌字体也跟着书走；没有时只跟颜色与粗细。 */
+    fonts: StageFonts? = null
 ) {
     val measurer = rememberTextMeasurer(cacheSize = 0)
-    val annotated = remember(text, spans, palette) { stageAnnotated(text, spans, palette) }
+    val annotated = remember(text, spans, palette, fonts) { stageAnnotated(text, spans, palette, fonts) }
     val continuous = remember(spans, motion) {
         !motion.reduceMotion && (motion.tremble || spans.any { span ->
             SpanStyle.SHAKE in span.styles || SpanStyle.WAVE in span.styles || SpanStyle.GLITCH in span.styles

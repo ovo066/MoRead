@@ -1,6 +1,7 @@
 package com.mozhi.reader.core.datastore
 
 import com.mozhi.reader.core.stage.StageIntensity
+import com.mozhi.reader.core.stage.StageNarrationRhythm
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -36,7 +37,10 @@ data class StageSettings(
     val ghost: Boolean = true,
     /** 提示语旁注；关掉时只显示名牌。 */
     val showAsides: Boolean = true,
+    /** 名牌头像：说话人有定妆图时，名牌旁放一枚小像。 */
     val showPortraits: Boolean = true,
+    /** 已生成的插图（读者自己画的、伴读配的）演到那一句时展示。 */
+    val generatedArt: Boolean = true,
     /** 默认直接显示：点一下下一句就在那里；墨晕、淡入、逐行、逐字是可选的显示效果。 */
     val textReveal: StageTextReveal = StageTextReveal.NONE,
     val layout: StageLayoutMode = StageLayoutMode.PAGE,
@@ -76,8 +80,14 @@ data class StageSettings(
     val musicVolume: Float = 0.45f,
     /** 提示音：开章的水滴、雷声、心跳、冲击。 */
     val soundCues: Boolean = true,
+    /** 配音跟读：这一章做过有声书时，演到哪句放哪句的配音；自动播放等配音念完再走。 */
+    val voiceOver: Boolean = true,
     /** AI 导演：用廉价模型按章校准布景、天气与情绪并挑金句（只返回标签，费用走自带 Key，默认关）。 */
     val aiDirector: Boolean = false,
+    /** 旁白默认合句；对白、心声与版式特写仍按原拍演出。 */
+    val narrationRhythm: StageNarrationRhythm = StageNarrationRhythm.MERGE,
+    /** 全屏演出：隐藏顶栏与底栏，全屏点按都走下一拍；上滑呼出工具栏，几秒不碰自己淡出。 */
+    val fullscreen: Boolean = false,
     /** 设置格式的版本：旧版本存下的默认值在读取时换成新的默认。 */
     val revision: Int = CURRENT_REVISION
 ) {

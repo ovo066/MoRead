@@ -93,6 +93,16 @@ class AiMediaGenerationService @Inject constructor(
     private val sharedSpeechGenerations =
         SharedGenerationRegistry<String, CachedSpeech>(applicationScope)
 
+    /** 生图出口此刻能不能用（已配置且拿得到 Key）。只查配置，不发请求。 */
+    suspend fun illustrationBackendReady(): Boolean = try {
+        clientFactory.imageGeneration()
+        true
+    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        false
+    }
+
     suspend fun generateIllustration(
         bookId: Long,
         chapterIndex: Int?,

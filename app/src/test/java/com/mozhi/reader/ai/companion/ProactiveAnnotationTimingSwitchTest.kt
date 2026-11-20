@@ -18,7 +18,7 @@ class ProactiveAnnotationTimingSwitchTest {
     @Test fun switchingFromAfterCompleteToAheadMidBookKeepsGenerating() = runTest {
         val f = Fixture(backgroundScope)
         val requests = mutableListOf<ProactiveAnnotationRequest>()
-        coEvery { f.service.generateForChapter(capture(requests), any(), any(), any()) } returns ProactiveAnnotationGenerationResult(false, false)
+        coEvery { f.service.generateForChapter(capture(requests), any(), any(), any(), any(), any(), any()) } returns ProactiveAnnotationGenerationResult(false, false)
         f.scheduler.onChapterEntered(1, 0); runCurrent()
         f.scheduler.onChapterCompleted(1, 0); f.scheduler.onChapterEntered(1, 1); runCurrent()
         f.scheduler.onChapterCompleted(1, 1); f.scheduler.onChapterEntered(1, 2); runCurrent()
@@ -39,7 +39,7 @@ class ProactiveAnnotationTimingSwitchTest {
     @Test fun switchingWhileReaderVisibleKeepsGenerating() = runTest {
         val f = Fixture(backgroundScope)
         val requests = mutableListOf<ProactiveAnnotationRequest>()
-        coEvery { f.service.generateForChapter(capture(requests), any(), any(), any()) } returns ProactiveAnnotationGenerationResult(false, false)
+        coEvery { f.service.generateForChapter(capture(requests), any(), any(), any(), any(), any(), any()) } returns ProactiveAnnotationGenerationResult(false, false)
         f.scheduler.onChapterEntered(1, 0); runCurrent()
         f.scheduler.onChapterCompleted(1, 0); f.scheduler.onChapterEntered(1, 1); runCurrent()
         f.autonomy.value = f.autonomy.value.copy(annotationLimits = f.autonomy.value.annotationLimits.copy(
@@ -61,14 +61,14 @@ class ProactiveAnnotationTimingSwitchTest {
         assertEquals(true, notices.single().dailyBudgetExhausted)
         assertEquals(0, notices.single().createdCount)
         assertEquals("知墨", notices.single().personaName)
-        coVerify(exactly = 0) { f.service.generateForChapter(any(), any(), any(), any()) }
+        coVerify(exactly = 0) { f.service.generateForChapter(any(), any(), any(), any(), any(), any(), any()) }
         coVerify(exactly = 0) { f.library.readChapterText(any(), any()) }
     }
 
     @Test fun aCancelledJobDoesNotSilenceTheWorkerForTheRestOfTheSession() = runTest {
         val f = Fixture(backgroundScope)
         val chapters = mutableListOf<Int>()
-        coEvery { f.service.generateForChapter(any(), any(), any(), any()) } coAnswers {
+        coEvery { f.service.generateForChapter(any(), any(), any(), any(), any(), any(), any()) } coAnswers {
             val chapter = firstArg<ProactiveAnnotationRequest>().chapterIndex
             chapters += chapter
             if (chapter == 0) throw kotlinx.coroutines.CancellationException("request timed out")
@@ -110,6 +110,7 @@ class ProactiveAnnotationTimingSwitchTest {
         val scheduler: ProactiveAnnotationScheduler
         init {
             every { database.proactiveAnnotationJobDao() } returns ledger
+            every { database.annotationDao() } returns mockk(relaxed = true)
             every { settings.companionAutonomySettings } returns autonomy
             every { settings.activePersonaId } returns persona
             coEvery { personas.getPersona(any()) } answers {

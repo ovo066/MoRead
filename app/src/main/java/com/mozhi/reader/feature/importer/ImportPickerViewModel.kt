@@ -1,6 +1,8 @@
 package com.mozhi.reader.feature.importer
 
 import android.net.Uri
+import com.mozhi.reader.R
+import com.mozhi.reader.core.i18n.UiText
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -24,7 +26,7 @@ data class ImportPickerState(
     val selected: Set<Uri> = emptySet(),
     val createGroupsFromFolders: Boolean = true,
     val searchQuery: String = "",
-    val error: String? = null
+    val error: UiText? = null
 ) {
     val visibleFiles: List<ScannedBookFile>
         get() = files.filter { file ->
@@ -51,7 +53,7 @@ class ImportPickerViewModel @Inject constructor(
     init {
         val treeUri = savedStateHandle.get<String>(ARG_TREE_URI)?.let(Uri::parse)
         if (treeUri == null) {
-            _uiState.value = ImportPickerState(scanning = false, error = "没有拿到文件夹地址")
+            _uiState.value = ImportPickerState(scanning = false, error = UiText.of(R.string.import_folder_missing))
         } else {
             scan(treeUri)
         }
@@ -66,7 +68,7 @@ class ImportPickerViewModel @Inject constructor(
                 .getOrElse { error ->
                     _uiState.value = ImportPickerState(
                         scanning = false,
-                        error = error.message ?: "读取文件夹失败"
+                        error = error.message?.let(UiText::raw) ?: UiText.of(R.string.import_folder_failed)
                     )
                     return@launch
                 }
@@ -81,7 +83,7 @@ class ImportPickerViewModel @Inject constructor(
                 alreadyImported = imported,
                 // 默认只勾没导过的，避免一键重复导入一整个已同步过的目录。
                 selected = files.map(ScannedBookFile::uri).toSet() - imported,
-                error = if (files.isEmpty()) "这个文件夹里没有 TXT 或 EPUB" else null
+                error = if (files.isEmpty()) UiText.of(R.string.import_folder_no_supported_files) else null
             )
         }
     }

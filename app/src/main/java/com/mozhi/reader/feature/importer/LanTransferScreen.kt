@@ -1,5 +1,8 @@
 package com.mozhi.reader.feature.importer
 
+import androidx.compose.ui.res.stringResource
+import com.mozhi.reader.R
+
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -379,8 +382,7 @@ private fun EmptyHint(running: Boolean) {
                 style = MaterialTheme.typography.bodyMedium
             )
             Text(
-                "支持 TXT 与 EPUB，单个文件上限 200 MB。文件先落在缓存里，" +
-                    "确认无误再按「全部导入书架」。",
+                stringResource(R.string.import_lan_formats_hint),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

@@ -90,6 +90,17 @@ interface AnnotationDao {
     @Query("SELECT * FROM annotation_replies WHERE annotationId = :annotationId ORDER BY createdAt ASC, id ASC")
     suspend fun getReplies(annotationId: Long): List<AnnotationReplyEntity>
 
+    @Query("SELECT * FROM annotation_replies WHERE annotationId IN (:annotationIds) ORDER BY createdAt ASC, id ASC")
+    suspend fun getRepliesForAnnotations(annotationIds: List<Long>): List<AnnotationReplyEntity>
+
+    @Query("SELECT COUNT(*) FROM annotation_replies AS r INNER JOIN annotations AS a ON a.id = r.annotationId " +
+        "WHERE a.bookId = :bookId AND a.chapterIndex = :chapterIndex AND r.personaId = :personaId")
+    suspend fun countPersonaRepliesForChapter(bookId: Long, chapterIndex: Int, personaId: Long): Int
+
+    /** 段落账本也包含主动跳过的候选，实际产出必须从内容表计数。 */
+    @Query("SELECT COUNT(*) FROM annotations WHERE proactiveJobId = :jobId")
+    suspend fun countProactiveForJob(jobId: Long): Int
+
     @Query(
         "SELECT annotationId, COUNT(*) AS replyCount FROM annotation_replies " +
             "WHERE annotationId IN (:annotationIds) GROUP BY annotationId"

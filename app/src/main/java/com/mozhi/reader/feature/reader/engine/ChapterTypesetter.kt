@@ -52,6 +52,8 @@ data class TypesetSpec(
     val wordGlosses: Map<String, com.mozhi.reader.core.dictionary.WordGloss> = emptyMap(),
     val glossColorArgb: Int = 0xff847561.toInt(),
     val paragraphTranslations: List<com.mozhi.reader.core.dictionary.ParagraphTranslation> = emptyList(),
+    /** 排进段落之间的插图（读者生成的、伴读配的）；不占原文坐标。 */
+    val embeddedArt: List<EmbeddedArt> = emptyList(),
     val readerTitleAlignment: com.mozhi.reader.core.datastore.ReaderTitleAlignment = com.mozhi.reader.core.datastore.ReaderTitleAlignment.START,
     val readerTitleInset: Float = 0f,
     val readerTitlePadding: Float = 0f,
@@ -121,10 +123,14 @@ class ChapterTypesetter(
         inlineMarkers: List<InlineMarkerReservation> = emptyList(),
         epubLayout: EpubLayoutChapterBundle? = null,
         cancellationCheck: () -> Unit = {},
-        translations: List<com.mozhi.reader.core.dictionary.ParagraphTranslation> = emptyList()
+        translations: List<com.mozhi.reader.core.dictionary.ParagraphTranslation> = emptyList(),
+        art: List<EmbeddedArt> = emptyList()
     ): TextChapter {
-        if (translations.isNotEmpty()) return ChapterTypesetter(spec.copy(paragraphTranslations = translations.filter { !it.hidden && it.matches(body) }), measure)
-            .typeset(chapterIndex, title, body, inlineImages, inlineMarkers, epubLayout, cancellationCheck)
+        // 译文与插图都只属于这一章：带进一份本章专用的排版参数，三条排版路径从同一处读。
+        if (translations.isNotEmpty() || art.isNotEmpty()) return ChapterTypesetter(spec.copy(
+            paragraphTranslations = translations.filter { !it.hidden && it.matches(body) },
+            embeddedArt = art.filter { it.anchor in 0..body.length }
+        ), measure).typeset(chapterIndex, title, body, inlineImages, inlineMarkers, epubLayout, cancellationCheck)
         cancellationCheck()
         if (epubLayout != null && epubLayout.document.textLength == body.length) {
             val publisherMeasure = (measure as? AndroidTextMeasure)?.forPublisherHeadings() ?: measure
@@ -202,6 +208,7 @@ class ChapterTypesetter(
                         syntax = syntax, inlineMarkers = inlineMarkers, cancellationCheck = cancellationCheck
                     )
                     layoutTranslation(state, cursor, end, cancellationCheck)
+                    layoutEmbeddedArt(state, cursor, end)
                     pendingGap = spec.paragraphSpacing
                 }
                 // 空行只是分段信号：抬高待结算间隙，不再占一整行正文高度。
@@ -228,6 +235,20 @@ class ChapterTypesetter(
                 cancellationCheck()
                 state.prepareForLine(line.lineBottom)
                 line.moveTranslationTo(state.durY)
+                state.addLine(line, line.lineBottom - line.lineTop)
+            }
+        }
+    }
+
+    /** 这一段后面的插图：图和图注整块落在同一页，放不下就整块去下一页。 */
+    private fun layoutEmbeddedArt(state: LayoutState, start: Int, end: Int) {
+        spec.embeddedArt.anchoredIn(start, end).forEach { art ->
+            val lines = embeddedArtLines(art, 0f, spec.visibleWidth, spec, measure, end)
+            state.addSpacing(embeddedArtGap(spec))
+            state.prepareForLine(lines.blockHeight())
+            val origin = state.durY
+            lines.forEach { line ->
+                line.moveTranslationTo(origin + line.lineTop)
                 state.addLine(line, line.lineBottom - line.lineTop)
             }
         }

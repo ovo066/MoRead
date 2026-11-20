@@ -71,12 +71,14 @@ internal data class ProactiveBookPolicy(
     val limits: ProactiveAnnotationLimits,
     val voice: Boolean,
     val images: Boolean,
-    val prompts: List<com.mozhi.reader.core.datastore.GlobalPromptPreset>
+    val prompts: List<com.mozhi.reader.core.datastore.GlobalPromptPreset>,
+    val interplay: Boolean
 )
 
 internal fun CompanionAutonomySettings.policyFor(bookId: Long, personaId: Long?) = ProactiveBookPolicy(
     proactiveAnnotationsEnabled, annotationPersonasFor(personaId), annotationLimitsFor(bookId).normalized(),
-    annotationVoiceActive, annotationImageActive, annotationPrompts.filter { it.enabled }
+    annotationVoiceActive, annotationImageActive, annotationPrompts.filter { it.enabled },
+    annotationInterplay && annotationPersonasFor(personaId).size > 1
 )
 
 /** One worker for the entire process. Queue is bounded to six chapters of the visible book. */
@@ -318,7 +320,7 @@ class ProactiveAnnotationScheduler @Inject constructor(
 
     private suspend fun run(trigger: Trigger) {
         val policy = settings.companionAutonomySettings.first().policyFor(trigger.bookId, settings.activePersonaId.first())
-        for ((index, personaId) in policy.personaIds.withIndex()) {
+        for ((index, personaId) in annotationPersonaOrder(policy.personaIds, trigger.chapterIndex, policy.interplay).withIndex()) {
             if (synchronized(lock) { observedPolicy != policy || !wanted(trigger) }) break
             runForPersona(trigger, personaId, policy.personaIds.size - index)
         }
@@ -373,10 +375,15 @@ class ProactiveAnnotationScheduler @Inject constructor(
             return
         }
         val candidateLimit = if (initial.limits.chapterUnlimited) Int.MAX_VALUE else initial.limits.maxPerChapter
+        val annotationDao = database.annotationDao()
+        val repliesSoFar = annotationDao.countPersonaRepliesForChapter(trigger.bookId, trigger.chapterIndex, personaId)
+        // done 只管候选去重，含不接话与整格跳过；每章额度只按真实段评和角色回复计算。
+        // 即使后来关掉互见也不能回到 done.size，否则旧的跳过记录会凭空吃掉额度。
+        var produced = (old?.let { annotationDao.countProactiveForJob(it.id) } ?: 0) + repliesSoFar
         // DONE 只说明旧一轮结束；旧上限或当时跳过的位置不能永久挡住后来新增的候选。
         // 用已落库的段落账本核对当前范围，补缺时仍跳过全部已有段评，且不重置失败预算。
         if (old?.status == "DONE") {
-            val remaining = done.size < candidateLimit &&
+            val remaining = produced < candidateLimit &&
                 ProactiveAnnotationParagraphs.generationBuckets(body, candidateLimit, startAt)
                     .any { bucket -> bucket.none { it.end in done } }
             if (!old.canAttempt(remaining)) return
@@ -414,7 +421,7 @@ class ProactiveAnnotationScheduler @Inject constructor(
             }
             val limits = initial.limits
             val chapterCap = if (limits.chapterUnlimited) Int.MAX_VALUE else limits.maxPerChapter
-            if (done.size >= chapterCap) return null
+            if (produced >= chapterCap) return null
             if (ids.size >= share) return null
             if (!limits.dailyUnlimited && dao.createdSince(startOfDay()) >= limits.dailyMax) return null
             return quota.reserve(limits, initial.voice && persona.voiceId.isNotBlank(), initial.images)
@@ -425,6 +432,9 @@ class ProactiveAnnotationScheduler @Inject constructor(
             val limits = initial.limits
             val entryMode = trigger.timing == ProactiveAnnotationTiming.ON_CHAPTER_ENTRY
             val visible = synchronized(lock) { lastEntered == trigger }
+            val peers = if (initial.interplay) loadProactivePeerNotes(
+                annotationDao, personas, trigger.bookId, trigger.chapterIndex, personaId
+            ) else emptyList()
             outcome = service.generateForChapter(
                 request = ProactiveAnnotationRequest(trigger.bookId, trigger.chapterIndex, body, persona,
                     candidateLimit, done.toSet(), initial.prompts,
@@ -440,12 +450,21 @@ class ProactiveAnnotationScheduler @Inject constructor(
                             catch (cancelled: CancellationException) { throw cancelled }
                             catch (_: Exception) { null }
                         book?.takeIf { it.lastReadChapterIndex == trigger.chapterIndex }?.lastReadCharOffset
-                    } else null),
+                    } else null,
+                    imagesPerChapter = if (initial.images) limits.maxImagesPerChapter else 0,
+                    chapterImageCount = {
+                        // 所有角色合计：两个角色轮流写同一章，也只占一份每章配图上限。
+                        database.annotationDao().getForChapter(trigger.bookId, trigger.chapterIndex).count {
+                            com.mozhi.reader.core.library.AnnotationMedia.decode(it.mediaJson).illustrationId != null
+                        }
+                    },
+                    peers = peers, repliesSoFar = repliesSoFar, interplay = initial.interplay),
                 allowance = { allowance() },
                 recordMedia = { voices, images ->
                     check(valid()) { "generation_context_changed_before_media_charge" }
                     quota.recordCreated(0, voices, images)
                 },
+                imageFailed = { runCatching { quota.recordImageFailure() } },
                 commit = { row, end, illustration ->
                     // Finish a paid paragraph before yielding to a newly entered chapter.
                     if (end in done || allowance(preferCurrent = false) == null) false
@@ -459,11 +478,36 @@ class ProactiveAnnotationScheduler @Inject constructor(
                             round.annotationIds += committed.annotationId
                             job = committed.job
                             done += end
+                            produced++
                             // DB origin counts cover failed DataStore bookkeeping; never undo committed successes.
                             runCatching { quota.recordCreated(1, 0, 0) }
                             true
                         }
                     }
+                },
+                commitReply = { peer, text, end ->
+                    if (end in done || allowance(preferCurrent = false) == null) false
+                    else {
+                        val updated = job.copy(doneParagraphEnds = Json.encodeToString((done + end).sorted()), updatedAt = System.currentTimeMillis())
+                        val committed = commits.commitReply(peer, text, updated, System.currentTimeMillis(), ::readerContextValid)
+                        if (committed == null) false else {
+                            if (committed.annotationId !in ids) ids += committed.annotationId
+                            if (committed.annotationId !in round.annotationIds) round.annotationIds += committed.annotationId
+                            job = committed.job
+                            done += end
+                            produced++
+                            runCatching { quota.recordCreated(1, 0, 0) }
+                            true
+                        }
+                    }
+                },
+                skip = { ends ->
+                    check(valid()) { "generation_context_changed_before_skip" }
+                    val updated = job.copy(doneParagraphEnds = Json.encodeToString((done + ends).sorted()), updatedAt = System.currentTimeMillis())
+                    val saved = commits.skip(updated, ::readerContextValid)
+                    checkNotNull(saved) { "generation_context_changed_during_skip" }
+                    job = saved
+                    done += ends
                 }
             )
         } catch (cancelled: CancellationException) {

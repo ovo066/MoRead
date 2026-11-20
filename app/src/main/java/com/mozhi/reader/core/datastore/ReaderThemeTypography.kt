@@ -5,10 +5,11 @@ import kotlinx.serialization.json.Json
 /** Built-in colors also have a named typography profile; color values are never read from it. */
 object ReaderThemeTypographyCodec {
     private val json = Json { ignoreUnknownKeys = true }
-    fun encode(values: Map<String, CustomReaderTheme>): String = json.encodeToString(values)
+    fun encode(values: Map<String, CustomReaderTheme>): String =
+        json.encodeToString(values.mapValues { (_, theme) -> theme.withNormalizedMargins() })
     fun decode(raw: String?): Map<String, CustomReaderTheme> = raw?.let {
         runCatching { json.decodeFromString<Map<String, CustomReaderTheme>>(it) }.getOrNull()
-    }.orEmpty()
+    }.orEmpty().mapValues { (_, theme) -> theme.withNormalizedMargins() }
 }
 
 internal fun ReaderSettings.typographySnapshot() = CustomReaderTheme(

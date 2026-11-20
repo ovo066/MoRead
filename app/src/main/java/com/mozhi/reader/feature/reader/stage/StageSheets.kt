@@ -30,6 +30,7 @@ import com.mozhi.reader.core.datastore.StagePaperTexture
 import com.mozhi.reader.core.datastore.StageTextReveal
 import com.mozhi.reader.core.datastore.StageWeather
 import com.mozhi.reader.core.stage.StageImage
+import com.mozhi.reader.core.stage.StageNarrationRhythm
 import com.mozhi.reader.ui.components.MoReadSlider
 import kotlin.math.roundToInt
 import androidx.compose.foundation.clickable
@@ -263,6 +264,16 @@ private fun StageTabStage(settings: StageSettings, onChange: ((StageSettings) ->
                 if (it == StageLayoutMode.PAGE) page else single
             }
         }
+        MoReadBlock(title = stringResource(R.string.stage_settings_rhythm), subtitle = stringResource(R.string.stage_settings_rhythm_hint)) {
+            val labels = mapOf(
+                StageNarrationRhythm.SENTENCE to stringResource(R.string.stage_rhythm_sentence),
+                StageNarrationRhythm.MERGE to stringResource(R.string.stage_rhythm_merge),
+                StageNarrationRhythm.PARAGRAPH to stringResource(R.string.stage_rhythm_paragraph)
+            )
+            MoReadSegmented(StageNarrationRhythm.entries, settings.narrationRhythm, { value -> onChange { it.copy(narrationRhythm = value) } }) {
+                labels.getValue(it)
+            }
+        }
         MoReadBlock(title = stringResource(R.string.stage_settings_intensity), subtitle = stringResource(R.string.stage_settings_intensity_hint)) {
             val labels = mapOf(
                 StageIntensity.RESTRAINED to stringResource(R.string.stage_intensity_restrained),
@@ -280,6 +291,12 @@ private fun StageTabStage(settings: StageSettings, onChange: ((StageSettings) ->
         }
     }
     MoReadSection(modifier = Modifier.padding(top = MoReadSpacing.m)) {
+        MoReadSwitchRow(
+            title = stringResource(R.string.stage_settings_fullscreen),
+            subtitle = stringResource(R.string.stage_settings_fullscreen_hint),
+            checked = settings.fullscreen,
+            onCheckedChange = { value -> onChange { it.copy(fullscreen = value) } }
+        )
         MoReadSwitchRow(
             title = stringResource(R.string.stage_settings_ai_director),
             subtitle = stringResource(R.string.stage_settings_ai_director_hint),
@@ -357,6 +374,18 @@ private fun StageTabText(settings: StageSettings, onChange: ((StageSettings) -> 
             subtitle = stringResource(R.string.stage_settings_asides_hint),
             checked = settings.showAsides,
             onCheckedChange = { value -> onChange { it.copy(showAsides = value) } }
+        )
+        MoReadSwitchRow(
+            title = stringResource(R.string.stage_settings_portraits),
+            subtitle = stringResource(R.string.stage_settings_portraits_hint),
+            checked = settings.showPortraits,
+            onCheckedChange = { value -> onChange { it.copy(showPortraits = value) } }
+        )
+        MoReadSwitchRow(
+            title = stringResource(R.string.stage_settings_generated_art),
+            subtitle = stringResource(R.string.stage_settings_generated_art_hint),
+            checked = settings.generatedArt,
+            onCheckedChange = { value -> onChange { it.copy(generatedArt = value) } }
         )
     }
 }
@@ -525,6 +554,13 @@ private fun StageTabSound(settings: StageSettings, onChange: ((StageSettings) ->
             subtitle = stringResource(R.string.stage_settings_sound_hint),
             checked = settings.sound,
             onCheckedChange = { value -> onChange { it.copy(sound = value) } }
+        )
+        // 配音不归声景管：没开环境声与配乐，也可以只听有声书的配音。
+        MoReadSwitchRow(
+            title = stringResource(R.string.stage_settings_voice_over),
+            subtitle = stringResource(R.string.stage_settings_voice_over_hint),
+            checked = settings.voiceOver,
+            onCheckedChange = { value -> onChange { it.copy(voiceOver = value) } }
         )
     }
     if (settings.sound) {

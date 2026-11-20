@@ -14,7 +14,7 @@ sealed interface PreparedImport {
 }
 
 interface BookImportGateway {
-    /** 单本导入：TXT 停在分章预览等用户确认，EPUB 直接入库。 */
+    /** 单本导入：TXT 等待分章确认；EPUB 及转换为 EPUB 的 Markdown / HTML / MOBI 直接入库。 */
     suspend fun prepare(uri: Uri, allowDuplicate: Boolean = false): PreparedImport
 
     /**

@@ -93,7 +93,11 @@ object StageEffectBudget {
             if (restrained && enter in motionEnter) enter = BeatEnter.FADE
             var n = 0
             // 人名、专有名词与书里自带的样式不算效果，不占两处的名额。
-            val spans = b.spans.filter { it.ink != null || SpanStyle.NAME in it.styles || SpanStyle.TERM in it.styles || ++n <= 2 }
+            val spans = b.spans.filterNot {
+                // 冷暖色只随克制档关闭（不看「减少动态」：它不是动效）；其它档位照常占两处强调的名额。
+                intensity == StageIntensity.RESTRAINED && it.styles.isNotEmpty() &&
+                    it.styles.all { style -> style == SpanStyle.COLD || style == SpanStyle.WARM }
+            }.filter { it.ink != null || SpanStyle.NAME in it.styles || SpanStyle.TERM in it.styles || ++n <= 2 }
             StagePresentation(enter, screen, x, x.paceMultiplier * when (b.pace) { BeatPace.SLOW -> 1.35f; BeatPace.FAST -> .7f; else -> 1f }, spans, blocked)
         }
     }

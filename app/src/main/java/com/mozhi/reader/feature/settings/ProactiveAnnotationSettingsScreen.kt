@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import com.mozhi.reader.R
@@ -74,11 +75,12 @@ fun ProactiveAnnotationSettingsScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val usedToday by viewModel.todayAnnotationCount.collectAsStateWithLifecycle()
+    val mediaToday by viewModel.todayAnnotationMedia.collectAsStateWithLifecycle()
     ProactiveAnnotationSettingsContent(
         bookId, state, onBack, viewModel::setAnnotationLimits,
         viewModel::setBookAnnotationLimits, viewModel::setProactiveAnnotations,
         viewModel::setAnnotationNotice, viewModel::setAnnotationPersonas, onOpenPrompts, viewModel::toggleAnnotationPersona,
-        usedToday
+        usedToday, mediaToday, viewModel::setAnnotationInterplay
     )
 }
 
@@ -94,7 +96,9 @@ internal fun ProactiveAnnotationSettingsContent(
     onSetPersonas: (Set<Long>) -> Unit = {},
     onOpenPrompts: () -> Unit = {},
     onTogglePersona: (Long) -> Unit = {},
-    usedToday: Int = 0
+    usedToday: Int = 0,
+    mediaToday: com.mozhi.reader.core.datastore.ProactiveAnnotationQuotaState? = null,
+    onSetInterplay: (Boolean) -> Unit = {}
 ) {
     val global = state.autonomy.annotationLimits
     val override = bookId?.let { state.autonomy.annotationLimitsByBook[it] }
@@ -193,6 +197,15 @@ internal fun ProactiveAnnotationSettingsContent(
                     }
                 }
             }
+            // 只有一位伴读时没有「互相」可言，开关不出现。
+            if (page == "personas" && bookId == null && state.autonomy.annotationPersonaIds.size >= 2) item {
+                MoReadSection(title = stringResource(R.string.annotation_interplay_section),
+                    footer = stringResource(R.string.annotation_interplay_footer)) {
+                    MoReadSwitchRow(title = stringResource(R.string.annotation_interplay),
+                        subtitle = stringResource(R.string.annotation_interplay_summary),
+                        checked = state.autonomy.annotationInterplay, onCheckedChange = onSetInterplay)
+                }
+            }
             if (page != "overview" && !editable && page in setOf("timing", "context", "limits")) item {
                 MoReadSection(title = "跟随全局") {
                     MoReadRow(title = "开启本书单独设置后可修改", onClick = { page = "overview" })
@@ -235,7 +248,7 @@ internal fun ProactiveAnnotationSettingsContent(
                 }
             }
             if (page == "limits") {
-                item { AnnotationUsageCard(editing, usedToday) }
+                item { AnnotationUsageCard(editing, usedToday, mediaToday) }
                 item {
                     val unit = stringResource(R.string.annotation_unit_count)
                     MoReadSection(title = stringResource(R.string.annotation_limits_chapter_section),
@@ -251,6 +264,16 @@ internal fun ProactiveAnnotationSettingsContent(
                             value = editing.maxPerChapter.orNullIfUnlimited(), range = 1..ProactiveAnnotationLimits.MAX_PER_CHAPTER,
                             unit = unit, allowUnlimited = true, enabled = editable,
                             onValueChange = { commit(editing.copy(maxPerChapter = it.orUnlimited()).normalized()) })
+                    }
+                }
+                item {
+                    MoReadSection(title = stringResource(R.string.annotation_limits_image_section),
+                        footer = stringResource(R.string.annotation_limits_image_footer)) {
+                        MoReadNumberRow(title = stringResource(R.string.annotation_limits_image_chapter),
+                            subtitle = stringResource(R.string.annotation_limits_image_chapter_summary),
+                            value = editing.maxImagesPerChapter, range = 1..ProactiveAnnotationLimits.MAX_IMAGES_PER_CHAPTER,
+                            unit = stringResource(R.string.annotation_unit_image), enabled = editable,
+                            onValueChange = { next -> next?.let { commit(editing.copy(maxImagesPerChapter = it).normalized()) } })
                     }
                 }
                 item {
@@ -322,7 +345,11 @@ private fun Int?.orUnlimited(): Int = this ?: ProactiveAnnotationLimits.UNLIMITE
 
 /** 额度页顶部的今日用量：大号计数 + 一条进度轨，让「还剩多少」不用自己算。 */
 @Composable
-private fun AnnotationUsageCard(limits: ProactiveAnnotationLimits, usedToday: Int) {
+private fun AnnotationUsageCard(
+    limits: ProactiveAnnotationLimits,
+    usedToday: Int,
+    mediaToday: com.mozhi.reader.core.datastore.ProactiveAnnotationQuotaState? = null
+) {
     val reached = !limits.dailyUnlimited && usedToday >= limits.dailyMax
     MoReadSection {
         MoReadBlock {
@@ -355,11 +382,18 @@ private fun AnnotationUsageCard(limits: ProactiveAnnotationLimits, usedToday: In
                 }
             }
             val noLimit = stringResource(R.string.annotation_usage_extra_unlimited)
+            Text(limits.summary(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            // 语音与插图写「已用 / 上限」：只写上限的话，用户分不清是没生成还是没轮到。
             Text(
-                limits.summary() + " · " + stringResource(R.string.annotation_usage_extras,
-                    limits.dailyVoiceMax.orNullIfUnlimited()?.toString() ?: noLimit,
-                    limits.dailyImageMax.orNullIfUnlimited()?.toString() ?: noLimit),
+                stringResource(R.string.annotation_usage_media,
+                    mediaToday?.voiceCount ?: 0, limits.dailyVoiceMax.orNullIfUnlimited()?.toString() ?: noLimit,
+                    mediaToday?.imageCount ?: 0, limits.dailyImageMax.orNullIfUnlimited()?.toString() ?: noLimit),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            val failures = mediaToday?.imageFailureCount ?: 0
+            if (failures > 0) Text(
+                pluralStringResource(R.plurals.annotation_usage_image_failures, failures, failures),
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error
             )
         }
     }

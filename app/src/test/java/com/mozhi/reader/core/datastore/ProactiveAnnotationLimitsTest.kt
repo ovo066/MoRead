@@ -17,6 +17,22 @@ class ProactiveAnnotationLimitsTest {
 
 
     @Test
+    fun imagesPerChapterDefaultsToOneAndStaysWithinItsRange() {
+        assertEquals(1, ProactiveAnnotationLimits().maxImagesPerChapter)
+        assertEquals(1, ProactiveAnnotationLimits(maxImagesPerChapter = 0).normalized().maxImagesPerChapter)
+        assertEquals(1, ProactiveAnnotationLimits(maxImagesPerChapter = ProactiveAnnotationLimits.UNLIMITED).normalized().maxImagesPerChapter)
+        assertEquals(ProactiveAnnotationLimits.MAX_IMAGES_PER_CHAPTER,
+            ProactiveAnnotationLimits(maxImagesPerChapter = 99).normalized().maxImagesPerChapter)
+        // 旧版本存下的设置没有这个字段，读回来是默认的一幅。
+        val legacy = """{"minPerChapter":1,"maxPerChapter":4,"dailyMax":20,"dailyVoiceMax":3,"dailyImageMax":5}"""
+        val decoded = ProactiveAnnotationLimitsCodec.decodeGlobal(legacy)
+        assertEquals(4, decoded.maxPerChapter)
+        assertEquals(1, decoded.maxImagesPerChapter)
+        val custom = decoded.copy(maxImagesPerChapter = 3)
+        assertEquals(custom, ProactiveAnnotationLimitsCodec.decodeGlobal(ProactiveAnnotationLimitsCodec.encodeGlobal(custom)))
+    }
+
+    @Test
     fun normalizeKeepsLowerBoundUnderUpperBound() {
         val limits = ProactiveAnnotationLimits(minPerChapter = 8, maxPerChapter = 3).normalized()
         assertEquals(3, limits.minPerChapter)

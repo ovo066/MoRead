@@ -340,6 +340,9 @@ object StageCompiler {
         /**
          * 精排书的字体、颜色与框落到各拍：整拍落在某个书内框里就带上这个框（容器自己的框留给容器）；
          * 文字样子取盖住整拍八成以上的那段，否则取所在段落的；只盖住几个字的换成行内样式。
+         *
+         * 「盖住整拍」按展示文字算：对白拍的原文区间带着引号和引号后的句末标点，
+         * 书里的色块常常只包住引号里的字（“<span>……</span>”），按原文区间要求全覆盖会让它两头落空、颜色整个丢掉。
          */
         fun applyBookStyles(list: List<StageBeat>): List<StageBeat> {
             val styles = book?.styles ?: return list
@@ -351,15 +354,22 @@ object StageCompiler {
                 val box = if (beat.containerId != null) null else styles.boxes
                     .filter { it.start <= full.start && it.end >= full.end }
                     .minByOrNull { it.end - it.start }?.box
-                val covering = styles.inks.filter { it.start <= r.start && it.end >= r.end }
+                val at = body.indexOf(beat.text, r.start).takeIf { it >= 0 && it < r.end }
+                val shownEnd = at?.plus(beat.text.length)
+                fun coversBeat(ink: StageBookInk): Boolean {
+                    if (ink.start <= r.start && ink.end >= r.end) return true
+                    if (at == null || shownEnd == null) return false
+                    val covered = (minOf(ink.end, shownEnd) - maxOf(ink.start, at)).coerceAtLeast(0)
+                    return covered * 5 >= beat.text.length * 4
+                }
+                val covering = styles.inks.filter(::coversBeat)
                 val block = covering.filter { it.block }.minByOrNull { it.end - it.start }?.ink
                 val wide = covering.filter { !it.block }.minByOrNull { it.end - it.start }?.ink
-                val at = body.indexOf(beat.text, r.start).takeIf { it >= 0 && it < r.end }
-                val inline = if (at == null) emptyList() else styles.inks.filter { !it.block && it.start < r.end && it.end > r.start && !(it.start <= r.start && it.end >= r.end) }
+                val inline = if (at == null) emptyList() else styles.inks.filter { !it.block && it.start < r.end && it.end > r.start && !coversBeat(it) }
                     .mapNotNull { ink ->
                         val a = (ink.start - at).coerceAtLeast(0)
                         val e = (ink.end - at).coerceAtMost(beat.text.length)
-                        if (a < e && e - a < beat.text.length * 4 / 5) StageSpan(a, e, emptySet(), source = StageSource.DIRECTOR, ink = ink.ink) else null
+                        if (a < e) StageSpan(a, e, emptySet(), source = StageSource.DIRECTOR, ink = ink.ink) else null
                     }
                 val ink = wide ?: block ?: box?.ink
                 if (box == null && ink == null && inline.isEmpty()) beat else beat.copy(box = box, ink = ink, spans = beat.spans + inline)
@@ -425,7 +435,9 @@ object StageCompiler {
                 }
                 i++
             }
-            val finished = StageFigures.apply(StageAmbience.apply(applyBookStyles(applyBookSpans(beats.toList()))), body)
+            // 旁白合句放在最后：特写（海报、阶梯、叠句）与屏幕效果先认出来，合句时绕开它们。
+            val styled = StageFigures.apply(StageMoodInk.apply(StageAmbience.apply(applyBookStyles(applyBookSpans(beats.toList())))), body)
+            val finished = StageRhythm.merge(styled, body, context.narration)
             val era = StageAtmosphere.era(body, context.history)
             return StageScript(
                 chapterIndex, title, finished, containers.toList(), protagonist, names, book?.titleArt, book?.breakArt,

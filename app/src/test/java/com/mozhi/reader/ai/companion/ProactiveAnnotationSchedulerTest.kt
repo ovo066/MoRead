@@ -5,6 +5,26 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ProactiveAnnotationSchedulerTest {
+    @Test fun interplayRotatesTheStartingPersonaByChapterAndOffKeepsOriginalOrder() {
+        val ids = listOf(3L, 8L, 12L)
+        assertEquals(ids, annotationPersonaOrder(ids, 0, true))
+        assertEquals(listOf(8L, 12L, 3L), annotationPersonaOrder(ids, 1, true))
+        assertEquals(listOf(12L, 3L, 8L), annotationPersonaOrder(ids, 2, true))
+        assertEquals(ids, annotationPersonaOrder(ids, 3, true))
+        for (chapter in 0..5) assertEquals(ids, annotationPersonaOrder(ids, chapter, false))
+        assertEquals(emptyList<Long>(), annotationPersonaOrder(emptyList(), 2, true))
+        assertEquals(listOf(3L), annotationPersonaOrder(listOf(3L), 2, true))
+    }
+
+    @Test fun interplayRequiresMultipleParticipantsAndIsPartOfPolicyIdentity() {
+        val settings = com.mozhi.reader.core.datastore.CompanionAutonomySettings(proactiveAnnotationsEnabled = true)
+        assertFalse(settings.policyFor(1, 3).interplay)
+        assertFalse(settings.copy(annotationPersonaIds = setOf(8)).policyFor(1, 3).interplay)
+        val multiple = settings.copy(annotationPersonaIds = setOf(3, 8))
+        assertTrue(multiple.policyFor(1, 3).interplay)
+        assertFalse(multiple.copy(annotationInterplay = false).policyFor(1, 3).interplay)
+        assertNotEquals(multiple.policyFor(1, 3), multiple.copy(annotationInterplay = false).policyFor(1, 3))
+    }
     @Test fun finiteDailyBudgetReservesAShareForTheOtherSelectedCompanions() {
         assertEquals(5, annotationBudgetShare(10, 2))
         assertEquals(4, annotationBudgetShare(10, 3))

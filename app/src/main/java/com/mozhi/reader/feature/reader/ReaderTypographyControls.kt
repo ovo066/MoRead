@@ -30,6 +30,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -540,11 +541,18 @@ internal fun StepButton(
     }
 }
 
+/** 左右边距是离屏幕边缘（宽屏时离栏边）的真实距离，最小 0 dp。 */
+@Composable
 internal fun horizontalMarginText(value: Float): String =
-    "${(ReaderPageStyle.MARGIN_BASE_DP + ReaderPageStyle.MARGIN_RANGE_DP * value).roundToInt()} dp"
+    stringResource(com.mozhi.reader.R.string.reader_margin_dp, ReaderPageStyle.horizontalMarginDp(value).roundToInt())
 
-internal fun verticalMarginText(value: Float): String =
-    "额外 ${(ReaderPageStyle.VERTICAL_MARGIN_RANGE_DP * value).roundToInt()} dp"
+/** 上下边距叠在系统安全区与页眉页脚之上：0 是默认位置，往上是额外加宽。 */
+@Composable
+internal fun verticalMarginText(value: Float): String {
+    val extra = (ReaderPageStyle.VERTICAL_MARGIN_RANGE_DP * value).roundToInt()
+    return if (extra <= 0) stringResource(com.mozhi.reader.R.string.reader_margin_vertical_default)
+    else stringResource(com.mozhi.reader.R.string.reader_margin_vertical_extra, extra)
+}
 
 internal fun chromeMarginText(value: Float): String =
     "额外 ${(ReaderPageStyle.CHROME_MARGIN_RANGE_DP * value).roundToInt()} dp"

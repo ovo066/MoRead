@@ -76,14 +76,14 @@ class ReaderSettingsRepository @Inject constructor(
                 ?.let { runCatching { PublisherStyleMode.valueOf(it) }.getOrNull() }
                 ?: PublisherStyleMode.SMART,
             pageMargin = (preferences[Keys.PageMargin] ?: 1f).coerceIn(0f, 2f),
-            pageMarginLeft = (preferences[Keys.PageMarginLeft]
+            pageMarginLeft = ReaderMarginLimits.horizontal(preferences[Keys.PageMarginLeft]
                 ?: preferences[Keys.PageMargin]
-                ?: 1f).coerceIn(0f, 2f),
-            pageMarginRight = (preferences[Keys.PageMarginRight]
+                ?: 1f),
+            pageMarginRight = ReaderMarginLimits.horizontal(preferences[Keys.PageMarginRight]
                 ?: preferences[Keys.PageMargin]
-                ?: 1f).coerceIn(0f, 2f),
-            pageMarginTop = (preferences[Keys.PageMarginTop] ?: 0f).coerceIn(0f, 2f),
-            pageMarginBottom = (preferences[Keys.PageMarginBottom] ?: 0f).coerceIn(0f, 2f),
+                ?: 1f),
+            pageMarginTop = ReaderMarginLimits.vertical(preferences[Keys.PageMarginTop] ?: 0f),
+            pageMarginBottom = ReaderMarginLimits.vertical(preferences[Keys.PageMarginBottom] ?: 0f),
             headerMarginTop = (preferences[Keys.HeaderMarginTop] ?: 0f).coerceIn(0f, 2f),
             footerMarginBottom = (preferences[Keys.FooterMarginBottom] ?: 0f).coerceIn(0f, 2f),
             letterSpacingEm = (preferences[Keys.LetterSpacingEm] ?: 0f).coerceIn(-0.05f, 0.2f),
@@ -133,9 +133,11 @@ class ReaderSettingsRepository @Inject constructor(
             volumeKeysPageTurn = preferences[Keys.VolumeKeysPageTurn] ?: false,
             physicalKeyBindings = ReaderKeyBindings.decode(preferences[Keys.PhysicalKeyBindings]),
             tapZones = ReaderTapZones.decode(preferences[Keys.TapZones]),
+            chromeLayout = ReaderChromeLayout.decode(preferences[Keys.ChromeLayout]),
             englishLearningEnabled = preferences[Keys.EnglishLearning] ?: false,
             englishBionicEnabled = preferences[Keys.EnglishBionic] ?: false,
             bilingualBooks = preferences[Keys.BilingualBooks].orEmpty().mapNotNull { it.toLongOrNull() }.toSet(),
+            embeddedArtBooks = preferences[Keys.EmbeddedArtBooks].orEmpty().mapNotNull { it.toLongOrNull() }.toSet(),
             selectionToolbarExtras = preferences[Keys.SelectionToolbarExtras].orEmpty().filter { it in SelectionToolbarItems.OPTIONAL }.toSet(),
             learningLanguages = preferences[Keys.LearningLanguages].orEmpty().mapNotNull { entry ->
                 entry.substringBefore('=').toLongOrNull()?.let { it to entry.substringAfter('=') }
@@ -395,19 +397,19 @@ class ReaderSettingsRepository @Inject constructor(
     }
 
     suspend fun setPageMarginLeft(value: Float) {
-        dataStore.edit { it[Keys.PageMarginLeft] = value.coerceIn(0f, 2f) }
+        dataStore.edit { it[Keys.PageMarginLeft] = ReaderMarginLimits.horizontal(value) }
     }
 
     suspend fun setPageMarginRight(value: Float) {
-        dataStore.edit { it[Keys.PageMarginRight] = value.coerceIn(0f, 2f) }
+        dataStore.edit { it[Keys.PageMarginRight] = ReaderMarginLimits.horizontal(value) }
     }
 
     suspend fun setPageMarginTop(value: Float) {
-        dataStore.edit { it[Keys.PageMarginTop] = value.coerceIn(0f, 2f) }
+        dataStore.edit { it[Keys.PageMarginTop] = ReaderMarginLimits.vertical(value) }
     }
 
     suspend fun setPageMarginBottom(value: Float) {
-        dataStore.edit { it[Keys.PageMarginBottom] = value.coerceIn(0f, 2f) }
+        dataStore.edit { it[Keys.PageMarginBottom] = ReaderMarginLimits.vertical(value) }
     }
 
     suspend fun setHeaderMarginTop(value: Float) {
@@ -685,10 +687,10 @@ class ReaderSettingsRepository @Inject constructor(
         preferences[Keys.Font] = theme.font.name
         preferences[Keys.FontWeight] = theme.fontWeight.coerceIn(300, 700)
         preferences[Keys.LineHeight] = theme.lineHeight.coerceIn(1f, 2.2f)
-        preferences[Keys.PageMarginLeft] = theme.pageMarginLeft.coerceIn(0f, 2f)
-        preferences[Keys.PageMarginRight] = theme.pageMarginRight.coerceIn(0f, 2f)
-        preferences[Keys.PageMarginTop] = theme.pageMarginTop.coerceIn(0f, 2f)
-        preferences[Keys.PageMarginBottom] = theme.pageMarginBottom.coerceIn(0f, 2f)
+        preferences[Keys.PageMarginLeft] = ReaderMarginLimits.horizontal(theme.pageMarginLeft)
+        preferences[Keys.PageMarginRight] = ReaderMarginLimits.horizontal(theme.pageMarginRight)
+        preferences[Keys.PageMarginTop] = ReaderMarginLimits.vertical(theme.pageMarginTop)
+        preferences[Keys.PageMarginBottom] = ReaderMarginLimits.vertical(theme.pageMarginBottom)
         preferences[Keys.LetterSpacingEm] = theme.letterSpacingEm.coerceIn(-0.05f, 0.2f)
         preferences[Keys.ParagraphSpacingEm] = theme.paragraphSpacingEm.coerceIn(0f, 1.5f)
         preferences[Keys.FirstLineIndentEm] = theme.firstLineIndentEm.coerceIn(0f, 4f)
@@ -972,11 +974,21 @@ class ReaderSettingsRepository @Inject constructor(
         dataStore.edit { it[Keys.TapZones] = zones.encode() }
     }
 
+    suspend fun setChromeLayout(layout: ReaderChromeLayout) {
+        dataStore.edit { it[Keys.ChromeLayout] = ReaderChromeLayout.encode(layout) }
+    }
+
     suspend fun setEnglishLearning(enabled: Boolean) { dataStore.edit { it[Keys.EnglishLearning] = enabled } }
     suspend fun setEnglishBionic(enabled: Boolean) { dataStore.edit { it[Keys.EnglishBionic] = enabled } }
     suspend fun setBilingual(bookId: Long, visible: Boolean) { dataStore.edit { prefs ->
         val books = prefs[Keys.BilingualBooks].orEmpty()
         prefs[Keys.BilingualBooks] = if (visible) books + bookId.toString() else books - bookId.toString()
+    } }
+
+    /** 这本书的插图排进正文（true）还是点开查看（false，默认）。 */
+    suspend fun setArtEmbedded(bookId: Long, embedded: Boolean) { dataStore.edit { prefs ->
+        val books = prefs[Keys.EmbeddedArtBooks].orEmpty()
+        prefs[Keys.EmbeddedArtBooks] = if (embedded) books + bookId.toString() else books - bookId.toString()
     } }
 
     /** AUTO 删除记录，回到自动识别。 */
@@ -1246,6 +1258,7 @@ class ReaderSettingsRepository @Inject constructor(
                     preferences[Keys.CompanionProactiveAnnotationVoice] ?: false,
                 proactiveAnnotationImageEnabled =
                     preferences[Keys.CompanionProactiveAnnotationImage] ?: false,
+                annotationInterplay = preferences[Keys.CompanionAnnotationInterplay] ?: true,
                 annotationNotice = preferences[Keys.CompanionAnnotationNotice]
                     ?.let { runCatching { ProactiveAnnotationNotice.valueOf(it) }.getOrNull() }
                     ?: ProactiveAnnotationNotice.BUILT_IN,
@@ -1279,6 +1292,10 @@ class ReaderSettingsRepository @Inject constructor(
 
     suspend fun setCompanionProactiveAnnotationImage(value: Boolean) {
         dataStore.edit { it[Keys.CompanionProactiveAnnotationImage] = value }
+    }
+
+    suspend fun setCompanionAnnotationInterplay(enabled: Boolean) {
+        dataStore.edit { it[Keys.CompanionAnnotationInterplay] = enabled }
     }
 
     suspend fun setCompanionAnnotationNotice(value: ProactiveAnnotationNotice) {
@@ -1351,6 +1368,7 @@ class ReaderSettingsRepository @Inject constructor(
                 BookReaderThemeCodec.decode(preferences[Keys.BookThemes]).filterKeys { it != bookId })
             preferences[Keys.BookChineseConversions] = BookChineseConversionCodec.encode(
                 BookChineseConversionCodec.decode(preferences[Keys.BookChineseConversions]).filterKeys { it != bookId })
+            preferences[Keys.EmbeddedArtBooks] = preferences[Keys.EmbeddedArtBooks].orEmpty() - bookId.toString()
             preferences[Keys.CompanionAnnotationLimitsByBook] = ProactiveAnnotationLimitsCodec.encodeBooks(
                 ProactiveAnnotationLimitsCodec.decodeBooks(preferences[Keys.CompanionAnnotationLimitsByBook]).filterKeys { it != bookId })
         }
@@ -1423,9 +1441,11 @@ class ReaderSettingsRepository @Inject constructor(
         val SyntaxHighlightRules = stringPreferencesKey("reader_syntax_highlight_rules")
         val TextReplacementRules = stringPreferencesKey("reader_text_replacement_rules")
         val TapZones = stringPreferencesKey("reader_tap_zones")
+        val ChromeLayout = stringPreferencesKey("reader_chrome_layout")
         val EnglishLearning = booleanPreferencesKey("reader_english_learning")
         val EnglishBionic = booleanPreferencesKey("reader_english_bionic")
         val BilingualBooks = androidx.datastore.preferences.core.stringSetPreferencesKey("reader_bilingual_books")
+        val EmbeddedArtBooks = androidx.datastore.preferences.core.stringSetPreferencesKey("reader_embedded_art_books")
         val SelectionToolbarExtras = androidx.datastore.preferences.core.stringSetPreferencesKey("reader_selection_toolbar_extras")
         val LearningLanguages = androidx.datastore.preferences.core.stringSetPreferencesKey("reader_learning_languages")
         val TranslationTarget = stringPreferencesKey("reader_translation_target")
@@ -1464,6 +1484,7 @@ class ReaderSettingsRepository @Inject constructor(
             booleanPreferencesKey("companion_proactive_annotation_voice")
         val CompanionProactiveAnnotationImage =
             booleanPreferencesKey("companion_proactive_annotation_image")
+        val CompanionAnnotationInterplay = booleanPreferencesKey("companion_annotation_interplay")
         val CustomThemes = stringPreferencesKey("reader_custom_themes")
         val ActiveCustomThemeId = longPreferencesKey("reader_active_custom_theme_id")
         val DayNightThemeAuto = booleanPreferencesKey("reader_theme_day_night_auto")

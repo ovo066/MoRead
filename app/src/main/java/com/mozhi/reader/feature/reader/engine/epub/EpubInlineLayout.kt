@@ -7,6 +7,9 @@ import com.mozhi.reader.core.epub.style.EpubVerticalAlignment
 import com.mozhi.reader.core.epub.style.ResolvedLength
 import com.mozhi.reader.core.epub.style.resolve
 import com.mozhi.reader.feature.reader.engine.InlineMarkerReservation
+import com.mozhi.reader.feature.reader.engine.anchoredIn
+import com.mozhi.reader.feature.reader.engine.embeddedArtGap
+import com.mozhi.reader.feature.reader.engine.embeddedArtLines
 import com.mozhi.reader.feature.reader.engine.fitPunctuationBreak
 import com.mozhi.reader.feature.reader.engine.canExpandTextGap
 import com.mozhi.reader.feature.reader.engine.resolveFirstLineIndent
@@ -168,7 +171,7 @@ internal class EpubInlineLayout(private val ctx: EpubLayoutContext) {
                 output.lines[lineIndex].paragraphLineCount = emitted
             }
         }
-        if (ctx.spec.paragraphTranslations.isNotEmpty()) {
+        if (ctx.spec.paragraphTranslations.isNotEmpty() || ctx.spec.embeddedArt.isNotEmpty()) {
             val originalLines = output.lines.drop(firstLineIndex).filter { it.paragraphId == paragraphId }.map { it.line }
             val sourceStart = originalLines.minOfOrNull { it.chapterPosition } ?: 0
             val sourceEnd = originalLines.maxOfOrNull { it.chapterPosition + it.charLength } ?: 0
@@ -181,6 +184,22 @@ internal class EpubInlineLayout(private val ctx: EpubLayoutContext) {
                 translated.forEachIndexed { index, line ->
                     line.moveTranslationTo(y)
                     output.lines += FlowLine(line, translatedParagraphId, 1, 1, index, translated.size, false)
+                    y = line.lineBottom
+                    emitted++
+                }
+            }
+            // 只有真有文字的段落才带图：空的行内盒（sourceEnd == sourceStart）没有锚点可言。
+            if (sourceEnd > sourceStart) ctx.spec.embeddedArt.anchoredIn(sourceStart, sourceEnd).forEach { art ->
+                y += embeddedArtGap(ctx.spec)
+                // 和译文一样先让开浮动图，插图不压在原书的图文环绕上。
+                y = max(y, bfc.bands.maxOfOrNull { it.bottom } ?: y)
+                val block = embeddedArtLines(art, cb.left, cb.width, ctx.spec, ctx.measure, sourceEnd)
+                val blockId = output.nextParagraphId++
+                val origin = y
+                block.forEachIndexed { index, line ->
+                    line.moveTranslationTo(origin + line.lineTop)
+                    // 孤行、寡行都设成整块的行数：图和图注不会被页切开。
+                    output.lines += FlowLine(line, blockId, block.size, block.size, index, block.size, false)
                     y = line.lineBottom
                     emitted++
                 }

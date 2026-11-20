@@ -133,7 +133,7 @@ fun BookshelfScreen(
     val documentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
-        // 单本仍走预览确认（能挑分章规则）；多本自动取最佳规则批量入库。
+        // 单本 TXT 预览分章，EPUB / Markdown / HTML / MOBI 直接入库；多本统一后台导入。
         when {
             uris.isEmpty() -> Unit
             uris.size == 1 -> viewModel.importDocument(uris.first())
@@ -191,6 +191,7 @@ fun BookshelfScreen(
                 is BookshelfEvent.OpenImportPreview -> onOpenImportPreview(event.sessionId)
                 is BookshelfEvent.OpenBook -> onOpenBook(event.bookId)
                 is BookshelfEvent.ShowMessage -> snackbarHostState.showSnackbar(event.message)
+                is BookshelfEvent.ShowLocalizedMessage -> snackbarHostState.showSnackbar(event.message.resolve(context.resources))
                 is BookshelfEvent.DuplicateFound -> duplicateImport = event.duplicate
             }
         }
@@ -446,7 +447,7 @@ fun BookshelfScreen(
             onDismiss = { importMenuVisible = false },
             onPickFiles = {
                 importMenuVisible = false
-                documentLauncher.launch(arrayOf("*/*"))
+                documentLauncher.launch(com.mozhi.reader.core.importer.convert.BookImportFiles.pickerMimeTypes.toTypedArray())
             },
             onPickFolder = {
                 importMenuVisible = false
@@ -600,7 +601,7 @@ private fun ImportMethodSheet(
             ImportMethodRow(
                 icon = Icons.Outlined.LibraryAdd,
                 title = "选择文件",
-                summary = "支持一次多选 TXT / EPUB",
+                summary = stringResource(R.string.import_multiple_formats),
                 onClick = onPickFiles
             )
             ImportMethodRow(

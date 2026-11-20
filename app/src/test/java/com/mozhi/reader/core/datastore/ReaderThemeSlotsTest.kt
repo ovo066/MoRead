@@ -96,4 +96,50 @@ class ReaderThemeSlotsTest {
         val noNightBackground = settings.copy(nightSelectedBackgroundImageId = null)
         assertNull(noNightBackground.resolveThemeSlot(ReaderThemeSlot.NIGHT).backgroundImagePath)
     }
+
+    @Test
+    fun `主题快照保留新边距范围且全局页眉页脚不随主题覆盖`() {
+        val chrome = ReaderChromeLayout.DEFAULT.with(ReaderChromeSlot.HEADER_CENTER, listOf(ReaderChromeItem.BOOK_TITLE))
+        val profile = nightCustom.copy(pageMarginLeft = -1.4f, pageMarginRight = 3f, pageMarginTop = 0f, pageMarginBottom = 3f)
+        val configured = settings.copy(
+            chromeLayout = chrome,
+            customThemes = listOf(profile),
+            builtinThemeTypography = mapOf(ReaderTheme.PAPER.name to profile),
+            bookThemes = mapOf(11L to BookReaderTheme(enabled = true, dayTheme = ReaderTheme.PAPER, nightCustomThemeId = profile.id))
+        )
+        ReaderThemeSlot.entries.forEach { slot ->
+            val resolved = configured.resolveForBook(11L, slot)
+            assertEquals(-1.4f, resolved.pageMarginLeft, 0f)
+            assertEquals(3f, resolved.pageMarginRight, 0f)
+            assertEquals(0f, resolved.pageMarginTop, 0f)
+            assertEquals(3f, resolved.pageMarginBottom, 0f)
+            assertEquals(chrome, resolved.chromeLayout)
+        }
+        val snapshot = configured.applyThemeSnapshot(profile).typographySnapshot()
+        assertEquals(profile.pageMarginLeft, snapshot.pageMarginLeft, 0f)
+        assertEquals(profile.pageMarginBottom, snapshot.pageMarginBottom, 0f)
+    }
+
+    @Test
+    fun `主题应用夹住正文边距并保留页眉页脚偏移的原范围`() {
+        val resolved = settings.applyThemeSnapshot(nightCustom.copy(
+            pageMarginLeft = -9f, pageMarginRight = 9f, pageMarginTop = -9f, pageMarginBottom = 9f,
+            headerMarginTop = -1f, footerMarginBottom = 3f
+        ))
+        assertEquals(-1.4f, resolved.pageMarginLeft, 0f)
+        assertEquals(3f, resolved.pageMarginRight, 0f)
+        assertEquals(0f, resolved.pageMarginTop, 0f)
+        assertEquals(3f, resolved.pageMarginBottom, 0f)
+        assertEquals(0f, resolved.headerMarginTop, 0f)
+        assertEquals(2f, resolved.footerMarginBottom, 0f)
+        listOf(Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY).forEach { value ->
+            val fallback = settings.applyThemeSnapshot(nightCustom.copy(
+                pageMarginLeft = value, pageMarginRight = value, pageMarginTop = value, pageMarginBottom = value
+            ))
+            assertEquals(1f, fallback.pageMarginLeft, 0f)
+            assertEquals(1f, fallback.pageMarginRight, 0f)
+            assertEquals(0f, fallback.pageMarginTop, 0f)
+            assertEquals(0f, fallback.pageMarginBottom, 0f)
+        }
+    }
 }

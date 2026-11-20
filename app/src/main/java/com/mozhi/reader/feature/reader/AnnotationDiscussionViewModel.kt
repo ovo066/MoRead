@@ -118,7 +118,28 @@ class AnnotationDiscussionViewModel @Inject constructor(
     fun respond(bookId: Long, annotationId: Long, personaId: Long) {
         if (respondJob?.isActive == true || mutableState.value.streaming != null) return
         mutableState.update { it.copy(streaming = DiscussionStreaming(personaId), error = null) }
+        respondJob = viewModelScope.launch { speak(bookId, annotationId, personaId, roundtable = false) }
+    }
+
+    /**
+     * 「大家聊聊」：[personaIds] 依次各说一句，前一位落库之后才轮到下一位，所以后面的人看得到前面的话。
+     * 有人没说出来就到此为止——让剩下的人对着一条失败提示接话没有意义。一次点击只跑一轮。
+     */
+    fun roundtable(bookId: Long, annotationId: Long, personaIds: List<Long>) {
+        val speakers = personaIds.distinct()
+        if (speakers.size < 2 || respondJob?.isActive == true || mutableState.value.streaming != null) return
+        mutableState.update { it.copy(streaming = DiscussionStreaming(speakers.first()), error = null) }
         respondJob = viewModelScope.launch {
+            for (personaId in speakers) {
+                if (!speak(bookId, annotationId, personaId, roundtable = true)) break
+            }
+        }
+    }
+
+    /** 让一个角色说完一条；说成了返回 true。 */
+    private suspend fun speak(bookId: Long, annotationId: Long, personaId: Long, roundtable: Boolean): Boolean {
+        var spoke = false
+        kotlinx.coroutines.coroutineScope {
             mutableState.update {
                 it.copy(streaming = DiscussionStreaming(personaId), error = null)
             }
@@ -132,7 +153,7 @@ class AnnotationDiscussionViewModel @Inject constructor(
                 }
             }
             try {
-                discussionService.respond(bookId, annotationId, personaId).collect { event ->
+                discussionService.respond(bookId, annotationId, personaId, roundtable).collect { event ->
                     when (event) {
                         is AnnotationDiscussionService.Event.Text -> {
                             streamBuffer.append(event.delta)
@@ -147,8 +168,9 @@ class AnnotationDiscussionViewModel @Inject constructor(
                             val current = state.streaming ?: return@update state
                             state.copy(streaming = current.copy(toolLabel = event.label))
                         }
-                        is AnnotationDiscussionService.Event.Done -> mutableState.update {
-                            it.copy(streaming = null)
+                        is AnnotationDiscussionService.Event.Done -> {
+                            spoke = true
+                            mutableState.update { it.copy(streaming = null) }
                         }
                         is AnnotationDiscussionService.Event.Failed -> mutableState.update {
                             it.copy(streaming = null, error = event.message)
@@ -159,6 +181,7 @@ class AnnotationDiscussionViewModel @Inject constructor(
                 ticker.cancel()
             }
         }
+        return spoke
     }
 
     /** 停止生成：丢弃半截回复（半条讨论没有保存价值）。 */

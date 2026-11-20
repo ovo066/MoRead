@@ -129,6 +129,9 @@ import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.sin
 
+/** 全屏演出时工具栏呼出后，多久不碰就自己淡出。 */
+private const val CHROME_HIDE_MILLIS = 3_000L
+
 /** 舞台上的临时状态：自动、快进、弹层、提示与下一拍的出场方式。都不落盘。 */
 @Stable
 private class StageControls {
@@ -141,6 +144,12 @@ private class StageControls {
     var nextInstant by mutableStateOf(false)
     /** 最近一次换拍的方向：1 向前、-1 向后。黑场和插图拍据此决定自动跨过的方向。 */
     var direction by mutableIntStateOf(1)
+    /** 全屏演出时顶栏、底栏是否呼出；不是全屏时始终显示。 */
+    var chromeShown by mutableStateOf(true)
+    /** 每碰一次工具栏加一，重新开始淡出计时。 */
+    var chromeTouch by mutableIntStateOf(0)
+    /** 本次进入演出已经提示过「上滑呼出工具栏」。 */
+    var chromeHinted by mutableStateOf(false)
 }
 
 /**
@@ -155,6 +164,7 @@ fun StageScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val settings by viewModel.stageSettings.collectAsStateWithLifecycle()
     val readerSettings by viewModel.readerSettings.collectAsStateWithLifecycle()
+    val portraits by viewModel.portraits.collectAsStateWithLifecycle()
     val palette = stagePalette(settings.theme, readerPalette(readerSettings, isDarkTheme()))
     val fonts = remember(readerSettings.font, readerSettings.customFontPath, settings.typeface, settings.brush) {
         stageFonts(readerSettings, settings.typeface).copy(brush = StageBrushFamily.takeIf { settings.brush })
@@ -165,6 +175,7 @@ fun StageScreen(
     }
     val controls = remember { StageControls() }
     val sound = rememberStageSound()
+    val voice = rememberStageVoice()
     val exit: () -> Unit = {
         controls.auto = false
         controls.skipping = false
@@ -213,17 +224,22 @@ fun StageScreen(
         } else {
             val soundOn = stringResource(R.string.stage_sound_on)
             val soundOff = stringResource(R.string.stage_sound_off)
-            StageStage(
-                chapter, state, settings, readerSettings, palette, fonts, reduceMotion, controls, viewModel, exit,
-                onToggleSound = {
-                    val next = !settings.sound
-                    viewModel.updateSettings { it.copy(sound = next) }
-                    controls.toast = if (next) soundOn else soundOff
-                },
-                onThunder = { delayMillis -> sound.thunder(delayMillis) },
-                onTitleImpact = { sound.cue(StageSoundCue.INK_DROP) },
-                onCue = sound::cue
-            )
+            androidx.compose.runtime.CompositionLocalProvider(
+                LocalStagePortraits provides if (settings.showPortraits) portraits else emptyMap()
+            ) {
+                StageStage(
+                    chapter, state, settings, readerSettings, palette, fonts, reduceMotion, controls, viewModel, exit,
+                    onToggleSound = {
+                        val next = !settings.sound
+                        viewModel.updateSettings { it.copy(sound = next) }
+                        controls.toast = if (next) soundOn else soundOff
+                    },
+                    onThunder = { delayMillis -> sound.thunder(delayMillis) },
+                    onTitleImpact = { sound.cue(StageSoundCue.INK_DROP) },
+                    onCue = sound::cue,
+                    voice = voice
+                )
+            }
             StageSoundBinding(sound, settings, chapter, state.index)
         }
         StageLightsUp()
@@ -264,14 +280,17 @@ private fun BoxScope.StageStage(
     onToggleSound: () -> Unit = {},
     onThunder: (Long) -> Unit = {},
     onTitleImpact: () -> Unit = {},
-    onCue: (StageSoundCue) -> Unit = {}
+    onCue: (StageSoundCue) -> Unit = {},
+    voice: StageVoiceController? = null
 ) {
     // 精排书的内嵌字体随章加载；没有时就是阅读页的字体。
     val bookFonts = rememberBookFonts(chapter.fonts)
     val fonts = remember(baseFonts, bookFonts) { baseFonts.copy(book = bookFonts) }
     val beats = chapter.beats
-    val presentations = remember(chapter.script, settings.intensity, reduceMotion) {
-        StageEffectBudget.apply(beats, settings.intensity, reduceMotion)
+    val presentations = remember(chapter.script, settings.intensity, reduceMotion, settings.bookStyles) {
+        val all = StageEffectBudget.apply(beats, settings.intensity, reduceMotion)
+        // 关掉「沿用书内样式」时，行内的书内字色与字体也一并不用，不只是整拍的。
+        if (settings.bookStyles) all else all.map { p -> p.copy(spans = p.spans.filter { it.ink == null }) }
     }
     val index = state.index
     val beat = beats.getOrNull(index)
@@ -311,6 +330,22 @@ private fun BoxScope.StageStage(
     // 手势处理器只创建一次，必须经由最新的引用调用，否则会拿着第一拍的揭示时钟。
     val currentAdvance by rememberUpdatedState(advance)
     val currentExit by rememberUpdatedState(exit)
+    val currentFullscreen by rememberUpdatedState(settings.fullscreen)
+    // 刚打开全屏或刚呼出时先露一下工具栏，几秒不碰就淡出；弹层开着时不收。
+    // 第一次收起时轻提示一次怎么叫回来，免得读者以为按钮没了。
+    val chromeHint = stringResource(R.string.stage_fullscreen_toast)
+    LaunchedEffect(settings.fullscreen) { controls.chromeShown = true }
+    LaunchedEffect(settings.fullscreen, controls.chromeShown, controls.chromeTouch, controls.backlogOpen, controls.settingsOpen, controls.auto) {
+        if (settings.fullscreen && controls.chromeShown && !controls.backlogOpen && !controls.settingsOpen) {
+            delay(CHROME_HIDE_MILLIS)
+            controls.chromeShown = false
+            if (!controls.chromeHinted) {
+                controls.chromeHinted = true
+                controls.toast = chromeHint
+            }
+        }
+    }
+    val chromeAlpha by animateFloatAsState(if (!settings.fullscreen || controls.chromeShown) 1f else 0f, tween(260), label = "stage-chrome")
 
     // —— 屏幕效果 ——
     val effect = presentation?.screen.takeIf { !instant }
@@ -396,14 +431,27 @@ private fun BoxScope.StageStage(
             viewModel.next()
         }
     }
-    // 自动播放：揭示完成后按字数停留；章末卡停一会儿接着下一章。
-    LaunchedEffect(beatKey, controls.auto, revealed, controls.backlogOpen, controls.settingsOpen) {
-        if (!controls.auto || !revealed || controls.backlogOpen || controls.settingsOpen) return@LaunchedEffect
+    // 配音跟读：一拍出现就放从这一拍开始的配音，翻走即停。快进、回看时不放——那是在找位置，不是在听。
+    val voiceClips = remember(chapter.voice, beat, settings.voiceOver) {
+        if (!settings.voiceOver || beat == null) emptyList() else com.mozhi.reader.core.stage.StageVoice.clipsFor(beat, chapter.voice)
+    }
+    var voiceDone by remember(beatKey) { mutableStateOf(voiceClips.isEmpty()) }
+    LaunchedEffect(beatKey, voiceClips, controls.skipping, controls.backlogOpen) {
+        if (voice == null || voiceClips.isEmpty() || controls.skipping || controls.backlogOpen) {
+            voiceDone = true
+            return@LaunchedEffect
+        }
+        try { voice.play(voiceClips) } finally { voice.stop(); voiceDone = true }
+    }
+    // 自动播放：揭示完成后按字数停留；有配音时等它念完再走。章末卡停一会儿接着下一章。
+    LaunchedEffect(beatKey, controls.auto, revealed, voiceDone, controls.backlogOpen, controls.settingsOpen) {
+        if (!controls.auto || !revealed || !voiceDone || controls.backlogOpen || controls.settingsOpen) return@LaunchedEffect
         if (beat == null) {
             delay(2_000)
             if (viewModel.hasNextChapter) viewModel.nextChapter() else controls.auto = false
         } else if (!beat.isSkipped()) {
-            delay(StageReveal.autoHoldMillis(beat, settings.autoSpeed))
+            // 念完配音之后只留一小口气，不再按字数整段地停。
+            delay(if (voiceClips.isEmpty()) StageReveal.autoHoldMillis(beat, settings.autoSpeed) else VOICE_TAIL_MS)
             controls.direction = 1
             viewModel.next()
         }
@@ -517,9 +565,16 @@ private fun BoxScope.StageStage(
                     val dx = end.x - start.x
                     val dy = end.y - start.y
                     when {
+                        // 全屏演出：工具栏收着时上滑先把它呼出来，再上滑才是回看。
+                        dy < -swipeUp && abs(dy) > abs(dx) && currentFullscreen && !controls.chromeShown -> controls.chromeShown = true
                         dy < -swipeUp && abs(dy) > abs(dx) -> { controls.auto = false; controls.backlogOpen = true }
                         dy > swipeDown && abs(dy) > abs(dx) -> currentExit()
-                        !moved -> { controls.auto = false; currentAdvance() }
+                        !moved -> {
+                            controls.auto = false
+                            // 点屏幕继续读：顺手收起刚呼出的工具栏。
+                            if (currentFullscreen) controls.chromeShown = false
+                            currentAdvance()
+                        }
                     }
                 }
             }
@@ -649,16 +704,17 @@ private fun BoxScope.StageStage(
 
     // —— 界面层 ——
     val directing by viewModel.directorBusy.collectAsStateWithLifecycle()
-    StageTopBar(
+    if (chromeAlpha > 0.01f) StageTopBar(
         title = chapter.script.title,
         progress = if (beats.isEmpty()) 1f else ((index + 1).toFloat() / beats.size).coerceIn(0f, 1f),
         auto = controls.auto,
         directing = directing,
         palette = palette,
         fonts = fonts,
-        onExit = exit
+        onExit = exit,
+        modifier = Modifier.graphicsLayer { alpha = chromeAlpha }
     )
-    StageToolbar(
+    if (chromeAlpha > 0.01f) StageToolbar(
         auto = controls.auto,
         skipping = controls.skipping,
         sound = settings.sound,
@@ -676,7 +732,8 @@ private fun BoxScope.StageStage(
             }
         },
         onMore = { controls.auto = false; controls.settingsOpen = true },
-        modifier = Modifier.align(Alignment.BottomCenter)
+        onTouched = { controls.chromeTouch++ },
+        modifier = Modifier.align(Alignment.BottomCenter).graphicsLayer { alpha = chromeAlpha }
     )
     controls.toast?.let { message -> StageToast(message, palette, Modifier.align(Alignment.TopCenter)) }
     if (controls.backlogOpen) {
@@ -708,6 +765,9 @@ private fun BoxScope.StageStage(
 }
 
 /** 自动跨过的拍：场景分隔，以及没有可显示图片的插图占位。 */
+/** 配音念完到下一拍之间的停顿。 */
+private const val VOICE_TAIL_MS = 350L
+
 private fun StageBeat.isSkipped(): Boolean = kind == BeatKind.BREAK || (kind == BeatKind.IMAGE && image == null)
 
 private fun StageBeat.isLine(): Boolean =
@@ -865,7 +925,7 @@ private fun StageSoloBeat(
             BeatKind.SYSTEM -> StageSystemPanel(beat, presentation, palette, fonts, clock, reduceMotion, settings.bookStyles)
             BeatKind.NOTE -> StageNote(beat, palette, fonts)
             BeatKind.BREAK -> Spacer(Modifier.height(1.dp))
-            else -> StageLineBeat(beat, presentation, palette, fonts, clock, names, settings.showAsides, reduceMotion)
+            else -> StageLineBeat(beat, presentation, palette, fonts, clock, names, settings.showAsides, reduceMotion, ink = beat.ink?.takeIf { settings.bookStyles })
         }
     }
 }
@@ -938,10 +998,10 @@ private fun StagePillButton(text: String, palette: StagePalette, fonts: StageFon
 /** 顶栏：左边收起，中间章名（宋体、疏朗字距），章名下一道细墨线标进度，朱砂一点是当前位置。 */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun BoxScope.StageTopBar(title: String, progress: Float, auto: Boolean, directing: Boolean, palette: StagePalette, fonts: StageFonts, onExit: () -> Unit) {
+private fun BoxScope.StageTopBar(title: String, progress: Float, auto: Boolean, directing: Boolean, palette: StagePalette, fonts: StageFonts, onExit: () -> Unit, modifier: Modifier = Modifier) {
     val animatedProgress by animateFloatAsState(progress, tween(420), label = "progress")
     Box(
-        Modifier
+        modifier
             .align(Alignment.TopCenter)
             .fillMaxWidth()
             .background(Brush.verticalGradient(listOf(palette.background.copy(alpha = 0.78f), palette.background.copy(alpha = 0f))))
@@ -1013,6 +1073,7 @@ private fun StageToolbar(
     onAuto: () -> Unit,
     onSkip: () -> Unit,
     onMore: () -> Unit,
+    onTouched: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -1028,11 +1089,11 @@ private fun StageToolbar(
                 .padding(top = MoReadSpacing.l),
             horizontalArrangement = Arrangement.SpaceEvenly
         ) {
-            StageToolButton(Icons.Outlined.History, stringResource(R.string.stage_backlog), false, palette, fonts, onBacklog)
-            StageToolButton(if (auto) Icons.Outlined.Pause else Icons.Outlined.PlayArrow, stringResource(R.string.stage_auto), auto, palette, fonts, onAuto)
-            StageToolButton(Icons.Outlined.FastForward, stringResource(R.string.stage_skip), skipping, palette, fonts, onSkip)
-            StageToolButton(if (sound) Icons.Outlined.MusicNote else Icons.Outlined.MusicOff, stringResource(R.string.stage_sound), sound, palette, fonts, onSound)
-            StageToolButton(Icons.Outlined.Tune, stringResource(R.string.stage_more), false, palette, fonts, onMore)
+            StageToolButton(Icons.Outlined.History, stringResource(R.string.stage_backlog), false, palette, fonts) { onTouched(); onBacklog() }
+            StageToolButton(if (auto) Icons.Outlined.Pause else Icons.Outlined.PlayArrow, stringResource(R.string.stage_auto), auto, palette, fonts) { onTouched(); onAuto() }
+            StageToolButton(Icons.Outlined.FastForward, stringResource(R.string.stage_skip), skipping, palette, fonts) { onTouched(); onSkip() }
+            StageToolButton(if (sound) Icons.Outlined.MusicNote else Icons.Outlined.MusicOff, stringResource(R.string.stage_sound), sound, palette, fonts) { onTouched(); onSound() }
+            StageToolButton(Icons.Outlined.Tune, stringResource(R.string.stage_more), false, palette, fonts) { onTouched(); onMore() }
         }
     }
 }

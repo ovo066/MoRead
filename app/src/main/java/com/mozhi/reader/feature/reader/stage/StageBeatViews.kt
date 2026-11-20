@@ -209,7 +209,9 @@ internal fun StageLineBeat(
     names: Set<String>,
     showAsides: Boolean,
     reduceMotion: Boolean,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** 精排书给这句定的字体与颜色（已按「沿用书内样式」开关过滤）。 */
+    ink: StageInk? = null
 ) {
     val asideStyle = TextStyle(
         fontFamily = fonts.body,
@@ -238,10 +240,11 @@ internal fun StageLineBeat(
             StageKineticText(
                 text = beat.text,
                 spans = presentation.spans,
-                style = lineStyle(beat, presentation, palette, fonts),
+                style = lineStyle(beat, presentation, palette, fonts).withInk(ink, fonts, palette),
                 palette = palette,
                 clock = clock,
-                motion = StageTextMotion(presentation.expression.tremble, presentation.expression.pop, reduceMotion)
+                motion = StageTextMotion(presentation.expression.tremble, presentation.expression.pop, reduceMotion),
+                fonts = fonts
             )
         }
         if (beat.continued) {
@@ -490,7 +493,8 @@ internal fun StageSystemPanel(beat: StageBeat, presentation: StagePresentation, 
                     .withInk(beat.ink ?: box.ink, fonts, palette),
                 palette = palette,
                 clock = clock,
-                motion = StageTextMotion(reduceMotion = reduceMotion)
+                motion = StageTextMotion(reduceMotion = reduceMotion),
+                fonts = fonts
             )
         }
         return

@@ -70,4 +70,40 @@ class CustomReaderThemeCodecTest {
 
         assertEquals(listOf(theme), CustomReaderThemeCodec.decode(CustomReaderThemeCodec.encode(listOf(theme))))
     }
+
+    @Test
+    fun `自定义主题与内置排版可往返保存左右负边距及上下新端点`() {
+        val expanded = themes.mapIndexed { index, theme -> theme.copy(
+            pageMarginLeft = if (index == 0) -1.4f else 3f,
+            pageMarginRight = if (index == 0) 3f else -1.4f,
+            pageMarginTop = if (index == 0) 0f else 3f,
+            pageMarginBottom = if (index == 0) 3f else 0f
+        ) }
+        assertEquals(expanded, CustomReaderThemeCodec.decode(CustomReaderThemeCodec.encode(expanded)))
+        val profiles = mapOf("PAPER" to expanded[0], "DARK" to expanded[1])
+        assertEquals(profiles, ReaderThemeTypographyCodec.decode(ReaderThemeTypographyCodec.encode(profiles)))
+    }
+
+    @Test
+    fun `主题编码前夹住越界边距并将非有限值回落默认`() {
+        val invalid = themes[0].copy(pageMarginLeft = -9f, pageMarginRight = 9f, pageMarginTop = -9f, pageMarginBottom = 9f)
+        val clamped = invalid.copy(pageMarginLeft = -1.4f, pageMarginRight = 3f, pageMarginTop = 0f, pageMarginBottom = 3f)
+        assertEquals(listOf(clamped), CustomReaderThemeCodec.decode(CustomReaderThemeCodec.encode(listOf(invalid))))
+        listOf(Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY).forEach { value ->
+            val nonFinite = themes[0].copy(pageMarginLeft = value, pageMarginRight = value, pageMarginTop = value, pageMarginBottom = value)
+            assertEquals(listOf(themes[0]), CustomReaderThemeCodec.decode(CustomReaderThemeCodec.encode(listOf(nonFinite))))
+            assertEquals(mapOf("PAPER" to themes[0]),
+                ReaderThemeTypographyCodec.decode(ReaderThemeTypographyCodec.encode(mapOf("PAPER" to nonFinite))))
+        }
+    }
+
+    @Test
+    fun `直接解码主题也夹住越界边距`() {
+        val rawTheme = """{"id":1,"name":"边距","backgroundArgb":1,"textArgb":2,"accentArgb":3,
+            "pageMarginLeft":-9,"pageMarginRight":9,"pageMarginTop":-9,"pageMarginBottom":9}"""
+        val expected = CustomReaderTheme(1, "边距", 1, 2, 3,
+            pageMarginLeft = -1.4f, pageMarginRight = 3f, pageMarginTop = 0f, pageMarginBottom = 3f)
+        assertEquals(listOf(expected), CustomReaderThemeCodec.decode("[$rawTheme]"))
+        assertEquals(mapOf("PAPER" to expected), ReaderThemeTypographyCodec.decode("""{"PAPER":$rawTheme}"""))
+    }
 }

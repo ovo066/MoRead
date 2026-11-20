@@ -40,6 +40,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.caverock.androidsvg.SVG
+import androidx.compose.ui.res.stringResource
+import com.mozhi.reader.R
 import com.mozhi.reader.core.library.EpubArchiveAsset
 import com.mozhi.reader.core.library.EpubArchivePool
 import com.mozhi.reader.core.stage.StageImage
@@ -127,7 +129,9 @@ internal fun StageImageBeat(image: StageImage, palette: StagePalette, fonts: Sta
         ) {
             if (bitmap != null) Image(bitmap, contentDescription = image.caption, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
         }
-        image.caption?.let {
+        // 不是书里的图就要说出来：读者生成的、伴读配的插图不冒充原书插图。
+        val caption = image.caption ?: if (image.generated) stringResource(R.string.stage_generated_art_caption) else null
+        caption?.let {
             Spacer(Modifier.height(MoReadSpacing.m))
             Text(
                 it, color = palette.inkSoft, fontFamily = fonts.body, fontSize = 12.5.sp, letterSpacing = 0.15.em,

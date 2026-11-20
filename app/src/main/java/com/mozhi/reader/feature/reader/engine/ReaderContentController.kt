@@ -122,6 +122,7 @@ class ReaderContentController(
 
     private var chapters: List<ChapterMeta> = emptyList()
     private var inlineMarkersByChapter: Map<Int, List<InlineMarkerReservation>> = emptyMap()
+    private var embeddedArtByChapter: Map<Int, List<EmbeddedArt>> = emptyMap()
     private var cumulativeChars: LongArray = LongArray(0)
     private var totalChars: Long = 0
 
@@ -191,6 +192,17 @@ class ReaderContentController(
             markers[it].orEmpty() != inlineMarkersByChapter[it].orEmpty()
         }.toSet()
         inlineMarkersByChapter = markers.mapValues { it.value.toList() }
+        changed.forEach { markerVersions[it] = (markerVersions[it] ?: 0) + 1 }
+        relayoutVisibleSlots(slots = listOfNotNull(curSlot, nextSlot, prevSlot).filter { it.index in changed })
+    }
+
+    /** 排进正文的插图；和插图按钮一样只重排真正变了的那几章。 */
+    fun setEmbeddedArt(art: Map<Int, List<EmbeddedArt>>) {
+        if (art == embeddedArtByChapter) return
+        val changed = (art.keys + embeddedArtByChapter.keys).filter {
+            art[it].orEmpty() != embeddedArtByChapter[it].orEmpty()
+        }.toSet()
+        embeddedArtByChapter = art.mapValues { it.value.toList() }
         changed.forEach { markerVersions[it] = (markerVersions[it] ?: 0) + 1 }
         relayoutVisibleSlots(slots = listOfNotNull(curSlot, nextSlot, prevSlot).filter { it.index in changed })
     }
@@ -674,6 +686,7 @@ class ReaderContentController(
                         inlineMarkers = inlineMarkersByChapter[index].orEmpty(),
                         epubLayout = content.epubLayout,
                         translations = if (translationsVisible) content.translations else emptyList(),
+                        art = embeddedArtByChapter[index].orEmpty(),
                         cancellationCheck = cancellationCheck
                     )
                 } catch (cancelled: CancellationException) {
@@ -688,6 +701,7 @@ class ReaderContentController(
                         inlineMarkers = inlineMarkersByChapter[index].orEmpty(),
                         epubLayout = null,
                         translations = if (translationsVisible) content.translations else emptyList(),
+                        art = embeddedArtByChapter[index].orEmpty(),
                         cancellationCheck = cancellationCheck
                     )
                 }

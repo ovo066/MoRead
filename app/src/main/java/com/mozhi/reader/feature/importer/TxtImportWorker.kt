@@ -139,7 +139,7 @@ class TxtImportWorker(
                 "书籍导入",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "显示大型 TXT 与 EPUB 的后台导入进度"
+                description = applicationContext.getString(com.mozhi.reader.R.string.import_notification_description)
             }
         )
     }

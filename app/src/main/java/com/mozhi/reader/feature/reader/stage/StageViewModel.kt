@@ -60,6 +60,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -74,7 +75,9 @@ data class StageChapter(
     val body: String,
     val script: StageScript,
     /** 精排书内嵌字体：族名（小写）→ 本地文件路径。 */
-    val fonts: Map<String, String> = emptyMap()
+    val fonts: Map<String, String> = emptyMap(),
+    /** 有声书已经合成好的配音（修订号与当前正文一致才有）；配音跟读按拍取用。 */
+    val voice: List<com.mozhi.reader.core.stage.StageVoiceClip> = emptyList()
 ) {
     val beats get() = script.beats
 
@@ -96,7 +99,7 @@ data class StageUiState(
     val index: Int = 0,
     /** 快进能到的最远一拍：本次看过的，或阅读水位以内的。 */
     val skipLimit: Int = -1,
-    /** 每换一章加一，界面据此重置舞台。 */
+    /** 换章或重编译时加一，界面据此重置舞台。 */
     val chapterGeneration: Int = 0
 )
 
@@ -112,6 +115,9 @@ class StageViewModel @Inject constructor(
     private val mediaStore: BookMediaStore,
     private val imageImporter: ReaderImageImporter,
     private val stageDirector: StageDirector,
+    private val imageConsistency: com.mozhi.reader.core.library.ImageConsistencyRepository,
+    private val illustrations: com.mozhi.reader.core.library.IllustrationRepository,
+    private val annotations: com.mozhi.reader.core.library.AnnotationRepository,
     @ApplicationScope private val applicationScope: CoroutineScope
 ) : ViewModel() {
     val bookId: Long = savedStateHandle.requireBookId()
@@ -124,6 +130,29 @@ class StageViewModel @Inject constructor(
     val readerSettings: StateFlow<ReaderSettings> = settingsRepository.cachedSettings
     val stageSettings: StateFlow<StageSettings> = settingsRepository.stageSettings
         .stateIn(viewModelScope, SharingStarted.Eagerly, StageSettings())
+
+    /** 原文称呼 → 人物键（见 [StagePortraits]）；人物档案读出来之后才有。 */
+    private val portraitKeys = MutableStateFlow<Map<String, String>>(emptyMap())
+
+    /**
+     * 名牌头像：原文称呼 → 定妆图文件。形象按章节生效，只取演到的这一章为止定下的那一版，
+     * 后面才换的装束不会提前出现。
+     */
+    val portraits: StateFlow<Map<String, String>> = kotlinx.coroutines.flow.combine(
+        portraitKeys,
+        imageConsistency.observeLooks(bookId),
+        settingsRepository.cachedSettings.map { it.imageLibrary }.distinctUntilChanged(),
+        mutableState.map { it.chapter?.index }.distinctUntilChanged()
+    ) { keys, looks, library, chapterIndex ->
+        if (chapterIndex == null || keys.isEmpty() || looks.isEmpty()) emptyMap()
+        else {
+            val files = keys.values.distinct().mapNotNull { key ->
+                val id = com.mozhi.reader.ai.media.visibleLook(looks, key, chapterIndex)?.referenceIds?.firstOrNull()
+                library.firstOrNull { it.id == id }?.let { key to it.filePath }
+            }.toMap()
+            keys.mapNotNull { (label, key) -> files[key]?.let { label to it } }.toMap()
+        }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
     private var chapters: List<ChapterEntity> = emptyList()
     private var knownNames: List<StageKnownName> = emptyList()
@@ -151,6 +180,12 @@ class StageViewModel @Inject constructor(
                     directorAttempted.clear()
                 }
                 updateDirectorBusy()
+            }
+        }
+        viewModelScope.launch {
+            // 跳过首个值：首章编译时直接读的就是它；之后真变了才作废缓存重编译，免得一进舞台就重置一次。
+            stageSettings.map { it.narrationRhythm to it.generatedArt }.distinctUntilChanged().drop(1).collect {
+                recompileNarration()
             }
         }
         viewModelScope.launch {
@@ -194,7 +229,11 @@ class StageViewModel @Inject constructor(
 
     /** 人物档案与有声书选角里的名字：只用于认出原文里已经写出来的称呼，不会提前写出名字。 */
     private suspend fun loadKnownNames(): List<StageKnownName> {
-        val dossier = characters.observe(bookId).first().saved?.guide?.characters.orEmpty().map { person ->
+        val people = characters.observe(bookId).first().saved?.guide?.characters.orEmpty()
+        portraitKeys.value = com.mozhi.reader.core.stage.StagePortraits.index(
+            people.map { com.mozhi.reader.core.stage.StagePortraitSubject(it.identity, it.name, it.aliases) }
+        )
+        val dossier = people.map { person ->
             StageKnownName(
                 name = person.name,
                 aliases = person.aliases,
@@ -235,15 +274,24 @@ class StageViewModel @Inject constructor(
         val history = (maxOf(0, index - HISTORY_CHAPTERS) until index).map { text(it) }
         val settings = settingsRepository.cachedSettings.value
         val bookLayout = runCatching { readBookLayout(index, body) }.getOrNull()
+        val art = if (stageSettings.value.generatedArt) runCatching { generatedArt(index, body) }.getOrDefault(emptyList()) else emptyList()
+        var voice: List<com.mozhi.reader.core.stage.StageVoiceClip> = emptyList()
         val stageChapter = withContext(Dispatchers.Default) {
-            var script = StageCompiler.compile(index, chapter.title, body, StageCompileContext(history, knownNames, bookLayout?.first))
+            var script = StageCompiler.compile(index, chapter.title, body, StageCompileContext(
+                history = history,
+                knownNames = knownNames,
+                book = bookLayout?.first,
+                narration = stageSettings.value.narrationRhythm
+            ))
             script = mergeAudiobook(script, index, body, settings)
+            voice = voiceClips(index, body, settings)
             if (stageSettings.value.aiDirector) {
                 stageDirector.cached(bookId, index, body)?.let { script = StageDirections.merge(script, body, it) }
             }
+            script = com.mozhi.reader.core.stage.StageGeneratedArt.merge(script, art)
             val mode = settings.chineseConversionModeFor(bookId)
             if (mode != ChineseConversionMode.OFF) script = convertForDisplay(script, mode)
-            StageChapter(index, chapter.title, body, script, bookLayout?.second.orEmpty())
+            StageChapter(index, chapter.title, body, script, bookLayout?.second.orEmpty(), voice)
         }
         compiled[index] = stageChapter
         // 只留当前章附近几章：离得最远的先丢。
@@ -254,6 +302,68 @@ class StageViewModel @Inject constructor(
         }
         if (stageSettings.value.aiDirector) requestDirection(stageChapter)
         compiled[index] ?: stageChapter
+    }
+
+    /**
+     * 本章已经生成的插图：读者在选段或工作室里画的，以及伴读随段评配的。同一处画过几版只取最新一版；
+     * 段评配图跟着段评走——段评删了，或关了「显示 AI 批注」，图也不出现。
+     */
+    private suspend fun generatedArt(index: Int, body: String): List<com.mozhi.reader.core.stage.StageArtAnchor> {
+        val images = illustrations.observeForBook(bookId).first()
+            .filter { it.chapterIndex == index && (it.charOffset ?: -1) in 0..body.length }
+        if (images.isEmpty()) return emptyList()
+        val showAi = settingsRepository.showAiAnnotations.first()
+        val attached = annotations.getForChapter(bookId, index)
+            .mapNotNull { com.mozhi.reader.core.library.AnnotationMedia.decode(it.mediaJson).illustrationId }.toSet()
+        return withContext(Dispatchers.IO) {
+            images.filter { image ->
+                val fromAnnotation = image.id in attached || "/annotations/" in image.imagePath
+                (!fromAnnotation || (showAi && image.id in attached)) && java.io.File(image.imagePath).isFile
+            }.groupBy { it.charOffset }.values.map { versions -> versions.maxBy { it.createdAt } }
+                .sortedBy { it.charOffset }.take(GENERATED_ART_PER_CHAPTER)
+                .map { com.mozhi.reader.core.stage.StageArtAnchor(it.charOffset ?: 0, StageImage(it.imagePath, it.pixelWidth, it.pixelHeight)) }
+        }
+    }
+
+    /** 节奏改变后连同下一章预编译一起作废；等正在编译的任务退出锁，避免旧结果重新填回缓存。 */
+    private suspend fun recompileNarration() {
+        compileLock.withLock { compiled.clear() }
+        val previous = mutableState.value.chapter ?: return
+        val chapter = runCatching { compile(previous.index) }.getOrNull() ?: return
+        mutableState.update { current ->
+            val old = current.chapter
+            if (old == null || old.index != chapter.index || old.body != chapter.body) current
+            // 这一章没有可合的旁白：拍子没变，不必重置舞台。
+            else if (old.beats == chapter.beats) current.copy(chapter = chapter)
+            else {
+                // 编译期间仍可翻拍，替换时再取最新位置；章名卡与章末卡分别保留。
+                val offset = old.beats.getOrNull(current.index)?.fullRange?.start ?: 0
+                val index = when {
+                    current.index >= old.beats.size -> chapter.beats.size
+                    current.index == 0 -> 0
+                    // beatIndexAt(0) 为续读返回章名卡，这里正文从偏移零开始时仍须留在正文。
+                    else -> chapter.beatIndexAt(offset).coerceAtLeast(1).coerceAtMost(chapter.beats.lastIndex.coerceAtLeast(0))
+                }
+                // 旧的快进上限按原文终点换算，不把旧拍序套在新节奏上，也不放行未读的整拍。
+                val skipEnd = old.beats.getOrNull(current.skipLimit)?.fullRange?.end
+                val skipLimit = when {
+                    current.skipLimit >= old.beats.size -> chapter.beats.size
+                    skipEnd != null -> chapter.beats.indexOfLast { beat -> beat.fullRange?.let { it.end <= skipEnd } ?: true }
+                    else -> -1
+                }
+                current.copy(
+                    chapter = chapter,
+                    index = index,
+                    skipLimit = maxOf(index, skipLimit, readLimit(chapter)),
+                    chapterGeneration = current.chapterGeneration + 1
+                )
+            }
+        }
+        // 只保存续读位置；阅读水位仍由完整显示后的 onBeatRevealed 单调推进。
+        if (mutableState.value.chapter === chapter) {
+            onBeatShown()
+            prefetch(chapter.index + 1)
+        }
     }
 
     /** 请求挂在应用作用域；缓存与网络在导演内部切到后台，章缓存和舞台状态只在主线程替换。 */
@@ -345,6 +455,22 @@ class StageViewModel @Inject constructor(
                 instruction = segment.instruction
             )
         })
+    }
+
+    /**
+     * 本章已经合成好的配音。分镜确认之后、修订号与当前正文一致的才算——正文改过、净化规则换过，
+     * 旧配音念的就不是屏幕上这句话了。合成到一半的章节也能用，只是后半没有声音。
+     */
+    private suspend fun voiceClips(index: Int, body: String, settings: ReaderSettings): List<com.mozhi.reader.core.stage.StageVoiceClip> {
+        val chapterState = audiobookRepository.getChapter(bookId, index)?.state ?: return emptyList()
+        if (chapterState !in USABLE_AUDIOBOOK_STATES) return emptyList()
+        val segments = audiobookRepository.getSegments(bookId, index)
+        val revision = audiobookRevision(body, settings.textReplacementRules)
+        if (segments.isEmpty() || segments.any { it.revision != revision }) return emptyList()
+        return segments.mapNotNull { segment ->
+            val path = segment.audioPath?.takeIf(String::isNotBlank) ?: return@mapNotNull null
+            com.mozhi.reader.core.stage.StageVoiceClip(segment.startCharOffset, segment.endCharOffset, path, segment.audioMillis)
+        }
     }
 
     /** 展示文字与阅读页一致（繁简）；坐标仍是原文。转换改变长度时丢掉该拍的行内强调。 */
@@ -531,6 +657,8 @@ class StageViewModel @Inject constructor(
         private const val COMPILED_CACHE = 4
         private const val PROGRESS_DEBOUNCE_MS = 600L
         private const val PREFETCH_FRACTION = 0.7f
+        /** 一章里排进演出的插图上限：再多就成了翻画册，盖过原文。 */
+        private const val GENERATED_ART_PER_CHAPTER = 12
         private val USABLE_AUDIOBOOK_STATES = setOf(
             AudiobookChapterState.CONFIRMED.name,
             AudiobookChapterState.SYNTHESIZING.name,

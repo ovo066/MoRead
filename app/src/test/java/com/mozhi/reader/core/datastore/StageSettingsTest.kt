@@ -1,6 +1,7 @@
 package com.mozhi.reader.core.datastore
 
 import com.mozhi.reader.core.stage.StageIntensity
+import com.mozhi.reader.core.stage.StageNarrationRhythm
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -9,6 +10,7 @@ class StageSettingsTest {
         val defaults = StageSettings()
         assertEquals(StageTheme.XUAN, defaults.theme)
         assertEquals(StageIntensity.STANDARD, defaults.intensity)
+        assertEquals(StageNarrationRhythm.MERGE, defaults.narrationRhythm)
         assertEquals(1f, defaults.typingSpeed)
         assertEquals(1f, defaults.autoSpeed)
         assertTrue(defaults.ghost && defaults.showAsides && defaults.showPortraits)
@@ -32,6 +34,16 @@ class StageSettingsTest {
         assertEquals(1f, StageSettings(typingSpeed = Float.NEGATIVE_INFINITY).normalized().typingSpeed)
     }
 
+    @Test fun `旁白节奏兼容旧JSON并保持整段设置`() {
+        val old = StageSettings.decode("""{"theme":"THEATER","revision":3}""")
+        assertEquals(StageTheme.THEATER, old.theme)
+        assertEquals(StageNarrationRhythm.MERGE, old.narrationRhythm)
+        val paragraph = old.copy(narrationRhythm = StageNarrationRhythm.PARAGRAPH)
+        val encoded = StageSettings.encode(paragraph)
+        assertTrue(encoded.contains("\"narrationRhythm\":\"PARAGRAPH\""))
+        assertEquals(paragraph, StageSettings.decode(encoded))
+    }
+
     @Test fun `旧版本存下的默认值换成新默认`() {
         val defaults = StageSettings()
         assertEquals(StageTextReveal.NONE, defaults.textReveal)
@@ -49,5 +61,11 @@ class StageSettingsTest {
         assertEquals(StageTextReveal.INK, StageSettings.decode("""{"textReveal":"INK","revision":3}""").textReveal)
         assertEquals(StageHalo.TOP, StageSettings.decode("""{"halo":"TOP","revision":3}""").halo)
         assertEquals(StageSettings.CURRENT_REVISION, StageSettings.decode(StageSettings.encode(defaults)).revision)
+    }
+
+    @Test fun `全屏演出默认关且能往返保存`() {
+        assertFalse(StageSettings().fullscreen)
+        assertFalse(StageSettings.decode("""{"theme":"PAPER","revision":3}""").fullscreen)
+        assertTrue(StageSettings.decode(StageSettings.encode(StageSettings(fullscreen = true))).fullscreen)
     }
 }

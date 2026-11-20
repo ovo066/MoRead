@@ -36,6 +36,19 @@ internal fun BehaviorPage(
         palette,
         actions.onImmersiveReadingChange
     )
+    val tapPreset = (settings.tapZones ?: com.mozhi.reader.core.datastore.ReaderTapZones()).preset
+    TypographyNavRow(
+        title = androidx.compose.ui.res.stringResource(com.mozhi.reader.R.string.reader_tap_zones_entry),
+        summary = androidx.compose.ui.res.stringResource(when (tapPreset) {
+            com.mozhi.reader.core.datastore.ReaderTapPreset.STANDARD -> com.mozhi.reader.R.string.tap_preset_standard
+            com.mozhi.reader.core.datastore.ReaderTapPreset.FULL_SCREEN_NEXT -> com.mozhi.reader.R.string.tap_preset_full_next
+            com.mozhi.reader.core.datastore.ReaderTapPreset.LEFT_HAND -> com.mozhi.reader.R.string.tap_preset_left_hand
+            com.mozhi.reader.core.datastore.ReaderTapPreset.TOP_BOTTOM -> com.mozhi.reader.R.string.tap_preset_top_bottom
+            null -> com.mozhi.reader.R.string.reader_tap_zones_custom
+        }),
+        palette = palette,
+        onClick = actions.onOpenTapZones
+    )
     ReaderKeySettingsControl(settings, palette, actions)
     SelectionToolbarSettings(settings.selectionToolbarExtras, palette, actions.onSelectionToolbarExtrasChange)
 }
@@ -154,14 +167,14 @@ internal fun MoreSettingsPage(
     Text("显示", style = MaterialTheme.typography.labelMedium, color = palette.muted)
     TypographySwitchRow(
         "显示页眉",
-        "页面顶部显示书名与章节",
+        "页面顶部一行小字，内容在「排版 · 页眉页脚」里选",
         settings.showHeader,
         palette,
         actions.onShowHeaderChange
     )
     TypographySwitchRow(
         "显示页脚",
-        "页面底部显示进度、页码与时间",
+        "页面底部一行小字，内容在「排版 · 页眉页脚」里选",
         settings.showFooter,
         palette,
         actions.onShowFooterChange

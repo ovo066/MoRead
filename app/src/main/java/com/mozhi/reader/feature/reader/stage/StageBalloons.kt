@@ -399,18 +399,25 @@ internal fun StageNameTag(
         speaker.isProtagonist -> palette.accent
         else -> palette.roleColor(speaker.label)
     }
+    val portrait = LocalStagePortraits.current[speaker.label].takeUnless { speaker.unknown }
     Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Start) {
         val seal: @Composable () -> Unit = {
-            StageSeal(
-                text = if (speaker.unknown) "?" else sealText(speaker.label, knownName),
-                color = color,
-                paper = palette.background,
-                fonts = fonts,
-                size = 19.dp,
-                stamp = stamp,
-                key = speaker.label,
-                outline = speaker.unknown
-            )
+            val stampSeal: @Composable (Dp) -> Unit = { size ->
+                StageSeal(
+                    text = if (speaker.unknown) "?" else sealText(speaker.label, knownName),
+                    color = color,
+                    paper = palette.background,
+                    fonts = fonts,
+                    size = size,
+                    stamp = stamp,
+                    key = speaker.label,
+                    outline = speaker.unknown
+                )
+            }
+            // 有定妆图的人物：小像为主，印缩小压在角上；没有的仍是一方印。
+            if (portrait != null) {
+                StagePortraitMedallion(portrait, color, palette.background, key = speaker.label, animate = stamp) { stampSeal(14.dp) }
+            } else stampSeal(19.dp)
         }
         if (!mirrored) {
             seal()

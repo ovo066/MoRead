@@ -9,6 +9,16 @@ import com.mozhi.reader.core.importer.BookTitles
 import com.mozhi.reader.core.importer.SourceFingerprints
 import com.mozhi.reader.core.importer.SourceFingerprint
 import com.mozhi.reader.core.importer.DuplicateBookException
+import com.mozhi.reader.core.importer.ImportFailureException
+import com.mozhi.reader.core.i18n.UiText
+import com.mozhi.reader.core.importer.convert.BookConversionException
+import com.mozhi.reader.core.importer.convert.BookDocumentInput
+import com.mozhi.reader.core.importer.convert.BookImportFormat
+import com.mozhi.reader.core.importer.convert.HtmlBookConverter
+import com.mozhi.reader.core.importer.convert.MarkdownBookConverter
+import com.mozhi.reader.core.importer.convert.MinimalEpubWriter
+import com.mozhi.reader.core.importer.convert.resolveBookImportFormat
+import com.mozhi.reader.core.importer.convert.mobi.MobiBookConverter
 import android.content.Context
 import com.mozhi.reader.R
 import android.content.Intent
@@ -143,13 +153,14 @@ class ImportCoordinator @Inject constructor(
         val mimeType = context.contentResolver.getType(uri).orEmpty()
 
         try {
-            when {
-                displayName.endsWith(".txt", ignoreCase = true) || mimeType.startsWith("text/") ->
+            when (val format = resolveBookImportFormat(displayName, mimeType)) {
+                BookImportFormat.MARKDOWN, BookImportFormat.HTML, BookImportFormat.MOBI ->
+                    PreparedImport.BookImported(importDocument(uri, displayName, format, allowDuplicate))
+                BookImportFormat.TXT ->
                     prepareTxt(uri, displayName, allowDuplicate)
-                displayName.endsWith(".epub", ignoreCase = true) ||
-                    mimeType == "application/epub+zip" ->
+                BookImportFormat.EPUB ->
                     PreparedImport.BookImported(importEpub(uri, displayName, allowDuplicate))
-                else -> error("仅支持 TXT 与 EPUB 文件")
+                null -> throw ImportFailureException(UiText.of(R.string.import_supported_formats))
             }
         } catch (duplicate: DuplicateBookException) {
             PreparedImport.Duplicate(uri, duplicate.bookId, duplicate.title, exact = true, removed = duplicate.removed)
@@ -167,13 +178,13 @@ class ImportCoordinator @Inject constructor(
         takeReadPermission(uri)
         val displayName = queryDisplayName(uri) ?: "未命名书籍"
         val mimeType = context.contentResolver.getType(uri).orEmpty()
-        when {
-            displayName.endsWith(".epub", ignoreCase = true) ||
-                mimeType == "application/epub+zip" -> importEpub(uri, displayName, allowDuplicate = false)
-            displayName.endsWith(".txt", ignoreCase = true) || mimeType.startsWith("text/") -> {
+        when (val format = resolveBookImportFormat(displayName, mimeType)) {
+            BookImportFormat.MARKDOWN, BookImportFormat.HTML, BookImportFormat.MOBI -> importDocument(uri, displayName, format, allowDuplicate = false)
+            BookImportFormat.EPUB -> importEpub(uri, displayName, allowDuplicate = false)
+            BookImportFormat.TXT -> {
                 importTxtStreaming(uri, displayName, onProgress)
             }
-            else -> error("仅支持 TXT 与 EPUB 文件")
+            null -> throw ImportFailureException(UiText.of(R.string.import_supported_formats))
         }
     }
 
@@ -202,7 +213,7 @@ class ImportCoordinator @Inject constructor(
                 }
             } }
             require(fingerprint.size > 0) { context.getString(R.string.import_txt_empty) }
-            if (!allowDuplicate) findDuplicate(fingerprint, BookSourceType.TXT)?.let {
+            if (!allowDuplicate) findDuplicate(fingerprint, backfillLegacyEpub = false)?.let {
                 throw DuplicateBookException(it.id, it.title, it.removedAt != 0L)
             }
             val charsetName = encodingDetector.decodeToFile(source, decoded, checkActive) { completed, total ->
@@ -349,9 +360,10 @@ class ImportCoordinator @Inject constructor(
      * 先按指纹查；旧 EPUB 没有指纹，只对字节数相同的旧书补算一次（原包与导入源逐字节一致），
      * 补算结果写回，下次直接命中。正文已移除、只保留记录的书同样算重复。
      */
-    private suspend fun findDuplicate(fingerprint: SourceFingerprint, type: BookSourceType): BookEntity? {
+    private suspend fun findDuplicate(fingerprint: SourceFingerprint, backfillLegacyEpub: Boolean): BookEntity? {
         libraryRepository.findBookBySourceHash(fingerprint.sha256)?.let { return it }
-        if (type != BookSourceType.EPUB) return null
+        // 转换书虽然存为 EPUB，源文件并不是 EPUB；只能使用已记录的源指纹，不能拿生成包补算。
+        if (!backfillLegacyEpub) return null
         libraryRepository.getEpubBooksWithoutSource().forEach { book ->
             val file = File(book.epubPath)
             if (!file.isFile || file.length() != fingerprint.size) return@forEach
@@ -373,15 +385,80 @@ class ImportCoordinator @Inject constructor(
     private suspend fun importEpub(uri: Uri, displayName: String, allowDuplicate: Boolean): Long {
         val bookKey = UUID.randomUUID().toString()
         val target = File(booksDirectory(), "$bookKey.epub")
+        val importContext = kotlinx.coroutines.currentCoroutineContext()
+        try {
+            val fingerprint = context.contentResolver.openInputStream(uri)?.use { input ->
+                target.outputStream().buffered().use { output ->
+                    SourceFingerprints.copy(input, output, checkActive = { importContext.ensureActive() })
+                }
+            } ?: error("无法读取 EPUB 文件")
+            if (!allowDuplicate) findDuplicate(fingerprint, backfillLegacyEpub = true)?.let { existing ->
+                throw DuplicateBookException(existing.id, existing.title, existing.removedAt != 0L)
+            }
+            return importEpubFile(target, bookKey, displayName, fingerprint)
+        } catch (error: Throwable) {
+            target.delete()
+            throw error
+        }
+    }
+
+    private suspend fun importDocument(uri: Uri, displayName: String, format: BookImportFormat, allowDuplicate: Boolean): Long {
+        val bookKey = UUID.randomUUID().toString()
+        val target = File(booksDirectory(), "$bookKey.epub")
+        val staging = File(context.cacheDir, "document-import").apply { mkdirs() }
+        val source = File(staging, "$bookKey.source")
+        val importContext = kotlinx.coroutines.currentCoroutineContext()
+        val checkActive = { importContext.ensureActive() }
+        try {
+            val maxBytes = if (format == BookImportFormat.MOBI) MobiBookConverter.MAX_SOURCE_BYTES else BookDocumentInput.MAX_SOURCE_BYTES
+            val sizeReason = if (format == BookImportFormat.MOBI) BookConversionException.Reason.MOBI_TOO_LARGE else BookConversionException.Reason.SOURCE_TOO_LARGE
+            if ((queryDocumentSize(uri) ?: 0) > maxBytes) throw BookConversionException(sizeReason)
+            val input = context.contentResolver.openInputStream(uri)
+                ?: throw ImportFailureException(UiText.of(R.string.import_file_read_failed))
+            val fingerprint = BookDocumentInput.bounded(input, maxBytes, sizeReason).use { stream ->
+                source.outputStream().buffered().use { output -> SourceFingerprints.copy(stream, output, checkActive = checkActive) }
+            }
+            if (!allowDuplicate) findDuplicate(fingerprint, backfillLegacyEpub = false)?.let {
+                throw DuplicateBookException(it.id, it.title, it.removedAt != 0L)
+            }
+            checkActive()
+            val converted = when (format) {
+                BookImportFormat.MARKDOWN -> MarkdownBookConverter().convert(source, displayName)
+                BookImportFormat.HTML -> HtmlBookConverter().convert(source, displayName)
+                BookImportFormat.MOBI -> MobiBookConverter().convert(source, displayName, checkActive)
+                else -> error("Expected a convertible book document")
+            }
+            checkActive()
+            MinimalEpubWriter.write(converted, fingerprint.sha256, target, checkActive)
+            checkActive()
+            return importEpubFile(target, bookKey, displayName, fingerprint)
+        } catch (error: Throwable) {
+            target.delete()
+            when (error) {
+                is kotlinx.coroutines.CancellationException, is DuplicateBookException, is ImportFailureException -> throw error
+                is BookConversionException -> throw ImportFailureException(UiText.of(when (error.reason) {
+                    BookConversionException.Reason.SOURCE_TOO_LARGE -> R.string.import_document_too_large
+                    BookConversionException.Reason.IMAGE_TOO_LARGE -> R.string.import_document_image_too_large
+                    BookConversionException.Reason.EMPTY_DOCUMENT -> R.string.import_document_empty
+                    BookConversionException.Reason.DRM_PROTECTED -> R.string.import_mobi_drm_protected
+                    BookConversionException.Reason.UNSUPPORTED_FORMAT -> R.string.import_mobi_unsupported
+                    BookConversionException.Reason.CORRUPT_FILE -> R.string.import_mobi_corrupt
+                    BookConversionException.Reason.MOBI_TOO_LARGE -> R.string.import_mobi_too_large
+                    BookConversionException.Reason.TEXT_TOO_LARGE -> R.string.import_mobi_text_too_large
+                }), error)
+                is Exception -> throw ImportFailureException(UiText.of(
+                    if (format == BookImportFormat.MOBI) R.string.import_mobi_failed else R.string.import_document_failed), error)
+                else -> throw error
+            }
+        } finally {
+            source.delete()
+        }
+    }
+
+    /** 原始 EPUB 与转换包从这里共用 Readium、正文、精排、目录和封面入库流程。 */
+    private suspend fun importEpubFile(target: File, bookKey: String, displayName: String, fingerprint: SourceFingerprint): Long {
         var coverFile: File? = null
         var insertedBookId: Long? = null
-        val fingerprint = context.contentResolver.openInputStream(uri)?.use { input ->
-            target.outputStream().buffered().use { output -> SourceFingerprints.copy(input, output) }
-        } ?: error("无法读取 EPUB 文件")
-        if (!allowDuplicate) findDuplicate(fingerprint, BookSourceType.EPUB)?.let { existing ->
-            target.delete()
-            throw DuplicateBookException(existing.id, existing.title, existing.removedAt != 0L)
-        }
 
         try {
             val importContext = kotlinx.coroutines.currentCoroutineContext()
@@ -449,7 +526,8 @@ class ImportCoordinator @Inject constructor(
                 }
             }
             if (error is kotlinx.coroutines.CancellationException) throw error
-            Log.e(TAG, "EPUB import failed: $displayName", error)
+            // 第三方解析异常可能携带正文片段，日志仅记录错误类型。
+            Log.e(TAG, "EPUB import failed: ${error.javaClass.simpleName}")
             throw IllegalStateException("EPUB 解析失败：${error.userFacingCause()}", error)
         }
     }

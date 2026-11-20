@@ -34,6 +34,25 @@ class AnnotationSettingsPersistenceTest {
         scope = scope
     )
 
+    @Test fun failedPicturesAreCountedForTheDayAndObservedLive() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        try {
+            val quota = ProactiveAnnotationQuota(createStore("quota-failures.preferences_pb", scope))
+            quota.recordCreated(1, 0, 2, today = 10)
+            quota.recordImageFailure(today = 10)
+            quota.recordImageFailure(today = 10)
+            assertEquals(ProactiveAnnotationQuotaState(10, annotationCount = 1, imageCount = 2, imageFailureCount = 2),
+                quota.snapshot(today = 10))
+            // 额度不退：失败的两次仍然占着当天的插图额度。
+            assertEquals(1, quota.reserve(ProactiveAnnotationLimits(dailyImageMax = 3), false, true, today = 10).maxImages)
+            // 跨天后旧的失败数不带过去，迟到的失败回执也不会记到新的一天头上。
+            quota.recordImageFailure(today = 11)
+            assertEquals(ProactiveAnnotationQuotaState(11), quota.snapshot(today = 11))
+            quota.recordCreated(0, 0, 1, today = 11)
+            assertEquals(ProactiveAnnotationQuotaState(11, imageCount = 1), quota.snapshot(today = 11))
+        } finally { scope.coroutineContext.job.cancelAndJoin() }
+    }
+
     @Test fun quotaIgnoresObsoleteChapterKeyAndPreservesDailyAccounting() = runTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         try {
@@ -114,6 +133,20 @@ class AnnotationSettingsPersistenceTest {
             assertFalse(repo.companionAutonomySettings.first().annotationPrompts.any { it.id == "custom" })
             repo.setAnnotationPersonaIds(emptySet())
             assertEquals(listOf(9L), repo.companionAutonomySettings.first().annotationPersonasFor(9))
+        } finally { scope.coroutineContext.job.cancelAndJoin() }
+    }
+
+    @Test fun annotationInterplayDefaultsOnAndRoundTrips() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        try {
+            val store = createStore("annotation-interplay.preferences_pb", scope)
+            val repo = ReaderSettingsRepository(store)
+            assertTrue(repo.companionAutonomySettings.first().annotationInterplay)
+            repo.setCompanionAnnotationInterplay(false)
+            assertFalse(ReaderSettingsRepository(store).companionAutonomySettings.first().annotationInterplay)
+            repo.setCompanionAnnotationInterplay(true)
+            assertTrue(ReaderSettingsRepository(store).companionAutonomySettings.first().annotationInterplay)
+            assertEquals(true, store.data.first()[androidx.datastore.preferences.core.booleanPreferencesKey("companion_annotation_interplay")])
         } finally { scope.coroutineContext.job.cancelAndJoin() }
     }
 }

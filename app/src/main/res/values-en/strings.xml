@@ -124,7 +124,8 @@
     <string name="settings_annotation_voice">Audio with comments</string>
     <string name="settings_annotation_voice_summary">Comments may include audio. Daily limits are in Reading comment settings.</string>
     <string name="settings_annotation_image">Images with comments</string>
-    <string name="settings_annotation_image_summary">Comments may include an image. Daily limits are in Reading comment settings.</string>
+    <string name="settings_annotation_image_summary">Illustrates the most visual passages of each chapter. Per-chapter and daily limits are in Reading comment settings.</string>
+    <string name="settings_annotation_image_no_backend">No image service is available yet, so no images will be made. Set one up under AI services first.</string>
     <string name="number_stepper_decrease">Decrease %1$s</string>
     <string name="number_stepper_increase">Increase %1$s</string>
     <string name="number_stepper_input">%1$s value, tap to type</string>
@@ -136,8 +137,21 @@
     <string name="annotation_usage_unlimited">· no daily limit</string>
     <string name="annotation_usage_remaining">%1$d left today</string>
     <string name="annotation_usage_reached">Limit reached · resumes tomorrow</string>
-    <string name="annotation_usage_extras">Voice %1$s · Images %2$s</string>
     <string name="annotation_usage_extra_unlimited">no limit</string>
+    <string name="annotation_usage_media">Voice today %1$d / %2$s · Images %3$d / %4$s</string>
+    <plurals name="annotation_usage_image_failures">
+        <item quantity="one">%1$d image failed to generate today. Check the image service settings.</item>
+        <item quantity="other">%1$d images failed to generate today. Check the image service settings.</item>
+    </plurals>
+    <string name="annotation_unit_image"></string>
+    <string name="annotation_interplay_section">Between companions</string>
+    <string name="annotation_interplay">Reply to each other</string>
+    <string name="annotation_interplay_summary">A passage one companion marked is not marked again; another may add a line in its thread</string>
+    <string name="annotation_interplay_footer">A reply costs one model call, like a comment, and counts toward the daily limit. A different companion goes first each chapter, and at most one companion replies to a comment automatically. Use “Let them talk” in a thread for more.</string>
+    <string name="annotation_limits_image_section">Images per chapter</string>
+    <string name="annotation_limits_image_footer">Applies when \u201cImages with comments\u201d is on. The app picks the passages locally: scenery, light and character poses come first; dialogue-heavy or expository passages are skipped, and a chapter with no suitable passage gets no image.</string>
+    <string name="annotation_limits_image_chapter">Image limit</string>
+    <string name="annotation_limits_image_chapter_summary">Images per chapter, at most</string>
     <string name="annotation_limits_chapter_section">Per chapter</string>
     <string name="annotation_limits_chapter_footer">Applies to each companion separately. The minimum is a target for the model; it may write fewer when nothing is worth commenting on. Tap a number to type it.</string>
     <string name="annotation_limits_min">Minimum</string>
@@ -494,6 +508,9 @@
     <string name="reader_menu_search">Search in book</string>
     <string name="reader_menu_auto_read">Auto read</string>
     <string name="reader_menu_stage_mode">Stage mode</string>
+    <string name="reader_menu_embed_art">Illustrations in the text</string>
+    <string name="reader_embedded_art_caption">AI illustration</string>
+    <string name="reader_embedded_art_caption_persona">AI illustration · %1$s</string>
     <string name="stage_exit">Exit stage mode</string>
     <string name="stage_backlog">Log</string>
     <string name="stage_auto">Auto</string>
@@ -526,6 +543,13 @@
     <string name="stage_settings_ghost_hint">Keeps the previous line faintly above the current one</string>
     <string name="stage_settings_asides">Speech tags</string>
     <string name="stage_settings_asides_hint">Keeps tags such as “she whispered his name” in small type beside the line; turn off to show only the name tag</string>
+    <string name="stage_settings_portraits">Character portraits</string>
+    <string name="stage_settings_portraits_hint">Shows a small portrait by the name tag when the speaker has a reference look; others keep the seal</string>
+    <string name="stage_settings_voice_over">Audiobook voices</string>
+    <string name="stage_settings_voice_over_hint">If this chapter has an audiobook, each line plays its recorded voice; auto-play waits for it to finish</string>
+    <string name="stage_settings_generated_art">Generated illustrations</string>
+    <string name="stage_settings_generated_art_hint">Pictures you made or a companion added appear at their line, marked as AI illustrations</string>
+    <string name="stage_generated_art_caption">AI illustration</string>
     <string name="stage_settings_tab_stage">Stage</string>
     <string name="stage_settings_tab_text">Text</string>
     <string name="stage_settings_tab_backdrop">Backdrop</string>
@@ -738,6 +762,8 @@
     <string name="toc_order_reverse">Newest first</string>
     <string name="discussion_placeholder_persona">Say something and %1$s will reply. Leave empty for a comment on the passage</string>
     <string name="discussion_placeholder">Write your thoughts…</string>
+    <string name="discussion_roundtable">Let them talk</string>
+    <string name="discussion_roundtable_wait">They have had two rounds. Say something to keep it going.</string>
     <string name="discussion_role_me">Reader</string>
     <string name="discussion_role_persona">Persona</string>
     <string name="discussion_reply">Reply</string>
@@ -786,4 +812,74 @@
     <string name="document_kind_character_sheet">Character sheet</string>
     <string name="document_kind_quote_collection">Quotes</string>
     <string name="document_kind_free">Document</string>
+    <!-- Tap zone presets (issue 19) -->
+    <string name="reader_tap_zones_entry">Tap zones</string>
+    <string name="reader_tap_zones_custom">Custom</string>
+    <string name="tap_preset_standard">Standard</string>
+    <string name="tap_preset_full_next">Tap = next</string>
+    <string name="tap_preset_left_hand">Left hand</string>
+    <string name="tap_preset_top_bottom">Top / bottom</string>
+    <string name="tap_preset_standard_hint">Left: previous page · Middle: menu · Right: next page</string>
+    <string name="tap_preset_full_next_hint">Everywhere turns to the next page except the center, which opens the menu</string>
+    <string name="tap_preset_left_hand_hint">Left: next page · Right: previous page, for holding the phone in your left hand</string>
+    <string name="tap_preset_top_bottom_hint">Top half: previous page · Bottom half: next page · Center: menu</string>
+    <string name="tap_preset_custom_hint">Customized zone by zone. Tap a preset above to apply it.</string>
+    <!-- Stage narration pacing -->
+    <string name="stage_settings_fullscreen">Full-screen stage</string>
+    <string name="stage_settings_fullscreen_hint">Hides the bars so a tap anywhere moves on. Swipe up to show them.</string>
+    <string name="stage_fullscreen_toast">Swipe up to show the toolbar</string>
+    <string name="stage_settings_rhythm">Narration pacing</string>
+    <string name="stage_settings_rhythm_hint">Short narration in the same paragraph shares one beat, so you tap less. Dialogue, thoughts and special shots are unaffected.</string>
+    <string name="stage_rhythm_sentence">Sentence</string>
+    <string name="stage_rhythm_merge">Grouped</string>
+    <string name="stage_rhythm_paragraph">Paragraph</string>
+    <!-- Page margins -->
+    <string name="reader_margin_dp">%1$d dp</string>
+    <string name="reader_margin_vertical_default">Default</string>
+    <string name="reader_margin_vertical_extra">%1$d dp wider</string>
+    <!-- Header and footer content -->
+    <string name="reader_chrome_title">Header &amp; footer content</string>
+    <string name="reader_chrome_dialog_hint">Check what goes here. Each item can sit in one place only; checking it moves it from where it was.</string>
+    <string name="reader_chrome_header">Header</string>
+    <string name="reader_chrome_footer">Footer</string>
+    <string name="reader_chrome_left">Left</string>
+    <string name="reader_chrome_center">Center</string>
+    <string name="reader_chrome_right">Right</string>
+    <string name="reader_chrome_empty">Empty</string>
+    <string name="reader_chrome_slot_title">%1$s · %2$s</string>
+    <string name="reader_chrome_item_book_title">Book title</string>
+    <string name="reader_chrome_item_chapter_title">Chapter title</string>
+    <string name="reader_chrome_item_chapter_page">Page in chapter</string>
+    <string name="reader_chrome_item_chapter_percent">Chapter progress</string>
+    <string name="reader_chrome_item_book_percent">Book progress</string>
+    <string name="reader_chrome_item_time">Time</string>
+    <string name="reader_chrome_item_battery">Battery</string>
+    <string name="reader_chrome_item_elsewhere">Now in %1$s</string>
+    <string name="reader_chrome_hide_clock">Hide time and battery when the status bar shows</string>
+    <string name="reader_chrome_hide_clock_hint">Unless full immersion is on, the system status bar already shows them</string>
+    <string name="reader_chrome_reset">Reset</string>
+    <string name="reader_chrome_done">Done</string>
+
+    <!-- Markdown / HTML 单文件导入 -->
+    <string name="import_document_too_large">Markdown / HTML files larger than 32 MiB cannot be imported</string>
+    <string name="import_document_image_too_large">An embedded image exceeds the 8 MiB limit</string>
+    <string name="import_document_empty">The file contains no readable text</string>
+    <string name="import_document_failed">Could not convert or parse the Markdown / HTML file</string>
+    <string name="import_folder_missing">No folder address was provided</string>
+    <string name="import_folder_failed">Could not read the folder</string>
+    <!-- MOBI / KF8 导入 -->
+    <string name="import_supported_formats">Supported formats: TXT, EPUB, Markdown, HTML and DRM-free MOBI / AZW3</string>
+    <string name="import_multiple_formats">Select multiple TXT / EPUB / Markdown / HTML / MOBI / AZW3 files</string>
+    <string name="shelf_import_formats_hint">Import TXT, EPUB, Markdown, HTML or DRM-free MOBI / AZW3. MoRead organizes chapters and saves them on this device.</string>
+    <string name="shelf_empty_formats_hint">Supports TXT, EPUB, Markdown, HTML and DRM-free MOBI / AZW3. Reading data, bookmarks and character chat context are stored on this device first.</string>
+    <string name="import_lan_formats_hint">Supports TXT / EPUB (200 MB each), Markdown / HTML (32 MiB each), and DRM-free MOBI / AZW3 (256 MiB each). Files are cached first; choose Import all when ready.</string>
+    <string name="import_folder_no_supported_files">No TXT, EPUB, Markdown, HTML, MOBI or AZW3 files were found in this folder</string>
+    <string name="import_notification_description">Shows background import progress for TXT, EPUB, Markdown, HTML, MOBI and AZW3</string>
+    <string name="import_lan_no_supported_files">No supported TXT / EPUB / Markdown / HTML / MOBI / AZW3 files were received</string>
+    <string name="import_mobi_drm_protected">DRM-protected books cannot be imported</string>
+    <string name="import_mobi_unsupported">This ebook format or compression is not supported yet. Convert it to EPUB first.</string>
+    <string name="import_mobi_corrupt">The ebook structure is corrupt and cannot be imported</string>
+    <string name="import_mobi_too_large">MOBI / AZW3 files larger than 256 MiB cannot be imported</string>
+    <string name="import_mobi_text_too_large">Decompressed ebook text exceeds the 64 MiB limit</string>
+    <string name="import_mobi_failed">Could not convert or parse the MOBI / AZW3 file</string>
 </resources>

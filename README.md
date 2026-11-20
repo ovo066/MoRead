@@ -43,7 +43,7 @@ This list describes the current source tree. For features in a packaged release,
 - **Chapter outlines:** open **Contents → Outline** to save coherent chapter recaps with expandable source evidence. Chapters generate independently, with up to two model requests at a time; the navigation panel keeps its position while scrolling or switching tabs.
 - **Whole-book characters:** the adjacent **Characters** tab offers quick research or a full scan, including unread chapters after confirmation. Stop and resume extraction, search saved character cards, and open their source passages.
 
-- **TXT and EPUB import:** automatic encoding detection, regex-based chapter splitting using Legado’s rule set, a preview with customizable chapter rules, and duplicate detection. Font, image, and persona-card imports also detect duplicates.
+- **Book import:** TXT and EPUB, plus Markdown, HTML and DRM-free MOBI / AZW3 (converted to EPUB on import, with no network access). Automatic encoding detection, regex-based chapter splitting using Legado’s rule set, a preview with customizable chapter rules, and duplicate detection. Font, image, and persona-card imports also detect duplicates.
 - **Native rendering:** classic and modern page-curl, cover, and slide animations; EPUB parsing and layout for supported CSS, block/inline content, floats, tables, backgrounds, and images. Includes text-selection handles, paragraph annotations and comments, bookmarks, and in-book search.
 - **EPUB typography:** right-to-left vertical writing with vertical punctuation, text selection, and page turns; supported CSS gradients, borders, text shadows, and positioned elements.
 - **Quick bookmarks:** in paginated mode, pull down until the release cue appears, then release to add a bookmark. Repeating the gesture never removes an existing bookmark. It is disabled in continuous vertical scrolling mode.
@@ -90,7 +90,7 @@ Get the latest officially signed APK from [Releases](https://github.com/ovo066/M
 
 ## Getting started
 
-1. Import a book from the bookshelf, or use **Open with → MoRead** on a TXT/EPUB file in your file manager.
+1. Import a book from the bookshelf, or use **Open with → MoRead** on a book file in your file manager.
 2. Optionally open **Settings → AI providers**, add a provider and API key, and assign chat, embedding, speech, and image models. Speech and image generation also have their own configuration pages.
 3. Long-press text in the reader to translate, explain, or ask a question. The reader toolbar opens the table of contents, read-aloud controls, and companion chat.
 

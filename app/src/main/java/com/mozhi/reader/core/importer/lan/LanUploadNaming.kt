@@ -9,7 +9,7 @@ import java.util.Locale
 object LanUploadNaming {
 
     /** 与导入管线支持的格式保持一致；其余类型宁可拒收也不落盘。 */
-    val ALLOWED_EXTENSIONS = setOf("txt", "epub")
+    val ALLOWED_EXTENSIONS = com.mozhi.reader.core.importer.convert.BookImportFiles.extensions
 
     const val MAX_NAME_CHARS = 120
 

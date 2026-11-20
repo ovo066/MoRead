@@ -103,7 +103,7 @@ class FolderScanner @Inject constructor(
     companion object {
         const val MAX_FILES = 500
         const val MAX_DEPTH = 8
-        val SUPPORTED_EXTENSIONS = setOf("txt", "epub")
+        val SUPPORTED_EXTENSIONS = com.mozhi.reader.core.importer.convert.BookImportFiles.extensions
 
         fun isSupportedBook(name: String): Boolean =
             name.substringAfterLast('.', "").lowercase(Locale.ROOT) in SUPPORTED_EXTENSIONS

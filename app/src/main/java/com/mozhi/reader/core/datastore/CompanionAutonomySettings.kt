@@ -34,7 +34,9 @@ data class CompanionAutonomySettings(
     val annotationLimitsByBook: Map<Long, BookProactiveAnnotationLimits> = emptyMap(),
     /** Empty preserves the previous behavior: follow the current companion. */
     val annotationPersonaIds: Set<Long> = emptySet(),
-    val annotationPrompts: List<GlobalPromptPreset> = ProactiveAnnotationPrompts.DEFAULTS
+    val annotationPrompts: List<GlobalPromptPreset> = ProactiveAnnotationPrompts.DEFAULTS,
+    /** 多个角色参与段评时互相看得见并偶尔接话；关＝各写各的，沿用旧行为。 */
+    val annotationInterplay: Boolean = true
 ) {
     fun annotationPersonasFor(activePersonaId: Long?): List<Long> =
         if (annotationPersonaIds.isEmpty()) listOfNotNull(activePersonaId)

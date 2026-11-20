@@ -99,7 +99,9 @@ internal fun ReaderPane(
     onSpreadModeChanged: (Boolean) -> Unit = {},
     onVisiblePagesDrawn: (ReaderVisibleReadSnapshot) -> Unit = {},
     readTrackingEnabled: Boolean = true,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** 页眉页脚可选显示书名。 */
+    bookTitle: String = ""
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -276,7 +278,7 @@ internal fun ReaderPane(
 
     // Environment: relayout when the typography inputs change; repaint when only colors change.
     val styleKey = readerRenderStyleKey(
-        settings, palette, density, viewport, statusBarPx, navBarPx, spreadGeometry
+        settings, palette, density, viewport, statusBarPx, navBarPx, spreadGeometry, bookTitle
     )
     val environment = styleKey.environment
     remember(styleKey) {
@@ -291,7 +293,7 @@ internal fun ReaderPane(
                         settings = settings, palette = palette, density = density,
                         viewWidth = environment.leafWidth, viewHeight = viewport.height,
                         statusBarPx = statusBarPx, navigationBarPx = navBarPx,
-                        columnWidthPx = environment.columnWidth
+                        columnWidthPx = environment.columnWidth, bookTitle = bookTitle
                     )
                 },
                 spread = spreadGeometry,
@@ -637,7 +639,8 @@ internal fun readerRenderStyleKey(
     viewport: IntSize,
     statusBarPx: Float,
     navigationBarPx: Float,
-    spread: SpreadGeometry? = null
+    spread: SpreadGeometry? = null,
+    bookTitle: String = ""
 ): ReaderRenderStyleKey {
     val environment = ReaderEnvironmentKey(
         fontScale = settings.fontScale,
@@ -665,7 +668,11 @@ internal fun readerRenderStyleKey(
             settings.showHeader,
             settings.showFooter,
             settings.headerMarginTop,
-            settings.footerMarginBottom
+            settings.footerMarginBottom,
+            // 页眉页脚的内容会改变页眉页脚是否占高度；书名只在用到时参与。
+            settings.chromeLayout,
+            settings.chromeLayout.hideClockWithStatusBar && !settings.immersiveReading,
+            bookTitle.takeIf { settings.chromeLayout.slots.values.any { com.mozhi.reader.core.datastore.ReaderChromeItem.BOOK_TITLE in it } }
         ).hashCode(),
         syntaxHighlightEnabled = settings.syntaxHighlightEnabled,
         syntaxRulesHash = listOf(settings.syntaxHighlightRules, settings.englishBionicEnabled, settings.englishLearningEnabled,

@@ -94,4 +94,100 @@ class ProactiveAnnotationCommitStoreTest {
             assertEquals("[]", db.proactiveAnnotationJobDao().find(1, 0, 2, "sha")!!.doneParagraphEnds)
         }
     }
+
+    private fun peer(annotationId: Long) = ProactivePeerNote(annotationId, 8, "照夜", "直言",
+        0, 40, "正文", "段评", false, sourceEnd = 80)
+
+    @Test fun replyAndLedgerCommitTogetherWithoutAnotherAnnotationOrMedia() = runBlocking {
+        withDatabase { db, job ->
+            val parentId = db.annotationDao().insert(row().copy(personaId = 8))
+            val result = ProactiveAnnotationCommitStore(db).commitReply(peer(parentId), "接一句", job.copy(doneParagraphEnds = "[80]"), 200) { true }
+            assertNotNull(result)
+            assertEquals(parentId, result!!.annotationId)
+            val reply = db.annotationDao().getReplies(parentId).single()
+            assertEquals(job.personaId, reply.personaId)
+            assertNull(reply.replyToId)
+            assertEquals("接一句", reply.contentMarkdown)
+            assertEquals(200L, reply.createdAt)
+            assertEquals("{}", reply.mediaJson)
+            assertEquals("[80]", db.proactiveAnnotationJobDao().find(1, 0, 2, "sha")!!.doneParagraphEnds)
+            assertEquals(1, db.annotationDao().getCountForBook(1))
+            assertTrue(db.illustrationDao().getForBook(1).isEmpty())
+            assertEquals(1, db.annotationDao().countPersonaRepliesForChapter(1, 0, 2))
+            assertEquals(0, db.annotationDao().countPersonaRepliesForChapter(1, 1, 2))
+            assertEquals(0, db.annotationDao().countPersonaRepliesForChapter(2, 0, 2))
+        }
+    }
+
+    @Test fun deletedParentRejectsReplyWithoutUpdatingLedger() = runBlocking {
+        withDatabase { db, job ->
+            val id = db.annotationDao().insert(row())
+            db.annotationDao().delete(id)
+            assertNull(ProactiveAnnotationCommitStore(db).commitReply(peer(id), "接一句", job.copy(doneParagraphEnds = "[80]"), 200) { true })
+            assertTrue(db.annotationDao().getReplies(id).isEmpty())
+            assertEquals("[]", db.proactiveAnnotationJobDao().find(1, 0, 2, "sha")!!.doneParagraphEnds)
+        }
+    }
+
+    @Test fun existingPersonaReplyWinsEvenIfThePeerSnapshotSaidTheThreadWasEmpty() = runBlocking {
+        withDatabase { db, job ->
+            val id = db.annotationDao().insert(row())
+            val prior = AnnotationReplyEntity(annotationId = id, personaId = 99, contentMarkdown = "先接了", createdAt = 100)
+            db.annotationDao().insertReply(prior)
+            assertNull(ProactiveAnnotationCommitStore(db).commitReply(peer(id), "迟到", job.copy(doneParagraphEnds = "[80]"), 200) { true })
+            assertEquals(listOf("先接了"), db.annotationDao().getReplies(id).map { it.contentMarkdown })
+            assertEquals("[]", db.proactiveAnnotationJobDao().find(1, 0, 2, "sha")!!.doneParagraphEnds)
+        }
+    }
+
+    @Test fun userReplyDoesNotOccupyThePersonaReplySlot() = runBlocking {
+        withDatabase { db, job ->
+            val id = db.annotationDao().insert(row())
+            db.annotationDao().insertReply(AnnotationReplyEntity(annotationId = id, personaId = null, contentMarkdown = "用户的话", createdAt = 100))
+            assertNotNull(ProactiveAnnotationCommitStore(db).commitReply(peer(id), "角色的话", job.copy(doneParagraphEnds = "[80]"), 200) { true })
+            assertEquals(listOf(null, 2L), db.annotationDao().getRepliesForAnnotations(listOf(id)).map { it.personaId })
+            assertEquals(1, db.annotationDao().countPersonaRepliesForChapter(1, 0, 2))
+        }
+    }
+
+    @Test fun lifecycleChangeRollsBackReplyAndLedgerAndAllowsAFreshAttempt() = runBlocking {
+        withDatabase { db, job ->
+            val id = db.annotationDao().insert(row())
+            val store = ProactiveAnnotationCommitStore(db)
+            var checks = 0
+            assertNull(store.commitReply(peer(id), "旧回复", job.copy(doneParagraphEnds = "[80]"), 200) { ++checks == 1 })
+            assertEquals(2, checks)
+            assertTrue(db.annotationDao().getReplies(id).isEmpty())
+            assertEquals("[]", db.proactiveAnnotationJobDao().find(1, 0, 2, "sha")!!.doneParagraphEnds)
+            assertNotNull(store.commitReply(peer(id), "新回复", job.copy(doneParagraphEnds = "[80]"), 300) { true })
+            assertEquals(listOf("新回复"), db.annotationDao().getReplies(id).map { it.contentMarkdown })
+        }
+    }
+
+    @Test fun skipUpdatesOnlyLedgerAndNeverCountsAsProducedContent() = runBlocking {
+        withDatabase { db, job ->
+            val store = ProactiveAnnotationCommitStore(db)
+            val saved = store.skip(job.copy(doneParagraphEnds = "[40,80]")) { true }
+            assertEquals("[40,80]", saved!!.doneParagraphEnds)
+            assertEquals("[40,80]", db.proactiveAnnotationJobDao().find(1, 0, 2, "sha")!!.doneParagraphEnds)
+            assertEquals(0, db.annotationDao().countProactiveForJob(job.id))
+            assertEquals(0, db.annotationDao().countPersonaRepliesForChapter(1, 0, 2))
+            assertEquals(0, db.proactiveAnnotationJobDao().createdSince(0))
+            var checks = 0
+            assertNull(store.skip(job.copy(doneParagraphEnds = "[40,80,120]")) { ++checks == 1 })
+            assertEquals("[40,80]", db.proactiveAnnotationJobDao().find(1, 0, 2, "sha")!!.doneParagraphEnds)
+            val result = store.commit(row(), job.copy(doneParagraphEnds = "[40,80,120]"), null, 2, 0) { true }
+            assertNotNull(result)
+            assertEquals(1, db.annotationDao().countProactiveForJob(job.id))
+        }
+    }
+
+    @Test fun removedJobCannotLeaveAReplyWithoutItsLedger() = runBlocking {
+        withDatabase { db, job ->
+            val id = db.annotationDao().insert(row())
+            db.proactiveAnnotationJobDao().deleteForBook(1)
+            assertNull(ProactiveAnnotationCommitStore(db).commitReply(peer(id), "接一句", job.copy(doneParagraphEnds = "[80]"), 200) { true })
+            assertTrue(db.annotationDao().getReplies(id).isEmpty())
+        }
+    }
 }

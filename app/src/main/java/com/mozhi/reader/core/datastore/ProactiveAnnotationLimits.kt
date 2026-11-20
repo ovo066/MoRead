@@ -20,6 +20,8 @@ data class ProactiveAnnotationLimits(
     val dailyMax: Int = 10,
     val dailyVoiceMax: Int = 3,
     val dailyImageMax: Int = 3,
+    /** 每章至多配几幅图。配给哪一段由应用按画面感在本地挑，不由模型决定。 */
+    val maxImagesPerChapter: Int = 1,
     val timing: ProactiveAnnotationTiming = ProactiveAnnotationTiming.AFTER_CHAPTER_COMPLETE,
     val aheadChapters: Int = 0,
     val context: ProactiveAnnotationContextSettings = ProactiveAnnotationContextSettings()
@@ -37,6 +39,7 @@ data class ProactiveAnnotationLimits(
             dailyMax = if (dailyMax == UNLIMITED) UNLIMITED else dailyMax.coerceIn(1, MAX_DAILY),
             dailyVoiceMax = if (dailyVoiceMax == UNLIMITED) UNLIMITED else dailyVoiceMax.coerceIn(0, MAX_DAILY),
             dailyImageMax = if (dailyImageMax == UNLIMITED) UNLIMITED else dailyImageMax.coerceIn(0, MAX_DAILY),
+            maxImagesPerChapter = maxImagesPerChapter.coerceIn(1, MAX_IMAGES_PER_CHAPTER),
             timing = timing,
             aheadChapters = aheadChapters.coerceIn(0, MAX_AHEAD_CHAPTERS),
             context = context.normalized()
@@ -75,6 +78,8 @@ data class ProactiveAnnotationLimits(
         // 设置页改为直接填数字后放宽：旧上界 10/50 是滑条格数的妥协，不是成本上的硬约束。
         const val MAX_PER_CHAPTER = 99
         const val MAX_DAILY = 999
+        /** 一章里图太多就不是「配图」而是画册了，也是最容易失控的一项花费。 */
+        const val MAX_IMAGES_PER_CHAPTER = 6
         const val MAX_AHEAD_CHAPTERS = 5
     }
 }

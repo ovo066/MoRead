@@ -427,6 +427,11 @@ class ReaderViewModel @Inject constructor(
     fun setBilingualVisible(visible: Boolean) = viewModelScope.launch { settingsRepository.setBilingual(bookId, visible) }
     fun toggleBilingualVisible() { setBilingualVisible(bookId !in mutableState.value.settings.bilingualBooks) }
 
+    /** 本书插图的两种看法之间切换：排进正文 / 点开查看。 */
+    fun toggleArtEmbedded() = viewModelScope.launch {
+        settingsRepository.setArtEmbedded(bookId, bookId !in mutableState.value.settings.embeddedArtBooks)
+    }
+
     fun stopTranslation() { translationJob?.cancel() }
 
     fun translateCurrentChapter(replaceCached: Boolean = false) = translateParagraphs(contentController.chapterIndex, null, replaceCached = replaceCached)
@@ -1368,6 +1373,10 @@ class ReaderViewModel @Inject constructor(
 
     fun setTapZones(zones: com.mozhi.reader.core.datastore.ReaderTapZones) {
         viewModelScope.launch { settingsRepository.setTapZones(zones) }
+    }
+
+    fun setChromeLayout(layout: com.mozhi.reader.core.datastore.ReaderChromeLayout) {
+        viewModelScope.launch { settingsRepository.setChromeLayout(layout) }
     }
 
     fun saveTextReplacementRule(rule: ReaderTextReplacementRule) {

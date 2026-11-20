@@ -102,7 +102,9 @@ internal fun ReaderScrollPane(
     autoRead: AutoReadSession? = null,
     onVisiblePagesDrawn: (ReaderVisibleReadSnapshot) -> Unit = {},
     readTrackingEnabled: Boolean = true,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** 页眉页脚可选显示书名。 */
+    bookTitle: String = ""
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -248,7 +250,7 @@ internal fun ReaderScrollPane(
     }
 
     // 排版环境：字号/字体/行距/边距/视口变化触发重排，仅调色变化只重绘。
-    val styleKey = readerRenderStyleKey(settings, palette, density, viewport, statusBarPx, navBarPx)
+    val styleKey = readerRenderStyleKey(settings, palette, density, viewport, statusBarPx, navBarPx, bookTitle = bookTitle)
     remember(styleKey) {
         if (viewport.width > 0 && viewport.height > 0) {
             holder.interruptScroll()
@@ -256,7 +258,7 @@ internal fun ReaderScrollPane(
             holder.applyStyle(styleKey, createStyle = {
                 ReaderPageStyle.resolve(
                     settings, palette, density, viewport.width, viewport.height,
-                    statusBarPx, navBarPx, styleKey.environment.columnWidth
+                    statusBarPx, navBarPx, styleKey.environment.columnWidth, bookTitle
                 )
             }, onBackgroundReady = {
                 invalidate()

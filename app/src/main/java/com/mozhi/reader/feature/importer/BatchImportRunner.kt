@@ -15,7 +15,8 @@ internal class BatchImportRunner(
     private val deleteSource: (String) -> Unit,
     private val progress: (index: Int, uri: String, stage: String, completed: Int, total: Int) -> Unit,
     private val labelOf: (String) -> String = { it.substringAfterLast('/').substringAfterLast(':') },
-    private val failureMessage: String = "Import failed"
+    private val failureMessage: String = "Import failed",
+    private val describeFailure: (Exception) -> String = { it.message ?: failureMessage }
 ) {
     suspend fun run(request: BatchImportRequestPayload): BatchImportCheckpoint {
         var checkpoint = request.checkpoint
@@ -52,7 +53,7 @@ internal class BatchImportRunner(
                     skippedLabels = (checkpoint.skippedLabels + label).take(MAX_DETAILS))
             } catch (error: Exception) {
                 checkpoint.copy(failed = checkpoint.failed + 1,
-                    failures = (checkpoint.failures + "$label：${error.message ?: failureMessage}".take(300)).take(MAX_DETAILS))
+                    failures = (checkpoint.failures + "$label：${describeFailure(error)}".take(300)).take(MAX_DETAILS))
             }
             val next = outcome.copy(nextIndex = index + 1, importedBookId = null)
             withContext(NonCancellable) {

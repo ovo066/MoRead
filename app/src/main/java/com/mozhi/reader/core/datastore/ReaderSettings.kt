@@ -76,13 +76,13 @@ data class ReaderSettings(
     val publisherStyleMode: PublisherStyleMode = PublisherStyleMode.SMART,
     /** 旧版统一边距；保留用于迁移，运行时请使用四边独立值。 */
     val pageMargin: Float = 1f,
-    /** 阅读正文左侧边距，0..2 对应紧凑到宽松。 */
+    /** 阅读正文左侧边距，范围见 [ReaderMarginLimits]。 */
     val pageMarginLeft: Float = 1f,
-    /** 阅读正文右侧边距，0..2 对应紧凑到宽松。 */
+    /** 阅读正文右侧边距，范围见 [ReaderMarginLimits]。 */
     val pageMarginRight: Float = 1f,
-    /** 阅读正文上侧边距，0..2 对应紧凑到宽松。 */
+    /** 阅读正文上侧边距，范围见 [ReaderMarginLimits]。 */
     val pageMarginTop: Float = 0f,
-    /** 阅读正文下侧边距，0..2 对应紧凑到宽松。 */
+    /** 阅读正文下侧边距，范围见 [ReaderMarginLimits]。 */
     val pageMarginBottom: Float = 0f,
     /** 页眉相对默认位置继续向下偏移，0..2。 */
     val headerMarginTop: Float = 0f,
@@ -105,6 +105,8 @@ data class ReaderSettings(
     val textJustification: Boolean = true,
     val showHeader: Boolean = true,
     val showFooter: Boolean = true,
+    /** 全局页眉页脚分项布局，不随阅读主题切换。 */
+    val chromeLayout: ReaderChromeLayout = ReaderChromeLayout.DEFAULT,
     val theme: ReaderTheme = ReaderTheme.SYSTEM,
     val pageMode: PageMode = PageMode.PAGINATED,
     val autoRead: AutoReadSettings = AutoReadSettings(),
@@ -128,6 +130,8 @@ data class ReaderSettings(
     val englishLearningEnabled: Boolean = false,
     val englishBionicEnabled: Boolean = false,
     val bilingualBooks: Set<Long> = emptySet(),
+    /** 把已生成的插图排进正文（像出版书的插图）的书；不在这里的书仍是点开查看。 */
+    val embeddedArtBooks: Set<Long> = emptySet(),
     /** 选区工具栏里额外放到第一排的操作（[SelectionToolbarItems.OPTIONAL] 中的 id）；其余收进「更多」。 */
     val selectionToolbarExtras: Set<String> = emptySet(),
     /** 按书设置的学习语言（[com.mozhi.reader.core.dictionary.LearningLanguage.code]）；没有记录 = 自动识别。 */

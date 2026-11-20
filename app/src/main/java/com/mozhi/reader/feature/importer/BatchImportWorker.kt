@@ -115,7 +115,11 @@ class BatchImportWorker(
                 reporter.update(BatchBookProgress(index, raw, stage, completed, bookTotal))
             },
             labelOf = { displayNameOf(Uri.parse(it)) },
-            failureMessage = applicationContext.getString(com.mozhi.reader.R.string.import_failed)
+            failureMessage = applicationContext.getString(com.mozhi.reader.R.string.import_failed),
+            describeFailure = { error ->
+                (error as? com.mozhi.reader.core.importer.ImportFailureException)?.uiText?.resolve(applicationContext.resources)
+                    ?: error.message ?: applicationContext.getString(com.mozhi.reader.R.string.import_failed)
+            }
         ).run(request) } finally {
             withContext(NonCancellable) { reporter.close() }
         }

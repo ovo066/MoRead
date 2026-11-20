@@ -575,7 +575,7 @@ internal class ScrollPaneHolder(private val controller: ReaderContentController)
             headerPage = controller.curPage()
             progress = controller.bookProgress()
         }
-        renderer.drawHeader(canvas, headerPage)
+        renderer.drawHeader(canvas, headerPage, progress, timeText, batteryPercent)
         renderer.drawFooter(canvas, headerPage, progress, timeText, batteryPercent)
     }
 

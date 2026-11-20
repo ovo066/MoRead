@@ -198,7 +198,7 @@ private fun ReadingNowCard(
                     Column(modifier = Modifier.padding(start = 16.dp)) {
                         Text("从一本书开始", style = MaterialTheme.typography.titleLarge)
                         Text(
-                            "导入 TXT 或 EPUB，墨知会整理章节并保存在本机。",
+                            stringResource(R.string.shelf_import_formats_hint),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(top = 5.dp)

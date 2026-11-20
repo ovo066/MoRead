@@ -8,13 +8,19 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import java.time.LocalDate
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 
 data class ProactiveAnnotationQuotaState(
     val epochDay: Long,
     val annotationCount: Int = 0,
     val voiceCount: Int = 0,
-    val imageCount: Int = 0
+    /** 已扣额度的配图次数，含没画出来的。 */
+    val imageCount: Int = 0,
+    /** 其中没画出来的次数。额度是按请求扣的，失败不显示出来，用户只会觉得「开了也不配图」。 */
+    val imageFailureCount: Int = 0
 )
 
 data class ProactiveAnnotationAllowance(
@@ -98,6 +104,7 @@ class ProactiveAnnotationQuota @Inject constructor(
                 preferences[ANNOTATIONS] = 0
                 preferences[VOICES] = 0
                 preferences[IMAGES] = 0
+                preferences[IMAGE_FAILURES] = 0
             }
             preferences[DAY] = today
             // 计数只累加、按天归零。旧版本会 coerceAtMost 到硬编码的 10/3/3——
@@ -108,14 +115,29 @@ class ProactiveAnnotationQuota @Inject constructor(
         }
     }
 
-    suspend fun snapshot(today: Long = LocalDate.now().toEpochDay()): ProactiveAnnotationQuotaState {
-        val preferences = dataStore.data.first()
-        if ((preferences[DAY] ?: today) != today) return ProactiveAnnotationQuotaState(today)
+    /** 一次已扣额度的配图没有画出来；只记数，不退额度（失败的请求多半也已经计费）。 */
+    suspend fun recordImageFailure(today: Long = LocalDate.now().toEpochDay()) {
+        dataStore.edit { preferences ->
+            if ((preferences[DAY] ?: today) != today) return@edit
+            preferences[IMAGE_FAILURES] = (preferences[IMAGE_FAILURES] ?: 0) + 1
+        }
+    }
+
+    suspend fun snapshot(today: Long = LocalDate.now().toEpochDay()): ProactiveAnnotationQuotaState =
+        dataStore.data.first().toState(today)
+
+    /** 设置页用：当天的语音、配图用量随生成实时更新。跨天后的旧计数读成 0。 */
+    fun observe(): Flow<ProactiveAnnotationQuotaState> =
+        dataStore.data.map { it.toState(LocalDate.now().toEpochDay()) }.distinctUntilChanged()
+
+    private fun Preferences.toState(today: Long): ProactiveAnnotationQuotaState {
+        if ((this[DAY] ?: today) != today) return ProactiveAnnotationQuotaState(today)
         return ProactiveAnnotationQuotaState(
             epochDay = today,
-            annotationCount = preferences[ANNOTATIONS] ?: 0,
-            voiceCount = preferences[VOICES] ?: 0,
-            imageCount = preferences[IMAGES] ?: 0
+            annotationCount = this[ANNOTATIONS] ?: 0,
+            voiceCount = this[VOICES] ?: 0,
+            imageCount = this[IMAGES] ?: 0,
+            imageFailureCount = this[IMAGE_FAILURES] ?: 0
         )
     }
 
@@ -124,5 +146,6 @@ class ProactiveAnnotationQuota @Inject constructor(
         val ANNOTATIONS = intPreferencesKey("proactive_annotation_daily_count")
         val VOICES = intPreferencesKey("proactive_annotation_daily_voice_count")
         val IMAGES = intPreferencesKey("proactive_annotation_daily_image_count")
+        val IMAGE_FAILURES = intPreferencesKey("proactive_annotation_daily_image_failure_count")
     }
 }

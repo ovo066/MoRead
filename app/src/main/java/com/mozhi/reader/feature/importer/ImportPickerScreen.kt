@@ -1,5 +1,7 @@
 package com.mozhi.reader.feature.importer
 
+import com.mozhi.reader.ui.components.asString
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -79,7 +81,7 @@ fun ImportPickerScreen(
                         Text(
                             when {
                                 state.scanning -> "正在扫描文件夹…"
-                                state.files.isEmpty() -> state.error ?: "没有找到书籍文件"
+                                state.files.isEmpty() -> state.error?.asString() ?: "没有找到书籍文件"
                                 state.searchQuery.isNotBlank() ->
                                     "找到 ${state.files.size} 本 · 显示 ${visibleFiles.size} 本 · 已选 ${state.selected.size} 本"
                                 else -> "找到 ${state.files.size} 本 · 已选 ${state.selected.size} 本"

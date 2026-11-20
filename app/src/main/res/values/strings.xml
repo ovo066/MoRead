@@ -127,7 +127,8 @@
     <string name="settings_annotation_voice">段评附语音</string>
     <string name="settings_annotation_voice_summary">批注可带一段语音，每日上限见「随读段评设置」</string>
     <string name="settings_annotation_image">段评附插图</string>
-    <string name="settings_annotation_image_summary">批注可带一张插图，每日上限见「随读段评设置」</string>
+    <string name="settings_annotation_image_summary">每章挑画面感最强的段落配图，每章与每日上限见「随读段评设置」</string>
+    <string name="settings_annotation_image_no_backend">还没有可用的生图服务，暂时不会配图。请先在「AI 服务」里配置生图</string>
     <string name="number_stepper_decrease">%1$s 减小</string>
     <string name="number_stepper_increase">%1$s 增大</string>
     <string name="number_stepper_input">%1$s 数值，点按输入</string>
@@ -139,8 +140,20 @@
     <string name="annotation_usage_unlimited">条 · 每日不限</string>
     <string name="annotation_usage_remaining">还可生成 %1$d 条</string>
     <string name="annotation_usage_reached">已达上限 · 明天恢复</string>
-    <string name="annotation_usage_extras">语音 %1$s · 插图 %2$s</string>
     <string name="annotation_usage_extra_unlimited">不限</string>
+    <string name="annotation_usage_media">今日语音 %1$d / %2$s · 插图 %3$d / %4$s</string>
+    <plurals name="annotation_usage_image_failures">
+        <item quantity="other">今天有 %1$d 次插图没有生成成功，请检查生图服务设置</item>
+    </plurals>
+    <string name="annotation_unit_image">张</string>
+    <string name="annotation_interplay_section">伴读之间</string>
+    <string name="annotation_interplay">互相接话</string>
+    <string name="annotation_interplay_summary">别的伴读划过的段落不再重复划线，偶尔在讨论里接一句</string>
+    <string name="annotation_interplay_footer">接话和段评一样各调用一次模型，计入每日额度。每章换一位伴读先写；一条段评下最多有一位伴读自动接话，想让他们多聊几句，可以在讨论里点「大家聊聊」。</string>
+    <string name="annotation_limits_image_section">每章插图</string>
+    <string name="annotation_limits_image_footer">开启「段评附插图」后生效。配给哪一段由应用在本地判断：写景、写光影和人物姿态的段落优先，对白和议论多的段落不配；一章里没有合适的段落就不配。</string>
+    <string name="annotation_limits_image_chapter">插图上限</string>
+    <string name="annotation_limits_image_chapter_summary">每章最多配</string>
     <string name="annotation_limits_chapter_section">每章条数</string>
     <string name="annotation_limits_chapter_footer">每位伴读分别生效。下限是给模型的期望，找不到值得写的段落时可以少写。点数字可直接输入。</string>
     <string name="annotation_limits_min">下限</string>
@@ -490,6 +503,9 @@
     <string name="reader_menu_search">书内搜索</string>
     <string name="reader_menu_auto_read">自动阅读</string>
     <string name="reader_menu_stage_mode">演出模式</string>
+    <string name="reader_menu_embed_art">插图排进正文</string>
+    <string name="reader_embedded_art_caption">AI 配图</string>
+    <string name="reader_embedded_art_caption_persona">AI 配图 · %1$s</string>
     <string name="stage_exit">退出演出</string>
     <string name="stage_backlog">回看</string>
     <string name="stage_auto">自动</string>
@@ -522,6 +538,13 @@
     <string name="stage_settings_ghost_hint">在当前这句上方淡淡留着上一句</string>
     <string name="stage_settings_asides">提示语旁注</string>
     <string name="stage_settings_asides_hint">像「她低声念出这个名字」这样的提示语以小字留在对白旁；关掉后只显示名牌</string>
+    <string name="stage_settings_portraits">人物小像</string>
+    <string name="stage_settings_portraits_hint">说话人已有定妆图时，名牌旁放一枚小像；没有定妆图的人物仍是印章</string>
+    <string name="stage_settings_voice_over">配音跟读</string>
+    <string name="stage_settings_voice_over_hint">这一章做过有声书时，演到哪句放哪句的配音；自动播放会等配音念完再走</string>
+    <string name="stage_settings_generated_art">已生成的插图</string>
+    <string name="stage_settings_generated_art_hint">你画的和伴读配的插图，演到那一句时出现，并标明是 AI 配图</string>
+    <string name="stage_generated_art_caption">AI 配图</string>
     <string name="stage_settings_tab_stage">演出</string>
     <string name="stage_settings_tab_text">文字</string>
     <string name="stage_settings_tab_backdrop">背景</string>
@@ -734,6 +757,8 @@
     <string name="toc_order_reverse">倒序</string>
     <string name="discussion_placeholder_persona">说点什么，%1$s 会接话；留空就请 TA 点评原文</string>
     <string name="discussion_placeholder">写下你的想法…</string>
+    <string name="discussion_roundtable">大家聊聊</string>
+    <string name="discussion_roundtable_wait">他们已经聊了两轮，你说一句再继续</string>
     <string name="discussion_role_me">读者</string>
     <string name="discussion_role_persona">角色</string>
     <string name="discussion_reply">回复</string>
@@ -782,4 +807,74 @@
     <string name="document_kind_character_sheet">人物档案</string>
     <string name="document_kind_quote_collection">金句摘录</string>
     <string name="document_kind_free">文档</string>
+    <!-- 操作区预设（issue 19） -->
+    <string name="reader_tap_zones_entry">操作区域</string>
+    <string name="reader_tap_zones_custom">自定义</string>
+    <string name="tap_preset_standard">标准</string>
+    <string name="tap_preset_full_next">全屏翻页</string>
+    <string name="tap_preset_left_hand">左手</string>
+    <string name="tap_preset_top_bottom">上下</string>
+    <string name="tap_preset_standard_hint">左侧上一页，中间菜单，右侧下一页</string>
+    <string name="tap_preset_full_next_hint">除了正中一格是菜单，点哪里都是下一页，单手双手都顺手</string>
+    <string name="tap_preset_left_hand_hint">左侧下一页，右侧上一页，适合左手拿手机</string>
+    <string name="tap_preset_top_bottom_hint">上半屏上一页，下半屏下一页，正中是菜单</string>
+    <string name="tap_preset_custom_hint">已逐格自定义；点上面的预设可以一键套用</string>
+    <!-- 演出旁白节奏 -->
+    <string name="stage_settings_fullscreen">全屏演出</string>
+    <string name="stage_settings_fullscreen_hint">收起顶栏和底栏，点哪里都是下一拍；上滑呼出工具栏</string>
+    <string name="stage_fullscreen_toast">上滑呼出工具栏</string>
+    <string name="stage_settings_rhythm">旁白节奏</string>
+    <string name="stage_settings_rhythm_hint">同一段里的短旁白合成一拍，少点几下；对白、心声和特写不受影响</string>
+    <string name="stage_rhythm_sentence">逐句</string>
+    <string name="stage_rhythm_merge">合句</string>
+    <string name="stage_rhythm_paragraph">整段</string>
+    <!-- 页边距 -->
+    <string name="reader_margin_dp">%1$d dp</string>
+    <string name="reader_margin_vertical_default">默认</string>
+    <string name="reader_margin_vertical_extra">加宽 %1$d dp</string>
+    <!-- 页眉页脚内容 -->
+    <string name="reader_chrome_title">页眉页脚内容</string>
+    <string name="reader_chrome_dialog_hint">勾选要放在这里的内容；每项只能放在一处，勾上会从原来的位置移过来</string>
+    <string name="reader_chrome_header">页眉</string>
+    <string name="reader_chrome_footer">页脚</string>
+    <string name="reader_chrome_left">左</string>
+    <string name="reader_chrome_center">中</string>
+    <string name="reader_chrome_right">右</string>
+    <string name="reader_chrome_empty">空</string>
+    <string name="reader_chrome_slot_title">%1$s · %2$s</string>
+    <string name="reader_chrome_item_book_title">书名</string>
+    <string name="reader_chrome_item_chapter_title">章名</string>
+    <string name="reader_chrome_item_chapter_page">本章页码</string>
+    <string name="reader_chrome_item_chapter_percent">本章进度</string>
+    <string name="reader_chrome_item_book_percent">全书进度</string>
+    <string name="reader_chrome_item_time">时间</string>
+    <string name="reader_chrome_item_battery">电量</string>
+    <string name="reader_chrome_item_elsewhere">现在在「%1$s」</string>
+    <string name="reader_chrome_hide_clock">状态栏可见时隐藏时间与电量</string>
+    <string name="reader_chrome_hide_clock_hint">没开「完全沉浸」时，系统状态栏里已经有时间和电量</string>
+    <string name="reader_chrome_reset">恢复默认</string>
+    <string name="reader_chrome_done">完成</string>
+
+    <!-- Markdown / HTML 单文件导入 -->
+    <string name="import_document_too_large">Markdown / HTML 文件超过 32 MiB，无法导入</string>
+    <string name="import_document_image_too_large">内嵌图片超过 8 MiB，无法导入</string>
+    <string name="import_document_empty">文件中没有可阅读的文字</string>
+    <string name="import_document_failed">文件转换或解析失败，请检查 Markdown / HTML 文件</string>
+    <string name="import_folder_missing">没有拿到文件夹地址</string>
+    <string name="import_folder_failed">读取文件夹失败</string>
+    <!-- MOBI / KF8 导入 -->
+    <string name="import_supported_formats">支持 TXT、EPUB、Markdown、HTML 及无 DRM 的 MOBI / AZW3 文件</string>
+    <string name="import_multiple_formats">支持多选 TXT / EPUB / Markdown / HTML / MOBI / AZW3</string>
+    <string name="shelf_import_formats_hint">导入 TXT、EPUB、Markdown、HTML 或无 DRM 的 MOBI / AZW3，墨知会整理章节并保存在本机。</string>
+    <string name="shelf_empty_formats_hint">支持 TXT、EPUB、Markdown、HTML 及无 DRM 的 MOBI / AZW3。阅读数据、书签和角色对话上下文优先保存在本机。</string>
+    <string name="import_lan_formats_hint">支持 TXT / EPUB（单个 200 MB）、Markdown / HTML（单个 32 MiB）及无 DRM 的 MOBI / AZW3（单个 256 MiB）。文件先保存在缓存，确认后按「全部导入书架」。</string>
+    <string name="import_folder_no_supported_files">这个文件夹里没有 TXT、EPUB、Markdown、HTML、MOBI 或 AZW3 文件</string>
+    <string name="import_notification_description">显示 TXT、EPUB、Markdown、HTML、MOBI 与 AZW3 的后台导入进度</string>
+    <string name="import_lan_no_supported_files">没有收到可导入的 TXT / EPUB / Markdown / HTML / MOBI / AZW3 文件</string>
+    <string name="import_mobi_drm_protected">带 DRM 保护，无法导入</string>
+    <string name="import_mobi_unsupported">暂不支持这种电子书格式或压缩方式，可先转成 EPUB 再导入</string>
+    <string name="import_mobi_corrupt">电子书结构损坏，无法导入</string>
+    <string name="import_mobi_too_large">MOBI / AZW3 文件超过 256 MiB，无法导入</string>
+    <string name="import_mobi_text_too_large">解压后的电子书正文超过 64 MiB，无法导入</string>
+    <string name="import_mobi_failed">电子书转换或解析失败，请检查 MOBI / AZW3 文件</string>
 </resources>

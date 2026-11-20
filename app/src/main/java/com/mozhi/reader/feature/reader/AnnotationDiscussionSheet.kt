@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Spacer
@@ -72,6 +73,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -368,7 +370,9 @@ internal fun AnnotationDiscussionSheet(
     onCancelStreaming: () -> Unit,
     onDismiss: () -> Unit,
     defaultRespondPersonaId: Long? = null,
-    onRememberRespondPersona: (Long) -> Unit = {}
+    onRememberRespondPersona: (Long) -> Unit = {},
+    /** 「大家聊聊」：让几位角色轮流各说一句。 */
+    onRoundtable: (target: AnnotationEntity, personaIds: List<Long>) -> Unit = { _, _ -> }
 ) {
     var input by remember { mutableStateOf("") }
     // 点名默认落在「上次点过的角色 → 当前伴读角色 → 第一个角色」上，不必每次重选。
@@ -665,6 +669,60 @@ internal fun AnnotationDiscussionSheet(
                             )
                         }
                     }
+                }
+            }
+            // 「大家聊聊」是一个动作，不是又一个可选的人：单独一行、实心胶囊，和上面的点名区分开。
+            val speakers = remember(annotations, replies, personas, respondTarget) {
+                roundtableSpeakers(annotations, replies, personas, respondTarget)
+            }
+            if (speakers.size >= 2 && annotations.isNotEmpty()) {
+                val open = roundtableAllowed(speakers.size, personaRunLength(replies))
+                val enabled = open && streaming == null
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Surface(
+                        onClick = {
+                            val target = annotations.firstOrNull { it.personaId == null } ?: annotations.first()
+                            onRoundtable(target, speakers)
+                        },
+                        enabled = enabled,
+                        shape = CircleShape,
+                        color = palette.onBackground.copy(alpha = if (enabled) 0.92f else 0.10f),
+                        contentColor = if (enabled) palette.background else palette.muted,
+                        modifier = Modifier.testTag("discussion-roundtable")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(start = 6.dp, end = 14.dp, top = 5.dp, bottom = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // 头像叠排：一眼看出这一轮谁会开口。
+                            Box(Modifier.width((22 + 13 * (speakers.size - 1)).dp).height(22.dp)) {
+                                speakers.forEachIndexed { index, id ->
+                                    val persona = personas.firstOrNull { it.id == id } ?: return@forEachIndexed
+                                    PersonaAvatarImage(
+                                        name = persona.name,
+                                        avatarPath = persona.avatarPath,
+                                        modifier = Modifier.padding(start = (13 * index).dp).size(22.dp)
+                                    )
+                                }
+                            }
+                            Text(
+                                stringResource(R.string.discussion_roundtable),
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.padding(start = 8.dp)
+                            )
+                        }
+                    }
+                    if (!open) Text(
+                        stringResource(R.string.discussion_roundtable_wait),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.muted,
+                        modifier = Modifier.weight(1f)
+                    )
                 }
             }
         }

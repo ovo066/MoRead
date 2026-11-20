@@ -327,6 +327,17 @@ internal class EpubBoxLayoutBackend(
                 state.addLine(line, line.lineBottom - line.lineTop)
             }
         }
+        spec.embeddedArt.anchoredIn(start, end).forEach { art ->
+            cancellationCheck()
+            val lines = embeddedArtLines(art, geometry.left, geometry.width, spec, measure, end)
+            state.addSpacing(embeddedArtGap(spec))
+            state.prepareForLine(lines.blockHeight())
+            val origin = state.durY
+            lines.forEach { line ->
+                line.moveTranslationTo(origin + line.lineTop)
+                state.addLine(line, line.lineBottom - line.lineTop)
+            }
+        }
     }
 
     private fun styledClusters(
